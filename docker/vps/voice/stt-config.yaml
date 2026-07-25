@@ -1,0 +1,89 @@
+version: 1
+
+# Secrets are intentionally forbidden here. VOICESTT_API_KEY and
+# VOICESTT_ADMIN_API_KEY come from secrets/services/voice/stt-voice.env.
+settings:
+  host: 0.0.0.0
+  port: 8010
+  log_level: INFO
+  language: de
+  device: cpu
+  compute_type: int8
+
+  transcription_engine: kroko_onnx
+  model: Kroko-DE-Community-64-L-Streaming-001.data
+  realtime_transcription_engine: kroko_onnx
+  realtime_model: Kroko-DE-Community-64-L-Streaming-001.data
+  use_main_model_for_realtime: true
+  transcription_engine_options: null
+  realtime_transcription_engine_options: null
+
+  tuning_profile: custom
+  beam_size: 5
+  beam_size_realtime: 3
+  batch_size: 16
+  realtime_batch_size: 16
+  vad_filter: true
+  normalize_audio: false
+  realtime_callback: update
+  min_length_of_recording: 0.2
+  min_gap_between_recordings: 0.0
+  post_speech_silence_duration: 0.55
+  silero_sensitivity: 0.05
+  webrtc_sensitivity: 3
+  realtime_processing_pause: 0.02
+  realtime_transcription_use_syllable_boundaries: false
+  realtime_boundary_detector_sensitivity: 0.6
+  realtime_boundary_followup_delays: [0.05, 0.2]
+  early_transcription_on_silence: 0.2
+
+  wakeword_backend: openwakeword
+  wake_words: hey_jarvis
+  openwakeword_model_paths: /models/openwakeword/hey_jarvis_v0.1.onnx
+  openwakeword_inference_framework: onnx
+  wake_words_sensitivity: 0.5
+  wake_word_activation_delay: 0.0
+  wake_word_timeout: 7.0
+  wake_word_buffer_duration: 0.1
+  wake_word_followup_window: 7.0
+
+  max_sessions: 8
+  max_active_speakers: 4
+  audio_queue_size: 128
+  max_audio_packet_bytes: 524288
+  max_audio_queue_seconds_per_session: 30.0
+  pre_recording_buffer_duration: 0.75
+  max_realtime_queue_age_ms: 1500
+  max_final_queue_depth_per_session: 8
+  max_global_inference_queue_depth: 64
+  realtime_degradation_threshold_ms: 1500
+  realtime_min_audio_seconds: 0.25
+  realtime_max_audio_seconds: 20.0
+  vad_energy_threshold: 250.0
+
+  model_warmup: false
+  model_idle_unload_enabled: true
+  model_idle_timeout_seconds: 3600.0
+  model_memory_policy_enabled: true
+  allow_two_medium_models: true
+
+  openai_api_enabled: true
+  openai_model_aliases:
+    whisper-1: final
+    fast: realtime
+  openai_max_file_bytes: 26214400
+
+  request_logging_enabled: true
+  request_log_stdout: true
+  request_log_path: /data/logs/voicestt-requests.jsonl
+  request_log_transcripts: true
+  request_log_max_bytes: 10485760
+  request_log_backup_count: 12
+  performance_logging_enabled: true
+  performance_log_stdout: true
+  performance_log_path: /data/logs/voicestt-performance.jsonl
+  performance_log_max_bytes: 10485760
+  performance_log_backup_count: 12
+  save_audio_files: false
+  audio_log_dir: /data/logs/audio
+  runtime_config_path: /data/config/runtime.json

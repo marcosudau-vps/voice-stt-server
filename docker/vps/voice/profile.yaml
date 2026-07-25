@@ -1,0 +1,22 @@
+schema_version: 1
+summary: Gemeinsamer Speech-to-Text- und Text-to-Speech-Dienst
+description: Voice bündelt die getrennten STT- und TTS-Container unter einem gemeinsamen Service-Namespace.
+
+components:
+  - slug: stt
+    name: Speech-to-Text
+    status: active
+    app_dir: /home/marco/selfhost/apps/services/voice/stt-voice
+    data_dir: /home/marco/selfhost/data/services/voice/stt-voice
+    config_file: /home/marco/selfhost/stacks/services/voice/stt-config.yaml
+  - slug: tts
+    name: Text-to-Speech
+    status: planned
+    app_dir: /home/marco/selfhost/apps/services/voice/tts-voice
+    data_dir: /home/marco/selfhost/data/services/voice/tts-voice
+    config_file: /home/marco/selfhost/stacks/services/voice/tts-config.yaml
+
+routes:
+  ui: voice.marcosudau.com
+  stt_api: stt.voice.marcosudau.com
+  tts_api: tts.voice.marcosudau.com

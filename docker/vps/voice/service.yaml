@@ -1,0 +1,30 @@
+schema_version: 1
+
+service:
+  slug: voice
+  name: Voice
+  category: ai-speech
+  status: active
+
+lifecycle:
+  archivable: true
+  snapshot_supported: true
+  archive_requires_confirmation: true
+
+runtime:
+  backend: docker_compose
+  compose_project: voice
+  compose_file: /home/marco/selfhost/stacks/services/voice/docker-compose.yml
+
+paths:
+  stack_dir: /home/marco/selfhost/stacks/services/voice
+  compose_file: /home/marco/selfhost/stacks/services/voice/docker-compose.yml
+  data_dir: /home/marco/selfhost/data/services/voice
+  docs_dir: /home/marco/selfhost/docs/services/voice
+  app_dir: /home/marco/selfhost/apps/services/voice
+  build_area_dir: /home/marco/selfhost_outsourced/build_area/services/voice
+  config_file: /home/marco/selfhost/stacks/services/voice/stt-config.yaml
+
+dependencies:
+  hard: []
+  optional: []

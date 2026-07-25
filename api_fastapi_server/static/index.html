@@ -1,0 +1,2051 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>VoiceSTT Live-Konsole</title>
+  <link rel="icon" href="data:,">
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #101114;
+      --panel: #171a1f;
+      --panel-2: #1d2229;
+      --line: #2b3139;
+      --line-strong: #3a4450;
+      --text: #f4f6f8;
+      --muted: #9aa6b2;
+      --soft: #c8d0d8;
+      --cyan: #5ad7ff;
+      --green: #57d68d;
+      --amber: #f1bd5a;
+      --violet: #a995ff;
+      --red: #ff6b6b;
+      --shadow: 0 18px 60px rgba(0, 0, 0, 0.38);
+      --radius: 8px;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0) 34%),
+        var(--bg);
+      color: var(--text);
+      overflow: hidden;
+    }
+
+    button, select {
+      font: inherit;
+    }
+
+    .symbols {
+      position: absolute;
+      width: 0;
+      height: 0;
+      overflow: hidden;
+    }
+
+    .app {
+      display: grid;
+      grid-template-rows: 64px 1fr;
+      height: 100vh;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+      padding: 0 28px;
+      border-bottom: 1px solid var(--line);
+      background: rgba(16, 17, 20, 0.92);
+      backdrop-filter: blur(18px);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      min-width: 240px;
+    }
+
+    .brand-mark {
+      width: 34px;
+      height: 34px;
+      border: 1px solid var(--line-strong);
+      border-radius: var(--radius);
+      display: grid;
+      place-items: center;
+      background: #15191f;
+      color: var(--cyan);
+      box-shadow: inset 0 0 0 1px rgba(90, 215, 255, 0.08);
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 0;
+      line-height: 1.1;
+    }
+
+    .brand small {
+      display: block;
+      margin-top: 3px;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .top-status {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 10px;
+      min-width: 0;
+      flex-wrap: wrap;
+    }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 30px;
+      padding: 0 11px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #15181d;
+      color: var(--soft);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--muted);
+      box-shadow: 0 0 0 3px rgba(154,166,178,0.1);
+    }
+
+    .dot.ready { background: var(--green); box-shadow: 0 0 0 3px rgba(87,214,141,0.14); }
+    .dot.live { background: var(--red); box-shadow: 0 0 0 3px rgba(255,107,107,0.18); }
+    .dot.wait { background: var(--amber); box-shadow: 0 0 0 3px rgba(241,189,90,0.16); }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: 340px minmax(0, 1fr);
+      min-height: 0;
+    }
+
+    .side {
+      display: grid;
+      grid-template-rows: auto auto minmax(0, 1fr);
+      gap: 18px;
+      padding: 24px;
+      border-right: 1px solid var(--line);
+      background: #121419;
+      min-height: 0;
+    }
+
+    .control-row {
+      display: grid;
+      grid-template-columns: 1fr 52px;
+      gap: 10px;
+    }
+
+    .primary {
+      height: 52px;
+      border: 1px solid rgba(90, 215, 255, 0.4);
+      border-radius: var(--radius);
+      background: #163142;
+      color: #ecfbff;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      cursor: pointer;
+      box-shadow: 0 12px 34px rgba(90, 215, 255, 0.12);
+      transition: transform 140ms ease, border-color 140ms ease, background 140ms ease;
+    }
+
+    .primary:hover { transform: translateY(-1px); border-color: rgba(90, 215, 255, 0.72); }
+    .primary.active { background: #3a1f25; border-color: rgba(255, 107, 107, 0.62); box-shadow: 0 12px 34px rgba(255, 107, 107, 0.12); }
+
+    .icon-button {
+      height: 52px;
+      width: 52px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      color: var(--soft);
+      display: grid;
+      place-items: center;
+      cursor: pointer;
+      transition: transform 140ms ease, border-color 140ms ease, color 140ms ease;
+    }
+
+    .icon-button:hover { transform: translateY(-1px); border-color: var(--line-strong); color: var(--text); }
+
+    .panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      box-shadow: var(--shadow);
+    }
+
+    .meter-panel {
+      overflow: hidden;
+    }
+
+    .meter-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 14px 14px 10px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .meter-head span {
+      color: var(--soft);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    .level-number {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      font-size: 12px;
+    }
+
+    #scope {
+      display: block;
+      width: 100%;
+      height: 320px;
+      background: #11161b;
+    }
+
+    .history-legend {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 6px;
+      padding: 10px 12px;
+      border-top: 1px solid var(--line);
+      background: #131820;
+    }
+
+    .history-legend span {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      min-width: 0;
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .history-legend i {
+      width: 8px;
+      height: 8px;
+      border-radius: 2px;
+      flex: 0 0 auto;
+      background: var(--muted);
+    }
+
+    .history-legend .mic { background: var(--cyan); }
+    .history-legend .wake { background: var(--amber); }
+    .history-legend .vad { background: var(--green); }
+    .history-legend .rec { background: var(--red); }
+    .history-legend .asr { background: var(--violet); }
+    .history-legend .warn { background: var(--amber); }
+
+    .stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      border-top: 1px solid var(--line);
+    }
+
+    .stat {
+      padding: 13px 14px;
+      border-right: 1px solid var(--line);
+      min-width: 0;
+    }
+
+    .stat:last-child { border-right: 0; }
+    .stat label { display: block; color: var(--muted); font-size: 11px; margin-bottom: 5px; }
+    .stat strong { display: block; color: var(--text); font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+    .model-panel {
+      padding: 14px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .model-line {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      gap: 10px;
+      align-items: baseline;
+      min-width: 0;
+    }
+
+    .model-line label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .model-line span {
+      color: var(--text);
+      font-size: 13px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .event-log {
+      min-height: 0;
+      overflow: auto;
+      padding: 12px 0;
+      border-top: 1px solid var(--line);
+    }
+
+    .event {
+      display: grid;
+      grid-template-columns: 54px 1fr;
+      gap: 8px;
+      padding: 7px 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .event time {
+      color: #6f7a86;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .event strong {
+      display: block;
+      color: var(--soft);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .event small {
+      display: block;
+      margin-top: 2px;
+      color: #7f8a96;
+      font-size: 11px;
+      line-height: 1.35;
+    }
+
+    .main {
+      display: grid;
+      grid-template-rows: auto auto 1fr;
+      min-width: 0;
+      min-height: 0;
+      background: #0f1115;
+    }
+
+    .transcript-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 24px 30px 18px;
+      border-bottom: 1px solid var(--line);
+      gap: 18px;
+    }
+
+    .transcript-title h2 {
+      margin: 0;
+      font-size: 22px;
+      letter-spacing: 0;
+      line-height: 1.15;
+    }
+
+    .transcript-title p {
+      margin: 6px 0 0;
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .state-rail {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 12px;
+    }
+
+    .state-step {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-height: 28px;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #15191f;
+      color: var(--muted);
+      font-size: 12px;
+      white-space: nowrap;
+    }
+
+    .state-step::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: #5f6b77;
+    }
+
+    .state-step.active {
+      border-color: rgba(90, 215, 255, 0.46);
+      color: #e8f9ff;
+      background: #13202a;
+    }
+
+    .state-step.active::before {
+      background: var(--cyan);
+      box-shadow: 0 0 0 3px rgba(90, 215, 255, 0.12);
+    }
+
+    .state-step.wait.active {
+      border-color: rgba(241,189,90,0.46);
+      color: #fff4dd;
+      background: #241d10;
+    }
+
+    .state-step.wait.active::before {
+      background: var(--amber);
+      box-shadow: 0 0 0 3px rgba(241,189,90,0.14);
+    }
+
+    .state-step.record.active {
+      border-color: rgba(255,107,107,0.52);
+      color: #fff0f0;
+      background: #26161a;
+    }
+
+    .state-step.record.active::before {
+      background: var(--red);
+      box-shadow: 0 0 0 3px rgba(255,107,107,0.16);
+    }
+
+    .state-step.disabled {
+      opacity: 0.45;
+    }
+
+    .transcript-actions {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .config-strip {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(140px, 1fr));
+      gap: 10px 18px;
+      padding: 12px 30px;
+      border-bottom: 1px solid var(--line);
+      background: #11151a;
+      min-width: 0;
+    }
+
+    .config-strip .model-line {
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 8px;
+      min-width: 0;
+    }
+
+    .config-strip .model-line label {
+      font-size: 11px;
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+
+    .config-strip .model-line span {
+      font-size: 12px;
+    }
+
+    .secondary {
+      height: 38px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel);
+      color: var(--soft);
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 0 12px;
+      cursor: pointer;
+    }
+
+    .transcript-wrap {
+      min-height: 0;
+      overflow: auto;
+      padding: 28px 30px 40px;
+    }
+
+    .transcript {
+      max-width: 1120px;
+      margin: 0 auto;
+      display: grid;
+      gap: 12px;
+    }
+
+    .empty {
+      min-height: 48vh;
+      display: grid;
+      place-items: center;
+      color: var(--muted);
+      text-align: center;
+      border: 1px dashed var(--line);
+      border-radius: var(--radius);
+      background: #12151a;
+    }
+
+    .empty strong {
+      display: block;
+      color: var(--soft);
+      font-size: 15px;
+      margin-bottom: 6px;
+    }
+
+    .segment {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: 16px 18px;
+      background: #15191f;
+      display: grid;
+      gap: 10px;
+    }
+
+    .segment.final {
+      border-color: rgba(87, 214, 141, 0.28);
+      background: #131a18;
+    }
+
+    .segment.interim {
+      border-color: rgba(90, 215, 255, 0.32);
+      background: #121b22;
+    }
+
+    .segment-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      color: var(--muted);
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    .segment-text {
+      color: var(--text);
+      font-size: 22px;
+      line-height: 1.45;
+      overflow-wrap: anywhere;
+      white-space: pre-wrap;
+    }
+
+    .segment-details {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.3;
+    }
+
+    .segment-details span {
+      display: inline-flex;
+      align-items: center;
+      min-height: 22px;
+      padding: 0 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,0.025);
+      white-space: nowrap;
+    }
+
+    .segment.interim .segment-text {
+      color: #d9f6ff;
+    }
+
+    .segment-text.realtime-split {
+      color: #dbeaf0;
+    }
+
+    .stable-text {
+      color: #ffffff;
+      font-weight: 650;
+    }
+
+    .unstable-text {
+      color: #cfe2e8;
+      font-weight: 400;
+    }
+
+    .segment.interim.outlier .unstable-text {
+      color: #b7c9cf;
+    }
+
+    .icon {
+      width: 18px;
+      height: 18px;
+      stroke: currentColor;
+      stroke-width: 2;
+      fill: none;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+      flex: 0 0 auto;
+    }
+
+    .settings-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 20;
+      display: none;
+      justify-content: flex-end;
+      background: rgba(0, 0, 0, 0.62);
+      backdrop-filter: blur(4px);
+    }
+
+    .settings-backdrop.open { display: flex; }
+
+    .settings-drawer {
+      width: min(520px, 100vw);
+      height: 100%;
+      overflow: auto;
+      padding: 24px;
+      border-left: 1px solid var(--line-strong);
+      background: #121419;
+      box-shadow: var(--shadow);
+    }
+
+    .settings-head, .settings-actions {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .settings-head h2 { margin: 0; font-size: 19px; }
+    .settings-head p, .settings-note { color: var(--muted); font-size: 12px; line-height: 1.5; }
+    .settings-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin: 22px 0; }
+    .settings-field { display: grid; gap: 7px; min-width: 0; }
+    .settings-field.wide { grid-column: 1 / -1; }
+    .settings-field label { color: var(--soft); font-size: 12px; font-weight: 650; }
+    .settings-field input, .settings-field select {
+      width: 100%;
+      min-height: 40px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--panel-2);
+      color: var(--text);
+      font: inherit;
+    }
+    .settings-check { display: flex; align-items: center; gap: 9px; min-height: 40px; color: var(--soft); font-size: 13px; }
+    .settings-check input { width: 17px; height: 17px; }
+    .settings-group { grid-column: 1 / -1; margin-top: 6px; padding-top: 16px; border-top: 1px solid var(--line); color: var(--cyan); font-size: 12px; font-weight: 750; text-transform: uppercase; letter-spacing: .08em; }
+    .settings-status { min-height: 42px; margin-top: 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); color: var(--muted); font-size: 12px; white-space: pre-wrap; }
+    .settings-status.ok { color: var(--green); border-color: rgba(87,214,141,.35); }
+    .settings-status.error { color: var(--red); border-color: rgba(255,107,107,.35); }
+
+    @media (max-width: 920px) {
+      body { overflow: auto; }
+      .app { min-height: 100vh; height: auto; }
+      .topbar { padding: 0 16px; height: auto; min-height: 64px; align-items: flex-start; flex-direction: column; justify-content: center; gap: 10px; padding-top: 12px; padding-bottom: 12px; }
+      .top-status { justify-content: flex-start; }
+      .workspace { grid-template-columns: 1fr; }
+      .side { border-right: 0; border-bottom: 1px solid var(--line); }
+      .main { min-height: 70vh; }
+      .transcript-head { padding: 20px 18px 16px; align-items: flex-start; flex-direction: column; }
+      .config-strip { padding: 12px 18px; grid-template-columns: 1fr 1fr; }
+      .transcript-wrap { padding: 18px; }
+      .segment-text { font-size: 18px; }
+      .settings-grid { grid-template-columns: 1fr; }
+      .settings-field.wide, .settings-group { grid-column: 1; }
+    }
+  </style>
+</head>
+<body>
+  <svg class="symbols" aria-hidden="true">
+    <symbol id="i-wave" viewBox="0 0 24 24"><path d="M3 12h3l2-7 4 14 3-10 2 3h4"/></symbol>
+    <symbol id="i-mic" viewBox="0 0 24 24"><path d="M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3Z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></symbol>
+    <symbol id="i-stop" viewBox="0 0 24 24"><path d="M7 7h10v10H7z"/></symbol>
+    <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M6 7l1 14h10l1-14"/><path d="M9 7V4h6v3"/></symbol>
+    <symbol id="i-plug" viewBox="0 0 24 24"><path d="M9 7V3"/><path d="M15 7V3"/><path d="M7 7h10v5a5 5 0 0 1-10 0Z"/><path d="M12 17v4"/></symbol>
+    <symbol id="i-copy" viewBox="0 0 24 24"><path d="M8 8h11v11H8z"/><path d="M5 16H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h11a1 1 0 0 1 1 1v1"/></symbol>
+  </svg>
+
+  <div class="app">
+    <header class="topbar">
+      <div class="brand">
+        <div class="brand-mark"><svg class="icon"><use href="#i-wave"></use></svg></div>
+        <div>
+          <h1>VoiceSTT Live-Konsole</h1>
+          <small>FastAPI-Browserstream</small>
+        </div>
+      </div>
+      <div class="top-status">
+        <span class="chip"><span id="serverDot" class="dot wait"></span><span id="serverState">Verbindung wird hergestellt</span></span>
+        <span class="chip"><span id="recordDot" class="dot"></span><span id="recordState">Bereit</span></span>
+        <span class="chip"><span id="latency">0 ms</span></span>
+        <button id="settingsButton" class="secondary" type="button">Einstellungen</button>
+      </div>
+    </header>
+
+    <div class="workspace">
+      <aside class="side">
+        <div class="control-row">
+          <button id="streamButton" class="primary" type="button">
+            <svg class="icon"><use href="#i-mic"></use></svg>
+            <span>Stream starten</span>
+          </button>
+          <button id="clearButton" class="icon-button" type="button" title="Transkript löschen">
+            <svg class="icon"><use href="#i-trash"></use></svg>
+          </button>
+        </div>
+
+        <section class="panel meter-panel" aria-label="Audiosignal">
+          <div class="meter-head">
+            <span>Signal</span>
+            <strong id="levelNumber" class="level-number">-inf dB</strong>
+          </div>
+          <canvas id="scope" width="640" height="440"></canvas>
+          <div class="history-legend" aria-label="Verlaufslegende">
+            <span><i class="mic"></i>Mikro</span>
+            <span><i class="wake"></i>Weckwort</span>
+            <span><i class="vad"></i>VAD</span>
+            <span><i class="rec"></i>Aufnahme</span>
+            <span><i class="asr"></i>ASR</span>
+            <span><i class="warn"></i>Warnung</span>
+          </div>
+          <div class="stats">
+            <div class="stat"><label>Abtastrate</label><strong id="sampleRate">--</strong></div>
+            <div class="stat"><label>Warteschlange</label><strong id="queueDepth">0</strong></div>
+          </div>
+        </section>
+
+        <div id="eventLog" class="event-log" aria-label="Ereignisprotokoll"></div>
+      </aside>
+
+      <main class="main">
+        <div class="transcript-head">
+          <div class="transcript-title">
+            <h2>Transkript</h2>
+            <p id="subtitle">Bereit für die Mikrofoneingabe.</p>
+            <div class="state-rail" aria-label="Sitzungsstatus">
+              <span id="wakeStep" class="state-step wait disabled">Weckwort</span>
+              <span id="voiceStep" class="state-step wait">Sprache</span>
+              <span id="recordStep" class="state-step record">Aufnahme</span>
+              <span id="asrStep" class="state-step">ASR</span>
+            </div>
+          </div>
+          <div class="transcript-actions">
+            <button id="copyButton" class="secondary" type="button">
+              <svg class="icon"><use href="#i-copy"></use></svg>
+              <span>Kopieren</span>
+            </button>
+            <button id="connectButton" class="secondary" type="button">
+              <svg class="icon"><use href="#i-plug"></use></svg>
+              <span>Neu verbinden</span>
+            </button>
+          </div>
+        </div>
+        <section class="config-strip" aria-label="Serverkonfiguration">
+          <div class="model-line"><label>Profil</label><span id="tuningProfile">--</span></div>
+          <div class="model-line"><label>Final</label><span id="finalModel">--</span></div>
+          <div class="model-line"><label>Realtime</label><span id="realtimeModel">--</span></div>
+          <div class="model-line"><label>Engine</label><span id="engineName">--</span></div>
+          <div class="model-line"><label>Gerät</label><span id="deviceName">--</span></div>
+          <div class="model-line"><label>Taktung</label><span id="cadenceInfo">--</span></div>
+          <div class="model-line"><label>VAD</label><span id="vadInfo">--</span></div>
+          <div class="model-line"><label>Weckwort</label><span id="wakeInfo">--</span></div>
+          <div class="model-line"><label>Dekodierung</label><span id="decodeInfo">--</span></div>
+        </section>
+        <div id="transcriptWrap" class="transcript-wrap">
+          <div id="transcript" class="transcript">
+            <div class="empty"><div><strong>Noch kein Transkript</strong><span>Starte den Stream und sprich.</span></div></div>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+
+  <div id="settingsBackdrop" class="settings-backdrop" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <form class="settings-drawer" onsubmit="return false">
+      <div class="settings-head">
+        <div><h2 id="settingsTitle">Servereinstellungen</h2><p>Änderungen gelten für neue Sitzungen. Bei einem Modellwechsel trennt sich diese Oberfläche, während die Worker neu geladen werden.</p></div>
+        <button id="settingsClose" class="secondary" type="button">Schließen</button>
+      </div>
+      <div class="settings-grid">
+        <div class="settings-field wide"><label for="adminKey">Admin-Schlüssel</label><input id="adminKey" type="password" autocomplete="off" placeholder="Wird nur im Browserspeicher gehalten"></div>
+        <div class="settings-group">Modelle und Sprache</div>
+        <div class="settings-field"><label for="finalModelSelect">Finales Modell</label><select id="finalModelSelect"></select></div>
+        <div class="settings-field"><label for="realtimeModelSelect">Realtime-Modell</label><select id="realtimeModelSelect"></select></div>
+        <div class="settings-field"><label for="languageSelect">Sprache</label><input id="languageSelect" value="de" maxlength="16"></div>
+        <div class="settings-field"><label>Modellstatus</label><div id="modelLifecycleState" class="settings-note">Status wird geladen ...</div></div>
+        <label class="settings-check"><input id="modelMemoryPolicy" type="checkbox"> CPU-Modellspeicher-Begrenzung erzwingen</label>
+        <label class="settings-check"><input id="allowTwoMediumModels" type="checkbox"> Zwei Modelle bis Medium-Größe erlauben</label>
+        <label class="settings-check"><input id="modelIdleUnload" type="checkbox"> Transkriptionsmodelle bei Inaktivität entladen</label>
+        <div class="settings-field"><label for="modelIdleMinutes">Inaktivitätszeit (Minuten)</label><input id="modelIdleMinutes" type="number" min="0.02" step="1" value="60"></div>
+        <div class="settings-field wide"><label>Speicheraktionen</label><div class="settings-actions" style="justify-content:flex-start;margin-top:0"><button id="modelsLoad" class="secondary" type="button">Modelle laden</button><button id="modelsUnload" class="secondary" type="button">Aus RAM entladen</button></div><div class="settings-note">Die nächste Transkription lädt entladene Modelle automatisch neu. Aktives Audio und laufende Anfragen werden nie unterbrochen.</div></div>
+        <div class="settings-group">Weckwort</div>
+        <label class="settings-check"><input id="wakeEnabled" type="checkbox"> Weckwort-Erkennung aktivieren</label>
+        <div class="settings-field"><label for="wakeBackend">Backend</label><select id="wakeBackend"><option value="openwakeword">OpenWakeWord</option><option value="pvporcupine">Porcupine</option></select></div>
+        <div class="settings-field wide"><label for="wakeWords">Weckwort-Modell</label><select id="wakeWords"></select></div>
+        <div class="settings-field"><label for="wakeSensitivity">Empfindlichkeit</label><input id="wakeSensitivity" type="number" min="0" max="1" step="0.05" value="0.5"></div>
+        <div class="settings-field"><label for="wakeTimeout">Sprach-Timeout (s)</label><input id="wakeTimeout" type="number" min="0" step="0.5" value="10"></div>
+        <div class="settings-field"><label for="wakeFollowup">Nachfragefenster (s)</label><input id="wakeFollowup" type="number" min="0" step="0.5" value="5"></div>
+        <div class="settings-group">Anfrageprotokollierung</div>
+        <label class="settings-check"><input id="loggingEnabled" type="checkbox"> Strukturierte Anfrageprotokollierung aktivieren</label>
+        <label class="settings-check"><input id="loggingStdout" type="checkbox"> JSON-Ereignisse an Standardausgabe / Dozzle senden</label>
+        <label class="settings-check"><input id="loggingTranscripts" type="checkbox"> Transkripttext einschließen</label>
+        <label class="settings-check"><input id="loggingAudio" type="checkbox"> Hochgeladene Audiodateien archivieren</label>
+      </div>
+      <div class="settings-actions">
+        <button id="settingsRefresh" class="secondary" type="button">Aktualisieren</button>
+        <button id="settingsApply" class="primary" type="button">Einstellungen übernehmen</button>
+      </div>
+      <div id="settingsStatus" class="settings-status">Gib den Admin-Schlüssel für die Remote-/Docker-Verwaltung ein.</div>
+    </form>
+  </div>
+
+  <script>
+    const ui = {
+      serverDot: document.getElementById("serverDot"),
+      serverState: document.getElementById("serverState"),
+      recordDot: document.getElementById("recordDot"),
+      recordState: document.getElementById("recordState"),
+      latency: document.getElementById("latency"),
+      streamButton: document.getElementById("streamButton"),
+      clearButton: document.getElementById("clearButton"),
+      connectButton: document.getElementById("connectButton"),
+      copyButton: document.getElementById("copyButton"),
+      transcript: document.getElementById("transcript"),
+      transcriptWrap: document.getElementById("transcriptWrap"),
+      subtitle: document.getElementById("subtitle"),
+      wakeStep: document.getElementById("wakeStep"),
+      voiceStep: document.getElementById("voiceStep"),
+      recordStep: document.getElementById("recordStep"),
+      asrStep: document.getElementById("asrStep"),
+      eventLog: document.getElementById("eventLog"),
+      scope: document.getElementById("scope"),
+      levelNumber: document.getElementById("levelNumber"),
+      sampleRate: document.getElementById("sampleRate"),
+      queueDepth: document.getElementById("queueDepth"),
+      tuningProfile: document.getElementById("tuningProfile"),
+      finalModel: document.getElementById("finalModel"),
+      realtimeModel: document.getElementById("realtimeModel"),
+      engineName: document.getElementById("engineName"),
+      deviceName: document.getElementById("deviceName"),
+      cadenceInfo: document.getElementById("cadenceInfo"),
+      vadInfo: document.getElementById("vadInfo"),
+      wakeInfo: document.getElementById("wakeInfo"),
+      decodeInfo: document.getElementById("decodeInfo")
+    };
+
+    Object.assign(ui, {
+      settingsButton: document.getElementById("settingsButton"),
+      settingsBackdrop: document.getElementById("settingsBackdrop"),
+      settingsClose: document.getElementById("settingsClose"),
+      settingsRefresh: document.getElementById("settingsRefresh"),
+      settingsApply: document.getElementById("settingsApply"),
+      settingsStatus: document.getElementById("settingsStatus"),
+      adminKey: document.getElementById("adminKey"),
+      finalModelSelect: document.getElementById("finalModelSelect"),
+      realtimeModelSelect: document.getElementById("realtimeModelSelect"),
+      languageSelect: document.getElementById("languageSelect"),
+      modelLifecycleState: document.getElementById("modelLifecycleState"),
+      modelMemoryPolicy: document.getElementById("modelMemoryPolicy"),
+      allowTwoMediumModels: document.getElementById("allowTwoMediumModels"),
+      modelIdleUnload: document.getElementById("modelIdleUnload"),
+      modelIdleMinutes: document.getElementById("modelIdleMinutes"),
+      modelsLoad: document.getElementById("modelsLoad"),
+      modelsUnload: document.getElementById("modelsUnload"),
+      wakeEnabled: document.getElementById("wakeEnabled"),
+      wakeBackend: document.getElementById("wakeBackend"),
+      wakeWords: document.getElementById("wakeWords"),
+      wakeSensitivity: document.getElementById("wakeSensitivity"),
+      wakeTimeout: document.getElementById("wakeTimeout"),
+      wakeFollowup: document.getElementById("wakeFollowup"),
+      loggingEnabled: document.getElementById("loggingEnabled"),
+      loggingStdout: document.getElementById("loggingStdout"),
+      loggingTranscripts: document.getElementById("loggingTranscripts"),
+      loggingAudio: document.getElementById("loggingAudio")
+    });
+
+    const state = {
+      socket: null,
+      clientId: null,
+      connected: false,
+      streaming: false,
+      stream: null,
+      audioContext: null,
+      source: null,
+      worklet: null,
+      processor: null,
+      zeroGain: null,
+      sampleRate: 0,
+      chunkBuffers: [],
+      bufferedSamples: 0,
+      targetChunkMs: 40,
+      latestSamples: new Float32Array(0),
+      level: 0,
+      smoothedLevel: 0,
+      levelHistory: [],
+      historyEvents: [],
+      lastHistoryBucketAt: 0,
+      clientSpeechActive: false,
+      clientSpeechLastAboveAt: 0,
+      lastServerState: null,
+      wakeEnabled: false,
+      adminData: null,
+      timelineEvents: [],
+      segments: [],
+      lastPingAt: 0
+    };
+
+    const historyConfig = {
+      seconds: 30,
+      bucketMs: 50,
+      floorDb: -60,
+      speechOnDb: -42,
+      speechOffDb: -50,
+      speechHoldMs: 360
+    };
+
+    function nowTime() {
+      return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+    }
+
+    function formatWallTime(timestamp) {
+      const number = Number(timestamp);
+      if (!Number.isFinite(number)) return nowTime();
+      return new Date(number * 1000).toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit"
+      });
+    }
+
+    function addEvent(text, detail, timestamp) {
+      const row = document.createElement("div");
+      row.className = "event";
+      const time = document.createElement("time");
+      time.textContent = formatWallTime(timestamp);
+      const body = document.createElement("span");
+      const title = document.createElement("strong");
+      title.textContent = text;
+      body.append(title);
+      if (detail) {
+        const small = document.createElement("small");
+        small.textContent = detail;
+        body.append(small);
+      }
+      row.append(time, body);
+      ui.eventLog.prepend(row);
+      while (ui.eventLog.children.length > 30) ui.eventLog.lastChild.remove();
+    }
+
+    function setServerState(text, mode) {
+      ui.serverState.textContent = text;
+      ui.serverDot.className = "dot " + (mode || "wait");
+    }
+
+    function setRecordState(text, mode) {
+      ui.recordState.textContent = text;
+      let className = "";
+      if (mode === true) className = "live";
+      else if (typeof mode === "string") className = mode;
+      ui.recordDot.className = "dot " + className;
+    }
+
+    function stateLabel(serverState) {
+      const labels = {
+        idle: "Bereit",
+        listening: "Warte auf Sprache",
+        voice: "Sprache erkannt",
+        silence: "Stille",
+        wakeword_wait: "Warte auf Weckwort",
+        wakeword_detected: "Warte auf Sprache",
+        wakeword_timeout: "Weckwort-Zeitüberschreitung",
+        recording: "Aufnahme",
+        transcribing: "Transkription läuft",
+        closed: "Geschlossen"
+      };
+      return labels[serverState] || String(serverState || "Bereit");
+    }
+
+    function stateTone(serverState) {
+      if (serverState === "recording" || serverState === "transcribing" || serverState === "voice") return "live";
+      if (serverState === "wakeword_wait" || serverState === "wakeword_detected" || serverState === "listening") return "wait";
+      return "";
+    }
+
+    function updateStateRail(serverState) {
+      const stateName = serverState || state.lastServerState || "idle";
+      const wakeActive = stateName === "wakeword_wait" || stateName === "wakeword_timeout";
+      const voiceActive = stateName === "listening" || stateName === "voice" || stateName === "silence" || stateName === "wakeword_detected";
+      const recordActive = stateName === "recording";
+      const asrActive = stateName === "transcribing";
+
+      ui.wakeStep.className = "state-step wait" + (state.wakeEnabled ? "" : " disabled") + (wakeActive ? " active" : "");
+      ui.voiceStep.className = "state-step wait" + (voiceActive ? " active" : "");
+      ui.recordStep.className = "state-step record" + (recordActive ? " active" : "");
+      ui.asrStep.className = "state-step" + (asrActive ? " active" : "");
+    }
+
+    function levelToDb(level) {
+      return Math.max(
+        historyConfig.floorDb,
+        Math.min(0, 20 * Math.log10(Math.max(0.00001, level)))
+      );
+    }
+
+    function pruneHistory(timestamp) {
+      const cutoff = timestamp - historyConfig.seconds * 1000;
+      while (state.levelHistory.length && state.levelHistory[0].time < cutoff) {
+        state.levelHistory.shift();
+      }
+      while (state.historyEvents.length && state.historyEvents[0].time < cutoff) {
+        state.historyEvents.shift();
+      }
+    }
+
+    function addHistoryEvent(kind, label, timestamp, dedupeMs) {
+      const eventTime = timestamp || performance.now();
+      if (dedupeMs) {
+        const recent = state.historyEvents[state.historyEvents.length - 1];
+        if (recent && recent.kind === kind && eventTime - recent.time < dedupeMs) return;
+      }
+      state.historyEvents.push({ kind, label, time: eventTime });
+      pruneHistory(eventTime);
+    }
+
+    function markServerState(serverState) {
+      if (!serverState || serverState === state.lastServerState) return;
+      state.lastServerState = serverState;
+      const labels = {
+        idle: "bereit",
+        listening: "hören",
+        voice: "sprache",
+        silence: "stille",
+        wakeword_wait: "weck",
+        wakeword_detected: "weck+",
+        wakeword_timeout: "weck!",
+        recording: "aufn",
+        transcribing: "asr",
+        closed: "zu"
+      };
+      addHistoryEvent(serverState, labels[serverState] || String(serverState).slice(0, 5));
+    }
+
+    function recordLevelSample(level) {
+      const timestamp = performance.now();
+      const smoothed = state.smoothedLevel
+        ? state.smoothedLevel * 0.82 + level * 0.18
+        : level;
+      state.smoothedLevel = smoothed;
+
+      const bucket = Math.floor(timestamp / historyConfig.bucketMs);
+      const last = state.levelHistory[state.levelHistory.length - 1];
+      if (!last || bucket !== state.lastHistoryBucketAt) {
+        state.levelHistory.push({ time: timestamp, level: smoothed, peak: level });
+        state.lastHistoryBucketAt = bucket;
+      } else {
+        last.level = last.level * 0.65 + smoothed * 0.35;
+        last.peak = Math.max(last.peak, level);
+        last.time = timestamp;
+      }
+
+      const db = levelToDb(smoothed);
+      if (db > historyConfig.speechOnDb) {
+        state.clientSpeechLastAboveAt = timestamp;
+      }
+      if (!state.clientSpeechActive && db > historyConfig.speechOnDb) {
+        state.clientSpeechActive = true;
+        addHistoryEvent("mic", "mikro", timestamp, 500);
+      } else if (
+        state.clientSpeechActive
+        && db < historyConfig.speechOffDb
+        && timestamp - state.clientSpeechLastAboveAt > historyConfig.speechHoldMs
+      ) {
+        state.clientSpeechActive = false;
+      }
+
+      pruneHistory(timestamp);
+    }
+
+    function wsUrl() {
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      return proto + "//" + location.host + "/ws/transcribe";
+    }
+
+    function adminHeaders(includeJson = false) {
+      const headers = {};
+      const key = ui.adminKey.value.trim();
+      if (key) headers["X-VoiceSTT-Admin-Key"] = key;
+      if (includeJson) headers["Content-Type"] = "application/json";
+      return headers;
+    }
+
+    async function apiJson(path, options = {}) {
+      const response = await fetch(path, {
+        ...options,
+        headers: { ...adminHeaders(Boolean(options.body)), ...(options.headers || {}) }
+      });
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch (_) {
+        payload = {};
+      }
+      if (!response.ok) {
+        throw new Error(payload.error || payload.detail || `${response.status} ${response.statusText}`);
+      }
+      return payload;
+    }
+
+    function setSettingsStatus(message, tone = "") {
+      ui.settingsStatus.textContent = message;
+      ui.settingsStatus.className = "settings-status" + (tone ? " " + tone : "");
+    }
+
+    function addModelOption(select, entry, active) {
+      const option = document.createElement("option");
+      option.value = entry.id;
+      option.dataset.engine = entry.engine;
+      option.textContent = `${entry.id} (${entry.engine}${entry.loaded ? ", geladen" : ""})`;
+      if (String(entry.id).toLowerCase() === String(active.model).toLowerCase()
+          && entry.engine === active.engine) option.selected = true;
+      select.append(option);
+    }
+
+    function populateModelSelect(select, entries, active) {
+      select.replaceChildren();
+      for (const entry of entries) addModelOption(select, entry, active);
+      const exact = Array.from(select.options).some(option => option.selected
+        && option.value.toLowerCase() === String(active.model).toLowerCase());
+      if (!exact) {
+        const fallback = { id: active.model, engine: active.engine, loaded: true };
+        addModelOption(select, fallback, active);
+      }
+    }
+
+    function normalizeWakeBackend(backend) {
+      return ["porcupine", "pvp", "pvporcupine"].includes(String(backend || "").toLowerCase())
+        ? "pvporcupine"
+        : "openwakeword";
+    }
+
+    function populateWakeWordSelect(backend, selectedValue) {
+      const normalizedBackend = normalizeWakeBackend(backend);
+      const catalog = state.adminData?.wake?.availableModels || {};
+      const models = catalog[normalizedBackend] || [];
+      ui.wakeWords.replaceChildren();
+      for (const model of models) {
+        const option = document.createElement("option");
+        option.value = model.id;
+        option.textContent = model.label || model.id;
+        option.dataset.path = model.path || "";
+        if (String(model.id).toLowerCase() === String(selectedValue || "").toLowerCase()) {
+          option.selected = true;
+        }
+        ui.wakeWords.append(option);
+      }
+      if (!ui.wakeWords.options.length) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "Keine verfügbaren Weckwort-Modelle";
+        option.disabled = true;
+        option.selected = true;
+        ui.wakeWords.append(option);
+      }
+      ui.wakeWords.disabled = models.length === 0;
+    }
+
+    function renderModelLifecycle(lifecycle) {
+      if (!lifecycle) return;
+      const stateLabel = lifecycle.loaded ? "In RAM geladen" : "Aus RAM entladen";
+      const idle = Number(lifecycle.idleSeconds || 0);
+      const timeout = Number(lifecycle.idleTimeoutSeconds || 0);
+      ui.modelLifecycleState.textContent = `${stateLabel} · inaktiv ${Math.round(idle)}s`
+        + (lifecycle.automaticUnloadEnabled ? ` / ${Math.round(timeout)}s` : " · automatisches Entladen aus");
+      ui.modelMemoryPolicy.checked = Boolean(lifecycle.memoryPolicyEnabled);
+      ui.allowTwoMediumModels.checked = Boolean(lifecycle.allowTwoMediumModels);
+      ui.modelIdleUnload.checked = Boolean(lifecycle.automaticUnloadEnabled);
+      ui.modelIdleMinutes.value = Math.max(0.02, timeout / 60);
+      ui.modelsLoad.disabled = Boolean(lifecycle.loaded);
+      ui.modelsUnload.disabled = !lifecycle.loaded;
+    }
+
+    async function loadAdminSettings() {
+      setSettingsStatus("Servereinstellungen werden geladen ...");
+      if (!ui.adminKey.value.trim()) {
+        const config = await apiJson("/api/config");
+        if (config.adminAuthRequired) {
+          state.adminData = null;
+          throw new Error("Gib den Admin-Schlüssel ein und klicke anschließend auf Aktualisieren.");
+        }
+      }
+      const [models, language, wake, logging] = await Promise.all([
+        apiJson("/api/models"),
+        apiJson("/api/language"),
+        apiJson("/api/wake-word"),
+        apiJson("/api/logging")
+      ]);
+      state.adminData = { models, language, wake, logging };
+      populateModelSelect(ui.finalModelSelect, models.data, models.active.final);
+      populateModelSelect(ui.realtimeModelSelect, models.data, models.active.realtime);
+      ui.languageSelect.value = language.language || "de";
+      ui.wakeEnabled.checked = Boolean(wake.enabled);
+      ui.wakeBackend.value = normalizeWakeBackend(wake.backend);
+      populateWakeWordSelect(ui.wakeBackend.value, wake.words);
+      ui.wakeSensitivity.value = wake.sensitivity ?? 0.5;
+      ui.wakeTimeout.value = wake.timeout ?? 10;
+      ui.wakeFollowup.value = wake.followupWindow ?? 5;
+      ui.loggingEnabled.checked = Boolean(logging.enabled);
+      ui.loggingStdout.checked = Boolean(logging.stdout);
+      ui.loggingTranscripts.checked = Boolean(logging.transcripts);
+      ui.loggingAudio.checked = Boolean(logging.saveAudio);
+      renderModelLifecycle(models.lifecycle);
+      setSettingsStatus("Einstellungen geladen. Änderungen gelten für neue Anfragen und Sitzungen.", "ok");
+    }
+
+    function closeSocketForModelSwitch() {
+      if (!state.socket || state.socket.readyState === WebSocket.CLOSED) return Promise.resolve();
+      return new Promise(resolve => {
+        const socket = state.socket;
+        const timeout = setTimeout(resolve, 2000);
+        socket.addEventListener("close", () => {
+          clearTimeout(timeout);
+          resolve();
+        }, { once: true });
+        socket.close(1000, "Modellwechsel");
+      });
+    }
+
+    async function applyAdminSettings() {
+      if (!state.adminData) await loadAdminSettings();
+      ui.settingsApply.disabled = true;
+      setSettingsStatus("Einstellungen werden übernommen ...");
+      let reconnect = false;
+      try {
+        const language = ui.languageSelect.value.trim().toLowerCase() || "de";
+        await apiJson("/api/language", {
+          method: "PUT", body: JSON.stringify({ language })
+        });
+        await apiJson("/api/wake-word", {
+          method: "PUT",
+          body: JSON.stringify({
+            enabled: ui.wakeEnabled.checked,
+            backend: ui.wakeBackend.value,
+            words: ui.wakeWords.value,
+            sensitivity: Number(ui.wakeSensitivity.value),
+            timeout: Number(ui.wakeTimeout.value),
+            followupWindow: Number(ui.wakeFollowup.value),
+            openwakewordModelPaths: ui.wakeBackend.value === "openwakeword"
+              ? (ui.wakeWords.selectedOptions[0]?.dataset.path || null)
+              : undefined
+          })
+        });
+        await apiJson("/api/logging", {
+          method: "PUT",
+          body: JSON.stringify({
+            enabled: ui.loggingEnabled.checked,
+            stdout: ui.loggingStdout.checked,
+            transcripts: ui.loggingTranscripts.checked,
+            saveAudio: ui.loggingAudio.checked
+          })
+        });
+        await apiJson("/api/models/lifecycle", {
+          method: "PUT",
+          body: JSON.stringify({
+            automaticUnloadEnabled: ui.modelIdleUnload.checked,
+            idleTimeoutSeconds: Math.max(1, Number(ui.modelIdleMinutes.value) * 60),
+            memoryPolicyEnabled: ui.modelMemoryPolicy.checked,
+            allowTwoMediumModels: ui.allowTwoMediumModels.checked
+          })
+        });
+
+        const previous = state.adminData.models.active;
+        const finalOption = ui.finalModelSelect.selectedOptions[0];
+        const realtimeOption = ui.realtimeModelSelect.selectedOptions[0];
+        const modelsChanged = finalOption && realtimeOption && (
+          finalOption.value !== previous.final.model
+          || finalOption.dataset.engine !== previous.final.engine
+          || realtimeOption.value !== previous.realtime.model
+          || realtimeOption.dataset.engine !== previous.realtime.engine
+        );
+        if (modelsChanged) {
+          if (state.streaming) stopStream();
+          reconnect = state.connected;
+          await closeSocketForModelSwitch();
+          await new Promise(resolve => setTimeout(resolve, 150));
+          setSettingsStatus("CPU-Modell-Worker werden neu geladen. Dies kann einige Minuten dauern ...");
+          await apiJson("/api/models/active", {
+            method: "PUT",
+            body: JSON.stringify({
+              model: finalOption.value,
+              transcription_engine: finalOption.dataset.engine,
+              realtime_model: realtimeOption.value,
+              realtime_transcription_engine: realtimeOption.dataset.engine
+            })
+          });
+        }
+        await loadAdminSettings();
+        setSettingsStatus("Einstellungen erfolgreich übernommen.", "ok");
+        addEvent("Servereinstellungen aktualisiert");
+      } catch (error) {
+        setSettingsStatus("Aktualisierung fehlgeschlagen: " + error.message, "error");
+        addEvent("Einstellungsänderung fehlgeschlagen: " + error.message);
+      } finally {
+        ui.settingsApply.disabled = false;
+        if (reconnect) connectSocket().catch(error => addEvent(error.message));
+      }
+    }
+
+    async function setModelsLoaded(load) {
+      ui.modelsLoad.disabled = true;
+      ui.modelsUnload.disabled = true;
+      setSettingsStatus(load ? "CPU-Transkriptionsmodelle werden geladen ..." : "Transkriptionsmodelle werden aus dem RAM entladen ...");
+      try {
+        if (!load && state.streaming) {
+          stopStream();
+          await new Promise(resolve => setTimeout(resolve, 250));
+        }
+        const result = await apiJson(load ? "/api/models/load" : "/api/models/unload", { method: "POST" });
+        await loadAdminSettings();
+        renderModelLifecycle(result.lifecycle);
+        setSettingsStatus(load ? "Modelle erfolgreich geladen." : "Modelle entladen. Sie werden bei der nächsten Transkription neu geladen.", "ok");
+        addEvent(load ? "Modelle in den RAM geladen" : "Modelle aus dem RAM entladen");
+      } catch (error) {
+        setSettingsStatus((load ? "Laden" : "Entladen") + " fehlgeschlagen: " + error.message, "error");
+        await loadAdminSettings().catch(() => {});
+      }
+    }
+
+    function connectSocket() {
+      if (state.socket && state.socket.readyState === WebSocket.OPEN) {
+        return Promise.resolve(state.socket);
+      }
+
+      return new Promise((resolve, reject) => {
+        const socket = new WebSocket(wsUrl());
+        socket.binaryType = "arraybuffer";
+        state.socket = socket;
+        setServerState("Verbindung wird hergestellt", "wait");
+
+        socket.onopen = () => {
+          state.connected = true;
+          setServerState("Verbunden", "ready");
+          addEvent("WebSocket verbunden");
+          resolve(socket);
+        };
+
+        socket.onmessage = (event) => handleServerMessage(JSON.parse(event.data));
+
+        socket.onerror = () => {
+          setServerState("Socket-Fehler", "wait");
+          addEvent("WebSocket-Fehler");
+          reject(new Error("WebSocket-Fehler"));
+        };
+
+        socket.onclose = () => {
+          state.connected = false;
+          setServerState("Getrennt", "wait");
+          addEvent("WebSocket getrennt");
+        };
+      });
+    }
+
+    function handleServerMessage(message) {
+      if (message.type === "hello") {
+        state.clientId = message.clientId;
+        applySettings(message.settings);
+      } else if (message.type === "ready") {
+        applySettings(message.settings);
+        setServerState("Bereit", "ready");
+        addEvent("Recorder bereit");
+      } else if (message.type === "status") {
+        ui.queueDepth.textContent = String(message.queueDepth || 0);
+        if (message.state) {
+          const label = stateLabel(message.state);
+          ui.subtitle.textContent = label;
+          setRecordState(label, stateTone(message.state));
+          updateStateRail(message.state);
+          markServerState(message.state);
+        }
+      } else if (message.type === "timeline") {
+        addTimelineEvent(message);
+      } else if (message.type === "realtime") {
+        upsertSegment(message.segmentId, message.displayText || message.text, false, {
+          segment: message.segment || null,
+          rawText: message.rawText || message.text || "",
+          displayText: message.displayText || message.text || "",
+          stableText: message.stableText || message.committedStableText || "",
+          stableDelta: message.stableDelta || "",
+          unstableText: message.visualUnstableText || message.unstableText || "",
+          committedStableText: message.committedStableText || message.stableText || "",
+          consensusText: message.consensusText || "",
+          consensusDisplayText: message.consensusDisplayText || "",
+          publicConsensusAligned: message.publicConsensusAligned !== false,
+          internalRevision: Boolean(message.internalRevision),
+          sequence: message.sequence,
+          isOutlier: Boolean(message.isOutlier),
+          stablePrefixConflict: Boolean(message.stablePrefixConflict)
+        });
+        addHistoryEvent("realtime", "rt", performance.now(), 1200);
+      } else if (message.type === "final") {
+        upsertSegment(message.segmentId, message.text, true, { segment: message.segment || null });
+        addHistoryEvent("final", "final");
+      } else if (message.type === "clear") {
+        state.segments = [];
+        state.timelineEvents = [];
+        renderTranscript();
+        addEvent("Transkript gelöscht");
+      } else if (message.type === "error") {
+        addEvent("Fehler: " + message.message);
+        addHistoryEvent("error", "fehl");
+      } else if (message.type === "warning") {
+        addEvent("Warnung: " + message.message);
+        addHistoryEvent("warning", "warn", performance.now(), 1200);
+      } else if (message.type === "pong") {
+        ui.latency.textContent = Math.max(0, Math.round(performance.now() - state.lastPingAt)) + " ms";
+      }
+    }
+
+    function addTimelineEvent(message) {
+      state.timelineEvents.unshift(message);
+      state.timelineEvents = state.timelineEvents.slice(0, 80);
+      addEvent(timelineTitle(message), timelineDetail(message), message.timestamp);
+      const kind = timelineHistoryKind(message.event);
+      if (kind) addHistoryEvent(kind, timelineHistoryLabel(message.event), performance.now(), 600);
+    }
+
+    function timelineTitle(message) {
+      const labels = {
+        final_transcript: "Finales Transkript",
+        realtime_transcript: "Realtime-Aktualisierung",
+        recording_ended: "Aufnahme beendet",
+        recording_started: "Aufnahme gestartet",
+        transcription_started: "Finale Transkription gestartet",
+        wakeword_detected: "Weckwort erkannt",
+        wakeword_followup_started: "Nachfragefenster aktiv",
+        wakeword_followup_timeout: "Nachfragefenster abgelaufen",
+        wakeword_timeout: "Weckwort-Zeitüberschreitung",
+        wakeword_wait_ended: "Warten auf Weckwort beendet",
+        wakeword_wait_started: "Warte auf Weckwort"
+      };
+      return labels[message.event] || message.event || "Zeitleistenereignis";
+    }
+
+    function timelineDetail(message) {
+      const details = [];
+      if (message.segmentId) details.push("Segment " + message.segmentId);
+      const segment = message.segment || {};
+      if (segment.recordingStartedAt) details.push("Start " + formatWallTime(segment.recordingStartedAt));
+      if (segment.recordingEndedAt) details.push("Ende " + formatWallTime(segment.recordingEndedAt));
+      if (Number.isFinite(Number(segment.durationSeconds))) {
+        details.push("Dauer " + formatSeconds(segment.durationSeconds));
+      } else if (Number.isFinite(Number(message.durationSeconds))) {
+        details.push("Dauer " + formatSeconds(message.durationSeconds));
+      }
+      if (segment.preRecordingBuffer) {
+        details.push("Vorlauf " + formatSeconds(segment.preRecordingBuffer.includedSeconds));
+      }
+      const wake = message.wakeWord || segment.wakeWord;
+      if (wake && wake.enabled) {
+        if (wake.detectedAt) details.push("Weckwort " + formatWallTime(wake.detectedAt));
+        else if (wake.timeoutAt) details.push("Zeitüberschreitung " + formatWallTime(wake.timeoutAt));
+        else if (wake.state) details.push(wake.state.replaceAll("_", " "));
+      }
+      if (message.reason) details.push(message.reason);
+      return details.join(" - ");
+    }
+
+    function timelineHistoryKind(eventName) {
+      if (!eventName) return null;
+      if (eventName === "wakeword_detected") return "wakeword_detected";
+      if (eventName === "wakeword_followup_started") return "wakeword_detected";
+      if (eventName === "wakeword_followup_timeout") return "wakeword_timeout";
+      if (eventName === "wakeword_timeout") return "wakeword_timeout";
+      if (eventName.startsWith("wakeword")) return "wakeword_wait";
+      if (eventName.startsWith("recording")) return "recording";
+      if (eventName.startsWith("realtime")) return "realtime";
+      if (eventName.startsWith("final") || eventName.startsWith("transcription")) return "transcribing";
+      return null;
+    }
+
+    function timelineHistoryLabel(eventName) {
+      const labels = {
+        final_transcript: "final",
+        realtime_transcript: "rt",
+        recording_ended: "ende",
+        recording_started: "aufn",
+        transcription_started: "asr",
+        wakeword_detected: "weck+",
+        wakeword_followup_started: "sprache",
+        wakeword_followup_timeout: "weck!",
+        wakeword_timeout: "weck!",
+        wakeword_wait_started: "weck"
+      };
+      return labels[eventName] || "evt";
+    }
+
+    function applySettings(settings) {
+      if (!settings) return;
+      const finalEngine = settings.transcription_engine || "--";
+      const realtimeEngine = settings.realtime_transcription_engine || settings.transcription_engine || "--";
+      const usesParakeet = String(finalEngine).includes("parakeet") || String(realtimeEngine).includes("parakeet");
+      state.wakeEnabled = Boolean(settings.wake_word_enabled);
+      updateStateRail(state.lastServerState || "idle");
+      ui.tuningProfile.textContent = settings.tuning_profile === "custom"
+        ? "benutzerdefiniert"
+        : (settings.tuning_profile || "benutzerdefiniert");
+      ui.finalModel.textContent = settings.model || "--";
+      if (settings.use_main_model_for_realtime) {
+        ui.realtimeModel.textContent = (settings.model || "--") + " (wie final)";
+        ui.engineName.textContent = finalEngine + " / gleich";
+      } else {
+        ui.realtimeModel.textContent = settings.realtime_model || settings.model || "--";
+        ui.engineName.textContent = finalEngine + " / " + realtimeEngine;
+      }
+      ui.deviceName.textContent = (settings.device || "--") + " / " + (settings.compute_type || "Standard");
+      ui.cadenceInfo.textContent = formatSeconds(settings.realtime_processing_pause) + " Realtime-Pause, Stapel " + settings.realtime_batch_size;
+      ui.vadInfo.textContent = formatSeconds(settings.post_speech_silence_duration) + " finale Stille, min. " + formatSeconds(settings.min_length_of_recording);
+      ui.wakeInfo.textContent = settings.wake_word_enabled
+        ? (settings.wakeword_backend || "Weckwort") + " / " + (settings.wake_words || "Modell")
+        : "Aus";
+      ui.decodeInfo.textContent = usesParakeet
+        ? "Parakeet: Stapel " + settings.batch_size + "; Beam ungenutzt"
+        : "Beam " + settings.beam_size + " final / " + settings.beam_size_realtime + " realtime";
+    }
+
+    function formatSeconds(value) {
+      const number = Number(value);
+      if (!Number.isFinite(number)) return "--";
+      return number.toFixed(number < 1 ? 2 : 1) + "s";
+    }
+
+    function upsertSegment(id, text, final, details = {}) {
+      const segmentId = Number(id);
+      let segment = state.segments.find(item => item.id === segmentId);
+      if (!segment) {
+        segment = { id: segmentId, text: "", final: false, createdAt: Date.now() };
+        state.segments.push(segment);
+      }
+      segment.text = text;
+      segment.final = final;
+      if (details.segment) {
+        segment.timeline = details.segment;
+      }
+      segment.rawText = final ? "" : details.rawText || "";
+      segment.displayText = final ? text : details.displayText || text || "";
+      segment.stableText = final ? "" : details.stableText || "";
+      segment.stableDelta = final ? "" : details.stableDelta || "";
+      segment.unstableText = final ? "" : details.unstableText || "";
+      segment.committedStableText = final ? "" : details.committedStableText || "";
+      segment.consensusText = final ? "" : details.consensusText || "";
+      segment.consensusDisplayText = final ? "" : details.consensusDisplayText || "";
+      segment.publicConsensusAligned = final ? true : details.publicConsensusAligned !== false;
+      segment.internalRevision = !final && Boolean(details.internalRevision);
+      segment.sequence = final ? undefined : details.sequence;
+      segment.isOutlier = !final && Boolean(details.isOutlier);
+      segment.stablePrefixConflict = !final && Boolean(details.stablePrefixConflict);
+      segment.updatedAt = Date.now();
+      renderTranscript();
+      ui.transcriptWrap.scrollTop = ui.transcriptWrap.scrollHeight;
+    }
+
+    function renderTranscript() {
+      ui.transcript.replaceChildren();
+      if (state.segments.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "empty";
+        const inner = document.createElement("div");
+        const strong = document.createElement("strong");
+        strong.textContent = "Noch kein Transkript";
+        const span = document.createElement("span");
+        span.textContent = "Starte den Stream und sprich.";
+        inner.append(strong, span);
+        empty.append(inner);
+        ui.transcript.append(empty);
+        return;
+      }
+
+      for (const segment of state.segments) {
+        const article = document.createElement("article");
+        article.className = "segment " + (segment.final ? "final" : "interim");
+        if (segment.isOutlier) article.classList.add("outlier");
+        const meta = document.createElement("div");
+        meta.className = "segment-meta";
+        const left = document.createElement("span");
+        left.textContent = segment.final ? "Final" : "Realtime";
+        const right = document.createElement("span");
+        right.textContent = segment.sequence
+          ? "Segment " + segment.id + " / #" + segment.sequence
+          : "Segment " + segment.id;
+        const body = document.createElement("div");
+        body.className = "segment-text";
+        if (!segment.final && (segment.stableText || segment.unstableText)) {
+          body.classList.add("realtime-split");
+          const stable = document.createElement("span");
+          stable.className = "stable-text";
+          stable.textContent = segment.stableText || "";
+          const unstable = document.createElement("span");
+          unstable.className = "unstable-text";
+          unstable.textContent = segment.unstableText || "";
+          body.append(stable, unstable);
+        } else {
+          body.textContent = segment.text;
+        }
+        meta.append(left, right);
+        article.append(meta, body);
+        const details = renderSegmentDetails(segment.timeline);
+        if (details) article.append(details);
+        ui.transcript.append(article);
+      }
+    }
+
+    function renderSegmentDetails(timeline) {
+      if (!timeline) return null;
+      const items = [];
+      if (timeline.recordingStartedAt) items.push("Start " + formatWallTime(timeline.recordingStartedAt));
+      if (timeline.recordingEndedAt) items.push("Ende " + formatWallTime(timeline.recordingEndedAt));
+      if (Number.isFinite(Number(timeline.durationSeconds))) items.push("Dauer " + formatSeconds(timeline.durationSeconds));
+      if (timeline.preRecordingBuffer) {
+        const pre = timeline.preRecordingBuffer;
+        items.push("Vorlauf " + formatSeconds(pre.includedSeconds));
+      }
+      if (timeline.wakeWord && timeline.wakeWord.enabled) {
+        if (timeline.wakeWord.detectedAt) items.push("Weckwort " + formatWallTime(timeline.wakeWord.detectedAt));
+        else items.push("Weckwortmodus");
+      }
+      if (!items.length) return null;
+      const row = document.createElement("div");
+      row.className = "segment-details";
+      for (const item of items) {
+        const chip = document.createElement("span");
+        chip.textContent = item;
+        row.append(chip);
+      }
+      return row;
+    }
+
+    async function startStream() {
+      await connectSocket();
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+          channelCount: 1
+        }
+      });
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      const audioContext = new AudioContextClass({ latencyHint: "interactive" });
+      state.stream = stream;
+      state.audioContext = audioContext;
+      state.sampleRate = audioContext.sampleRate;
+      ui.sampleRate.textContent = String(audioContext.sampleRate) + " Hz";
+
+      const source = audioContext.createMediaStreamSource(stream);
+      const zeroGain = audioContext.createGain();
+      zeroGain.gain.value = 0;
+      zeroGain.connect(audioContext.destination);
+      state.source = source;
+      state.zeroGain = zeroGain;
+
+      if (audioContext.audioWorklet) {
+        const workletSource = "class VoiceSTTCapture extends AudioWorkletProcessor { process(inputs) { const input = inputs[0]; if (input && input[0]) this.port.postMessage(input[0].slice(0)); return true; } } registerProcessor('voicestt-capture', VoiceSTTCapture);";
+        const blob = new Blob([workletSource], { type: "application/javascript" });
+        const url = URL.createObjectURL(blob);
+        await audioContext.audioWorklet.addModule(url);
+        URL.revokeObjectURL(url);
+        const node = new AudioWorkletNode(audioContext, "voicestt-capture");
+        node.port.onmessage = event => enqueueSamples(event.data);
+        source.connect(node);
+        node.connect(zeroGain);
+        state.worklet = node;
+      } else {
+        const processor = audioContext.createScriptProcessor(1024, 1, 1);
+        processor.onaudioprocess = event => enqueueSamples(event.inputBuffer.getChannelData(0));
+        source.connect(processor);
+        processor.connect(zeroGain);
+        state.processor = processor;
+      }
+
+      state.streaming = true;
+      ui.streamButton.classList.add("active");
+      ui.streamButton.querySelector("span").textContent = "Stream stoppen";
+      setRecordState("Streaming aktiv", true);
+      state.socket.send(JSON.stringify({ type: "start" }));
+      addHistoryEvent("stream", "start");
+      addEvent("Mikrofonstream gestartet");
+      if (state.wakeEnabled) {
+        setRecordState("Warte auf Weckwort", "wait");
+        ui.subtitle.textContent = "Warte auf Weckwort";
+        updateStateRail("wakeword_wait");
+      } else {
+        setRecordState("Warte auf Sprache", "wait");
+        ui.subtitle.textContent = "Warte auf Sprache";
+        updateStateRail("listening");
+      }
+    }
+
+    function stopStream() {
+      state.streaming = false;
+      flushAudio();
+      if (state.socket && state.socket.readyState === WebSocket.OPEN) {
+        state.socket.send(JSON.stringify({ type: "stop" }));
+      }
+      if (state.worklet) state.worklet.disconnect();
+      if (state.processor) state.processor.disconnect();
+      if (state.source) state.source.disconnect();
+      if (state.zeroGain) state.zeroGain.disconnect();
+      if (state.stream) state.stream.getTracks().forEach(track => track.stop());
+      if (state.audioContext) state.audioContext.close();
+      state.worklet = null;
+      state.processor = null;
+      state.source = null;
+      state.zeroGain = null;
+      state.stream = null;
+      state.audioContext = null;
+      state.chunkBuffers = [];
+      state.bufferedSamples = 0;
+      state.clientSpeechActive = false;
+      ui.streamButton.classList.remove("active");
+      ui.streamButton.querySelector("span").textContent = "Stream starten";
+      setRecordState("Bereit", "");
+      ui.subtitle.textContent = "Bereit";
+      updateStateRail("idle");
+      addHistoryEvent("stop", "stopp");
+      addEvent("Mikrofonstream gestoppt");
+    }
+
+    function enqueueSamples(samples) {
+      if (!state.streaming || !state.socket || state.socket.readyState !== WebSocket.OPEN) return;
+      const copy = new Float32Array(samples);
+      state.latestSamples = copy;
+      state.chunkBuffers.push(copy);
+      state.bufferedSamples += copy.length;
+      state.level = rms(copy);
+      recordLevelSample(state.level);
+      const targetSamples = Math.max(256, Math.floor(state.sampleRate * state.targetChunkMs / 1000));
+      if (state.bufferedSamples >= targetSamples) flushAudio();
+    }
+
+    function flushAudio() {
+      if (!state.bufferedSamples || !state.socket || state.socket.readyState !== WebSocket.OPEN) return;
+      const merged = new Float32Array(state.bufferedSamples);
+      let offset = 0;
+      for (const chunk of state.chunkBuffers) {
+        merged.set(chunk, offset);
+        offset += chunk.length;
+      }
+      state.chunkBuffers = [];
+      state.bufferedSamples = 0;
+
+      const pcm = new Int16Array(merged.length);
+      for (let i = 0; i < merged.length; i++) {
+        const value = Math.max(-1, Math.min(1, merged[i]));
+        pcm[i] = value < 0 ? value * 32768 : value * 32767;
+      }
+
+      const metadata = {
+        sampleRate: state.sampleRate,
+        channels: 1,
+        format: "pcm_s16le",
+        frames: pcm.length,
+        sentAt: performance.now()
+      };
+      state.socket.send(encodePacket(metadata, pcm.buffer));
+    }
+
+    function encodePacket(metadata, audioBuffer) {
+      const metadataBytes = new TextEncoder().encode(JSON.stringify(metadata));
+      const packet = new ArrayBuffer(4 + metadataBytes.byteLength + audioBuffer.byteLength);
+      const view = new DataView(packet);
+      view.setUint32(0, metadataBytes.byteLength, true);
+      new Uint8Array(packet, 4, metadataBytes.byteLength).set(metadataBytes);
+      new Uint8Array(packet, 4 + metadataBytes.byteLength).set(new Uint8Array(audioBuffer));
+      return packet;
+    }
+
+    function rms(samples) {
+      if (!samples.length) return 0;
+      let sum = 0;
+      for (let i = 0; i < samples.length; i++) sum += samples[i] * samples[i];
+      return Math.sqrt(sum / samples.length);
+    }
+
+    function eventColor(kind) {
+      const colors = {
+        mic: "#5ad7ff",
+        stream: "#5ad7ff",
+        voice: "#57d68d",
+        wakeword: "#f1bd5a",
+        wakeword_wait: "#f1bd5a",
+        wakeword_detected: "#57d68d",
+        wakeword_timeout: "#ff6b6b",
+        recording: "#ff6b6b",
+        silence: "#f1bd5a",
+        listening: "#9aa6b2",
+        idle: "#596471",
+        transcribing: "#a995ff",
+        realtime: "#5ad7ff",
+        final: "#57d68d",
+        warning: "#f1bd5a",
+        error: "#ff6b6b",
+        stop: "#9aa6b2",
+        closed: "#596471"
+      };
+      return colors[kind] || "#c8d0d8";
+    }
+
+    function drawGrid(ctx, width, top, height, lines) {
+      ctx.strokeStyle = "rgba(255,255,255,0.07)";
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= lines; i++) {
+        const y = top + height * i / lines;
+        ctx.beginPath();
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+        ctx.stroke();
+      }
+    }
+
+    function drawLiveWaveform(ctx, width, top, height) {
+      const samples = state.latestSamples;
+      if (!samples.length) return;
+
+      ctx.strokeStyle = state.streaming ? "#5ad7ff" : "#596471";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+
+      const mid = top + height * 0.5;
+      const amp = height * 0.42;
+      const visualGain = 2.15;
+      for (let x = 0; x < width; x++) {
+        const position = samples.length === 1 ? 0 : x * (samples.length - 1) / Math.max(1, width - 1);
+        const i0 = Math.floor(position);
+        const i1 = Math.min(samples.length - 1, i0 + 1);
+        const mix = position - i0;
+        const raw = (samples[i0] || 0) * (1 - mix) + (samples[i1] || 0) * mix;
+        const sample = Math.max(-1, Math.min(1, raw * visualGain));
+        const y = mid - sample * amp;
+        if (x === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+
+    function drawLevelHistory(ctx, width, top, height, now) {
+      const bottom = top + height;
+      const duration = historyConfig.seconds * 1000;
+      const axisTop = top;
+      const laneTop = top + 30;
+      const laneGap = 22;
+      const levelTop = top + 148;
+      const levelHeight = bottom - levelTop - 6;
+      const speechNorm = (historyConfig.speechOnDb - historyConfig.floorDb) / Math.abs(historyConfig.floorDb);
+      const speechY = bottom - speechNorm * levelHeight;
+      const lanes = [
+        { id: "mic", label: "Mikro", y: laneTop, match: kind => kind === "mic" || kind === "stream" || kind === "stop" },
+        { id: "wake", label: "Weckwort", y: laneTop + laneGap, match: kind => kind === "wakeword_wait" || kind === "wakeword_detected" || kind === "wakeword_timeout" },
+        { id: "vad", label: "VAD", y: laneTop + laneGap * 2, match: kind => kind === "voice" || kind === "silence" || kind === "listening" || kind === "idle" },
+        { id: "rec", label: "Aufnahme", y: laneTop + laneGap * 3, match: kind => kind === "recording" },
+        { id: "asr", label: "ASR", y: laneTop + laneGap * 4, match: kind => kind === "transcribing" || kind === "realtime" || kind === "final" || kind === "warning" || kind === "error" }
+      ];
+
+      ctx.fillStyle = "#9aa6b2";
+      ctx.font = "11px Inter, ui-sans-serif, system-ui, sans-serif";
+      ctx.textBaseline = "top";
+      ctx.fillText("30s", 8, axisTop);
+      ctx.fillText("15s", Math.round(width / 2) - 10, axisTop);
+      ctx.fillText("jetzt", width - 35, axisTop);
+
+      ctx.strokeStyle = "rgba(255,255,255,0.05)";
+      for (let seconds = 5; seconds < historyConfig.seconds; seconds += 5) {
+        const x = width - seconds / historyConfig.seconds * width;
+        ctx.beginPath();
+        ctx.moveTo(x, axisTop + 18);
+        ctx.lineTo(x, bottom);
+        ctx.stroke();
+      }
+
+      for (const lane of lanes) {
+        ctx.fillStyle = "#6f7a86";
+        ctx.fillText(lane.label, 8, lane.y - 8);
+        ctx.strokeStyle = "rgba(255,255,255,0.08)";
+        ctx.beginPath();
+        ctx.moveTo(46, lane.y);
+        ctx.lineTo(width - 8, lane.y);
+        ctx.stroke();
+      }
+
+      ctx.strokeStyle = "rgba(241,189,90,0.22)";
+      ctx.setLineDash([4, 5]);
+      ctx.beginPath();
+      ctx.moveTo(46, speechY);
+      ctx.lineTo(width, speechY);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      for (const point of state.levelHistory) {
+        const age = now - point.time;
+        if (age < 0 || age > duration) continue;
+        const x = width - age / duration * width;
+        const db = levelToDb(point.level);
+        const norm = Math.max(0, Math.min(1, (db - historyConfig.floorDb) / Math.abs(historyConfig.floorDb)));
+        const barHeight = Math.max(1, norm * levelHeight);
+        const alpha = db > historyConfig.speechOnDb ? 0.64 : 0.28;
+        ctx.fillStyle = db > historyConfig.speechOnDb
+          ? `rgba(87,214,141,${alpha})`
+          : `rgba(90,215,255,${alpha})`;
+        ctx.fillRect(Math.round(x), bottom - barHeight, 2, barHeight);
+      }
+
+      const lastLabels = new Map();
+      ctx.font = "11px Inter, ui-sans-serif, system-ui, sans-serif";
+      ctx.textBaseline = "middle";
+      for (const event of state.historyEvents) {
+        const age = now - event.time;
+        if (age < 0 || age > duration) continue;
+        const lane = lanes.find(item => item.match(event.kind)) || lanes[lanes.length - 1];
+        const x = width - age / duration * width;
+        const color = eventColor(event.kind);
+        ctx.strokeStyle = color;
+        ctx.fillStyle = color;
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(x, lane.y - 10);
+        ctx.lineTo(x, bottom);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x, lane.y, 4, 0, Math.PI * 2);
+        ctx.closePath();
+        ctx.fill();
+
+        const lastLabelX = lastLabels.get(lane.id) || -100;
+        const important = event.kind !== "mic" || age < 1500;
+        if (important && (x - lastLabelX > 46 || age < 1800)) {
+          ctx.fillText(event.label, Math.min(width - 38, Math.max(50, x + 7)), lane.y);
+          lastLabels.set(lane.id, x);
+        }
+      }
+    }
+
+    function drawScope() {
+      const canvas = ui.scope;
+      const ctx = canvas.getContext("2d");
+      const width = canvas.width;
+      const height = canvas.height;
+      const now = performance.now();
+      pruneHistory(now);
+
+      ctx.clearRect(0, 0, width, height);
+      ctx.fillStyle = "#11161b";
+      ctx.fillRect(0, 0, width, height);
+
+      const liveTop = 16;
+      const liveHeight = 150;
+      const historyTop = 190;
+      const historyHeight = 218;
+      const barY = height - 25;
+
+      ctx.fillStyle = "#10151a";
+      ctx.fillRect(0, historyTop - 12, width, historyHeight + 24);
+      drawGrid(ctx, width, liveTop, liveHeight, 3);
+      drawGrid(ctx, width, historyTop, historyHeight, 2);
+
+      const db = levelToDb(state.level);
+      ui.levelNumber.textContent = db <= historyConfig.floorDb + 1 ? "-inf dB" : Math.round(db) + " dB";
+
+      drawLiveWaveform(ctx, width, liveTop, liveHeight);
+      drawLevelHistory(ctx, width, historyTop, historyHeight, now);
+
+      const barWidth = Math.max(4, Math.round((db - historyConfig.floorDb) / Math.abs(historyConfig.floorDb) * (width - 28)));
+      ctx.fillStyle = "rgba(87,214,141,0.30)";
+      ctx.fillRect(14, barY, barWidth, 6);
+      ctx.fillStyle = "rgba(241,189,90,0.36)";
+      ctx.fillRect(14 + barWidth, barY, Math.max(0, width - 28 - barWidth), 6);
+
+      requestAnimationFrame(drawScope);
+    }
+
+    ui.streamButton.addEventListener("click", async () => {
+      try {
+        if (state.streaming) stopStream();
+        else await startStream();
+      } catch (error) {
+        addEvent("Start fehlgeschlagen: " + error.message);
+        stopStream();
+      }
+    });
+
+    ui.clearButton.addEventListener("click", () => {
+      state.segments = [];
+      state.timelineEvents = [];
+      renderTranscript();
+      if (state.socket && state.socket.readyState === WebSocket.OPEN) {
+        state.socket.send(JSON.stringify({ type: "clear" }));
+      }
+    });
+
+    ui.connectButton.addEventListener("click", () => connectSocket().catch(error => addEvent(error.message)));
+
+    ui.copyButton.addEventListener("click", async () => {
+      const text = state.segments.map(segment => segment.text).join("\n").trim();
+      if (!text) return;
+      await navigator.clipboard.writeText(text);
+      addEvent("Transkript kopiert");
+    });
+
+    ui.settingsButton.addEventListener("click", () => {
+      ui.settingsBackdrop.classList.add("open");
+      loadAdminSettings().catch(error => setSettingsStatus("Laden fehlgeschlagen: " + error.message, "error"));
+    });
+    ui.settingsClose.addEventListener("click", () => ui.settingsBackdrop.classList.remove("open"));
+    ui.settingsBackdrop.addEventListener("click", event => {
+      if (event.target === ui.settingsBackdrop) ui.settingsBackdrop.classList.remove("open");
+    });
+    ui.settingsRefresh.addEventListener("click", () => {
+      loadAdminSettings().catch(error => setSettingsStatus("Laden fehlgeschlagen: " + error.message, "error"));
+    });
+    ui.settingsApply.addEventListener("click", applyAdminSettings);
+    ui.wakeBackend.addEventListener("change", () => {
+      populateWakeWordSelect(ui.wakeBackend.value, "");
+    });
+    ui.modelsLoad.addEventListener("click", () => setModelsLoaded(true));
+    ui.modelsUnload.addEventListener("click", () => setModelsLoaded(false));
+    document.addEventListener("keydown", event => {
+      if (event.key === "Escape") ui.settingsBackdrop.classList.remove("open");
+    });
+
+    setInterval(() => {
+      if (state.socket && state.socket.readyState === WebSocket.OPEN) {
+        state.lastPingAt = performance.now();
+        state.socket.send(JSON.stringify({ type: "ping" }));
+      }
+    }, 2500);
+
+    connectSocket().catch(() => {});
+    renderTranscript();
+    updateStateRail("idle");
+    drawScope();
+  </script>
+</body>
+</html>

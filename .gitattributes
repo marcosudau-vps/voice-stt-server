@@ -1,0 +1,18 @@
+* text=auto
+
+# Keep shell and container files Unix-compatible.
+*.sh text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+Dockerfile text eol=lf
+
+# Keep native Windows launchers consistent.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Test audio and model fixtures are binary.
+*.wav binary
+*.onnx binary
+*.tflite binary
+*.data binary
