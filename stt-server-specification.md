@@ -145,9 +145,9 @@ Der Admin-Key sollte keinesfalls in einen gewöhnlichen Desktop-Build eingebette
 
 ---
 
-# 5. WebSocket-Protokoll
+## 5. WebSocket-Protokoll
 
-## Verbindung aufbauen
+### Verbindung aufbauen
 
 ```text
 wss://stt.voice.marcosudau.com/ws/transcribe
@@ -187,7 +187,7 @@ Jede Verbindung bekommt eine neue `sessionId`. Nach einem Reconnect darf die alt
 
 `ready` bedeutet, dass der Server die Sitzung bedienen kann. Falls die Modelle wegen Inaktivität entladen wurden, kann `ready` trotzdem erfolgreich sein und `models.loaded=false` enthalten. Das Modell wird dann bei der nächsten tatsächlichen Transkription automatisch geladen.
 
-## Streaming starten
+### Streaming starten
 
 Vor dem ersten Audiopaket muss gesendet werden:
 
@@ -206,7 +206,7 @@ Mit aktivem Wake Word wechselt die Sitzung danach normalerweise in:
 
 Der Client muss danach weiterhin kontinuierlich Mikrofon-Audio senden. Die Wake-Word-Erkennung findet serverseitig im eingehenden Audiostrom statt.
 
-## Streaming stoppen
+### Streaming stoppen
 
 ```json
 {"type":"stop"}
@@ -216,7 +216,7 @@ Dadurch wird die Sitzung in den Zustand `idle` versetzt und noch gepuffertes Aud
 
 Die WebSocket-Verbindung kann dabei geöffnet bleiben.
 
-## Sitzung zurücksetzen
+### Sitzung zurücksetzen
 
 ```json
 {"type":"clear"}
@@ -239,7 +239,7 @@ Beispiel:
 }
 ```
 
-## Keepalive
+### Keepalive
 
 Anwendungs-Ping:
 
@@ -267,7 +267,7 @@ Empfehlung:
 
 Ein Ping hält die Netzwerkverbindung offen, verhindert aber nicht das automatische Entladen der Modelle.
 
-## Sitzungsmetriken anfordern
+### Sitzungsmetriken anfordern
 
 ```json
 {"type":"metrics"}
@@ -295,7 +295,7 @@ Antwort:
 
 ---
 
-# 6. Binäres Audioformat
+## 6. Binäres Audioformat
 
 Audiopakete werden als binäre WebSocket-Nachrichten gesendet.
 
@@ -348,7 +348,7 @@ Mono
 
 Damit entfällt unnötiges Resampling.
 
-## Empfohlene Paketgröße
+### Empfohlene Paketgröße
 
 Empfehlung für den Desktop-Client:
 
@@ -364,7 +364,7 @@ Bei 16 kHz Mono PCM16:
 
 Die maximale binäre Audio-Nutzlast ist aktuell 524.288 Byte. Kleine Echtzeitpakete sind wesentlich sinnvoller.
 
-## Beispiel zur Paketerstellung
+### Beispiel zur Paketerstellung
 
 TypeScript-artiges Beispiel:
 
@@ -397,9 +397,9 @@ function buildAudioPacket(
 
 ---
 
-# 7. Serverereignisse
+## 7. Serverereignisse
 
-## `realtime`
+### `realtime`
 
 Ein vorläufiges, veränderliches Transkript:
 
@@ -438,7 +438,7 @@ timing
 
 Der Client sollte unbekannte Felder tolerieren. Für die einfache Darstellung reichen `sessionId`, `segmentId` und `text`.
 
-## `final`
+### `final`
 
 Das verbindliche Endergebnis eines Segments:
 
@@ -460,7 +460,7 @@ Empfohlenes Clientverhalten:
 3. Erst `final.text` dauerhaft speichern, in die Zwischenablage legen oder in eine Zielanwendung einfügen.
 4. Segmente immer über `sessionId + segmentId` identifizieren.
 
-## `status`
+### `status`
 
 Beispiel:
 
@@ -495,7 +495,7 @@ transcribing
 closed
 ```
 
-## `timeline`
+### `timeline`
 
 Detaillierte Ablaufereignisse:
 
@@ -529,7 +529,7 @@ final_transcript
 
 Diese Ereignisse sind für Statusanzeigen, Debugging und Latenzmessungen hilfreich. Die eigentliche Textverarbeitung sollte sich jedoch primär auf `realtime` und `final` stützen.
 
-## `warning`
+### `warning`
 
 Ein behebbares Problem:
 
@@ -550,7 +550,7 @@ Warnungen können beispielsweise auftreten bei:
 
 Die Verbindung muss deshalb nicht sofort getrennt werden.
 
-## `error`
+### `error`
 
 ```json
 {
@@ -578,7 +578,7 @@ Fehler sollten protokolliert und anhand des Bereichs behandelt werden. Nicht jed
 
 ---
 
-# 8. Wake-Word-Verhalten
+## 8. Wake-Word-Verhalten
 
 Wake Word ist derzeit global aktiviert:
 
@@ -617,7 +617,7 @@ Die zweite Variante wäre langfristig sauberer, falls Browser, Desktop-Client un
 
 ---
 
-# 9. Kapazitäten und Gleichzeitigkeit
+## 9. Kapazitäten und Gleichzeitigkeit
 
 Der Server erlaubt aktuell:
 
@@ -630,8 +630,8 @@ Eine dauerhaft offene, aber schweigende Desktop-Verbindung belegt eine der acht 
 
 Wenn das Sitzungslimit erreicht ist:
 
-1. Der WebSocket wird zunächst angenommen.
-2. Der Server sendet:
+- Der WebSocket wird zunächst angenommen.
+- Der Server sendet:
 
 ```json
 {
@@ -642,7 +642,7 @@ Wenn das Sitzungslimit erreicht ist:
 }
 ```
 
-3. Danach schließt der Server mit WebSocket-Code `1013`.
+- Danach schließt der Server mit WebSocket-Code `1013`.
 
 Bei `1013` sollte der Desktop-Client nicht aggressiv reconnecten, sondern beispielsweise 30–60 Sekunden warten.
 
@@ -652,7 +652,7 @@ Realtime- und finale Transkription laufen über getrennte Scheduler-Aufgabentype
 
 ---
 
-# 10. Reconnect-Strategie für einen dauerhaften Client
+## 10. Reconnect-Strategie für einen dauerhaften Client
 
 Empfohlene Staffelung:
 
@@ -687,7 +687,7 @@ Es existiert kein serverseitiges Session-Resume und keine Paket-ACK-Nummerierung
 
 ---
 
-# 11. Lokale Audiopufferung und Backpressure
+## 11. Lokale Audiopufferung und Backpressure
 
 Der Client sollte zusätzlich überwachen:
 
@@ -710,7 +710,7 @@ Der Server finalisiert ein fortlaufendes Segment spätestens nach ungefähr 30 S
 
 ---
 
-# 12. Modell-Entladen und Cold Start
+## 12. Modell-Entladen und Cold Start
 
 Modelle werden nach 3600 Sekunden ohne Modellaktivität automatisch aus dem RAM entladen.
 
@@ -748,9 +748,9 @@ Ein normaler Desktop-Client sollte nicht pauschal den Admin-Key enthalten. Wenn 
 
 ---
 
-# 13. OpenAI-kompatibler Dateiendpunkt
+## 13. OpenAI-kompatibler Dateiendpunkt
 
-## Request
+### Request
 
 ```http
 POST /v1/audio/transcriptions
@@ -827,7 +827,7 @@ Andere Granularitäten als der Standard `segment` erfordern `response_format=ver
 logprobs
 ```
 
-## Modellrouting
+### Modellrouting
 
 Standardkompatibilität:
 
@@ -879,7 +879,7 @@ X-VoiceSTT-Override-Model
 X-VoiceSTT-Override-Source
 ```
 
-## Normale JSON-Antwort
+### Normale JSON-Antwort
 
 ```json
 {
@@ -891,7 +891,7 @@ X-VoiceSTT-Override-Source
 }
 ```
 
-## SSE mit `stream=true`
+### SSE mit `stream=true`
 
 Mögliche Delta-Nachricht:
 
@@ -913,7 +913,7 @@ Wichtig:
 - Der Server sendet momentan kein zusätzliches `data: [DONE]`.
 - Das Ende wird durch das `done`-Ereignis und anschließend das Ende des HTTP-Streams signalisiert.
 
-## Diarisierung
+### Diarisierung
 
 `diarized_json` wird aus Kompatibilitätsgründen angenommen. Die derzeit geladenen ASR-Modelle besitzen aber kein echtes Diarisierungsmodell. Die Antwort wird daher als Single-Speaker-Kompatibilitätsantwort gekennzeichnet.
 
@@ -921,7 +921,7 @@ Darauf sollte der Desktop-Client keine echte Sprechertrennung aufbauen.
 
 ---
 
-# 14. Administrative Modellwechsel
+## 14. Administrative Modellwechsel
 
 Aktive Modelle:
 
@@ -945,7 +945,7 @@ Wake-Word- und Sprachänderungen gelten für neue Sitzungen beziehungsweise neue
 
 ---
 
-# 15. Logging und Datenschutz
+## 15. Logging und Datenschutz
 
 Aktueller Serverzustand:
 
@@ -963,7 +963,7 @@ Für besonders sensible Inhalte könnte später ein Konfigurationsprofil mit dea
 
 ---
 
-# 16. Empfohlene interne Desktop-Client-Komponenten
+## 16. Empfohlene interne Desktop-Client-Komponenten
 
 Eine robuste Implementierung sollte mindestens diese getrennten Bausteine haben:
 
@@ -1005,7 +1005,7 @@ Eine robuste Implementierung sollte mindestens diese getrennten Bausteine haben:
 
 ---
 
-# 17. Empfohlene Zustandslogik im Client
+## 17. Empfohlene Zustandslogik im Client
 
 Der Client sollte ungefähr diese eigenen Zustände führen:
 
@@ -1037,7 +1037,7 @@ Die Oberfläche kann daraus beispielsweise ableiten:
 
 ---
 
-# 18. Mindesttests für das Desktop-Projekt
+## 18. Mindesttests für das Desktop-Projekt
 
 Vor einer Freigabe sollte der Client mindestens real testen:
 
@@ -1061,19 +1061,15 @@ Vor einer Freigabe sollte der Client mindestens real testen:
 
 ---
 
-## Referenzimplementierung im Repository
+### Referenzimplementierung im Repository
 
 Die maßgeblichen Stellen sind:
 
-- [WebSocket- und API-Server](P:/DockerProjekte/VoiceSTT/api_fastapi_server/server.py)
-- [Binäres Audioprotokoll](P:/DockerProjekte/VoiceSTT/api_fastapi_server/protocol.py)
-- [OpenAI-Anfrage- und Antwortformat](P:/DockerProjekte/VoiceSTT/VoiceSTT_server/openai_compat.py)
-- [Dokumentation des FastAPI-Servers](P:/DockerProjekte/VoiceSTT/docs/fastapi-server.md)
-- [Realer Paralleltest](P:/DockerProjekte/VoiceSTT/tools/validate_parallel_realtime.py)
-- [Aktuelle VPS-Konfiguration](P:/DockerProjekte/VoiceSTT/docker/vps/voice/stt-config.yaml)
+- [WebSocket- und API-Server](api_fastapi_server/server.py)
+- [Binäres Audioprotokoll](api_fastapi_server/protocol.py)
+- [OpenAI-Anfrage- und Antwortformat](VoiceSTT_server/openai_compat.py)
+- [Dokumentation des FastAPI-Servers](docs/fastapi-server.md)
+- [Realer Paralleltest](tools/validate_parallel_realtime.py)
+- [Zentrale Konfiguration](config.yaml)
 
 Der wichtigste Designpunkt für das Desktop-Projekt ist: eine einzige langlebige WebSocket-Sitzung, kontinuierliches kleines PCM-Audio, Realtime-Texte nur als ersetzbare Vorschau und ausschließlich `final` als dauerhaftes Ergebnis.
-
-
-
-

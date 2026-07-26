@@ -190,10 +190,11 @@ server_requirements = [
     "httpx",
     "PyYAML>=6.0",
 ]
-app_app_talk_with_llm_requirements = [
-    "RealtimeTTS[system]==0.7.3",
+app_talk_with_llm_requirements = [
+    "RealtimeTTS[edge,system]==0.7.3",
     "PyQt5==5.15.11",
     "openai==2.41.1",
+    "PyYAML>=6.0",
     "sounddevice==0.5.5",
     "wavio==0.0.9",
     "keyboard==0.13.5",
@@ -248,7 +249,7 @@ extras_require = {
         porcupine_requirements + openwakeword_requirements
     ),
     "server": server_requirements,
-    "example-app": talk_with_llm_requirements,
+    "example-app": app_talk_with_llm_requirements,
     "recommended": unique_requirements(
         faster_whisper_requirements + silero_onnx_requirements
     ),

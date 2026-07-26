@@ -3,7 +3,7 @@ services:
     build:
       context: .
       target: cpu
-    image: voicestt-cpu:local
+    image: ${VOICESTT_IMAGE:?Starte Compose über tools/compose.py}
     container_name: voicestt-server
     restart: unless-stopped
     init: true
@@ -15,70 +15,38 @@ services:
       VOICESTT_OPENWAKEWORD_MODEL_ROOT: /models/openwakeword
       VOICESTT_API_KEY: ${VOICESTT_API_KEY:-}
       VOICESTT_ADMIN_API_KEY: ${VOICESTT_ADMIN_API_KEY:-}
-      VOICESTT_RUNTIME_CONFIG: /data/config/runtime.json
-      VOICESTT_REQUEST_LOGGING: ${VOICESTT_REQUEST_LOGGING:-1}
-      VOICESTT_REQUEST_LOG_STDOUT: ${VOICESTT_REQUEST_LOG_STDOUT:-1}
-      VOICESTT_REQUEST_LOG_PATH: /data/logs/voicestt-requests.jsonl
-      VOICESTT_REQUEST_LOG_TRANSCRIPTS: ${VOICESTT_REQUEST_LOG_TRANSCRIPTS:-1}
-      VOICESTT_PERFORMANCE_LOGGING: ${VOICESTT_PERFORMANCE_LOGGING:-1}
-      VOICESTT_PERFORMANCE_LOG_STDOUT: ${VOICESTT_PERFORMANCE_LOG_STDOUT:-1}
-      VOICESTT_PERFORMANCE_LOG_PATH: /data/logs/voicestt-performance.jsonl
-      VOICESTT_SAVE_AUDIO_FILES: ${VOICESTT_SAVE_AUDIO_FILES:-0}
-      VOICESTT_AUDIO_LOG_DIR: /data/logs/audio
-      VOICESTT_MODEL_IDLE_UNLOAD: ${VOICESTT_MODEL_IDLE_UNLOAD:-1}
-      VOICESTT_MODEL_IDLE_TIMEOUT_SECONDS: ${VOICESTT_MODEL_IDLE_TIMEOUT_SECONDS:-3600}
-      VOICESTT_MODEL_MEMORY_POLICY: ${VOICESTT_MODEL_MEMORY_POLICY:-1}
-      VOICESTT_ALLOW_TWO_MEDIUM_MODELS: ${VOICESTT_ALLOW_TWO_MEDIUM_MODELS:-1}
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
-      OMP_NUM_THREADS: ${VOICESTT_CPU_THREADS:-4}
+      OMP_NUM_THREADS: ${VOICESTT_CPU_THREADS:?Starte Compose über tools/compose.py}
       CT2_USE_EXPERIMENTAL_PACKED_GEMM: "1"
     command:
       - python
       - -m
       - VoiceSTT_server.server
-      - --host
-      - 0.0.0.0
-      - --port
-      - "8010"
-      - --device
-      - cpu
-      - --compute-type
-      - int8
-      - --model
-      - ${VOICESTT_MODEL:-small}
-      - --realtime-model
-      - ${VOICESTT_REALTIME_MODEL:-Kroko-DE-Community-64-L-Streaming-001.data}
-      - --engine
-      - ${VOICESTT_ENGINE:-faster_whisper}
-      - --realtime-engine
-      - ${VOICESTT_REALTIME_ENGINE:-kroko_onnx}
-      - --language
-      - ${VOICESTT_LANGUAGE:-de}
-      - --openai-model-aliases
-      - '{"whisper-1":"final","fast":"realtime"}'
-      - --max-sessions
-      - ${VOICESTT_MAX_SESSIONS:-8}
-      - --max-active-speakers
-      - ${VOICESTT_MAX_ACTIVE_SPEAKERS:-4}
+      - --config
+      - /config/config.yaml
     volumes:
       - type: bind
-        source: ${VOICESTT_FASTER_WHISPER_HOST_PATH:-S:/MODELS/stt/ctranslate2}
+        source: ./config.yaml
+        target: /config/config.yaml
+        read_only: true
+      - type: bind
+        source: ${VOICESTT_FASTER_WHISPER_HOST_PATH:?Starte Compose über tools/compose.py}
         target: /models/ctranslate2
         read_only: true
       - type: bind
-        source: ${VOICESTT_KROKO_HOST_PATH:-S:/MODELS/stt/kroko_asr}
+        source: ${VOICESTT_KROKO_HOST_PATH:?Starte Compose über tools/compose.py}
         target: /models/kroko
         read_only: true
       - type: bind
-        source: ${VOICESTT_OPENWAKEWORD_HOST_PATH:-S:/MODELS/stt/openwakeword}
+        source: ${VOICESTT_OPENWAKEWORD_HOST_PATH:?Starte Compose über tools/compose.py}
         target: /models/openwakeword
         read_only: true
       - type: bind
-        source: ${VOICESTT_DATA_PATH:-./data}
+        source: ${VOICESTT_DATA_PATH:?Starte Compose über tools/compose.py}
         target: /data
     ports:
-      - "${VOICESTT_PORT:-8010}:8010"
+      - "${VOICESTT_PORT:?Starte Compose über tools/compose.py}:8010"
     healthcheck:
       test: ["CMD", "python", "-c", "import json, urllib.request; result=json.load(urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=5)); assert result.get('ready') and result.get('ok')"]
       interval: 30s
@@ -94,7 +62,7 @@ services:
       - ./api_fastapi_server/static:/usr/share/nginx/html:ro
       - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro
     ports:
-      - "${VOICESTT_BROWSER_PORT:-8081}:80"
+      - "${VOICESTT_BROWSER_PORT:?Starte Compose über tools/compose.py}:80"
     depends_on:
       server:
         condition: service_healthy

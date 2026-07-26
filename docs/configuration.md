@@ -1,5 +1,11 @@
 # Configuration
 
+The repository has one versioned runtime configuration:
+[`config.yaml`](../config.yaml). Server defaults are under `settings`, portable
+Docker paths and ports under `deployment`, and desktop-example defaults under
+`example_app`. Credentials are deliberately rejected from YAML and belong only
+in the ignored root `.env`.
+
 `AudioToTextRecorder` is the main library entry point. This page is a parameter
 reference for its constructor. Examples and recommended starting patterns live
 in [quick-start.md](quick-start.md).

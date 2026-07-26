@@ -37,14 +37,13 @@ tests/unit/audio/voice_corpus/
 # Local backup/copy files
 backup_voicestt_code.bat
 * - Kopie*.py
+server_zwischenstand/
 *.bak
 *.tmp
 
 # Local secrets and credentials
-.env.*
-!.env.example
-!.env.docker.example
-github.env
+.env
+*.env
 *.pem
 *.key
 *.p12

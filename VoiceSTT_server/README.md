@@ -14,22 +14,14 @@ processes and may run on different hosts. One server instance provides:
 - CPU-only execution with no device-driver probing;
 - local-only model resolution when `VOICESTT_OFFLINE_MODELS=1`.
 
-Windows example:
+Portable Docker example (Windows and VPS):
 
 ```powershell
-$env:VOICESTT_FASTER_WHISPER_MODEL_ROOT="S:\MODELS\stt\ctranslate2"
-$env:VOICESTT_KROKO_MODEL_ROOT="S:\MODELS\stt\kroko_asr"
-$env:VOICESTT_OPENWAKEWORD_MODEL_ROOT="S:\MODELS\stt\openwakeword"
-$env:VOICESTT_OFFLINE_MODELS="1"
-.\.venv\Scripts\stt-server.exe `
-  --host 0.0.0.0 --port 8010 `
-  --engine faster_whisper --model small `
-  --realtime-engine kroko_onnx `
-  --realtime-model Kroko-DE-Community-64-L-Streaming-001.data `
-  --language de --device cpu --compute-type int8 `
-  --admin-api-key "replace-this-admin-key" `
-  --runtime-config ".\data\config\runtime.json"
+python .\tools\compose.py up --build -d
 ```
+
+All non-secret defaults and path candidates are defined once in the root
+`config.yaml`. API keys are read only from the ignored root `.env`.
 
 Open `http://localhost:8010` for the browser client. Use
 `stt-server --help` for the complete configuration reference. The old two-port

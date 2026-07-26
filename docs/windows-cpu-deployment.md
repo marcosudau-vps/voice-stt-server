@@ -29,12 +29,10 @@ The second value must be `None`.
 
 ## External models
 
-```powershell
-$env:VOICESTT_FASTER_WHISPER_MODEL_ROOT="S:\MODELS\stt\ctranslate2"
-$env:VOICESTT_KROKO_MODEL_ROOT="S:\MODELS\stt\kroko_asr"
-$env:VOICESTT_OPENWAKEWORD_MODEL_ROOT="S:\MODELS\stt\openwakeword"
-$env:VOICESTT_OFFLINE_MODELS="1"
-```
+The Compose launcher reads `deployment.model_paths` from the root
+`config.yaml` and selects the first directory that exists. Windows and VPS
+locations are already listed. For another machine, add only one candidate in
+that section.
 
 Faster Whisper resolves both direct CTranslate2 directories and Hugging Face
 `models--owner--name/snapshots/...` layouts. Kroko resolves `.data` filenames
@@ -178,12 +176,11 @@ follow-up window can then be changed in **Settings**. Porcupine uses backend
 
 The image has one stage named `cpu`, installs PyTorch from the CPU wheel index,
 and declares no host devices or accelerator runtime. Models are read-only bind
-mounts. Review or copy `.env.docker.example`, then run:
+mounts. Start it through the portable configuration launcher:
 
 ```powershell
-docker compose --env-file .env.docker.example config
-docker compose --env-file .env.docker.example build server
-docker compose --env-file .env.docker.example up -d
+python .\tools\compose.py config
+python .\tools\compose.py up --build -d
 ```
 
 - API/server: `http://localhost:8010`

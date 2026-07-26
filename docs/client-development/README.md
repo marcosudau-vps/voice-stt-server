@@ -75,13 +75,14 @@ flowchart LR
 
 ## Aktuelles versioniertes Produktionsprofil
 
-Das eingecheckte VPS-Profil `docker/vps/voice/stt-config.yaml` konfiguriert:
+Das zentrale Profil `config.yaml` konfiguriert:
 
 | Bereich | Wert |
 | --- | --- |
 | Sprache / Ausführung | Deutsch (`de`), CPU, `int8` |
-| Final und Realtime | `kroko_onnx`, `Kroko-DE-Community-64-L-Streaming-001.data` |
-| Modellfreigabe | eine gemeinsam genutzte Modell-Lane (`use_main_model_for_realtime: true`) |
+| Final | `faster_whisper`, `faster-whisper-large-v3-turbo` |
+| Realtime | `kroko_onnx`, `Kroko-DE-Community-64-L-Streaming-001.data` |
+| Modellfreigabe | getrennte Modell-Lanes (`use_main_model_for_realtime: false`) |
 | Wake Word | OpenWakeWord, `hey_jarvis`, Timeout 7 s, Follow-up 7 s |
 | Kapazität | 8 Sessions, 4 gleichzeitig aktive Sprecher |
 | Aufnahmegrenze | 30 s pro fortlaufendem Segment |
@@ -115,7 +116,7 @@ geprüft:
 | `VoiceSTT_server/openai_compat.py` | Multipartparameter, Antwort- und Fehlerformate |
 | `VoiceSTT_server/operations.py` | Modellregistrys, Runtime-Persistenz und Logging |
 | `api_fastapi_server/static/index.html` | tatsächlich genutzter Browser-Clientablauf |
-| `docker/vps/voice/stt-config.yaml` | versioniertes Produktionsprofil |
+| `config.yaml` | zentrale versionierte Laufzeitkonfiguration |
 | `tests/unit/test_fastapi_server_*.py` | Protokoll-, Isolation-, Event- und Integrationsverhalten |
 | `tests/unit/test_openai_compatible_endpoint.py` | OpenAI-/Admin-HTTP-Vertrag |
 | `tests/unit/test_server_operations.py` | Registry-, Logging- und Persistenzverhalten |

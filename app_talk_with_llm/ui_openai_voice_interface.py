@@ -1,88 +1,191 @@
 if __name__ == '__main__':
 
-    import os
+    from pathlib import Path
     import sys
 
-    check_only = "--check" in sys.argv
+    project_root = Path(__file__).resolve().parents[1]
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
 
-    from RealtimeTTS import TextToAudioStream, SystemEngine
+    from RealtimeTTS import TextToAudioStream, EdgeEngine, SystemEngine
     from VoiceSTT import AudioToTextRecorder
 
     from PyQt5.QtCore import Qt, QTimer, QEvent, pyqtSignal, QThread
     from PyQt5.QtGui import QColor, QPainter, QFontMetrics, QFont, QMouseEvent
     from PyQt5.QtWidgets import QApplication, QWidget, QDesktopWidget, QMenu, QAction
 
-    from openai import OpenAI
+    import logging
+    import os
     import time
     import sounddevice as sd
     import numpy as np
     import wavio
     import keyboard
 
-    max_history_messages = 6
-    return_to_wakewords_after_silence = 12
-    start_with_wakeword = False
-    start_engine = os.environ.get("VOICESTT_TTS_ENGINE", "System")
-    recorder_model = os.environ.get("VOICESTT_MODEL", "small")
-    realtime_model = os.environ.get(
-        "VOICESTT_REALTIME_MODEL",
-        "Kroko-DE-Community-64-L-Streaming-001.data",
+    from app_talk_with_llm.custom_api_chat_endpoint import stream_chat_completion
+    from example_app_config import (
+        asset_path,
+        build_config,
+        configure_file_logging,
     )
-    realtime_engine = os.environ.get("VOICESTT_REALTIME_ENGINE", "kroko_onnx")
-    language = os.environ.get("VOICESTT_LANGUAGE", "de")
-    azure_speech_region = "eastus"
-    openai_model = os.environ.get("OPENAI_CHAT_MODEL", "gpt-4o-mini")
-    openai_base_url = os.environ.get("OPENAI_BASE_URL")
 
-    if check_only:
-        print("UI dependency check passed; STT device=cpu, compute_type=int8, model=" + recorder_model)
+    config = build_config()
+    if "--check" in sys.argv:
+        print(
+            "Voice assistant dependencies and config are valid "
+            f"(final={config.final_backend.name}, "
+            f"realtime={config.realtime_backend.name}, language={config.language})."
+        )
         raise SystemExit(0)
 
-    user_font_size = 22
-    user_color = QColor(0, 188, 242) # turquoise
+    app_logger, log_file_path = configure_file_logging(config.logs_dir)
+    app_logger.info("Example app starting; log_file=%s", log_file_path)
+    max_history_messages = config.max_history_messages
+    return_to_wakewords_after_silence = config.return_to_wakewords_after_silence
+    start_with_wakeword = config.start_with_wakeword
+    start_engine = config.start_engine
+    edge_voice_string = config.edge_voice_string
+    selected_backend = config.final_backend.name
+    selected_realtime_backend = config.realtime_backend.name
+    download_root = config.download_root
+    recorder_device = config.device
+    recorder_compute_type = config.compute_type
+    input_device_index = config.input_device_index
+    gpu_device_index = config.gpu_device_index
+    use_microphone = config.use_microphone
+    spinner = config.spinner
+    batch_size = config.batch_size
+    realtime_batch_size = config.realtime_batch_size
+    beam_size = config.beam_size
+    beam_size_realtime = config.beam_size_realtime
+    initial_prompt = config.initial_prompt
+    initial_prompt_realtime = config.initial_prompt_realtime
+    suppress_tokens = config.suppress_tokens
+    ensure_sentence_starting_uppercase = config.ensure_sentence_starting_uppercase
+    ensure_sentence_ends_with_period = config.ensure_sentence_ends_with_period
+    print_transcription_time = config.print_transcription_time
+    early_transcription_on_silence = config.early_transcription_on_silence
+    no_log_file = config.no_log_file
+    recorder_log_level = config.log_level
+    use_extended_logging = config.use_extended_logging
+    faster_whisper_vad_filter = config.faster_whisper_vad_filter
+    normalize_audio = config.normalize_audio
+    start_callback_in_new_thread = config.start_callback_in_new_thread
+    allowed_latency_limit = config.allowed_latency_limit
+    sample_rate = config.sample_rate
+    buffer_size = config.buffer_size
+    handle_buffer_overflow = config.handle_buffer_overflow
+    debug_mode = config.debug_mode
+    wakeword_backend = config.wakeword_backend
+    openwakeword_model_paths = config.openwakeword_model_paths
+    openwakeword_inference_framework = config.openwakeword_inference_framework
+    wake_words = config.wake_words
+    wake_words_sensitivity = config.wake_words_sensitivity
+    wake_word_activation_delay = config.wake_word_activation_delay
+    wake_word_timeout = config.wake_word_timeout
+    wake_word_buffer_duration = config.wake_word_buffer_duration
+    silero_sensitivity = config.silero_sensitivity
+    silero_use_onnx = config.silero_use_onnx
+    silero_deactivity_detection = config.silero_deactivity_detection
+    silero_backend = config.silero_backend
+    silero_onnx_model_path = config.silero_onnx_model_path
+    silero_onnx_threads = config.silero_onnx_threads
+    deactivity_silence_confirmation_duration = config.deactivity_silence_confirmation_duration
+    webrtc_sensitivity = config.webrtc_sensitivity
+    warmup_vad = config.warmup_vad
+    post_speech_silence_duration = config.post_speech_silence_duration
+    min_length_of_recording = config.min_length_of_recording
+    min_gap_between_recordings = config.min_gap_between_recordings
+    pre_recording_buffer_duration = config.pre_recording_buffer_duration
+    pre_recording_buffer_trim_config = config.pre_recording_buffer_trim_config
+    use_main_model_for_realtime = config.use_main_model_for_realtime
+    realtime_processing_pause = config.realtime_processing_pause
+    init_realtime_after_seconds = config.init_realtime_after_seconds
+    enable_realtime_transcription = config.enable_realtime_transcription
+    realtime_callback = config.realtime_callback
+    realtime_transcription_use_syllable_boundaries = config.realtime_transcription_use_syllable_boundaries
+    realtime_boundary_detector_sensitivity = config.realtime_boundary_detector_sensitivity
+    realtime_boundary_followup_delays = config.realtime_boundary_followup_delays
+    clear_text_delay_ms = config.clear_text_delay_ms
+    tts_minimum_sentence_length = config.tts_minimum_sentence_length
+    tts_buffer_threshold_seconds = config.tts_buffer_threshold_seconds
+    tts_log_characters = config.tts_log_characters
+    edge_rate = config.edge_rate
+    edge_pitch = config.edge_pitch
+    language = config.language
+    chat_model = config.chat_model
 
-    assistant_font_size = 24
-    assistant_color = QColor(239, 98, 166) # pink
+    user_font_size = config.user_font_size
+    user_color = QColor(*config.user_color_rgb)
 
-    voice_azure = "en-GB-SoniaNeural"
-    voice_system = "Zira"
-    #voice_system = "Hazel"
-    prompt = "Be concise, polite, and casual with a touch of sass. Aim for short, direct responses, as if we're talking."
-    elevenlabs_model = "eleven_monolingual_v1"
+    assistant_font_size = config.assistant_font_size
+    assistant_color = QColor(*config.assistant_color_rgb)
 
-    if language == "de":
-        elevenlabs_model = "eleven_multilingual_v1"
-        voice_system = "Katja"
-        voice_azure = "de-DE-MajaNeural"
-        prompt = 'Sei präzise, höflich und locker, mit einer Prise Schlagfertigkeit. Antworte kurz und direkt, als ob wir gerade sprechen.'
-        
+
+
+
+    voice_system = config.voice_system
+    system_prompt = config.system_prompt
+
     print ("Click the top right corner to change the engine")
     print ("Press ESC to stop the current playback")
 
     system_prompt_message = {
         'role': 'system',
-        'content': prompt
+        'content': system_prompt
     }
 
-    def generate_response(messages):
-        """Generate assistant's response using OpenAI."""
-        client_options = {"api_key": os.environ.get("OPENAI_API_KEY")}
-        if openai_base_url:
-            client_options["base_url"] = openai_base_url
-        client = OpenAI(**client_options)
-        for chunk in client.chat.completions.create(
-            model=openai_model,
-            messages=messages,
-            stream=True,
-        ):
-            text_chunk = chunk.choices[0].delta.content
-            if text_chunk:
-                yield text_chunk
-
+    MAX_WINDOW_WIDTH = config.max_window_width
+    MAX_WIDTH_ASSISTANT = config.max_width_assistant
+    MAX_WIDTH_USER = config.max_width_user
     history = []
-    MAX_WINDOW_WIDTH = 1600
-    MAX_WIDTH_ASSISTANT = 1200
-    MAX_WIDTH_USER = 1500
+
+    recorder_model = config.final_backend.model
+    realtime_recorder_model = config.realtime_backend.model
+    transcription_engine_options = config.final_backend.options
+    realtime_transcription_engine_options = config.realtime_backend.options
+
+    print(f"Using STT backend: {selected_backend}")
+    print(f"Using realtime STT backend: {selected_realtime_backend}")
+    app_logger.info(
+        "Configuration loaded: stt_backend=%s realtime_backend=%s model=%s realtime_model=%s "
+        "language=%s start_with_wakeword=%s wake_words=%s return_to_wakewords_after_silence=%.2f "
+        "wake_word_timeout=%.2f post_speech_silence_duration=%.2f min_length_of_recording=%.2f "
+        "min_gap_between_recordings=%.2f pre_recording_buffer_duration=%.2f "
+        "realtime_processing_pause=%.2f init_realtime_after_seconds=%.2f "
+        "allowed_latency_limit=%s device=%s compute_type=%s wakeword_backend=%s "
+        "wake_word_activation_delay=%.2f wake_word_buffer_duration=%.2f",
+        selected_backend,
+        selected_realtime_backend,
+        recorder_model,
+        realtime_recorder_model,
+        language,
+        start_with_wakeword,
+        wake_words,
+        return_to_wakewords_after_silence,
+        wake_word_timeout,
+        post_speech_silence_duration,
+        min_length_of_recording,
+        min_gap_between_recordings,
+        pre_recording_buffer_duration,
+        realtime_processing_pause,
+        init_realtime_after_seconds,
+        allowed_latency_limit,
+        recorder_device,
+        recorder_compute_type,
+        wakeword_backend,
+        wake_word_activation_delay,
+        wake_word_buffer_duration,
+    )
+
+    def generate_response(messages):
+        """Generate assistant's response using an OpenAI-compatible endpoint."""
+        app_logger.info("Chat completion requested; messages=%d model=%s", len(messages), chat_model)
+        yield from stream_chat_completion(
+            messages,
+            model=chat_model,
+            logit_bias={35309: -100, 36661: -100},
+        )
 
     class AudioPlayer(QThread):
         def __init__(self, file_path):
@@ -90,10 +193,13 @@ if __name__ == '__main__':
             self.file_path = file_path
 
         def run(self):
-            wav = wavio.read(self.file_path)
-            sound = wav.data.astype(np.float32) / np.iinfo(np.int16).max  
-            sd.play(sound, wav.rate)
-            sd.wait()
+            try:
+                wav = wavio.read(self.file_path)
+                sound = wav.data.astype(np.float32) / np.iinfo(np.int16).max
+                sd.play(sound, wav.rate)
+                sd.wait()
+            except Exception as exc:
+                app_logger.warning("Audio cue playback failed for %s: %s", self.file_path, exc)
 
     class TextRetrievalThread(QThread):
         textRetrieved = pyqtSignal(str)
@@ -102,18 +208,38 @@ if __name__ == '__main__':
             super().__init__()
             self.recorder = recorder
             self.active = False  
+            self.running = True
 
         def run(self):
-            while True:
-                if self.active:  
-                    text = self.recorder.text()
-                    self.recorder.wake_word_activation_delay = return_to_wakewords_after_silence
-                    self.textRetrieved.emit(text)
+            while self.running:
+                if self.active:
+                    try:
+                        app_logger.info("Waiting for final transcription text")
+                        text = self.recorder.text()
+                    except Exception as exc:
+                        app_logger.exception("Text retrieval failed: %s", exc)
+                    else:
+                        self.recorder.wake_word_activation_delay = return_to_wakewords_after_silence
+                        app_logger.info(
+                            "Final transcription retrieved; chars=%d wake_word_activation_delay=%.2f",
+                            len(text or ""),
+                            self.recorder.wake_word_activation_delay,
+                        )
+                        self.textRetrieved.emit(text)
                     self.active = False
-                time.sleep(0.1) 
+                time.sleep(0.1)
 
         def activate(self):
-            self.active = True 
+            if not self.running:
+                return
+            if not self.active:
+                app_logger.info("Text retrieval activated")
+            self.active = True
+
+        def stop(self):
+            app_logger.info("Text retrieval stopping")
+            self.active = False
+            self.running = False
 
     class TransparentWindow(QWidget):
         updateUI = pyqtSignal()
@@ -142,7 +268,11 @@ if __name__ == '__main__':
             self.displayed_user_text = ""
             self.displayed_assistant_text = ""
             self.stream = None
+            self.recorder = None
             self.text_retrieval_thread = None
+            self.is_closing = False
+            self.last_realtime_log_time = 0
+            self.last_realtime_text = ""
 
             self.user_text_timer = QTimer(self)
             self.assistant_text_timer = QTimer(self)
@@ -171,19 +301,16 @@ if __name__ == '__main__':
                 }
                 """)
 
-            self.elevenlabs_action = QAction("Elevenlabs", self)
-            self.azure_action = QAction("Azure", self)
+            self.edge_action = QAction("Edge", self)
             self.system_action = QAction("System", self)
             self.quit_action = QAction("Quit", self)
 
-            self.menu.addAction(self.elevenlabs_action)
-            self.menu.addAction(self.azure_action)
+            self.menu.addAction(self.edge_action)
             self.menu.addAction(self.system_action)
             self.menu.addSeparator() 
             self.menu.addAction(self.quit_action)
 
-            self.elevenlabs_action.triggered.connect(lambda: self.select_engine("Elevenlabs"))
-            self.azure_action.triggered.connect(lambda: self.select_engine("Azure"))
+            self.edge_action.triggered.connect(lambda: self.select_engine("Edge"))
             self.system_action.triggered.connect(lambda: self.select_engine("System"))
             self.quit_action.triggered.connect(self.close_application)
 
@@ -193,77 +320,153 @@ if __name__ == '__main__':
                     self.menu.exec_(self.mapToGlobal(event.pos()))        
 
         def close_application(self):
+            app_logger.info("Close requested from menu")
+            self.shutdown_runtime()
+            QApplication.quit()
+
+        def shutdown_runtime(self):
+            if self.is_closing:
+                return
+            self.is_closing = True
+            app_logger.info("Runtime shutdown started")
+            if self.recorder:
+                self.recorder.shutdown()
+            if self.text_retrieval_thread:
+                self.text_retrieval_thread.stop()
+                self.text_retrieval_thread.wait(2000)
+            keyboard.unhook_all()
+            app_logger.info("Runtime shutdown finished")
+
+        def close_application_old(self):
             if self.recorder:
                 self.recorder.shutdown()                    
             QApplication.quit()                
 
         def init(self):
 
+            app_logger.info("Window initialization started")
             self.select_engine(start_engine)
 
-            # recorder = AudioToTextRecorder(spinner=False, model="large-v2", language="de", on_recording_start=recording_start, silero_sensitivity=0.4, post_speech_silence_duration=0.4, min_length_of_recording=0.3, min_gap_between_recordings=0.01, realtime_preview_resolution = 0.01, realtime_preview = True, realtime_preview_model = "small", on_realtime_preview=text_detected)
+            # recorder = AudioToTextRecorder(spinner=False, model="large_turbo", language="de", on_recording_start=recording_start, silero_sensitivity=0.4, post_speech_silence_duration=0.4, min_length_of_recording=0.3, min_gap_between_recordings=0.01, realtime_preview_resolution = 0.01, realtime_preview = True, realtime_preview_model = "small", on_realtime_preview=text_detected)
 
             self.recorder = AudioToTextRecorder(
                 model=recorder_model,
+                transcription_engine=selected_backend,
+                transcription_engine_options=transcription_engine_options,
+                download_root=download_root,
+                device=recorder_device,
+                compute_type=recorder_compute_type,
+                input_device_index=input_device_index,
+                gpu_device_index=gpu_device_index,
                 language=language,
-                wake_words=os.environ.get("VOICESTT_WAKE_WORDS", "Jarvis"),
-                device="cpu",
-                compute_type="int8",
-                silero_use_onnx=True,
-                silero_deactivity_detection=True,
-                spinner=True,
-                silero_sensitivity=0.2,
-                webrtc_sensitivity=3,
+                use_microphone=use_microphone,
+                spinner=spinner,
+                batch_size=batch_size,
+                realtime_batch_size=realtime_batch_size,
+                beam_size=beam_size,
+                beam_size_realtime=beam_size_realtime,
+                initial_prompt=initial_prompt,
+                initial_prompt_realtime=initial_prompt_realtime,
+                suppress_tokens=suppress_tokens,
+                ensure_sentence_starting_uppercase=ensure_sentence_starting_uppercase,
+                ensure_sentence_ends_with_period=ensure_sentence_ends_with_period,
+                print_transcription_time=print_transcription_time,
+                early_transcription_on_silence=early_transcription_on_silence,
+                wake_words=wake_words,
+                wakeword_backend=wakeword_backend,
+                openwakeword_model_paths=openwakeword_model_paths,
+                openwakeword_inference_framework=openwakeword_inference_framework,
+                wake_words_sensitivity=wake_words_sensitivity,
+                wake_word_activation_delay=wake_word_activation_delay,
+                wake_word_timeout=wake_word_timeout,
+                wake_word_buffer_duration=wake_word_buffer_duration,
+                silero_use_onnx=silero_use_onnx,
+                silero_sensitivity=silero_sensitivity,
+                silero_deactivity_detection=silero_deactivity_detection,
+                silero_backend=silero_backend,
+                silero_onnx_model_path=silero_onnx_model_path,
+                silero_onnx_threads=silero_onnx_threads,
+                deactivity_silence_confirmation_duration=deactivity_silence_confirmation_duration,
+                webrtc_sensitivity=webrtc_sensitivity,
+                warmup_vad=warmup_vad,
                 on_recording_start=self.on_recording_start,
                 on_vad_detect_start=self.on_vad_detect_start,
                 on_wakeword_detection_start=self.on_wakeword_detection_start,
                 on_transcription_start=self.on_transcription_start,
-                post_speech_silence_duration=0.4, 
-                min_length_of_recording=0.3, 
-                min_gap_between_recordings=0.01, 
-                enable_realtime_transcription = True,
-                realtime_transcription_engine=realtime_engine,
-                realtime_processing_pause = 0.01, 
-                realtime_model_type=realtime_model,
-                on_realtime_transcription_stabilized=self.text_detected
+                post_speech_silence_duration=post_speech_silence_duration,
+                min_length_of_recording=min_length_of_recording,
+                min_gap_between_recordings=min_gap_between_recordings,
+                pre_recording_buffer_duration=pre_recording_buffer_duration,
+                pre_recording_buffer_trim_config=pre_recording_buffer_trim_config,
+                enable_realtime_transcription=enable_realtime_transcription,
+                use_main_model_for_realtime=use_main_model_for_realtime,
+                realtime_transcription_engine=selected_realtime_backend,
+                realtime_transcription_engine_options=realtime_transcription_engine_options,
+                realtime_processing_pause=realtime_processing_pause,
+                init_realtime_after_seconds=init_realtime_after_seconds,
+                realtime_model_type=realtime_recorder_model,
+                realtime_transcription_use_syllable_boundaries=realtime_transcription_use_syllable_boundaries,
+                realtime_boundary_detector_sensitivity=realtime_boundary_detector_sensitivity,
+                realtime_boundary_followup_delays=realtime_boundary_followup_delays,
+                allowed_latency_limit=allowed_latency_limit,
+                sample_rate=sample_rate,
+                buffer_size=buffer_size,
+                handle_buffer_overflow=handle_buffer_overflow,
+                debug_mode=debug_mode,
+                on_realtime_transcription_update=(
+                    self.text_detected
+                    if realtime_callback in ("update", "both")
+                    else None
+                ),
+                on_realtime_transcription_stabilized=(
+                    self.text_detected
+                    if realtime_callback in ("stabilized", "both")
+                    else None
+                ),
+                no_log_file=no_log_file,
+                level=recorder_log_level,
+                use_extended_logging=use_extended_logging,
+                faster_whisper_vad_filter=faster_whisper_vad_filter,
+                normalize_audio=normalize_audio,
+                start_callback_in_new_thread=start_callback_in_new_thread,
             )
             if not start_with_wakeword:
                 self.recorder.wake_word_activation_delay = return_to_wakewords_after_silence
+                app_logger.info(
+                    "Start mode skips wake word; wake_word_activation_delay=%.2f",
+                    self.recorder.wake_word_activation_delay,
+                )
                 
             self.text_retrieval_thread = TextRetrievalThread(self.recorder)
             self.text_retrieval_thread.textRetrieved.connect(self.process_user_text)
             self.text_retrieval_thread.start()
             self.text_retrieval_thread.activate()
 
-            keyboard.on_press_key('esc', self.on_escape)
+            try:
+                keyboard.on_press_key('esc', self.on_escape)
+            except Exception as exc:
+                app_logger.warning("ESC keyboard hook could not be registered: %s", exc)
+            app_logger.info("Window initialization finished")
 
         def closeEvent(self, event):
-            if self.recorder:
-                self.recorder.shutdown()            
+            self.shutdown_runtime()
+            event.accept()
 
         def select_engine(self, engine_name):
             if self.stream:
+                app_logger.info("Stopping current TTS stream before engine switch")
                 self.stream.stop()
                 self.stream = None
 
             engine = None
 
-            if engine_name == "Azure":
-                from RealtimeTTS import AzureEngine
-                engine = AzureEngine(
-                        os.environ.get("AZURE_SPEECH_KEY"),
-                        os.environ.get("AZURE_SPEECH_REGION"),
-                        voice_azure,
-                        rate=24,
-                        pitch=10,
+            if engine_name == "Edge":
+                engine = EdgeEngine(
+                        rate=edge_rate,
+                        pitch=edge_pitch,
                     )
-
-            elif engine_name == "Elevenlabs":
-                from RealtimeTTS import ElevenlabsEngine
-                engine = ElevenlabsEngine(
-                        os.environ.get("ELEVENLABS_API_KEY"),
-                        model=elevenlabs_model
-                    )
+                voice_edge= edge_voice_string # engine.get_voice(edge_voice_string)
+                engine.set_voice(voice_edge)
             else:
                 engine = SystemEngine(
                     voice=voice_system,
@@ -276,11 +479,12 @@ if __name__ == '__main__':
                 on_text_stream_stop=self.on_text_stream_stop,
                 on_text_stream_start=self.on_text_stream_start,
                 on_audio_stream_stop=self.on_audio_stream_stop,
-                log_characters=True
+                log_characters=tts_log_characters
             )
             sys.stdout.write('\033[K')  # Clear to the end of line
             sys.stdout.write('\r')  # Move the cursor to the beginning of the line
             print (f"Using {engine_name} engine")
+            app_logger.info("TTS engine selected: %s", engine_name)
 
 
         def text_detected(self, text):
@@ -290,9 +494,15 @@ if __name__ == '__main__':
             self.user_text_opacity = 255 
             self.user_text = text
             self.updateUI.emit()
+            now = time.time()
+            if text != self.last_realtime_text and now - self.last_realtime_log_time >= 1:
+                app_logger.info("Realtime transcription update; chars=%d", len(text or ""))
+                self.last_realtime_log_time = now
+                self.last_realtime_text = text
 
         def on_escape(self, e):
-            if self.stream.is_playing():
+            if self.stream and self.stream.is_playing():
+                app_logger.info("ESC pressed; stopping TTS playback")
                 self.stream.stop()
 
         def showEvent(self, event: QEvent):
@@ -312,13 +522,19 @@ if __name__ == '__main__':
                 assistant_response = self.stream.text()            
                 self.assistant_text = assistant_response
                 history.append({'role': 'assistant', 'content': assistant_response})
+                app_logger.info(
+                    "Assistant text stream stopped; chars=%d history_messages=%d",
+                    len(assistant_response or ""),
+                    len(history),
+                )
 
         def on_audio_stream_stop(self):
             self.set_symbols("🎙️", "⚪")
 
-            if self.stream:
+            if self.stream and self.text_retrieval_thread:
                 self.clearAssistantTextSignal.emit()
                 self.text_retrieval_thread.activate()
+            app_logger.info("Assistant audio stream stopped")
 
         def generate_answer(self):
             self.run_fade_assistant = False
@@ -329,8 +545,15 @@ if __name__ == '__main__':
             self.remove_assistant_text()
             assistant_response = generate_response([system_prompt_message] + history[-max_history_messages:])
             self.stream.feed(assistant_response)
-            self.stream.play_async(minimum_sentence_length=6,
-                                buffer_threshold_seconds=2)
+            app_logger.info(
+                "Assistant generation started; user_chars=%d history_messages=%d",
+                len(self.user_text or ""),
+                len(history),
+            )
+            self.stream.play_async(
+                minimum_sentence_length=tts_minimum_sentence_length,
+                buffer_threshold_seconds=tts_buffer_threshold_seconds,
+            )
 
         def set_symbols(self, big_symbol, small_symbol):
             self.big_symbol_text = big_symbol
@@ -339,6 +562,7 @@ if __name__ == '__main__':
 
         def on_text_stream_start(self):
             self.set_symbols("⌛", "👄")
+            app_logger.info("Assistant text stream started")
 
         def process_user_text(self, user_text):
             user_text = user_text.strip()
@@ -352,33 +576,42 @@ if __name__ == '__main__':
                 self.clearUserTextSignal.emit()
                 print (f"Me: \"{user_text}\"\nAI: \"", end="", flush=True)
                 self.set_symbols("⌛", "🧠")
+                app_logger.info("User text accepted; chars=%d", len(user_text))
                 QTimer.singleShot(100, self.generate_answer)
+            else:
+                app_logger.info("Empty transcription ignored")
 
-        def on_transcription_start(self):
+        def on_transcription_start(self, audio_data=None):
             self.set_symbols("⌛", "📝")
+            audio_len = len(audio_data) if audio_data is not None else 0
+            app_logger.info("Final transcription started; audio_samples=%d", audio_len)
+            return False
 
         def on_recording_start(self):
             self.text_storage = []
             self.ongoing_sentence = ""
             self.set_symbols("🎙️", "🔴")
+            app_logger.info("Recording started")
 
         def on_vad_detect_start(self):
             if self.small_symbol_text == "💤" or self.small_symbol_text == "🚀":
-                self.audio_player = AudioPlayer("active.wav")
+                self.audio_player = AudioPlayer(asset_path("active.wav"))
                 self.audio_player.start() 
 
             self.set_symbols("🎙️", "⚪")
+            app_logger.info("Voice activity listening started")
 
         def on_wakeword_detection_start(self):
-            self.audio_player = AudioPlayer("inactive.wav")
+            self.audio_player = AudioPlayer(asset_path("inactive.wav"))
             self.audio_player.start()         
 
             self.set_symbols("", "💤")
+            app_logger.info("Wake-word detection started")
 
         def init_clear_user_text(self):
             if self.user_text_timer.isActive():
                 self.user_text_timer.stop()        
-            self.user_text_timer.start(10000)
+            self.user_text_timer.start(clear_text_delay_ms)
 
         def remove_user_text(self):
             self.user_text = ""
@@ -410,7 +643,7 @@ if __name__ == '__main__':
         def init_clear_assistant_text(self):
             if self.assistant_text_timer.isActive():
                 self.assistant_text_timer.stop()        
-            self.assistant_text_timer.start(10000)
+            self.assistant_text_timer.start(clear_text_delay_ms)
 
         def remove_assistant_text(self):
             self.assistant_text = ""
@@ -546,5 +779,15 @@ if __name__ == '__main__':
 
     window = TransparentWindow()
     window.show()
+    auto_quit_ms = os.environ.get("EXAMPLE_APP_AUTO_QUIT_MS")
+    if auto_quit_ms:
+        def auto_quit_application():
+            app_logger.info("Auto quit requested after %s ms", auto_quit_ms)
+            window.shutdown_runtime()
+            QApplication.exit(0)
 
-    sys.exit(app.exec_())
+        QTimer.singleShot(int(auto_quit_ms), auto_quit_application)
+
+    exit_code = app.exec_()
+    app_logger.info("Example app exited; exit_code=%s", exit_code)
+    sys.exit(0 if auto_quit_ms else exit_code)

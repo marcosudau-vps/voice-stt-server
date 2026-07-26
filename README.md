@@ -131,6 +131,15 @@ More examples are in [docs/quick-start.md](docs/quick-start.md) and
 
 ## Configuration Reference
 
+All project and deployment defaults live in the versioned root
+[`config.yaml`](config.yaml). It is grouped into `settings`, `deployment` and
+`example_app`. The only local env file is `.env`, and it contains credentials
+only. It is ignored by Git.
+
+Docker model paths are selected automatically from the existing candidates in
+`deployment.model_paths`. A new machine therefore requires no change when one
+of those paths exists; otherwise add one candidate in that single section.
+
 Every `AudioToTextRecorder` constructor parameter is documented in
 [docs/configuration.md](docs/configuration.md), including model/engine
 selection, realtime transcription, VAD timing, wake words, callbacks, external
@@ -191,13 +200,12 @@ OpenAI-compatible transcription route through one shared model scheduler.
 
 ```bash
 .\install_windows_cpu.ps1
-$env:VOICESTT_FASTER_WHISPER_MODEL_ROOT="S:\MODELS\stt\ctranslate2"
-$env:VOICESTT_KROKO_MODEL_ROOT="S:\MODELS\stt\kroko_asr"
-$env:VOICESTT_OFFLINE_MODELS="1"
-.\.venv\Scripts\stt-server.exe --model small --realtime-engine kroko_onnx --realtime-model Kroko-DE-Community-64-L-Streaming-001.data --language de
+python .\tools\compose.py up --build -d
 ```
 
-Open `http://localhost:8010`. See [docs/fastapi-server.md](docs/fastapi-server.md)
+The same command works on the VPS when its configured model directories are
+present. Open `http://localhost:8010`. See
+[docs/fastapi-server.md](docs/fastapi-server.md)
 for engine recipes, websocket protocol details, health checks, and metrics.
 
 ## Contributing
@@ -208,7 +216,3 @@ unit tests separate from opt-in real-model tests; see [docs/testing.md](docs/tes
 ## License
 
 MIT
-
-## Author
-
-Kolja Beigel

@@ -1,0 +1,226 @@
+version: 1
+
+# Zentrale, versionierte VoiceSTT-Konfiguration.
+# Zugangsdaten gehören ausschließlich in die nicht versionierte Root-Datei .env.
+
+settings:
+  # Server
+  host: 0.0.0.0
+  port: 8010
+  log_level: INFO
+  language: de
+  device: cpu
+  compute_type: int8
+
+  # Modelle und Engines
+  transcription_engine: faster_whisper
+  model: faster-whisper-large-v3-turbo
+  realtime_transcription_engine: kroko_onnx
+  realtime_model: Kroko-DE-Community-64-L-Streaming-001.data
+  use_main_model_for_realtime: false
+  transcription_engine_options: null
+  realtime_transcription_engine_options: null
+
+  # Erkennung und Latenz
+  tuning_profile: custom
+  beam_size: 5
+  beam_size_realtime: 3
+  batch_size: 16
+  realtime_batch_size: 16
+  vad_filter: true
+  normalize_audio: false
+  realtime_callback: update
+  min_length_of_recording: 0.2
+  min_gap_between_recordings: 0.0
+  post_speech_silence_duration: 0.55
+  silero_sensitivity: 0.05
+  webrtc_sensitivity: 3
+  realtime_processing_pause: 0.02
+  realtime_transcription_use_syllable_boundaries: false
+  realtime_boundary_detector_sensitivity: 0.6
+  realtime_boundary_followup_delays: [0.05, 0.2]
+  early_transcription_on_silence: 0.2
+
+  # Wake Word
+  wakeword_backend: openwakeword
+  wake_words: hey_jarvis
+  openwakeword_model_paths: hey_jarvis_v0.1.onnx
+  openwakeword_inference_framework: onnx
+  wake_words_sensitivity: 0.5
+  wake_word_activation_delay: 0.0
+  wake_word_timeout: 7.0
+  wake_word_buffer_duration: 0.1
+  wake_word_followup_window: 7.0
+
+  # Parallelität und Grenzen
+  max_sessions: 8
+  max_active_speakers: 4
+  audio_queue_size: 128
+  max_audio_packet_bytes: 524288
+  max_audio_queue_seconds_per_session: 30.0
+  pre_recording_buffer_duration: 0.75
+  max_realtime_queue_age_ms: 1500
+  max_final_queue_depth_per_session: 8
+  max_global_inference_queue_depth: 64
+  realtime_degradation_threshold_ms: 1500
+  realtime_min_audio_seconds: 0.25
+  realtime_max_audio_seconds: 20.0
+  vad_energy_threshold: 250.0
+
+  # Modell-Lebenszyklus
+  model_warmup: false
+  model_idle_unload_enabled: true
+  model_idle_timeout_seconds: 3600.0
+  model_memory_policy_enabled: true
+  allow_two_medium_models: true
+
+  # API
+  openai_api_enabled: true
+  openai_model_aliases:
+    whisper-1: final
+    fast: realtime
+  openai_max_file_bytes: 26214400
+
+  # Protokollierung und Laufzeitdaten
+  request_logging_enabled: true
+  request_log_stdout: true
+  request_log_path: /data/logs/voicestt-requests.jsonl
+  request_log_transcripts: true
+  request_log_max_bytes: 10485760
+  request_log_backup_count: 12
+  performance_logging_enabled: true
+  performance_log_stdout: true
+  performance_log_path: /data/logs/voicestt-performance.jsonl
+  performance_log_max_bytes: 10485760
+  performance_log_backup_count: 12
+  save_audio_files: false
+  audio_log_dir: /data/logs/audio
+  runtime_config_path: /data/config/runtime.json
+
+deployment:
+  compose_project: voice
+  image: voicestt-cpu:local
+  server_port: 8010
+  browser_port: 8081
+  cpu_threads: 4
+  public_url: https://voice.marcosudau.com
+
+  runtime_data:
+    path: auto
+    candidates:
+      - /home/marco/selfhost/data/services/voice/stt-voice
+      - ./data
+
+  # "auto" verwendet den ersten vorhandenen Eintrag aus candidates.
+  # Für eine weitere Umgebung muss nur hier ein zusätzlicher Kandidat stehen.
+  model_paths:
+    faster_whisper:
+      path: auto
+      candidates:
+        - S:/MODELS/stt/ctranslate2
+        - /home/marco/selfhost_outsourced/models/stt/ctranslate2
+    kroko:
+      path: auto
+      candidates:
+        - S:/MODELS/stt/kroko_asr
+        - /home/marco/selfhost_outsourced/models/stt/kroko_asr
+    openwakeword:
+      path: auto
+      candidates:
+        - S:/MODELS/stt/openwakeword
+        - /home/marco/selfhost_outsourced/models/openwakeword
+
+example_app:
+  recognition:
+    stt_backend: faster_whisper
+    realtime_stt_backend: faster_whisper
+    model: medium
+    realtime_model: tiny
+    language: de
+    device: cpu
+    compute_type: int8
+    gpu_device_index: 0
+    use_microphone: true
+    batch_size: 16
+    realtime_batch_size: 16
+    beam_size: 5
+    beam_size_realtime: 3
+    suppress_tokens: [-1]
+    ensure_sentence_starting_uppercase: true
+    ensure_sentence_ends_with_period: true
+    print_transcription_time: false
+    early_transcription_on_silence: 0
+    faster_whisper_vad_filter: true
+    normalize_audio: false
+
+  audio:
+    sample_rate: 16000
+    buffer_size: 512
+    handle_buffer_overflow: true
+
+  realtime:
+    enable_realtime_transcription: true
+    use_main_model_for_realtime: false
+    realtime_callback: stabilized
+    realtime_processing_pause: 0.35
+    init_realtime_after_seconds: 0.7
+    realtime_transcription_use_syllable_boundaries: false
+    realtime_boundary_detector_sensitivity: 0.6
+    realtime_boundary_followup_delays: [0.05, 0.2]
+    allowed_latency_limit: 600
+
+  wake_word:
+    start_with_wakeword: true
+    openwakeword_inference_framework: onnx
+    wake_words: Jarvis
+    wake_words_sensitivity: 0.55
+    wake_word_activation_delay: 0.0
+    wake_word_timeout: 10.0
+    wake_word_buffer_duration: 0.1
+    return_to_wakewords_after_silence: 18
+
+  voice_activity:
+    post_speech_silence_duration: 3.0
+    min_length_of_recording: 0.8
+    min_gap_between_recordings: 0.6
+    pre_recording_buffer_duration: 1.0
+    silero_sensitivity: 0.4
+    silero_use_onnx: false
+    silero_deactivity_detection: false
+    silero_backend: auto
+    silero_onnx_threads: 2
+    deactivity_silence_confirmation_duration: 0.16
+    webrtc_sensitivity: 2
+    warmup_vad: true
+
+  logging:
+    spinner: true
+    no_log_file: true
+    log_level: CRITICAL
+    use_extended_logging: false
+    debug_mode: false
+    start_callback_in_new_thread: false
+
+  speech:
+    start_engine: Edge
+    edge_voice_string: de-DE-KatjaNeural
+    edge_rate: 24
+    edge_pitch: 10
+    voice_system: Katja
+    tts_minimum_sentence_length: 8
+    tts_buffer_threshold_seconds: 2.5
+    tts_log_characters: true
+
+  conversation:
+    custom_api_chat_model: opencode-go/minimax-m3
+    max_history_messages: 6
+    clear_text_delay_ms: 15000
+
+  interface:
+    user_font_size: 22
+    assistant_font_size: 24
+    user_color_rgb: [0, 188, 242]
+    assistant_color_rgb: [239, 98, 166]
+    max_window_width: 1600
+    max_width_assistant: 1200
+    max_width_user: 1500
