@@ -12,6 +12,8 @@
   for configuring the manifest or its directory directly.
 - Added protocol, isolation, model-catalog, fallback, and WebSocket tests for
   independent Hotkey and Wake Word sessions.
+- Added a detailed implementation and operations guide plus a PowerShell live
+  verification script for the session-local Wake Word contract.
 
 ### Changed
 

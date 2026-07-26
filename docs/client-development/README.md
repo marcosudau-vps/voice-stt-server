@@ -75,6 +75,11 @@ flowchart LR
 
 ## Aktuelles versioniertes Produktionsprofil
 
+Eine zusammenhängende Architektur-, Migrations- und Betriebsbeschreibung der
+Session-Wake-Word-Erweiterung einschließlich eines ausführbaren
+PowerShell-Nachweises steht unter
+[`docs/session-wakeword-erweiterung.md`](../session-wakeword-erweiterung.md).
+
 Das zentrale Profil `config.yaml` konfiguriert:
 
 | Bereich | Wert |

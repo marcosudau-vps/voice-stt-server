@@ -21,7 +21,7 @@ Stars improve visibility and visibility brings more users, more real-world testi
 
 `https://github.com/user-attachments/assets/797e6552-27cd-41b1-a7f3-e5cbc72094f5`
 
-[CLI demo code (reproduces the video above)](tests/voicestt_test.py)
+[CLI demo code (reproduces the video above)](tests/realtimestt_test.py)
 
 ## Featured Integration: Kroko/Banafo ASR
 
@@ -173,6 +173,8 @@ audio, logging, and executor injection.
   legacy experiments under `tests/`.
 - [FastAPI server](docs/fastapi-server.md): browser server configuration,
   protocol, metrics, and deployment notes.
+- [Session-local Wake Word](docs/session-wakeword-erweiterung.md): architecture,
+  handshake contract, fallbacks, isolation and live PowerShell verification.
 - [Troubleshooting](docs/troubleshooting.md): common install, audio, model,
   dependency, and runtime errors.
 - [Engine licenses](docs/licenses.md): license notes for optional engine
