@@ -14,6 +14,7 @@ output
 data
 logs
 .test-tmp*
+.docker-build-session*.log
 htmlcov
 .coverage
 pytest.ini

@@ -43,7 +43,7 @@ COPY --from=kroko-builder /build/kroko-work/kroko-onnx/release_artifacts/linux/*
 RUN python -m pip install --upgrade pip setuptools wheel && \
     python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu && \
     python -m pip install '/tmp/kroko-wheels/'*.whl && \
-    python -m pip install -e '.[faster-whisper,silero-onnx-cpu,porcupine]' \
+    python -m pip install -e '.[faster-whisper,silero-onnx-cpu]' \
       -r api_fastapi_server/requirements.txt python-multipart \
       scikit-learn requests && \
     python -m pip install --no-deps 'openwakeword==0.6.0' && \
@@ -56,7 +56,7 @@ RUN python -m pip install --upgrade pip setuptools wheel && \
 
 EXPOSE 8010
 HEALTHCHECK --interval=30s --timeout=10s --start-period=180s --retries=5 \
-  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=5)" || exit 1
+  CMD python -c "import json, urllib.request; result=json.load(urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=5)); assert result.get('ready') and result.get('ok')" || exit 1
 
 CMD ["python", "-m", "VoiceSTT_server.server", \
      "--host", "0.0.0.0", "--port", "8010", \
