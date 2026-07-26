@@ -325,7 +325,7 @@ def test_admin_api_requires_key_and_typed_endpoints_persist(tmp_path, monkeypatc
         assert wake.status_code == 200
         wake_config = client.get("/api/wake-word", headers=headers).json()
         assert wake_config["availableModels"]["openwakeword"][0]["id"] == "hey_jarvis"
-        assert wake_config["availableModels"]["pvporcupine"]
+        assert set(wake_config["availableModels"]) == {"openwakeword"}
         logging_response = client.put("/api/logging", headers=headers, json={
             "enabled": True, "stdout": False, "transcripts": False,
             "file": str(tmp_path / "audit.jsonl"),

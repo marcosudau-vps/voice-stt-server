@@ -109,6 +109,12 @@ Anfragen dauern. Ein pauschaler kurzer Finaltimeout wäre daher fehleranfällig.
 - Vor breiter Verteilung empfiehlt sich ein vorgeschalteter Auth-Mechanismus
   oder eine Protokollerweiterung mit kurzlebigem Sessiontoken.
 
+Das gilt auch für sessionlokale Wake-Word-Queryparameter. Sie verändern keine
+globale Konfiguration und akzeptieren keine freien Pfade, können aber die
+Initialisierung lokaler OpenWakeWord-Modelle und damit Ressourcenverbrauch
+auslösen. Reverse Proxy, Sessionlimit, Connection-/Rate-Limits und Monitoring
+sind deshalb weiterhin Teil der Produktionshärtung.
+
 Diese Dokumentation erfindet bewusst keinen Tokenparameter: Ein Client darf nur
 Felder senden, die der Server tatsächlich auswertet.
 
@@ -202,6 +208,10 @@ werden.
 - [ ] Wake-Wartephase sendet weiterhin Audio.
 - [ ] Wake-Timeout und Follow-up-Timeout werden unterschieden.
 - [ ] Aufnahme-/Timelinefelder werden bei Fehlen tolerant behandelt.
+- [ ] `wakeWordEnabled=false`, `true` und Vererbung werden gegen
+      `hello.sessionConfig` geprüft.
+- [ ] Fallbacks/Warnungen werden sichtbar behandelt; ein
+      `session_config`-Fehler mit Close 1008 erzeugt keine Reconnectschleife.
 
 ### Fehler und Last
 

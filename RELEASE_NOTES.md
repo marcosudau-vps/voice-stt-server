@@ -1,5 +1,25 @@
 # Release Notes
 
+## Unreleased
+
+### Added
+
+- Added a session-local OpenWakeWord contract on `/ws/transcribe`, including
+  tri-state enablement, optional tuning overrides, explicit fallbacks, and
+  effective configuration/capabilities in `hello` and `ready`.
+- Added `models.json`-backed OpenWakeWord discovery with logical IDs, default
+  model selection, pipeline-model mappings, local file validation, and support
+  for configuring the manifest or its directory directly.
+- Added protocol, isolation, model-catalog, fallback, and WebSocket tests for
+  independent Hotkey and Wake Word sessions.
+
+### Changed
+
+- The FastAPI Wake Word admin and session contracts now expose OpenWakeWord
+  only; Porcupine is omitted from the model catalog and browser selector.
+- Ready notifications are session-specific so they cannot leak another
+  session's effective Wake Word profile.
+
 ## 1.0.2 - 2026-05-31
 
 ### Changed in V 1.0.2

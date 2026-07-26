@@ -98,7 +98,9 @@ erreichtem Sessionlimit gibt es kein `hello`, sondern einen Admission-Fehler.
 | `type` | `"hello"` | Diskriminator |
 | `clientId` | String | identisch mit `sessionId`; Kompatibilitätsname |
 | `sessionId` | String | zufällige hexadezimale UUID ohne Bindestriche |
-| `settings` | Object | öffentliche effektive Servereinstellungen; Engine-Options und Secrets entfernt |
+| `settings` | Object | öffentliche effektive Sessioneinstellungen; Engine-Options, Secrets und lokale Modellpfade entfernt |
+| `sessionConfig` | Object | angeforderter und effektiver Wake-Word-Modus einschließlich Fallbacks/Warnungen |
+| `sessionCapabilities` | Object | Contractversion, OpenWakeWord-Katalog und unterstützte Queryparameter |
 | `limits` | Object | kompakte Kapazitätsgrenzen |
 | `supportedEngines` | Array | Namen der im Code registrierten Transkriptionsengines |
 | `runtimeSettings` | Object | Listen `activeSessionSafe`, `newSessionOnly`, `startupOnly` |
@@ -124,6 +126,17 @@ aktualisieren, aber auf `ready` warten.
   "clientId": "7cb1…",
   "sessionId": "7cb1…",
   "settings": { "language": "de", "wake_word_enabled": true },
+  "sessionConfig": {
+    "version": 1,
+    "requestedWakeWordEnabled": true,
+    "effectiveWakeWordEnabled": true,
+    "effectiveWakeWordBackend": "openwakeword",
+    "effectiveWakeWords": ["hey_jarvis"],
+    "source": "session",
+    "fallbacks": [],
+    "ignoredFields": [],
+    "warnings": []
+  },
   "limits": { "maxSessions": 8, "maxActiveSpeakers": 4 },
   "supportedEngines": ["faster_whisper", "kroko_onnx"],
   "runtimeSettings": {
@@ -147,24 +160,25 @@ sind bewusst entladen und der Dienst kann sie bei Bedarf laden.
 
 1. Direkt nach `hello`, wenn `service.ready` beim Verbindungsaufbau bereits
    gesetzt ist.
-2. Als Broadcast an alle offenen Sessions, wenn der asynchrone Ready-Worker die
-   Startinitialisierung beendet.
+2. Sessionspezifisch an jede offene Session, wenn der asynchrone Ready-Worker
+   die Startinitialisierung beendet.
 
-| Feld | Direkt nach `hello` | Später Broadcast | Bedeutung |
-| --- | --- | --- | --- |
-| `type` | ja | ja | `"ready"` |
-| `sessionId` | ja | nein | Besitzer der direkten Variante |
-| `settings` | ja | ja | aktuelle öffentliche Settings |
-| `limits` | ja | ja | aktuelle Limits |
-| `runtimeSettings` | ja | ja | Änderungsscope |
-| `ok` | ja | ja | Scheduler gesund bzw. absichtlich unloaded |
-| `models` | ja | nein | detaillierter Modell-Lifecycle-Snapshot |
+| Feld | Bedeutung |
+| --- | --- |
+| `type` | `"ready"` |
+| `sessionId` | Besitzer der Nachricht |
+| `settings` | öffentliche effektive Sessioneinstellungen |
+| `sessionConfig` | identisch zur Auflösung aus `hello` |
+| `sessionCapabilities` | sessionlokaler Wake-Word-Contract und Modellkatalog |
+| `limits` | aktuelle Limits |
+| `runtimeSettings` | Änderungsscope |
+| `ok` | Scheduler gesund bzw. absichtlich unloaded |
+| `models` | detaillierter Modell-Lifecycle-Snapshot |
 
 **Clientreaktion:** Bei `ok: true` Audiofunktionen aktivieren. Bei `ok: false`
 auf nachfolgende `error`-Events achten und einen sichtbaren Fehlerzustand zeigen.
-Das Fehlen von `sessionId` oder `models` ist bei der Broadcast-Variante gültig.
-`ready` darf durch ein enges Timing direkt und anschließend als Broadcast
-eintreffen; die Verarbeitung muss idempotent sein.
+`ready` darf durch ein enges Timing direkt und anschließend aus dem
+Ready-Worker eintreffen; die Verarbeitung muss idempotent sein.
 
 ---
 
@@ -510,6 +524,7 @@ gesamte Session.
 
 | `where` | Verbindung | Clientmaßnahme |
 | --- | --- | --- |
+| `session_config` | Server schließt mit 1008 | Konfiguration korrigieren; nicht automatisch ohne Änderung wiederholen |
 | `admission` | Server schließt mit 1013 | exponentiell verzögert neu versuchen; Limits anzeigen |
 | `command` | bleibt offen | Payload/State-Machine korrigieren; kein Reconnect nötig |
 | `audio_packet` | bleibt offen | Paketencoder prüfen; fehlerhaftes Paket verwerfen |

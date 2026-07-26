@@ -128,8 +128,9 @@ Wake word mode is passed through to each browser session's recorder:
 
 ```bash
 python api_fastapi_server/server.py \
-  --wakeword-backend pvporcupine \
-  --wake-words jarvis \
+  --wakeword-backend openwakeword \
+  --openwakeword-model-paths /models/openwakeword/models.json \
+  --wake-words hey_jarvis \
   --wake-words-sensitivity 0.7 \
   --wake-word-timeout 5 \
   --wake-word-followup-window 5
@@ -326,6 +327,27 @@ Server events:
 Transcript-bearing events include `sessionId` and are routed only to that
 session. `clear` resets only the issuing session and discards pending stale
 results from earlier session generations.
+
+Wake Word behavior can be selected per connection:
+
+```text
+/ws/transcribe?wakeWordEnabled=false
+/ws/transcribe?wakeWordEnabled=true&wakeWords=hey_jarvis
+```
+
+Optional parameters are `wakeWordBackend`, `wakeWords`,
+`wakeWordInferenceFramework`,
+`wakeWordSensitivity`, `wakeWordActivationDelay`, `wakeWordTimeout`,
+`wakeWordBufferDuration`, and `wakeWordFollowupWindow`. `hello` and `ready`
+return the effective result as `sessionConfig` plus logical model IDs under
+`sessionCapabilities`. Session overrides never change the server baseline.
+
+OpenWakeWord model discovery prefers `models.json` in the configured model
+root. `openwakeword_model_paths` may also point directly to that manifest or
+its directory. The manifest provides the default model, logical IDs,
+classifier filenames, and pipeline-model filenames; only files that exist
+locally are accepted. Porcupine is not part of the current server session or
+admin contract.
 
 ## Engine Names
 

@@ -1,140 +1,135 @@
 # Wake Words
 
-VoiceSTT can wait for a wake word before recording the following speech.
-Two backends are supported:
+VoiceSTT uses OpenWakeWord to wait for a wake word before recording the
+following speech. The FastAPI server's current admin and session contracts
+publish only this backend.
 
-- Porcupine through `pvporcupine`
-- OpenWakeWord through `openwakeword`
-
-Wake word mode is enabled when `wake_words` is set or when
-`wakeword_backend` selects OpenWakeWord.
-
-## Porcupine
-
-Install the Porcupine extra before selecting this backend:
-
-```bash
-python -m pip install "VoiceSTT[porcupine]"
-```
-
-```python
-from VoiceSTT import AudioToTextRecorder
-
-if __name__ == "__main__":
-    recorder = AudioToTextRecorder(
-        wakeword_backend="pvporcupine",
-        wake_words="jarvis",
-    )
-
-    print('Say "Jarvis" and then speak.')
-    print(recorder.text())
-    recorder.shutdown()
-```
-
-Aliases:
-
-- `pvporcupine`
-- `pvp`
-
-Built-in keyword names include:
-
-- `alexa`
-- `americano`
-- `blueberry`
-- `bumblebee`
-- `computer`
-- `grapefruits`
-- `grasshopper`
-- `hey google`
-- `hey siri`
-- `jarvis`
-- `ok google`
-- `picovoice`
-- `porcupine`
-- `terminator`
-
-Multiple Porcupine keywords can be comma-separated:
-
-```python
-recorder = AudioToTextRecorder(wake_words="jarvis,computer")
-```
-
-## OpenWakeWord
-
-Install the OpenWakeWord extra before selecting this backend:
+Install the OpenWakeWord extra:
 
 ```bash
 python -m pip install "VoiceSTT[openwakeword]"
 ```
 
-Select it with `wakeword_backend="oww"` or
-`wakeword_backend="openwakeword"`.
+## Local model catalog
+
+VoiceSTT never downloads Wake Word assets at runtime. It first looks for a
+`models.json` beside the configured model directory. Set the search root with:
+
+```bash
+VOICESTT_OPENWAKEWORD_MODEL_ROOT=/models/openwakeword
+```
+
+Relevant manifest structure:
+
+```json
+{
+  "openwakeword_models": {
+    "path": "/models/openwakeword/all_models",
+    "default_model": "alexa",
+    "pipeline_models": {
+      "embedding_model_onnx": "embedding_model.onnx",
+      "melspectrogram_onnx": "melspectrogram.onnx",
+      "embedding_model_tflite": "embedding_model.tflite",
+      "melspectrogram_tflite": "melspectrogram.tflite"
+    },
+    "onnx_models": {
+      "alexa": "alexa.onnx",
+      "hey_jarvis": "jarvis_v2.onnx"
+    },
+    "tflite_models": {
+      "alexa": "alexa.tflite"
+    }
+  }
+}
+```
+
+The dictionary keys are stable logical Wake Word IDs; the values are local
+filenames. Only entries whose files exist are exposed. Pipeline models and
+support files such as `silero_vad` are not selectable Wake Words.
+
+The manifest `path` is tried first. If that platform-specific path is not
+available in the running container or host, VoiceSTT also checks the configured
+model root and the manifest directory. This allows the same generated manifest
+to remain usable after a model directory is mounted at a different path.
+
+`openwakeword_model_paths` remains backward compatible. It may contain:
+
+- one or more comma-separated `.onnx` or `.tflite` classifier paths;
+- a directory containing models and optionally `models.json`;
+- the path to `models.json` itself.
+
+Without a usable manifest, VoiceSTT falls back to scanning local `.onnx` and
+`.tflite` files. A manifest is recommended because it provides exact logical
+IDs, the default model and pipeline-file mappings.
+
+## Python recorder
+
+Direct classifier paths remain supported:
 
 ```python
 from VoiceSTT import AudioToTextRecorder
 
 if __name__ == "__main__":
     recorder = AudioToTextRecorder(
-        wakeword_backend="oww",
-        openwakeword_model_paths="models/hey_assistant.onnx",
+        wakeword_backend="openwakeword",
+        openwakeword_model_paths="/models/openwakeword/alexa.onnx",
+        wake_words="alexa",
         wake_words_sensitivity=0.35,
         wake_word_buffer_duration=1.0,
     )
-
-    print("Say the trained wake word and then speak.")
     print(recorder.text())
     recorder.shutdown()
 ```
 
-OpenWakeWord model names are inferred from model files, so `wake_words` is not
-required for custom model paths.
-
-## Model Files
-
-Porcupine built-in keywords are provided by the Porcupine package. For custom
-Porcupine keywords, follow Picovoice's model/key workflow and pass paths through
-the Porcupine package options when the wake word abstraction grows to expose
-them.
-
-OpenWakeWord accepts comma-separated paths:
+Using the manifest:
 
 ```python
-openwakeword_model_paths="word1.onnx,word2.onnx"
+recorder = AudioToTextRecorder(
+    wakeword_backend="openwakeword",
+    openwakeword_model_paths="/models/openwakeword/models.json",
+    wake_words="hey_jarvis",
+)
 ```
 
-Supported inference frameworks:
+Model IDs are resolved case-insensitively. An empty `wake_words` value selects
+`default_model` when the manifest is used.
 
-- `onnx`
-- `tflite`
+Supported inference frameworks are `onnx` and `tflite`, selected with
+`openwakeword_inference_framework`.
 
-Set the framework with:
+## FastAPI session-local configuration
 
-```python
-openwakeword_inference_framework="onnx"
+The WebSocket endpoint resolves Wake Word configuration before creating the
+session recorder:
+
+```text
+/ws/transcribe?wakeWordEnabled=false
+/ws/transcribe?wakeWordEnabled=true
+/ws/transcribe?wakeWordEnabled=true&wakeWords=hey_jarvis
 ```
 
-If you have a TensorFlow Lite model and need ONNX:
+Clients send logical model IDs, not filesystem paths. The effective result,
+fallbacks and available IDs are returned in `hello.sessionConfig` and
+`hello.sessionCapabilities`. A session can choose a locally available ONNX or
+TensorFlow Lite variant with `wakeWordInferenceFramework=onnx` or
+`wakeWordInferenceFramework=tflite`.
 
-```bash
-python -m pip install -U tf2onnx
-python -m tf2onnx.convert --tflite my_model.tflite --output my_model.onnx
-```
+See
+[Betriebsmodi und sessionlokale Wake-Word-Konfiguration](client-development/09-betriebsmodi-und-serverkonfiguration.md)
+for the complete contract.
 
-OpenWakeWord project resources include training notebooks and conversion
-guidance. Train and convert models outside VoiceSTT, then pass the resulting
-model files into `openwakeword_model_paths`.
-
-## Sensitivity And Timing
+## Sensitivity and timing
 
 | Parameter | Default | Meaning |
 | --- | --- | --- |
-| `wake_words_sensitivity` | `0.6` | Detection threshold from `0` to `1`. Lower can reduce false negatives but may increase false positives. |
-| `wake_word_activation_delay` | `0.0` | Delay before switching into wake word activation when no initial speech is detected. |
-| `wake_word_timeout` | `5.0` | Seconds to wait for speech after the wake word before returning to wake word mode. |
-| `wake_word_buffer_duration` | `0.1` | Audio buffered/removed around wake word detection so the wake word itself is less likely to appear in final text. |
+| `wake_words_sensitivity` | `0.6` | Detection threshold from `0` to `1`; lower values can increase false positives |
+| `wake_word_activation_delay` | `0.0` | Delay before entering Wake Word mode when no initial speech is detected |
+| `wake_word_timeout` | `5.0` | Seconds to wait for speech after detection |
+| `wake_word_buffer_duration` | `0.1` | Audio removed/buffered around detection |
+| `wake_word_followup_window` | server setting | Window in which follow-up speech can continue |
 
-For OpenWakeWord custom models, a starting sensitivity around `0.35` can be a
-useful first test, then tune against real room audio.
+A sensitivity around `0.35` can be a useful starting point for custom models,
+but it must be tuned against real microphones and room noise.
 
 ## Callbacks
 
@@ -148,13 +143,14 @@ def timeout():
 
 
 recorder = AudioToTextRecorder(
-    wake_words="jarvis",
+    wakeword_backend="openwakeword",
+    openwakeword_model_paths="/models/openwakeword/models.json",
     on_wakeword_detected=detected,
     on_wakeword_timeout=timeout,
 )
 ```
 
-Available wake word callbacks:
+Available callbacks:
 
 - `on_wakeword_detection_start`
 - `on_wakeword_detection_end`
@@ -163,10 +159,12 @@ Available wake word callbacks:
 
 ## Troubleshooting
 
-- If wake words never trigger, confirm the selected backend, microphone device,
-  sample rate, and model paths.
-- If OpenWakeWord model files are missing, pass absolute paths first to remove
-  ambiguity.
-- If too many false detections occur, raise `wake_words_sensitivity`, reduce
-  room noise, or retrain the model with better negative examples.
-- If the wake word appears in final text, increase `wake_word_buffer_duration`.
+- Confirm that the manifest and every referenced classifier/pipeline file are
+  readable inside the current host or container.
+- Check `default_model` against the logical keys, including spelling.
+- Use the admin Wake Word catalog or WebSocket `sessionCapabilities` to see
+  which models passed validation.
+- Raise sensitivity if false activations are common; lower it if detections are
+  consistently missed.
+- Increase `wake_word_buffer_duration` if the Wake Word appears in the final
+  transcript.

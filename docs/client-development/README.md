@@ -25,7 +25,7 @@ Client bewusst tolerant sein sollte.
 | [HTTP-API & Authentifizierung](06-http-api-und-authentifizierung.md) | Health, Konfiguration, Metriken, Admin-API und OpenAI-kompatible Datei-Transkription | Administration und Datei-Uploads |
 | [Robustheit, Grenzen & Sicherheit](07-robustheit-grenzen-und-sicherheit.md) | Fehlerklassen, Überlast, Timeouts, Datenschutz und Abnahmetests | Produktionsreife Clients |
 | [Abgrenzung der Serverprotokolle](08-protokollabgrenzung.md) | Klare Unterscheidung des produktiven Single-WebSocket-Protokolls von der separaten Zwei-Port-Implementierung | Auswahl des richtigen Einstiegspunkts |
-| [Betriebsmodi & Serverkonfiguration](09-betriebsmodi-und-serverkonfiguration.md) | Hotkey- und Wake-Word-Betrieb, globales Admin-Config-Interface, Moduswechsel, UI- und Sicherheitskonzept | Desktop-Client, Aufnahmeautomation und Administration |
+| [Betriebsmodi & sessionlokale Wake-Word-Konfiguration](09-betriebsmodi-und-serverkonfiguration.md) | Hotkey- und Wake-Word-Betrieb, Session-Create-Contract, `models.json`, Fallbacks, Admin-Baseline und UI-Konzept | Desktop-Client, Aufnahmeautomation und Administration |
 
 ## Architektur in einem Bild
 
@@ -56,7 +56,7 @@ flowchart LR
     G --- Q
 ```
 
-## Die fünf wichtigsten Integrationsregeln
+## Die wichtigsten Integrationsregeln
 
 1. **`hello` bedeutet zugelassen, `ready` bedeutet betriebsbereit.** Ein Client
    sollte den Audiostart erst nach einem erfolgreichen `ready` freigeben.
@@ -69,6 +69,9 @@ flowchart LR
    die bisherige Zwischenanzeige. Erst `final` ist das abgeschlossene Ergebnis.
 5. **Eine neue WebSocket-Verbindung ist eine neue Session.** Nach Reconnect gibt
    es eine neue `sessionId`; alte Segmente und Befehle werden nicht fortgesetzt.
+6. **Der Wake-Word-Modus wird beim Verbindungsaufbau festgelegt.**
+   `hello.sessionConfig` ist die verbindliche Bestätigung der effektiven
+   sessionlokalen Konfiguration.
 
 ## Aktuelles versioniertes Produktionsprofil
 

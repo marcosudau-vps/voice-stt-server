@@ -30,17 +30,20 @@ dieses Codes zusätzliche Regeln anwenden.
 sequenceDiagram
     participant C as Client
     participant S as Server
-    C->>S: WebSocket Upgrade /ws/transcribe
-    alt Sessionlimit erreicht
+    C->>S: WebSocket Upgrade /ws/transcribe?...
+    alt Sessionkonfiguration ungültig/nicht erfüllbar
+        S-->>C: error (where=session_config)
+        S-->>C: Close 1008
+    else Sessionlimit erreicht
         S-->>C: error (where=admission, limits)
         S-->>C: Close 1013
     else Session angenommen
-        S-->>C: hello (sessionId, settings, limits, ...)
+        S-->>C: hello (sessionId, settings, sessionConfig, ...)
         alt Modelle/Service bereits ready
-            S-->>C: ready (sessionId, ok, models, ...)
+            S-->>C: ready (sessionId, sessionConfig, ok, models, ...)
         else Initialisierung läuft
             Note over C,S: Verbindung bleibt offen
-            S-->>C: ready (Broadcast, ggf. ohne sessionId/models)
+            S-->>C: ready (sessionspezifisch)
         end
         C->>S: {"type":"start"}
         S-->>C: status
@@ -52,14 +55,34 @@ sequenceDiagram
 
 - `hello` bestätigt die Aufnahme der Session und liefert die zugewiesene
   `sessionId` (identisch mit `clientId`).
-- `ready` kann direkt nach `hello` oder später als Broadcast eintreffen.
-- Die direkte `ready`-Variante enthält `sessionId` und `models`; der spätere
-  Broadcast enthält diese beiden Felder nicht zwingend.
+- `ready` kann direkt nach `hello` oder später eintreffen.
+- Jede `ready`-Nachricht ist sessionspezifisch und enthält dieselbe
+  `sessionConfig` wie `hello`.
 - Startfehler können nach `ready` als `error` folgen und bei später verbundenen
   Clients erneut ausgespielt werden.
 - Ein Client sollte erst nach `ready` mit `ok: true` den Audiostart freigeben.
 - `models.loaded: false` kann bei absichtlich entladenen Idle-Modellen normal
   sein; die erste Inferenz löst dann einen Lazy-Reload aus.
+
+## Sessionlokale Wake-Word-Parameter
+
+Der gewünschte Wake-Word-Modus wird beim Upgrade festgelegt:
+
+```text
+/ws/transcribe?wakeWordEnabled=false
+/ws/transcribe?wakeWordEnabled=true&wakeWords=hey_jarvis
+```
+
+Unterstützte Queryparameter sind `wakeWordEnabled`, `wakeWordBackend`,
+`wakeWords`, `wakeWordInferenceFramework`, `wakeWordSensitivity`, `wakeWordActivationDelay`,
+`wakeWordTimeout`, `wakeWordBufferDuration` und
+`wakeWordFollowupWindow`. Die vollständigen Regeln, Fallbacks und
+Clientabläufe stehen unter
+[Betriebsmodi und sessionlokale Wake-Word-Konfiguration](09-betriebsmodi-und-serverkonfiguration.md).
+
+Der Server bestätigt nicht nur die Anfrage, sondern die tatsächlich wirksame
+Konfiguration in `hello.sessionConfig` und `ready.sessionConfig`. Interne
+Modellpfade werden dabei nicht veröffentlicht.
 
 ## Clientbefehle
 

@@ -1,9 +1,11 @@
 import json
+import os
 import queue
 import threading
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -24,15 +26,61 @@ from api_fastapi_server.server import (
     ConnectionManager,
     FairInferenceQueue,
     InferenceJob,
+    SessionConfigurationError,
+    SessionWakeWordRequest,
     VoiceSTTService,
     SegmentState,
     ServerSettings,
     parse_args,
+    parse_session_wake_word_query,
+    resolve_session_wake_word_config,
     settings_from_args,
 )
+from VoiceSTT_server.operations import WakeWordRegistry
+
+
+class QueryParamsStub:
+    def __init__(self, values=None):
+        self.values = values or {}
+
+    def getlist(self, name):
+        value = self.values.get(name, [])
+        return value if isinstance(value, list) else [value]
 
 
 class FastAPIServerProtocolTests(unittest.TestCase):
+    def _wakeword_registry(self, root):
+        models = root / "all_models"
+        models.mkdir()
+        for filename in (
+            "alexa.onnx",
+            "alexa.tflite",
+            "jarvis_v2.onnx",
+            "embedding_model.onnx",
+            "melspectrogram.onnx",
+            "embedding_model.tflite",
+            "melspectrogram.tflite",
+        ):
+            (models / filename).write_bytes(b"model")
+        (root / "models.json").write_text(json.dumps({
+            "openwakeword_models": {
+                "path": str(models),
+                "default_model": "alexa",
+                "pipeline_models": {
+                    "embedding_model_onnx": "embedding_model.onnx",
+                    "melspectrogram_onnx": "melspectrogram.onnx",
+                    "embedding_model_tflite": "embedding_model.tflite",
+                    "melspectrogram_tflite": "melspectrogram.tflite",
+                },
+                "onnx_models": {
+                    "alexa": "alexa.onnx",
+                    "hey_jarvis": "jarvis_v2.onnx",
+                },
+                "tflite_models": {"alexa": "alexa.tflite"},
+            }
+        }), encoding="utf-8")
+        return WakeWordRegistry(root)
+
     def test_audio_packet_round_trip(self):
         metadata = {
             "sampleRate": 48000,
@@ -247,6 +295,190 @@ settings:
         self.assertEqual(settings.wake_word_buffer_duration, 0.2)
         self.assertEqual(settings.wake_word_followup_window, 5.0)
         self.assertTrue(settings.public_dict()["wake_word_enabled"])
+
+    def test_bare_fastapi_wake_words_default_to_openwakeword(self):
+        settings = settings_from_args(parse_args([
+            "--wake-words",
+            "hey_jarvis",
+        ]))
+
+        self.assertEqual(settings.wakeword_backend, "openwakeword")
+
+    def test_session_wake_word_query_inherits_and_ignores_optional_fields(self):
+        request = parse_session_wake_word_query(QueryParamsStub({
+            "wakeWordBackend": "invalid-but-ignored",
+            "wakeWordSensitivity": "not-a-number",
+        }))
+
+        self.assertIsNone(request.enabled)
+        self.assertEqual(
+            request.ignored_fields,
+            ("wakeWordBackend", "wakeWordSensitivity"),
+        )
+
+    def test_session_wake_word_query_marks_invalid_control_values_for_fallback(self):
+        invalid_enabled = parse_session_wake_word_query(QueryParamsStub({
+            "wakeWordEnabled": "flase",
+        }))
+        self.assertIsNone(invalid_enabled.enabled)
+        self.assertEqual(
+            invalid_enabled.fallbacks[0]["field"],
+            "wakeWordEnabled",
+        )
+
+        invalid_backend = parse_session_wake_word_query(QueryParamsStub({
+            "wakeWordEnabled": "true",
+            "wakeWordBackend": "pvporcupine",
+        }))
+        self.assertTrue(invalid_backend.enabled)
+        self.assertEqual(
+            invalid_backend.fallbacks[0]["field"],
+            "wakeWordBackend",
+        )
+
+        invalid_framework = parse_session_wake_word_query(QueryParamsStub({
+            "wakeWordEnabled": "true",
+            "wakeWordInferenceFramework": "torch",
+        }))
+        _settings, framework_contract = resolve_session_wake_word_config(
+            ServerSettings(
+                openwakeword_inference_framework="onnx",
+                wakeword_backend="openwakeword",
+                wake_words="alexa",
+                openwakeword_model_paths="C:/models/alexa.onnx",
+            ),
+            invalid_framework,
+            WakeWordRegistry(),
+        )
+        self.assertEqual(
+            framework_contract.fallbacks[0]["value"],
+            "onnx",
+        )
+
+    def test_session_wake_word_false_clears_only_session_copy(self):
+        base = ServerSettings(
+            wakeword_backend="openwakeword",
+            wake_words="hey_jarvis",
+            openwakeword_model_paths="C:/models/jarvis.onnx",
+        )
+        resolved, contract = resolve_session_wake_word_config(
+            base,
+            SessionWakeWordRequest(enabled=False),
+            WakeWordRegistry(),
+        )
+
+        self.assertFalse(resolved.wake_word_enabled())
+        self.assertEqual(resolved.wakeword_backend, "")
+        self.assertEqual(resolved.wake_words, "")
+        self.assertIsNone(resolved.openwakeword_model_paths)
+        self.assertTrue(base.wake_word_enabled())
+        self.assertEqual(base.wake_words, "hey_jarvis")
+        self.assertFalse(contract.effective_enabled)
+
+    def test_session_wake_word_true_resolves_manifest_default_and_tuning_fallback(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
+            registry = self._wakeword_registry(Path(temp_dir))
+            request = parse_session_wake_word_query(QueryParamsStub({
+                "wakeWordEnabled": "true",
+                "wakeWordBackend": "openwakeword",
+                "wakeWordSensitivity": "invalid",
+                "wakeWordTimeout": "12.5",
+            }))
+            base = ServerSettings(
+                wakeword_backend="",
+                wake_words="",
+                wake_words_sensitivity=0.42,
+                wake_word_timeout=7.0,
+            )
+            resolved, contract = resolve_session_wake_word_config(
+                base,
+                request,
+                registry,
+            )
+
+        self.assertTrue(resolved.wake_word_enabled())
+        self.assertEqual(resolved.wake_words, "alexa")
+        self.assertTrue(resolved.openwakeword_model_paths.endswith("alexa.onnx"))
+        self.assertEqual(resolved.wake_words_sensitivity, 0.42)
+        self.assertEqual(resolved.wake_word_timeout, 12.5)
+        self.assertEqual(contract.source, "session")
+        self.assertEqual(contract.fallbacks[0]["field"], "wakeWordSensitivity")
+        self.assertTrue(contract.warnings)
+
+    def test_session_wake_word_true_can_select_tflite_framework(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
+            registry = self._wakeword_registry(Path(temp_dir))
+            request = parse_session_wake_word_query(QueryParamsStub({
+                "wakeWordEnabled": "true",
+                "wakeWordInferenceFramework": "tflite",
+            }))
+            resolved, contract = resolve_session_wake_word_config(
+                ServerSettings(),
+                request,
+                registry,
+            )
+
+        self.assertEqual(
+            resolved.openwakeword_inference_framework,
+            "tflite",
+        )
+        self.assertTrue(
+            resolved.openwakeword_model_paths.endswith("alexa.tflite")
+        )
+        self.assertEqual(contract.source, "session")
+
+    def test_service_populates_manifest_default_for_openwakeword_baseline(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
+            root = Path(temp_dir)
+            self._wakeword_registry(root)
+            with patch.dict(
+                os.environ,
+                {"VOICESTT_OPENWAKEWORD_MODEL_ROOT": str(root)},
+            ):
+                service = VoiceSTTService(
+                    ServerSettings(wakeword_backend="openwakeword"),
+                    ConnectionManager(),
+                )
+
+        self.assertEqual(service.settings.wake_words, "alexa")
+        self.assertTrue(
+            service.settings.openwakeword_model_paths.endswith("alexa.onnx")
+        )
+
+    def test_session_wake_word_true_resolves_named_manifest_models(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
+            registry = self._wakeword_registry(Path(temp_dir))
+            request = parse_session_wake_word_query(QueryParamsStub({
+                "wakeWordEnabled": "true",
+                "wakeWords": "HEY_JARVIS",
+            }))
+            resolved, contract = resolve_session_wake_word_config(
+                ServerSettings(),
+                request,
+                registry,
+            )
+
+            self.assertEqual(resolved.wake_words, "hey_jarvis")
+            self.assertTrue(
+                resolved.openwakeword_model_paths.endswith("jarvis_v2.onnx")
+            )
+            self.assertEqual(contract.source, "session")
+
+            fallback_settings, fallback_contract = (
+                resolve_session_wake_word_config(
+                    ServerSettings(),
+                    SessionWakeWordRequest(
+                        enabled=True,
+                        values=(("wakeWords", "missing"),),
+                    ),
+                    registry,
+                )
+            )
+            self.assertEqual(fallback_settings.wake_words, "alexa")
+            self.assertEqual(
+                fallback_contract.fallbacks[0]["source"],
+                "model_catalog",
+            )
 
     def test_runtime_settings_update_distinguishes_safe_and_startup_only_fields(self):
         service = VoiceSTTService(ServerSettings(max_sessions=1), ConnectionManager())

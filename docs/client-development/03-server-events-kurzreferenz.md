@@ -109,6 +109,7 @@ Vorlaufdauer geliefert hat und der Tracker den konfigurierten Wert verwendet.
 | Wert / Muster | Ursache |
 | --- | --- |
 | `admission` | Sessionlimit erreicht; danach Close 1013 |
+| `session_config` | Sessionparameter mehrdeutig oder kein lokales Fallbackprofil verfügbar; danach Close 1008 |
 | `command` | ungültiges JSON, kein Objekt oder unbekannter Befehl |
 | `audio_packet` | Binärformat oder Metadaten ungültig |
 | `audio` | unerwarteter Fehler bei Audioverarbeitung |

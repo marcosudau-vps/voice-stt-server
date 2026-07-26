@@ -262,8 +262,11 @@ enabled, backend, words, sensitivity, timeout, bufferDuration,
 followupWindow, openwakewordModelPaths, availableModels, appliesTo
 ```
 
-`availableModels` ist nach OpenWakeWord und Porcupine gruppiert. Änderungen via
-`PUT` gelten für neue Sessions.
+`availableModels.openwakeword` enthält die lokal validierten logischen
+Modell-IDs aus `models.json` beziehungsweise dem Dateiscan. Der aktuelle
+FastAPI-Adminvertrag veröffentlicht kein Porcupine. Änderungen via `PUT`
+ändern nur die Baseline für neue Sessions; ein Desktop-Client kann Wake Word
+unabhängig davon beim WebSocket-Aufbau sessionlokal konfigurieren.
 
 ## OpenAI-kompatible Datei-Transkription
 

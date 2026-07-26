@@ -396,6 +396,419 @@ class ServerSettings:
         return bool(str(self.wakeword_backend or "").strip() and str(self.wake_words or "").strip())
 
 
+SESSION_WAKE_WORD_QUERY_FIELDS = (
+    "wakeWordBackend",
+    "wakeWords",
+    "wakeWordInferenceFramework",
+    "wakeWordSensitivity",
+    "wakeWordActivationDelay",
+    "wakeWordTimeout",
+    "wakeWordBufferDuration",
+    "wakeWordFollowupWindow",
+)
+
+SESSION_WAKE_WORD_TUNING_FIELDS = {
+    "wakeWordSensitivity": ("wake_words_sensitivity", 0.0, 1.0),
+    "wakeWordActivationDelay": ("wake_word_activation_delay", 0.0, 3600.0),
+    "wakeWordTimeout": ("wake_word_timeout", 0.0, 3600.0),
+    "wakeWordBufferDuration": ("wake_word_buffer_duration", 0.0, 60.0),
+    "wakeWordFollowupWindow": ("wake_word_followup_window", 0.0, 3600.0),
+}
+
+OPENWAKEWORD_SESSION_BACKENDS = {
+    "openwakeword",
+    "open_wakeword",
+    "oww",
+}
+
+
+class SessionConfigurationError(ValueError):
+    def __init__(self, code, message, **details):
+        super().__init__(message)
+        self.code = code
+        self.message = message
+        self.details = details
+
+    def payload(self):
+        payload = {
+            "type": "error",
+            "where": "session_config",
+            "code": self.code,
+            "message": self.message,
+        }
+        payload.update(self.details)
+        return payload
+
+
+@dataclass(frozen=True)
+class SessionWakeWordRequest:
+    enabled: Optional[bool] = None
+    values: Tuple[Tuple[str, str], ...] = ()
+    ignored_fields: Tuple[str, ...] = ()
+    fallbacks: Tuple[Dict[str, Any], ...] = ()
+    warnings: Tuple[Dict[str, Any], ...] = ()
+
+    def get(self, name, default=None):
+        return dict(self.values).get(name, default)
+
+    @property
+    def provided_fields(self):
+        return tuple(name for name, _value in self.values)
+
+
+@dataclass(frozen=True)
+class ResolvedSessionWakeWordConfig:
+    requested_enabled: Optional[bool]
+    effective_enabled: bool
+    effective_backend: str
+    effective_wake_words: Tuple[str, ...]
+    source: str
+    fallbacks: Tuple[Dict[str, Any], ...] = ()
+    ignored_fields: Tuple[str, ...] = ()
+    warnings: Tuple[Dict[str, Any], ...] = ()
+    requested_fields: Tuple[str, ...] = ()
+
+    def public_dict(self):
+        return {
+            "version": 1,
+            "requestedWakeWordEnabled": self.requested_enabled,
+            "effectiveWakeWordEnabled": self.effective_enabled,
+            "effectiveWakeWordBackend": self.effective_backend,
+            "effectiveWakeWords": list(self.effective_wake_words),
+            "source": self.source,
+            "fallbacks": [dict(item) for item in self.fallbacks],
+            "ignoredFields": list(self.ignored_fields),
+            "warnings": [dict(item) for item in self.warnings],
+            "requestedFields": list(self.requested_fields),
+        }
+
+
+def parse_session_wake_word_query(query_params):
+    enabled_values = list(query_params.getlist("wakeWordEnabled"))
+    if len(enabled_values) > 1:
+        raise SessionConfigurationError(
+            "duplicate_wake_word_enabled",
+            "wakeWordEnabled darf nur einmal angegeben werden.",
+        )
+
+    enabled = None
+    fallbacks = []
+    warnings = []
+    if enabled_values:
+        normalized = str(enabled_values[0]).strip().lower()
+        if normalized in {"null", "inherit"}:
+            enabled = None
+        elif normalized == "true":
+            enabled = True
+        elif normalized == "false":
+            enabled = False
+        else:
+            fallbacks.append({
+                "field": "wakeWordEnabled",
+                "source": "server",
+                "value": None,
+                "reason": "invalid_value",
+            })
+            warnings.append({
+                "code": "session_config_value_fallback",
+                "field": "wakeWordEnabled",
+                "message": (
+                    "wakeWordEnabled war ungültig; die Serverkonfiguration "
+                    "wurde übernommen."
+                ),
+            })
+
+    provided = []
+    for name in SESSION_WAKE_WORD_QUERY_FIELDS:
+        values = list(query_params.getlist(name))
+        if not values:
+            continue
+        if enabled is True and len(values) > 1:
+            raise SessionConfigurationError(
+                "duplicate_session_config_field",
+                f"{name} darf nur einmal angegeben werden.",
+                field=name,
+            )
+        provided.append((name, str(values[-1])))
+
+    if enabled is not True:
+        return SessionWakeWordRequest(
+            enabled=enabled,
+            values=tuple(provided),
+            ignored_fields=tuple(name for name, _value in provided),
+            fallbacks=tuple(fallbacks),
+            warnings=tuple(warnings),
+        )
+
+    backend = dict(provided).get("wakeWordBackend")
+    if backend is not None:
+        normalized_backend = backend.strip().lower().replace("-", "_")
+        if normalized_backend not in OPENWAKEWORD_SESSION_BACKENDS:
+            fallbacks.append({
+                "field": "wakeWordBackend",
+                "source": "server",
+                "value": "openwakeword",
+                "reason": "unsupported_value",
+            })
+            warnings.append({
+                "code": "session_config_value_fallback",
+                "field": "wakeWordBackend",
+                "message": (
+                    "wakeWordBackend wird sessionlokal nicht unterstützt; "
+                    "OpenWakeWord wurde verwendet."
+                ),
+            })
+    framework = dict(provided).get("wakeWordInferenceFramework")
+    if framework is not None:
+        normalized_framework = framework.strip().lower()
+        if normalized_framework not in {"onnx", "tflite"}:
+            fallbacks.append({
+                "field": "wakeWordInferenceFramework",
+                "source": "server",
+                "value": None,
+                "reason": "unsupported_value",
+            })
+            warnings.append({
+                "code": "session_config_value_fallback",
+                "field": "wakeWordInferenceFramework",
+                "message": (
+                    "wakeWordInferenceFramework war ungültig; die "
+                    "Serverkonfiguration wurde übernommen."
+                ),
+            })
+    return SessionWakeWordRequest(
+        enabled=True,
+        values=tuple(provided),
+        fallbacks=tuple(fallbacks),
+        warnings=tuple(warnings),
+    )
+
+
+def _split_wake_word_ids(value):
+    return tuple(
+        item.strip()
+        for item in str(value or "").split(",")
+        if item.strip()
+    )
+
+
+def resolve_session_wake_word_config(base_settings, request, registry):
+    settings = replace(base_settings)
+    inherited_words = _split_wake_word_ids(settings.wake_words)
+    fallbacks = [dict(item) for item in request.fallbacks]
+    warnings = [dict(item) for item in request.warnings]
+    for fallback in fallbacks:
+        if fallback.get("field") == "wakeWordInferenceFramework":
+            fallback["value"] = (
+                settings.openwakeword_inference_framework
+            )
+
+    if request.enabled is None:
+        return settings, ResolvedSessionWakeWordConfig(
+            requested_enabled=None,
+            effective_enabled=settings.wake_word_enabled(),
+            effective_backend=str(settings.wakeword_backend or ""),
+            effective_wake_words=inherited_words,
+            source="server",
+            ignored_fields=request.ignored_fields,
+            fallbacks=tuple(fallbacks),
+            warnings=tuple(warnings),
+            requested_fields=request.provided_fields,
+        )
+
+    if request.enabled is False:
+        settings.wakeword_backend = ""
+        settings.wake_words = ""
+        settings.openwakeword_model_paths = None
+        return settings, ResolvedSessionWakeWordConfig(
+            requested_enabled=False,
+            effective_enabled=False,
+            effective_backend="",
+            effective_wake_words=(),
+            source="session",
+            ignored_fields=request.ignored_fields,
+            fallbacks=tuple(fallbacks),
+            warnings=tuple(warnings),
+            requested_fields=request.provided_fields,
+        )
+
+    requested_backend = request.get("wakeWordBackend")
+    requested_words = _split_wake_word_ids(request.get("wakeWords"))
+    requested_framework = str(
+        request.get("wakeWordInferenceFramework") or ""
+    ).strip().lower()
+    if requested_framework in {"onnx", "tflite"}:
+        settings.openwakeword_inference_framework = requested_framework
+    normalized_requested_backend = (
+        str(requested_backend or "")
+        .strip()
+        .lower()
+        .replace("-", "_")
+    )
+    valid_backend_override = (
+        normalized_requested_backend in OPENWAKEWORD_SESSION_BACKENDS
+    )
+    inherited_backend = (
+        str(settings.wakeword_backend or "")
+        .strip()
+        .lower()
+        .replace("-", "_")
+    )
+    can_inherit_complete_openwakeword = (
+        not valid_backend_override
+        and not requested_words
+        and requested_framework not in {"onnx", "tflite"}
+        and inherited_backend in OPENWAKEWORD_SESSION_BACKENDS
+        and settings.wake_word_enabled()
+    )
+
+    source = "server"
+    if not can_inherit_complete_openwakeword:
+        requested_model_ids = (
+            requested_words
+            or (
+                inherited_words
+                if requested_framework in {"onnx", "tflite"}
+                else None
+            )
+        )
+        resolved, missing = registry.resolve_openwakeword(
+            requested_model_ids,
+            settings.openwakeword_model_paths,
+            settings.openwakeword_inference_framework,
+        )
+        if requested_words and missing:
+            fallback_source = None
+            if (
+                inherited_backend in OPENWAKEWORD_SESSION_BACKENDS
+                and base_settings.wake_word_enabled()
+            ):
+                settings.wakeword_backend = "openwakeword"
+                settings.wake_words = base_settings.wake_words
+                settings.openwakeword_model_paths = (
+                    base_settings.openwakeword_model_paths
+                )
+                inherited_words = _split_wake_word_ids(
+                    base_settings.wake_words
+                )
+                fallback_source = "server"
+            else:
+                default_resolved, default_missing = (
+                    registry.resolve_openwakeword(
+                        None,
+                        settings.openwakeword_model_paths,
+                        settings.openwakeword_inference_framework,
+                    )
+                )
+                if default_resolved and not default_missing:
+                    settings.wakeword_backend = "openwakeword"
+                    settings.wake_words = ",".join(
+                        entry["id"] for entry in default_resolved
+                    )
+                    settings.openwakeword_model_paths = ",".join(
+                        entry["path"] for entry in default_resolved
+                    )
+                    inherited_words = tuple(
+                        entry["id"] for entry in default_resolved
+                    )
+                    fallback_source = "model_catalog"
+            if fallback_source is None:
+                raise SessionConfigurationError(
+                    "wake_word_fallback_unavailable",
+                    "Das angeforderte Wake Word ist ungültig und es ist kein Fallback-Profil verfügbar.",
+                    unavailableWakeWords=missing,
+                )
+            fallbacks.append({
+                "field": "wakeWords",
+                "source": fallback_source,
+                "value": list(inherited_words),
+                "reason": "unknown_value",
+            })
+            warnings.append({
+                "code": "session_config_value_fallback",
+                "field": "wakeWords",
+                "message": (
+                    "Mindestens ein angefordertes Wake Word war nicht "
+                    "verfügbar; das Fallback-Profil wurde verwendet."
+                ),
+            })
+            source = fallback_source
+        elif missing or not resolved:
+            raise SessionConfigurationError(
+                "wake_word_default_unavailable",
+                "Wake Word kann nicht aktiviert werden, weil kein verfügbares OpenWakeWord-Standardmodell gefunden wurde.",
+            )
+        else:
+            settings.wakeword_backend = "openwakeword"
+            settings.wake_words = ",".join(
+                entry["id"] for entry in resolved
+            )
+            settings.openwakeword_model_paths = ",".join(
+                entry["path"] for entry in resolved
+            )
+            inherited_words = tuple(entry["id"] for entry in resolved)
+            source = "session" if requested_words else "model_catalog"
+    else:
+        settings.wakeword_backend = "openwakeword"
+        inherited_words = _split_wake_word_ids(settings.wake_words)
+
+    if requested_framework in {"onnx", "tflite"}:
+        source = "session"
+
+    for query_name, (setting_name, minimum, maximum) in (
+        SESSION_WAKE_WORD_TUNING_FIELDS.items()
+    ):
+        raw_value = request.get(query_name)
+        if raw_value is None:
+            continue
+        try:
+            value = float(raw_value)
+            if not math.isfinite(value) or not minimum <= value <= maximum:
+                raise ValueError
+        except (TypeError, ValueError):
+            fallback_value = getattr(base_settings, setting_name)
+            fallbacks.append({
+                "field": query_name,
+                "source": "server",
+                "value": fallback_value,
+                "reason": "invalid_value",
+            })
+            warnings.append({
+                "code": "session_config_value_fallback",
+                "field": query_name,
+                "message": (
+                    f"{query_name} war ungültig und wurde aus der "
+                    "Serverkonfiguration übernommen."
+                ),
+            })
+            continue
+        setattr(settings, setting_name, value)
+        source = "session"
+
+    if not settings.wake_word_enabled():
+        raise SessionConfigurationError(
+            "incomplete_wake_word_profile",
+            "Das aufgelöste Wake-Word-Profil ist unvollständig.",
+        )
+
+    return settings, ResolvedSessionWakeWordConfig(
+        requested_enabled=True,
+        effective_enabled=True,
+        effective_backend="openwakeword",
+        effective_wake_words=inherited_words,
+        source=source,
+        fallbacks=tuple(fallbacks),
+        warnings=tuple(warnings),
+        requested_fields=request.provided_fields,
+    )
+
+
+def public_session_settings(settings):
+    data = settings.public_dict()
+    data.pop("openwakeword_model_paths", None)
+    return data
+
+
 def runtime_settings_contract():
     return {
         "activeSessionSafe": sorted(ACTIVE_RUNTIME_SETTINGS),
@@ -1799,9 +2212,22 @@ class RealtimeSession:
 
 
 class RecorderBackedRealtimeSession:
-    def __init__(self, service, session_id):
+    def __init__(
+        self,
+        service,
+        session_id,
+        settings=None,
+        session_config=None,
+    ):
         self.service = service
-        self.settings = replace(service.settings)
+        self.settings = settings or replace(service.settings)
+        self.session_config = session_config or ResolvedSessionWakeWordConfig(
+            requested_enabled=None,
+            effective_enabled=self.settings.wake_word_enabled(),
+            effective_backend=str(self.settings.wakeword_backend or ""),
+            effective_wake_words=_split_wake_word_ids(self.settings.wake_words),
+            source="server",
+        )
         self.session_id = session_id
         self.segment_state = SegmentState()
         self.timeline = SegmentTimelineTracker(self.settings)
@@ -2107,6 +2533,23 @@ class RecorderBackedRealtimeSession:
             message["timestampIso"] = timestamp_iso(message["timestamp"])
         self.service.manager.publish_session(self.session_id, message)
 
+    def session_config_dict(self):
+        session_config = getattr(self, "session_config", None)
+        if session_config is None:
+            session_config = ResolvedSessionWakeWordConfig(
+                requested_enabled=None,
+                effective_enabled=self.settings.wake_word_enabled(),
+                effective_backend=str(self.settings.wakeword_backend or ""),
+                effective_wake_words=_split_wake_word_ids(
+                    self.settings.wake_words
+                ),
+                source="server",
+            )
+        return session_config.public_dict()
+
+    def public_settings(self):
+        return public_session_settings(self.settings)
+
     def snapshot(self):
         with self.lock:
             state = self.status
@@ -2118,6 +2561,7 @@ class RecorderBackedRealtimeSession:
             "recording": recording,
             "state": state,
             "wakeWordEnabled": self.settings.wake_word_enabled(),
+            "sessionConfig": self.session_config_dict(),
             "currentSegmentId": self.segment_state.current(),
             "currentSegment": self.timeline.snapshot(self.segment_state.current()),
             "queueDepth": self._recorder_queue_depth(),
@@ -2878,6 +3322,10 @@ class SessionStore:
         with self._lock:
             return self._sessions.get(session_id)
 
+    def all(self):
+        with self._lock:
+            return list(self._sessions.values())
+
     def try_activate_speaker(self, session_id):
         with self._lock:
             if session_id in self._active_speakers:
@@ -2948,11 +3396,39 @@ class VoiceSTTService:
         self._last_model_activity_at = datetime.datetime.now(datetime.timezone.utc)
         self.model_registry = LocalModelRegistry()
         self.wakeword_registry = WakeWordRegistry()
+        self._apply_openwakeword_manifest_default()
         self.audit = AuditLogManager(settings)
         self.performance = PerformanceLogManager(settings)
         self.config_store = RuntimeConfigStore(settings.runtime_config_path)
         self.ready_thread = None
         self.idle_thread = None
+
+    def _apply_openwakeword_manifest_default(self):
+        backend = (
+            str(self.settings.wakeword_backend or "")
+            .strip()
+            .lower()
+            .replace("-", "_")
+        )
+        if (
+            backend not in OPENWAKEWORD_SESSION_BACKENDS
+            or _split_wake_word_ids(self.settings.wake_words)
+        ):
+            return
+        resolved, missing = self.wakeword_registry.resolve_openwakeword(
+            None,
+            self.settings.openwakeword_model_paths,
+            self.settings.openwakeword_inference_framework,
+        )
+        if missing or not resolved:
+            return
+        self.settings.wakeword_backend = "openwakeword"
+        self.settings.wake_words = ",".join(
+            item["id"] for item in resolved
+        )
+        self.settings.openwakeword_model_paths = ",".join(
+            item["path"] for item in resolved
+        )
 
     def _new_scheduler(self):
         return self.scheduler_factory(
@@ -2999,13 +3475,26 @@ class VoiceSTTService:
         self.audit.close()
         self.performance.close()
 
-    def admit_session(self, session_id):
+    def admit_session(self, session_id, wake_word_request=None):
         self.touch_model_activity("websocket_connection")
+        wake_word_request = wake_word_request or SessionWakeWordRequest()
+        with self._settings_lock:
+            base_settings = replace(self.settings)
+        session_settings, session_config = resolve_session_wake_word_config(
+            base_settings,
+            wake_word_request,
+            self.wakeword_registry,
+        )
         if not self.sessions.reserve(session_id):
             return None
         session = None
         try:
-            session = RecorderBackedRealtimeSession(self, session_id)
+            session = RecorderBackedRealtimeSession(
+                self,
+                session_id,
+                settings=session_settings,
+                session_config=session_config,
+            )
             if not self.sessions.add(session):
                 session.close()
                 return None
@@ -3298,42 +3787,88 @@ class VoiceSTTService:
     def runtime_settings_contract(self):
         return runtime_settings_contract()
 
+    def session_capabilities(self):
+        with self._settings_lock:
+            configured_paths = self.settings.openwakeword_model_paths
+            inference_framework = (
+                self.settings.openwakeword_inference_framework
+            )
+        models = self.wakeword_registry.openwakeword_models(
+            configured_paths,
+            inference_framework,
+        )
+        return {
+            "version": 1,
+            "wakeWord": {
+                "supported": bool(models),
+                "backends": ["openwakeword"],
+                "availableWakeWords": [
+                    {
+                        "id": item["id"],
+                        "label": item["label"],
+                        "availableFormats": item["availableFormats"],
+                        "default": bool(item.get("default")),
+                    }
+                    for item in models
+                ],
+                "queryParameters": [
+                    "wakeWordEnabled",
+                    *SESSION_WAKE_WORD_QUERY_FIELDS,
+                ],
+            },
+        }
+
+    def ready_payload(self, session):
+        model_status = self.model_lifecycle_status()
+        return {
+            "type": "ready",
+            "sessionId": session.session_id,
+            "settings": session.public_settings(),
+            "sessionConfig": session.session_config_dict(),
+            "sessionCapabilities": self.session_capabilities(),
+            "limits": self.limits_dict(),
+            "runtimeSettings": self.runtime_settings_contract(),
+            "ok": model_status["loaded"] is False or self.metrics()["ok"],
+            "models": model_status,
+        }
+
     def update_settings(self, updates):
         applied = {}
         rejected = {}
         if not isinstance(updates, dict):
             raise ValueError("Die Einstellungsänderung muss ein JSON-Objekt sein")
 
-        for name, value in updates.items():
-            if name in STARTUP_ONLY_SETTINGS:
-                rejected[name] = {
-                    "reason": "startup_only",
-                    "message": "Diese Einstellung erfordert einen Serverneustart, da gemeinsam genutzte Ressourcen bereits initialisiert sind.",
+        with self._settings_lock:
+            for name, value in updates.items():
+                if name in STARTUP_ONLY_SETTINGS:
+                    rejected[name] = {
+                        "reason": "startup_only",
+                        "message": "Diese Einstellung erfordert einen Serverneustart, da gemeinsam genutzte Ressourcen bereits initialisiert sind.",
+                    }
+                    continue
+                if name not in ACTIVE_RUNTIME_SETTINGS and name not in NEW_SESSION_RUNTIME_SETTINGS:
+                    rejected[name] = {
+                        "reason": "unknown",
+                        "message": "Unbekannte oder nicht unterstützte Servereinstellung.",
+                    }
+                    continue
+                try:
+                    coerced = coerce_setting_value(name, value)
+                except ValueError as exc:
+                    rejected[name] = {
+                        "reason": "invalid_value",
+                        "message": str(exc),
+                    }
+                    continue
+                setattr(self.settings, name, coerced)
+                applied[name] = {
+                    "value": coerced,
+                    "appliesTo": (
+                        "active_sessions"
+                        if name in ACTIVE_RUNTIME_SETTINGS
+                        else "new_sessions"
+                    ),
                 }
-                continue
-            if name not in ACTIVE_RUNTIME_SETTINGS and name not in NEW_SESSION_RUNTIME_SETTINGS:
-                rejected[name] = {
-                    "reason": "unknown",
-                    "message": "Unbekannte oder nicht unterstützte Servereinstellung.",
-                }
-                continue
-            try:
-                coerced = coerce_setting_value(name, value)
-            except ValueError as exc:
-                rejected[name] = {
-                    "reason": "invalid_value",
-                    "message": str(exc),
-                }
-                continue
-            setattr(self.settings, name, coerced)
-            applied[name] = {
-                "value": coerced,
-                "appliesTo": (
-                    "active_sessions"
-                    if name in ACTIVE_RUNTIME_SETTINGS
-                    else "new_sessions"
-                ),
-            }
 
         if applied:
             if any(name in {
@@ -3764,14 +4299,11 @@ class VoiceSTTService:
                 memory_before or {},
                 reason="startup",
             )
-        ready_message = {
-            "type": "ready",
-            "settings": self.settings.public_dict(),
-            "limits": self.limits_dict(),
-            "runtimeSettings": self.runtime_settings_contract(),
-            "ok": scheduler.healthy(),
-        }
-        self.manager.publish_all(ready_message)
+        for session in self.sessions.all():
+            self.manager.publish_session(
+                session.session_id,
+                self.ready_payload(session),
+            )
         if self.startup_errors:
             for error in self.startup_errors:
                 self.manager.publish_all(error)
@@ -4040,6 +4572,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "limits": service.limits_dict(),
             "supportedEngines": get_supported_transcription_engines(),
             "runtimeSettings": service.runtime_settings_contract(),
+            "sessionCapabilities": service.session_capabilities(),
             "adminAuthRequired": bool(settings.admin_api_key or os.getenv("VOICESTT_ADMIN_API_KEY")),
         })
 
@@ -4246,17 +4779,41 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         else:
             backend = str(payload.get("backend") or settings.wakeword_backend or "openwakeword").strip().lower()
             words = str(payload.get("words") or settings.wake_words or "").strip()
-            if backend not in {"openwakeword", "oww", "pvporcupine", "porcupine", "pvp"}:
-                return JSONResponse({"error": "backend muss openwakeword oder pvporcupine sein"}, status_code=400)
-            if not words:
-                return JSONResponse({"error": "words ist bei aktivierter Weckwort-Erkennung erforderlich"}, status_code=400)
-            updates = {"wakeword_backend": backend, "wake_words": words}
+            if backend not in OPENWAKEWORD_SESSION_BACKENDS:
+                return JSONResponse(
+                    {"error": "backend muss openwakeword sein"},
+                    status_code=400,
+                )
+            candidate_paths = payload.get(
+                "openwakewordModelPaths",
+                settings.openwakeword_model_paths,
+            )
+            resolved, missing = service.wakeword_registry.resolve_openwakeword(
+                words or None,
+                candidate_paths,
+                settings.openwakeword_inference_framework,
+            )
+            if missing:
+                return JSONResponse({
+                    "error": "Mindestens ein Wake Word ist nicht verfügbar.",
+                    "unavailableWakeWords": missing,
+                }, status_code=400)
+            if not resolved:
+                return JSONResponse({
+                    "error": "Kein verfügbares OpenWakeWord-Standardmodell gefunden."
+                }, status_code=400)
+            updates = {
+                "wakeword_backend": "openwakeword",
+                "wake_words": ",".join(item["id"] for item in resolved),
+                "openwakeword_model_paths": ",".join(
+                    item["path"] for item in resolved
+                ),
+            }
         mapping = {
             "sensitivity": "wake_words_sensitivity",
             "timeout": "wake_word_timeout",
             "bufferDuration": "wake_word_buffer_duration",
             "followupWindow": "wake_word_followup_window",
-            "openwakewordModelPaths": "openwakeword_model_paths",
         }
         for source, target in mapping.items():
             if source in payload:
@@ -4691,8 +5248,49 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
 
     @app.websocket("/ws/transcribe")
     async def websocket_transcribe(websocket: WebSocket):
+        try:
+            wake_word_request = parse_session_wake_word_query(
+                websocket.query_params
+            )
+        except SessionConfigurationError as exc:
+            await websocket.accept()
+            await websocket.send_text(json.dumps(exc.payload()))
+            await websocket.close(code=1008)
+            service.audit.event(
+                "websocket.session_config_rejected",
+                code=exc.code,
+                client=getattr(getattr(websocket, "client", None), "host", None),
+            )
+            return
+
         session_id = uuid.uuid4().hex
-        session = service.admit_session(session_id)
+        try:
+            session = service.admit_session(
+                session_id,
+                wake_word_request=wake_word_request,
+            )
+        except SessionConfigurationError as exc:
+            await websocket.accept()
+            await websocket.send_text(json.dumps(exc.payload()))
+            await websocket.close(code=1008)
+            service.audit.event(
+                "websocket.session_config_rejected",
+                sessionId=session_id,
+                code=exc.code,
+                client=getattr(getattr(websocket, "client", None), "host", None),
+            )
+            return
+        except Exception:
+            LOGGER.exception("WebSocket-Sitzung konnte nicht initialisiert werden")
+            await websocket.accept()
+            await websocket.send_text(json.dumps({
+                "type": "error",
+                "where": "session_config",
+                "code": "session_initialization_failed",
+                "message": "Die Sitzung konnte nicht initialisiert werden.",
+            }))
+            await websocket.close(code=1011)
+            return
         if session is None:
             await websocket.accept()
             await websocket.send_text(json.dumps({
@@ -4709,27 +5307,28 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "websocket.connected",
             sessionId=session_id,
             client=getattr(getattr(websocket, "client", None), "host", None),
+            requestedWakeWordEnabled=(
+                session.session_config.requested_enabled
+            ),
+            effectiveWakeWordEnabled=(
+                session.session_config.effective_enabled
+            ),
         )
         await websocket.send_text(json.dumps({
             "type": "hello",
             "clientId": session_id,
             "sessionId": session_id,
-            "settings": settings.public_dict(),
+            "settings": session.public_settings(),
+            "sessionConfig": session.session_config_dict(),
+            "sessionCapabilities": service.session_capabilities(),
             "limits": service.limits_dict(),
             "supportedEngines": get_supported_transcription_engines(),
             "runtimeSettings": service.runtime_settings_contract(),
         }))
         if service.ready.is_set():
-            model_status = service.model_lifecycle_status()
-            await websocket.send_text(json.dumps({
-                "type": "ready",
-                "sessionId": session_id,
-                "settings": settings.public_dict(),
-                "limits": service.limits_dict(),
-                "runtimeSettings": service.runtime_settings_contract(),
-                "ok": model_status["loaded"] is False or service.metrics()["ok"],
-                "models": model_status,
-            }))
+            await websocket.send_text(json.dumps(
+                service.ready_payload(session)
+            ))
             for error in service.startup_errors:
                 await websocket.send_text(json.dumps(error))
 
@@ -5163,7 +5762,7 @@ def settings_from_args(args):
         initial_prompt_realtime=args.initial_prompt_realtime,
         wakeword_backend=(
             args.wakeword_backend
-            or ("pvporcupine" if args.wake_words else "")
+            or ("openwakeword" if args.wake_words else "")
         ),
         openwakeword_model_paths=args.openwakeword_model_paths,
         openwakeword_inference_framework=args.openwakeword_inference_framework,

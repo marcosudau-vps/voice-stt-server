@@ -110,14 +110,14 @@ Wake word flags:
 
 | Flag | Meaning |
 | --- | --- |
-| `--wakeword-backend` | Wake word backend passed to `AudioToTextRecorder`, for example `pvporcupine` or `openwakeword`. |
+| `--wakeword-backend` | Wake word backend passed to `AudioToTextRecorder`; the current FastAPI contract uses `openwakeword`. |
 | `--wake-words` | Comma-separated wake words or model names for the selected backend. |
 | `--wake-words-sensitivity` | Wake word detection sensitivity. |
 | `--wake-word-activation-delay` | Delay before wake word mode becomes active. |
 | `--wake-word-timeout` | Time to wait for speech after wake detection before returning to wake wait mode. |
 | `--wake-word-buffer-duration` | Wake-word audio removed from the beginning of the recorded segment. |
 | `--wake-word-followup-window` | Optional post-recording grace period that keeps the session in Voice mode so follow-up speech can start without repeating the wake word. |
-| `--openwakeword-model-paths` | Comma-separated OpenWakeWord model paths. |
+| `--openwakeword-model-paths` | Comma-separated classifier paths, a model directory, or a `models.json` path. |
 | `--openwakeword-inference-framework` | OpenWakeWord inference framework, default `onnx`. |
 
 Capacity and scheduling flags:
@@ -180,13 +180,14 @@ Faster-Whisper models can therefore be assigned independently to either the
 final or realtime lane. Server-side CPU memory policy remains the only optional
 capacity guard.
 
-`GET /api/wake-word` returns `availableModels` grouped into `openwakeword` and
-`pvporcupine`. OpenWakeWord entries are discovered from the mounted model root
-(`VOICESTT_OPENWAKEWORD_MODEL_ROOT`) and explicit model paths; helper models
-such as the embedding, mel-spectrogram, and Silero VAD files are excluded.
-Porcupine entries come from the keywords installed for the running platform.
-The browser UI uses this catalog as a backend-dependent dropdown and sends the
-selected OpenWakeWord file path when applying the setting.
+`GET /api/wake-word` returns `availableModels.openwakeword`. Discovery first
+uses `models.json` from `VOICESTT_OPENWAKEWORD_MODEL_ROOT`, a configured model
+directory, or a directly configured manifest path. Logical IDs map to local
+ONNX/TFLite classifier files, `default_model` defines the fallback, and
+`pipeline_models` maps embedding and mel-spectrogram assets. Only files that
+exist are exposed; helper models such as embedding, mel-spectrogram, and Silero
+VAD are excluded from the selectable catalog. The current server admin and
+session contracts do not expose Porcupine.
 
 ### Performance measurements
 
@@ -335,15 +336,16 @@ This recipe targets `api_fastapi_server/server.py` from a source checkout,
 not the installed `stt-server` console script. Check `stt-server --help`
 separately for the installed CLI's supported options.
 
-Wake word mode with Porcupine:
+Wake word mode with OpenWakeWord:
 
 ```bash
 python api_fastapi_server/server.py \
   --engine faster_whisper \
   --model small.en \
   --realtime-model tiny.en \
-  --wakeword-backend pvporcupine \
-  --wake-words jarvis \
+  --wakeword-backend openwakeword \
+  --openwakeword-model-paths /models/openwakeword/models.json \
+  --wake-words hey_jarvis \
   --wake-words-sensitivity 0.7 \
   --wake-word-timeout 5 \
   --wake-word-followup-window 5
@@ -401,6 +403,31 @@ Transcript-bearing events include `sessionId` and are routed only to that
 session. `realtime` and `final` events may include a `segment` object with
 recording start/end timestamps, duration, pre-recording buffer range, and wake
 word timing when available.
+
+### Session-local Wake Word profile
+
+Wake Word behavior is resolved before the session recorder is created:
+
+```text
+/ws/transcribe?wakeWordEnabled=false
+/ws/transcribe?wakeWordEnabled=true
+/ws/transcribe?wakeWordEnabled=true&wakeWords=hey_jarvis
+```
+
+`wakeWordEnabled` is the decisive tri-state selector: absent, `null`, or
+`inherit` copies the server baseline; `false` disables Wake Word for this
+session; `true` activates an OpenWakeWord profile. Optional query parameters
+are `wakeWordBackend`, `wakeWords`, `wakeWordInferenceFramework`, `wakeWordSensitivity`,
+`wakeWordActivationDelay`, `wakeWordTimeout`, `wakeWordBufferDuration`, and
+`wakeWordFollowupWindow`.
+
+Invalid optional values fall back to the corresponding server value, active
+OpenWakeWord profile, or manifest default and are reported under
+`sessionConfig.fallbacks` and `sessionConfig.warnings`. If no local model can
+satisfy an enabled profile, the server sends a `session_config` error and
+closes with code 1008. `hello` and `ready` contain the same effective
+`sessionConfig` and a path-free logical model catalog under
+`sessionCapabilities`.
 
 ## Metrics And Health
 

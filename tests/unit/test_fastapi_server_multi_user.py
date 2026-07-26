@@ -1,8 +1,13 @@
 import collections
+import json
+import os
 import queue
+import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
@@ -12,6 +17,7 @@ from api_fastapi_server.server import (
     InferenceResult,
     QueueSubmitResult,
     RecorderBackedRealtimeSession,
+    SessionWakeWordRequest,
     VoiceSTTService,
     SegmentState,
     ServerSettings,
@@ -509,6 +515,34 @@ class FastAPIMultiUserSessionTests(unittest.TestCase):
         self.assertTrue(callable(config["on_wakeword_detected"]))
         self.assertTrue(callable(config["on_wakeword_timeout"]))
 
+    def test_disabled_session_is_isolated_from_inherited_wake_word_session(self):
+        service, _ = make_service(
+            wakeword_backend="openwakeword",
+            wake_words="hey_jarvis",
+            openwakeword_model_paths="C:/models/hey_jarvis.onnx",
+        )
+
+        inherited = service.admit_session("inherited")
+        disabled = service.admit_session(
+            "disabled",
+            wake_word_request=SessionWakeWordRequest(enabled=False),
+        )
+
+        self.assertTrue(inherited.settings.wake_word_enabled())
+        self.assertFalse(disabled.settings.wake_word_enabled())
+        self.assertTrue(service.settings.wake_word_enabled())
+        self.assertEqual(
+            FakeRecorder.instances[-2].kwargs["wakeword_backend"],
+            "openwakeword",
+        )
+        self.assertEqual(
+            FakeRecorder.instances[-1].kwargs["wakeword_backend"],
+            "",
+        )
+        self.assertFalse(
+            disabled.session_config_dict()["effectiveWakeWordEnabled"]
+        )
+
     def test_wake_word_callbacks_publish_status_and_timeline_events(self):
         service, manager = make_service(
             wakeword_backend="pvporcupine",
@@ -928,6 +962,142 @@ class FastAPIMultiUserWebSocketTests(unittest.TestCase):
                     self.assertIn(second_session, second_final["text"])
                     self.assertNotIn(second_session, first_final["text"])
                     self.assertNotIn(first_session, second_final["text"])
+
+    def test_websocket_disabled_wake_word_contract_is_confirmed(self):
+        settings = ServerSettings(
+            model_warmup=False,
+            wakeword_backend="openwakeword",
+            wake_words="hey_jarvis",
+            openwakeword_model_paths="C:/models/hey_jarvis.onnx",
+        )
+        app = create_app(
+            settings,
+            scheduler_factory=AutoScheduler,
+            recorder_factory=FakeRecorder,
+        )
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                "/ws/transcribe?wakeWordEnabled=false"
+                "&wakeWordBackend=ignored"
+                "&wakeWordSensitivity=invalid"
+            ) as websocket:
+                hello = websocket.receive_json()
+                ready = websocket.receive_json()
+
+        self.assertEqual(hello["type"], "hello")
+        self.assertFalse(
+            hello["sessionConfig"]["effectiveWakeWordEnabled"]
+        )
+        self.assertEqual(
+            hello["sessionConfig"]["ignoredFields"],
+            ["wakeWordBackend", "wakeWordSensitivity"],
+        )
+        self.assertNotIn(
+            "openwakeword_model_paths",
+            hello["settings"],
+        )
+        self.assertFalse(ready["sessionConfig"]["effectiveWakeWordEnabled"])
+        self.assertFalse(ready["settings"]["wake_word_enabled"])
+
+    def test_websocket_falls_back_for_invalid_wake_word_control(self):
+        settings = ServerSettings(model_warmup=False)
+        app = create_app(
+            settings,
+            scheduler_factory=AutoScheduler,
+            recorder_factory=FakeRecorder,
+        )
+
+        with TestClient(app) as client:
+            with client.websocket_connect(
+                "/ws/transcribe?wakeWordEnabled=flase"
+            ) as websocket:
+                hello = websocket.receive_json()
+                ready = websocket.receive_json()
+            metrics = client.get("/api/metrics").json()
+
+        self.assertEqual(hello["type"], "hello")
+        self.assertFalse(
+            hello["sessionConfig"]["effectiveWakeWordEnabled"]
+        )
+        self.assertEqual(
+            hello["sessionConfig"]["fallbacks"][0]["field"],
+            "wakeWordEnabled",
+        )
+        self.assertEqual(
+            ready["sessionConfig"],
+            hello["sessionConfig"],
+        )
+        self.assertEqual(metrics["activeSessions"], 0)
+
+    def test_websocket_enables_manifest_default_and_reports_fallback(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
+            root = Path(temp_dir)
+            models = root / "all_models"
+            models.mkdir()
+            for filename in (
+                "alexa.onnx",
+                "embedding_model.onnx",
+                "melspectrogram.onnx",
+            ):
+                (models / filename).write_bytes(b"model")
+            (root / "models.json").write_text(json.dumps({
+                "openwakeword_models": {
+                    "path": str(models),
+                    "default_model": "alexa",
+                    "pipeline_models": {
+                        "embedding_model_onnx": "embedding_model.onnx",
+                        "melspectrogram_onnx": "melspectrogram.onnx",
+                    },
+                    "onnx_models": {"alexa": "alexa.onnx"},
+                    "tflite_models": {},
+                }
+            }), encoding="utf-8")
+            with patch.dict(
+                os.environ,
+                {"VOICESTT_OPENWAKEWORD_MODEL_ROOT": str(root)},
+            ):
+                settings = ServerSettings(
+                    model_warmup=False,
+                    wake_words_sensitivity=0.37,
+                )
+                app = create_app(
+                    settings,
+                    scheduler_factory=AutoScheduler,
+                    recorder_factory=FakeRecorder,
+                )
+                with TestClient(app) as client:
+                    with client.websocket_connect(
+                        "/ws/transcribe?wakeWordEnabled=true"
+                        "&wakeWordBackend=openwakeword"
+                        "&wakeWordSensitivity=invalid"
+                    ) as websocket:
+                        hello = websocket.receive_json()
+                        ready = websocket.receive_json()
+
+        config = hello["sessionConfig"]
+        self.assertTrue(config["effectiveWakeWordEnabled"])
+        self.assertEqual(config["effectiveWakeWords"], ["alexa"])
+        self.assertEqual(config["fallbacks"][0]["value"], 0.37)
+        self.assertEqual(
+            hello["sessionCapabilities"]["wakeWord"][
+                "availableWakeWords"
+            ][0]["id"],
+            "alexa",
+        )
+        self.assertEqual(
+            FakeRecorder.instances[-1].kwargs["wake_words"],
+            "alexa",
+        )
+        self.assertTrue(
+            FakeRecorder.instances[-1].kwargs[
+                "openwakeword_model_paths"
+            ].endswith("alexa.onnx")
+        )
+        self.assertEqual(
+            ready["sessionConfig"],
+            hello["sessionConfig"],
+        )
 
     def test_admission_limit_rejects_extra_websocket(self):
         settings = ServerSettings(model_warmup=False, max_sessions=1)

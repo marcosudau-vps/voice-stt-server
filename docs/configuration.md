@@ -101,12 +101,12 @@ recorder = AudioToTextRecorder(
 | Parameter | Default | Description |
 | --- | --- | --- |
 | `wakeword_backend` | `""` | Wake word backend. Use `"pvporcupine"`/`"pvp"` or `"oww"`/`"openwakeword"`. |
-| `wake_words` | `""` | Comma-separated Porcupine keywords. Also enables wake word mode. |
+| `wake_words` | `""` | Comma-separated Wake Word keywords or logical OpenWakeWord model IDs. Also enables wake word mode. |
 | `wake_words_sensitivity` | `0.6` | Wake word sensitivity from `0` to `1`. |
 | `wake_word_activation_delay` | `0.0` | Delay before switching from normal voice activation to wake word activation. |
 | `wake_word_timeout` | `5.0` | Seconds after wake word detection to wait for speech before returning to wake word mode. |
 | `wake_word_buffer_duration` | `0.1` | Audio removed/buffered around wake word detection so the wake word is not included in the transcription. |
-| `openwakeword_model_paths` | `None` | Comma-separated OpenWakeWord `.onnx` or `.tflite` model paths. |
+| `openwakeword_model_paths` | `None` | Comma-separated OpenWakeWord classifier paths, a model directory, or a `models.json` manifest path. |
 | `openwakeword_inference_framework` | `"onnx"` | OpenWakeWord inference framework: `"onnx"` or `"tflite"`. |
 
 ## Callback Parameters

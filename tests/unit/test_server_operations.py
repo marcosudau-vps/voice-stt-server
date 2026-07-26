@@ -60,6 +60,53 @@ def test_wakeword_registry_discovers_models_and_ignores_support_files(tmp_path):
     assert models[0]["availableFormats"] == ["onnx", "tflite"]
 
 
+def test_wakeword_registry_prefers_models_json_and_resolves_default(tmp_path):
+    model_root = tmp_path / "all_models"
+    model_root.mkdir()
+    for filename in (
+        "alexa.onnx",
+        "jarvis_v2.onnx",
+        "embedding.custom.onnx",
+        "melspectrogram.custom.onnx",
+        "silero_vad.onnx",
+    ):
+        (model_root / filename).write_bytes(b"model")
+    (tmp_path / "models.json").write_text(json.dumps({
+        "openwakeword_models": {
+            "path": str(model_root),
+            "default_model": "alexa",
+            "pipeline_models": {
+                "embedding_model_onnx": "embedding.custom.onnx",
+                "melspectrogram_onnx": "melspectrogram.custom.onnx",
+            },
+            "onnx_models": {
+                "alexa": "alexa.onnx",
+                "hey_jarvis": "jarvis_v2.onnx",
+                "missing": "missing.onnx",
+                "silero_vad": "silero_vad.onnx",
+            },
+            "tflite_models": {},
+        }
+    }), encoding="utf-8")
+
+    registry = WakeWordRegistry(tmp_path)
+    models = registry.openwakeword_models(framework="onnx")
+    default, missing = registry.default_openwakeword(framework="onnx")
+    selected, unavailable = registry.resolve_openwakeword(
+        ["HEY_JARVIS"],
+        framework="onnx",
+    )
+
+    assert [model["id"] for model in models] == ["alexa", "hey_jarvis"]
+    assert models[0]["default"] is True
+    assert all(model["source"] == "models.json" for model in models)
+    assert default["id"] == "alexa"
+    assert missing == []
+    assert selected[0]["id"] == "hey_jarvis"
+    assert selected[0]["path"] == str((model_root / "jarvis_v2.onnx").resolve())
+    assert unavailable == []
+
+
 @dataclass
 class LogSettings:
     request_logging_enabled: bool = True

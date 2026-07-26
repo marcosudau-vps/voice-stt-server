@@ -802,7 +802,7 @@
         <div class="settings-field wide"><label>Speicheraktionen</label><div class="settings-actions" style="justify-content:flex-start;margin-top:0"><button id="modelsLoad" class="secondary" type="button">Modelle laden</button><button id="modelsUnload" class="secondary" type="button">Aus RAM entladen</button></div><div class="settings-note">Die nächste Transkription lädt entladene Modelle automatisch neu. Aktives Audio und laufende Anfragen werden nie unterbrochen.</div></div>
         <div class="settings-group">Weckwort</div>
         <label class="settings-check"><input id="wakeEnabled" type="checkbox"> Weckwort-Erkennung aktivieren</label>
-        <div class="settings-field"><label for="wakeBackend">Backend</label><select id="wakeBackend"><option value="openwakeword">OpenWakeWord</option><option value="pvporcupine">Porcupine</option></select></div>
+        <div class="settings-field"><label for="wakeBackend">Backend</label><select id="wakeBackend"><option value="openwakeword">OpenWakeWord</option></select></div>
         <div class="settings-field wide"><label for="wakeWords">Weckwort-Modell</label><select id="wakeWords"></select></div>
         <div class="settings-field"><label for="wakeSensitivity">Empfindlichkeit</label><input id="wakeSensitivity" type="number" min="0" max="1" step="0.05" value="0.5"></div>
         <div class="settings-field"><label for="wakeTimeout">Sprach-Timeout (s)</label><input id="wakeTimeout" type="number" min="0" step="0.5" value="10"></div>
@@ -1144,9 +1144,7 @@
     }
 
     function normalizeWakeBackend(backend) {
-      return ["porcupine", "pvp", "pvporcupine"].includes(String(backend || "").toLowerCase())
-        ? "pvporcupine"
-        : "openwakeword";
+      return "openwakeword";
     }
 
     function populateWakeWordSelect(backend, selectedValue) {
@@ -1255,9 +1253,7 @@
             sensitivity: Number(ui.wakeSensitivity.value),
             timeout: Number(ui.wakeTimeout.value),
             followupWindow: Number(ui.wakeFollowup.value),
-            openwakewordModelPaths: ui.wakeBackend.value === "openwakeword"
-              ? (ui.wakeWords.selectedOptions[0]?.dataset.path || null)
-              : undefined
+            openwakewordModelPaths: ui.wakeWords.selectedOptions[0]?.dataset.path || null
           })
         });
         await apiJson("/api/logging", {

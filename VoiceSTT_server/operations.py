@@ -3,7 +3,6 @@
 import json
 import logging
 import os
-import re
 import sys
 import threading
 import uuid
@@ -12,6 +11,7 @@ from datetime import datetime, timezone
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
+from VoiceSTT.core.openwakeword_catalog import OpenWakeWordCatalog
 
 FASTER_MODEL_ROOT_ENV = "VOICESTT_FASTER_WHISPER_MODEL_ROOT"
 KROKO_MODEL_ROOT_ENV = "VOICESTT_KROKO_MODEL_ROOT"
@@ -29,6 +29,7 @@ AUDIT_EVENT_MESSAGES_DE = {
     "transcription.started": "Transkription gestartet",
     "websocket.connected": "WebSocket verbunden",
     "websocket.disconnected": "WebSocket getrennt",
+    "websocket.session_config_rejected": "WebSocket-Sitzungskonfiguration abgelehnt",
 }
 
 PERFORMANCE_EVENT_MESSAGES_DE = {
@@ -230,77 +231,35 @@ class LocalModelRegistry:
 
 
 class WakeWordRegistry:
-    """Discover usable OpenWakeWord files and installed Porcupine keywords."""
-
-    _OPENWAKEWORD_SUPPORT_FILES = {
-        "embedding_model", "melspectrogram", "silero_vad",
-    }
+    """Discover usable OpenWakeWord models without network access."""
 
     def __init__(self, openwakeword_root=None):
         configured = openwakeword_root or os.getenv(OPENWAKEWORD_MODEL_ROOT_ENV, "")
         self.openwakeword_root = Path(configured).expanduser() if configured else None
 
-    @staticmethod
-    def _wakeword_id(stem):
-        return re.sub(r"_v\d+(?:\.\d+)*$", "", stem, flags=re.IGNORECASE)
-
     def openwakeword_models(self, configured_paths=None, framework="onnx"):
-        candidates = []
-        if self.openwakeword_root is not None and self.openwakeword_root.is_dir():
-            candidates.extend(path for path in self.openwakeword_root.iterdir() if path.is_file())
-        for value in str(configured_paths or "").split(","):
-            value = value.strip()
-            if value:
-                candidates.append(Path(value).expanduser())
+        return OpenWakeWordCatalog(
+            self.openwakeword_root,
+            configured_paths,
+        ).entries(framework, include_paths=True)
 
-        grouped = {}
-        for path in candidates:
-            suffix = path.suffix.lower()
-            if suffix not in {".onnx", ".tflite"}:
-                continue
-            stem = path.stem
-            if stem.lower() in self._OPENWAKEWORD_SUPPORT_FILES:
-                continue
-            wakeword_id = self._wakeword_id(stem)
-            entry = grouped.setdefault(wakeword_id.lower(), {
-                "id": wakeword_id,
-                "label": wakeword_id.replace("_", " ").title(),
-                "backend": "openwakeword",
-                "formats": {},
-            })
-            entry["formats"][suffix.lstrip(".")] = str(path.resolve())
+    def resolve_openwakeword(self, model_ids, configured_paths=None, framework="onnx"):
+        return OpenWakeWordCatalog(
+            self.openwakeword_root,
+            configured_paths,
+        ).resolve(model_ids, framework)
 
-        preferred = str(framework or "onnx").lower()
-        result = []
-        for entry in grouped.values():
-            formats = entry.pop("formats")
-            entry["path"] = formats.get(preferred) or formats.get("onnx") or formats.get("tflite")
-            entry["availableFormats"] = sorted(formats)
-            result.append(entry)
-        return sorted(result, key=lambda item: item["label"].lower())
-
-    @staticmethod
-    def porcupine_models():
-        try:
-            import pvporcupine
-        except ModuleNotFoundError:
-            return []
-        keywords = getattr(pvporcupine, "KEYWORDS", ()) or ()
-        paths = getattr(pvporcupine, "KEYWORD_PATHS", {}) or {}
-        return [
-            {
-                "id": keyword,
-                "label": str(keyword).title(),
-                "backend": "pvporcupine",
-                "path": paths.get(keyword),
-            }
-            for keyword in sorted(keywords)
-        ]
+    def default_openwakeword(self, configured_paths=None, framework="onnx"):
+        catalog = OpenWakeWordCatalog(
+            self.openwakeword_root,
+            configured_paths,
+        )
+        resolved, missing = catalog.resolve(None, framework)
+        return (resolved[0] if resolved else None), missing
 
     def catalog(self, configured_paths=None, framework="onnx"):
         return {
             "openwakeword": self.openwakeword_models(configured_paths, framework),
-            "pvporcupine": self.porcupine_models(),
         }
 
 

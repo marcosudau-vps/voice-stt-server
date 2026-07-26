@@ -152,6 +152,14 @@ Die Einteilung ist deshalb Teil des aktuell implementierten Verwaltungsvertrags.
 | Prompts | `initial_prompt`, `initial_prompt_realtime` |
 | Wake Word | `wakeword_backend`, `wake_words`, `wake_words_sensitivity`, `wake_word_activation_delay`, `wake_word_timeout`, `wake_word_buffer_duration`, `wake_word_followup_window`, `openwakeword_model_paths`, `openwakeword_inference_framework` |
 
+Die Wake-Word-Werte können zusätzlich beim WebSocket-Aufbau sessionlokal
+überschrieben werden. `wakeWordEnabled` entscheidet, ob die Session die
+Serverbaseline erbt, Wake Word deaktiviert oder ein OpenWakeWord-Profil
+aktiviert. Die Auflösung erfolgt vor Recorder-Erzeugung auf einer Kopie der
+Baseline; globale Einstellungen und andere Sessions bleiben unverändert.
+Clients senden dabei nur logische Modell-IDs, keine Serverpfade. Siehe
+[Betriebsmodi und sessionlokale Wake-Word-Konfiguration](09-betriebsmodi-und-serverkonfiguration.md).
+
 Vollständig und exakt enthält `newSessionOnly`:
 
 ```text
@@ -255,11 +263,13 @@ Nach dem konfigurierten Idle-Timeout dürfen die Modell-Worker entladen sein.
 `ready`/`health` können trotzdem erfolgreich sein. Die nächste Inferenz lädt die
 Lanes synchron wieder; der erste Text kann dann deutlich länger dauern.
 
-### Settings in `hello` sind kein Session-Mutationskanal
+### Settings in `hello` sind die effektive Sessionkopie
 
-Der Client erhält öffentliche Settings zur Information. Im WebSocket-Protokoll
-existiert kein Befehl zum Ändern einzelner Sessionparameter. Änderungen laufen
-über die Admin-HTTP-API und gelten entsprechend dem Runtime-Vertrag.
+Der Client erhält die für diese Verbindung aufgelösten öffentlichen Settings.
+Wake-Word-Queryparameter können sie beim Aufbau sessionlokal beeinflussen;
+nach `hello` existiert weiterhin kein Befehl zum Ändern einzelner
+Sessionparameter. Serverweite Änderungen laufen über die Admin-HTTP-API und
+gelten entsprechend dem Runtime-Vertrag.
 
 ## Konfigurationsquellen und Priorität
 

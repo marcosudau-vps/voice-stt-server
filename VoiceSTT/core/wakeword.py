@@ -4,12 +4,15 @@ Internal wake-word backend setup and runtime helpers.
 
 from importlib import import_module
 import logging
-import os
 import struct
 from pathlib import Path
 
 import numpy as np
 
+from .openwakeword_catalog import (
+    OPENWAKEWORD_MODEL_ROOT_ENV,
+    OpenWakeWordCatalog,
+)
 
 logger = logging.getLogger("voicestt")
 
@@ -21,51 +24,50 @@ OPENWAKEWORD_BACKENDS = {
     "open_wakeword",
     "open_wakewords",
 }
-OPENWAKEWORD_MODEL_ROOT_ENV = "VOICESTT_OPENWAKEWORD_MODEL_ROOT"
-
-
-def _resolve_openwakeword_paths(model_paths, wake_words):
+def _resolve_openwakeword_paths(
+    model_paths,
+    wake_words,
+    inference_framework="onnx",
+):
     """Resolve classifier and feature models without performing network I/O."""
 
     explicit = [Path(value.strip()).expanduser() for value in (model_paths or "").split(",") if value.strip()]
-    root_value = os.getenv(OPENWAKEWORD_MODEL_ROOT_ENV)
-    root = Path(root_value).expanduser() if root_value else None
-    if explicit:
-        classifiers = explicit
-        if root is None:
-            root = explicit[0].parent
-    elif root is not None and root.is_dir():
-        available = [
-            path for path in sorted(root.glob("*.onnx"))
-            if path.name not in {"melspectrogram.onnx", "embedding_model.onnx", "silero_vad.onnx"}
-        ]
-        requested = [value.strip().lower().replace(" ", "_") for value in (wake_words or "").split(",") if value.strip()]
-        classifiers = [
-            path for path in available
-            if not requested or any(name in path.stem.lower() for name in requested)
-        ]
+    catalog = OpenWakeWordCatalog(configured_paths=explicit)
+    explicit_classifiers = [
+        path for path in explicit
+        if path.suffix.lower() in {".onnx", ".tflite"}
+    ]
+    if explicit_classifiers:
+        classifiers = explicit_classifiers
     else:
-        classifiers = []
+        resolved, missing = catalog.resolve(
+            wake_words,
+            preferred_framework=inference_framework,
+        )
+        if missing:
+            raise FileNotFoundError(
+                "OpenWakeWord model IDs are missing in offline mode: "
+                + ", ".join(missing)
+            )
+        classifiers = [Path(entry["path"]) for entry in resolved]
 
     missing = [str(path) for path in classifiers if not path.is_file()]
     if not classifiers or missing:
-        detail = ", ".join(missing) if missing else str(root or "<unset>")
+        detail = ", ".join(missing) if missing else str(catalog.model_root or "<unset>")
         raise FileNotFoundError(
             "OpenWakeWord model files are missing in offline mode: " + detail + ". Set "
             + OPENWAKEWORD_MODEL_ROOT_ENV + " or pass openwakeword_model_paths."
         )
-    feature_paths = {
-        "melspec_model_path": root / "melspectrogram.onnx",
-        "embedding_model_path": root / "embedding_model.onnx",
-    }
-    missing_features = [str(path) for path in feature_paths.values() if not path.is_file()]
-    if missing_features:
+    feature_paths = catalog.pipeline_paths(
+        inference_framework,
+        classifier_path=classifiers[0],
+    )
+    if len(feature_paths) != 2:
         raise FileNotFoundError(
-            "OpenWakeWord feature models are missing in offline mode: " + ", ".join(missing_features)
+            "OpenWakeWord feature models are missing in offline mode for "
+            + str(Path(classifiers[0]).parent)
         )
-    return [str(path.resolve()) for path in classifiers], {
-        name: str(path.resolve()) for name, path in feature_paths.items()
-    }
+    return [str(path.resolve()) for path in classifiers], feature_paths
 
 
 def _normalize_wakeword_backend(wakeword_backend, wake_words):
@@ -186,6 +188,7 @@ def setup_wakeword_detection(
             model_paths, feature_paths = _resolve_openwakeword_paths(
                 openwakeword_model_paths,
                 wake_words,
+                openwakeword_inference_framework,
             )
             recorder.owwModel = Model(
                 wakeword_models=model_paths,
