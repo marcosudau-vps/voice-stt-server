@@ -327,21 +327,33 @@ def test_admin_api_requires_key_and_typed_endpoints_persist(tmp_path, monkeypatc
         assert wake_config["availableModels"]["openwakeword"][0]["id"] == "hey_jarvis"
         assert set(wake_config["availableModels"]) == {"openwakeword"}
         logging_response = client.put("/api/logging", headers=headers, json={
-            "enabled": True, "stdout": False, "transcripts": False,
+            "enabled": True, "stdout": False, "transcriptMode": "none",
             "file": str(tmp_path / "audit.jsonl"),
+            "retentionDays": 45,
             "performanceEnabled": True,
             "performanceStdout": False,
             "performanceFile": str(tmp_path / "performance.jsonl"),
+            "performanceRetentionDays": 14,
+            "transcriptionRetentionDays": 90,
+            "systemRetentionDays": 30,
         })
         assert logging_response.status_code == 200
         logging_config = client.get("/api/logging", headers=headers).json()
         assert logging_config["performance"]["enabled"] is True
         assert logging_config["performance"]["file"].endswith("performance.jsonl")
+        assert logging_config["transcriptMode"] == "none"
+        assert logging_config["transcripts"] is False
+        assert logging_config["retentionDays"] == 45
+        assert logging_config["performance"]["retentionDays"] == 14
+        assert logging_config["transcription"]["retentionDays"] == 90
+        assert logging_config["system"]["retentionDays"] == 30
 
     persisted = json.loads(runtime_path.read_text(encoding="utf-8"))["settings"]
     assert persisted["language"] == "de"
     assert persisted["wakeword_backend"] == "openwakeword"
     assert persisted["request_log_transcripts"] is False
+    assert persisted["transcript_log_mode"] == "none"
+    assert persisted["request_log_retention_days"] == 45
     assert persisted["performance_logging_enabled"] is True
     assert "admin_api_key" not in persisted
 
@@ -484,11 +496,13 @@ def test_openai_model_list_and_default_language_are_exposed():
 
 def test_structured_request_log_contains_completed_event(tmp_path):
     log_path = tmp_path / "requests.jsonl"
+    transcription_log_path = tmp_path / "transcription"
     settings = ServerSettings(
         model_warmup=False,
         request_logging_enabled=True,
         request_log_stdout=False,
         request_log_path=str(log_path),
+        transcription_log_path=str(transcription_log_path),
     )
     app = create_app(settings, scheduler_factory=ImmediateScheduler)
     with TestClient(app) as client:
@@ -506,9 +520,21 @@ def test_structured_request_log_contains_completed_event(tmp_path):
         for line in log_files[0].read_text(encoding="utf-8").splitlines()
     ]
     completed = next(event for event in events if event["event"] == "transcription.completed")
-    assert completed["data"]["text"] == "hello world"
+    assert "text" not in completed["data"]
     assert completed["data"]["language"] == "de"
     assert completed["requestId"] == response.headers["x-request-id"]
+
+    transcription_events = [
+        json.loads(line)
+        for path in transcription_log_path.glob("*/*.jsonl")
+        for line in path.read_text(encoding="utf-8").splitlines()
+    ]
+    transcript_completed = next(
+        event
+        for event in transcription_events
+        if event["event"] == "transcription.completed"
+    )
+    assert transcript_completed["data"]["text"] == "hello world"
 
 
 def test_log_history_api_returns_unified_http_transcription_events(tmp_path):
@@ -528,6 +554,7 @@ def test_log_history_api_returns_unified_http_transcription_events(tmp_path):
             "/v1/audio/transcriptions",
             data={"model": "whisper-1"},
             files={"file": ("sample.wav", wav_bytes(), "audio/wav")},
+            headers={"X-VoiceSTT-Client-ID": "api-client-42"},
         )
         request_id = response.headers["x-request-id"]
         history = client.get(
@@ -537,14 +564,32 @@ def test_log_history_api_returns_unified_http_transcription_events(tmp_path):
                 "channels": "transcription,performance",
             },
         )
+        session_history = client.get(f"/api/logs/sessions/{request_id}")
+        transcription_history = client.get(
+            f"/api/logs/transcriptions/{request_id}"
+        )
 
     assert history.status_code == 200
     events = history.json()["data"]
     names = {event["event"] for event in events}
+    assert "transcription.accepted" in names
     assert "transcription.started" in names
     assert "transcription.completed" in names
     assert all(event["sessionId"] == request_id for event in events)
     assert all(event["transport"] == "http" for event in events)
+    assert session_history.status_code == 200
+    assert transcription_history.status_code == 200
+    assert session_history.json()["data"]
+    assert transcription_history.json()["data"]
+    missing_client_ids = [
+        (event["event"], event.get("clientId"))
+        for event in transcription_history.json()["data"]
+        if event.get("clientId") != "api-client-42"
+    ]
+    assert missing_client_ids == []
+    serialized = json.dumps(session_history.json())
+    assert "testclient" not in serialized
+    assert "accessToken" not in serialized
 
 
 def test_model_switch_uses_only_mounted_models_and_reloads_workers(tmp_path, monkeypatch):

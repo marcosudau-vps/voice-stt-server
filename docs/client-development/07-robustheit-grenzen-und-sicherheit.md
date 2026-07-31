@@ -139,11 +139,12 @@ Netzwerkebene begrenzen.
 | Setting | Risiko / Wirkung |
 | --- | --- |
 | `request_logging_enabled` | erzeugt strukturierte Auditdaten |
-| `request_log_transcripts` | kann erkannten Text in Requestlogs speichern |
+| `request_log_transcripts` | Legacy-Schalter für `transcript_log_mode` |
+| `transcript_log_mode` | kann finalen oder vollständigen Text ausschließlich im Transkriptionskanal speichern |
 | `request_log_stdout` | kann Daten in zentrale Containerlogs/Dozzle spiegeln |
 | `save_audio_files` | speichert Audio auf Serverdisk |
 | `performance_logging_enabled` | schreibt Latenz-/Ressourcendaten, laut Implementierung ohne Transkripttext |
-| `transcription_logging_enabled` | schreibt transportübergreifende Transkriptionsereignisse; Finaltext folgt `request_log_transcripts` |
+| `transcription_logging_enabled` | schreibt transportübergreifende Transkriptionsereignisse; Text folgt `transcript_log_mode` |
 | `event_store_enabled` | persistiert strukturierte Ereignisse zusätzlich in SQLite für Historienabfragen |
 | `log_live_enabled` | erlaubt einen separaten, authentifizierten Log-WebSocket |
 

@@ -39,17 +39,28 @@ Every structured event uses the same versioned outer schema:
 ```
 
 Context identifiers remain at the top level. Event-specific values are stored
-under `data`. `eventId` is unique; `cursor` is a monotonically increasing
-position from the persistent event store and is used for pagination and live
-reconnect.
+under `data`. `eventId` is unique; `cursor` is assigned centrally before fan-out
+and is strictly increasing even if an individual sink temporarily fails. It is
+used for pagination and live reconnect. A sink failure creates an explicit gap
+rather than reusing a cursor.
 
 HTTP and WebSocket transcription events use the same `transcription.*` event
 names. `transport` records the protocol difference. One HTTP request owns one
 transcription ID. A WebSocket session can own multiple transcription IDs, one
 per final segment.
 
-Final transcript text is written only when `request_log_transcripts` is
-enabled. Realtime text is never written to the performance channel.
+`transcript_log_mode` controls transcript content:
+
+- `none`: no transcript text in structured events;
+- `final`: final text only in `transcription.completed` on the
+  `transcription` channel;
+- `full`: transcript fields are permitted on the `transcription` channel.
+
+The legacy `request_log_transcripts` Boolean remains compatible with
+`none`/`final`. Audit and performance events never contain transcript text.
+The central sanitizer recursively removes credentials, authorization values,
+cookies, query strings, binary/audio fields, and disallowed transcript fields
+before an event reaches any file, SQLite, stdout, or live subscriber sink.
 
 ## Calendar file layout
 
@@ -79,8 +90,10 @@ reaches its configured size, numbered daily segments are created, for example
 
 The legacy `*BackupCount` settings remain accepted for configuration
 compatibility, but do not delete calendar files. Numbered segments continue as
-needed so the configured size limit is not silently abandoned. Retention will
-only be introduced with a separately confirmed age-based policy.
+needed so the configured size limit is not silently abandoned. Each channel
+has an independent `*_log_retention_days` setting. The default `0` disables
+automatic deletion. A positive value prunes only dated JSONL files below that
+channel's configured root and applies the same channel policy to SQLite.
 
 Legacy values ending in `.jsonl` are accepted as channel-root hints. For
 example `/data/logs/voicestt-requests.jsonl` writes below
@@ -90,16 +103,19 @@ example `/data/logs/voicestt-requests.jsonl` writes below
 
 The `transcription` channel includes:
 
+- `transcription.accepted`
 - `transcription.started`
 - `transcription.recording_started`
 - `transcription.recording_ended`
 - `transcription.completed`
 - `transcription.failed`
 - `transcription.rejected`
+- `transcription.cancelled`
 - wake-word wait, detection, timeout and follow-up events
 
-The system lifecycle currently uses `server.starting`, `server.ready`,
-`server.stopping`, and `server.component_failed`.
+The system/audit channels also report authentication failures, recorder or
+worker failures, scheduler overload, storage failures, and recovered
+subscriber drops where applicable.
 
 WebSocket realtime outputs are measured in the performance channel:
 
@@ -133,6 +149,8 @@ History is available at:
 
 ```http
 GET /api/logs/events
+GET /api/logs/sessions/{sessionId}
+GET /api/logs/transcriptions/{transcriptionId}
 ```
 
 Supported query parameters:
@@ -183,16 +201,20 @@ than in the URL:
 The server responds with:
 
 - `log.hello`
+- `log.subscribed`
 - zero or more replayed `log.event` messages
 - `log.replay_completed`
 - subsequent live `log.event` messages
 - `log.keepalive` during idle periods
-- `log.gap` if the subscriber was too slow and its bounded queue dropped data
+- `log.pong` in response to `{"type":"ping"}`
+- `log.gap` if a sink or subscriber queue dropped data
 - `log.error` for protocol or authorization failures
 
-After `log.gap`, a client should reconnect with the cursor of its last
-successfully processed `log.event`; the persistent replay then fills the
-subscriber-local gap. The bundled browser client does this automatically.
+After a subscriber-local `log.gap`, a client should reconnect with the cursor
+of its last successfully processed `log.event`; the persistent replay then
+fills the gap. A store-related gap cannot be replayed from that store and must
+remain visible as an operational data-loss signal. The bundled browser client
+reconnects automatically.
 
 An administrator may use the configured admin key as `accessToken` and can
 subscribe across channels and, when omitted, across sessions.
@@ -201,6 +223,12 @@ The bundled browser client opens this second WebSocket automatically after
 `hello`, replays the current session from its last cursor and adds incoming
 structured events to its event log. Older or broader history remains available
 through the HTTP endpoint.
+
+The browser persists a random stable client identifier locally and supplies it
+as `clientId` when opening `/ws/transcribe`. API clients can supply the same
+correlation concept in `X-VoiceSTT-Client-ID`. `clientId`, `sessionId`,
+`requestId`, and `transcriptionId` remain separate identifiers. Client IP
+addresses and access tokens are not part of session events.
 
 ## Configuration
 
@@ -213,7 +241,10 @@ channel settings, timezone, transcript policy and live access can be changed
 at runtime. `log_level` is also applied immediately to the active root,
 FastAPI, Uvicorn and managed VoiceSTT console loggers.
 
-The structured writer uses a bounded background queue so logging does not
-normally block transcription. Audit and transcription events get a short
-last-chance enqueue window when the queue is full; lower-priority performance
-events may be dropped. Live subscribers have independent bounded queues.
+Store, channel files, stdout, and live publishing each use an independent
+bounded background queue. Emission is non-blocking. On saturation, audit,
+errors, and terminal transcription events have higher preservation priority
+than performance detail. Every eviction or failed write increments a per-sink
+counter and emits a `log.gap`; storage failures additionally create a throttled
+`storage.failed` event. Live subscribers have their own bounded queues and
+report recovered drops through `log.subscriber.dropped`.

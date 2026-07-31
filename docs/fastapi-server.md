@@ -146,11 +146,16 @@ Capacity and scheduling flags:
 | `--performance-log-path` | Calendar JSONL root for performance events; default `logs/performance`. |
 | `--performance-log-max-bytes` | Maximum size of one performance log file. |
 | `--performance-log-backup-count` | Legacy compatibility setting; calendar files are not deleted automatically. |
+| `--performance-log-retention-days` | Deletes older performance calendar files and store entries; `0` disables deletion. |
 | `--transcription-logging` / `--no-transcription-logging` | Enables/disables the transport-independent transcription event channel. |
 | `--transcription-log-stdout` / `--no-transcription-log-stdout` | Mirrors transcription events to stdout. |
 | `--transcription-log-path` | Calendar JSONL root for transcription events. |
+| `--transcription-log-retention-days` | Deletes older transcription calendar files and store entries; `0` disables deletion. |
 | `--system-event-logging` / `--no-system-event-logging` | Enables/disables selected structured server lifecycle events. |
 | `--system-event-log-path` | Calendar JSONL root for system events. |
+| `--system-event-log-retention-days` | Deletes older system calendar files and store entries; `0` disables deletion. |
+| `--transcript-mode` | Transcript policy `none`, `final`, or `full`; text is permitted only in the transcription channel. |
+| `--request-log-retention-days` | Deletes older audit calendar files and store entries; `0` disables deletion. |
 | `--log-calendar-timezone` | Calendar timezone for `YYYY-MM/YYYY-MM-DD.jsonl` paths; default `Europe/Berlin`. |
 | `--realtime-log-detail` | `off`, `summary`, or `events` for realtime cadence measurements. |
 | `--event-store` / `--no-event-store` | Enables/disables the indexed SQLite history. |

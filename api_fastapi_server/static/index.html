@@ -885,6 +885,23 @@
       loggingAudio: document.getElementById("loggingAudio")
     });
 
+    const installationClientId = (() => {
+      const storageKey = "voicestt.clientId";
+      try {
+        const existing = localStorage.getItem(storageKey);
+        if (existing) return existing;
+        const created = "browser-" + (
+          crypto.randomUUID
+            ? crypto.randomUUID()
+            : Math.random().toString(16).slice(2)
+        );
+        localStorage.setItem(storageKey, created);
+        return created;
+      } catch (_) {
+        return "browser-" + Math.random().toString(16).slice(2);
+      }
+    })();
+
     const state = {
       socket: null,
       logSocket: null,
@@ -892,7 +909,7 @@
       logSessionId: null,
       logAccess: null,
       logReconnectTimer: null,
-      clientId: null,
+      clientId: installationClientId,
       connected: false,
       streaming: false,
       stream: null,
@@ -1094,7 +1111,8 @@
 
     function wsUrl() {
       const proto = location.protocol === "https:" ? "wss:" : "ws:";
-      return proto + "//" + location.host + "/ws/transcribe";
+      return proto + "//" + location.host + "/ws/transcribe?clientId="
+        + encodeURIComponent(installationClientId);
     }
 
     function logWsUrl(path) {
@@ -1159,7 +1177,7 @@
     }
 
     function adminHeaders(includeJson = false) {
-      const headers = {};
+      const headers = { "X-VoiceSTT-Client-ID": installationClientId };
       const key = ui.adminKey.value.trim();
       if (key) headers["X-VoiceSTT-Admin-Key"] = key;
       if (includeJson) headers["Content-Type"] = "application/json";

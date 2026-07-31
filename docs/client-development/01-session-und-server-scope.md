@@ -132,7 +132,8 @@ Die Einteilung ist deshalb Teil des aktuell implementierten Verwaltungsvertrags.
 | `request_logging_enabled` | Audit-/Request-Logging aktiv |
 | `request_log_stdout` | Audit-Events zusätzlich auf stdout |
 | `request_log_path` | Wurzelverzeichnis des Audit-Kanals |
-| `request_log_transcripts` | Transkripttext in Audit-Logs aufnehmen |
+| `request_log_transcripts` | Legacy-Schalter für `transcript_log_mode` (`false` = `none`, `true` = `final`) |
+| `transcript_log_mode` | Transkripttext `none`, `final` oder `full`; ausschließlich im Transkriptionskanal |
 | `request_log_max_bytes` | Rotationsgröße der Audit-Datei |
 | `request_log_backup_count` | Anzahl Audit-Backups |
 | `performance_logging_enabled` | Performance-Kanal aktiv |
@@ -299,8 +300,9 @@ Transcript-Events werden mit `publish_session(sessionId, ...)` gezielt an die
 zugehörige Verbindung gesendet. `ready` und Startfehler können bewusst über
 `publish_all(...)` an alle Verbindungen gehen. Audio wird nicht broadcastet.
 
-Audit- und Transkriptionslogs können – abhängig von
-`request_log_transcripts` – Transkripttext enthalten. Bei
+Der Transkriptionskanal kann – abhängig von `transcript_log_mode` –
+Transkripttext enthalten; Audit- und Performancekanal enthalten keinen
+Transkripttext. Bei
 `save_audio_files: true` kann außerdem Audio auf dem Server persistiert werden.
 Stream-Isolation bedeutet daher nicht automatisch, dass keine serverweite
 Protokollierung stattfindet.

@@ -1,6 +1,6 @@
 # Implementierungsplan: Logging-Fixes
 
-Status: Implementiert und verifiziert
+Status: Implementiert, nach Abnahmebericht nachgebessert und verifiziert
 Betroffene Basis: lokale Entwicklungsversion des VoiceSTT-Servers
 Produktivsystem/VPS: nicht Teil der Planung oder Umsetzung, sofern nicht später ausdrücklich festgelegt
 
@@ -148,7 +148,8 @@ Das Auditlog dokumentiert WebSocket-Verbindungen, aber nicht die einzelnen final
 - Audio-/Aufnahmedauer
 - relevante Latenzen, soweit an dieser Stelle zuverlässig verfügbar
 - Erfolg beziehungsweise Fehler
-- optional `text`, weiterhin strikt abhängig von `request_log_transcripts`
+- optional `text`, ausschließlich im Transkriptionskanal und abhängig von
+  `transcript_log_mode` (`none`, `final`, `full`)
 
 #### Zu klärende Fragen
 
@@ -230,7 +231,10 @@ Die genaue Benennung und Reihenfolge wird vor der Implementierung verbindlich fe
 
 Die bisherige ausschließlich dateianzahlbasierte Option `backup_count` passt nur eingeschränkt zu Tagesdateien. Für die neue Struktur soll eine zeitbasierte Aufbewahrung pro Channel vorgesehen werden, beispielsweise `retention_days`.
 
-Bis die Aufbewahrungsregeln ausdrücklich bestätigt sind, werden vorhandene Tagesdateien nicht automatisch gelöscht. Eine spätere Bereinigung muss ausschließlich Dateien innerhalb des jeweiligen konfigurierten Channel-Stammverzeichnisses berücksichtigen.
+Die Aufbewahrung ist pro Channel über `*_log_retention_days` konfigurierbar.
+Der sichere Standardwert `0` löscht nichts. Positive Werte berücksichtigen
+ausschließlich datierte JSONL-Dateien im jeweiligen konfigurierten
+Channel-Stammverzeichnis und die Einträge dieses Channels im SQLite-Store.
 
 #### Voraussichtlich betroffene Stellen
 
@@ -274,16 +278,33 @@ ereignisspezifische Daten liegen unter `data`.
 
 - Alle aktivierten Channels schreiben asynchron in die kalenderbasierte
   JSONL-Struktur.
-- Ein optionaler SQLite-Store hält dieselben Events indiziert und liefert
-  monotone Cursor für Historie und Replay.
-- `GET /api/logs/events` bietet gefilterten Historienzugriff.
-- `/ws/logs` liefert Cursor-Replay und anschließend Live-Events; bei
-  Subscriber-Überlast wird `log.gap` ausgegeben.
+- Ein optionaler SQLite-Store hält dieselben Events indiziert. Der zentrale Hub
+  vergibt strikt monotone Cursor bereits vor dem Fan-out, sodass auch ein
+  temporärer Storefehler keine Cursor dupliziert.
+- `GET /api/logs/events`, `GET /api/logs/sessions/{sessionId}` und
+  `GET /api/logs/transcriptions/{transcriptionId}` bieten gefilterten
+  Historienzugriff.
+- `/ws/logs` bestätigt mit `log.subscribed`, liefert Cursor-Replay und
+  anschließend Live-Events und beantwortet Client-Pings mit `log.pong`.
+- Store, Dateien, stdout und Live-Publishing besitzen unabhängige,
+  nichtblockierende Queues. Sink- und Subscriberverluste werden als `log.gap`
+  sichtbar; Store-/Dateifehler zusätzlich als `storage.failed`.
 - Normale Sessiontokens dürfen nur die eigene Session und die Channels
   `audit`, `transcription` und `performance` lesen. System- und
   sessionübergreifender Zugriff bleiben Admins vorbehalten.
 
 Der vollständige Vertrag steht in `docs/structured-logging.md`.
+
+### 4.4 Datenschutz und Korrelation
+
+- Eine zentrale rekursive Bereinigung läuft vor allen Sinks und entfernt
+  Credentials, Authorization-/Cookie-Werte, Querystrings, Binär-/Audiodaten
+  sowie im jeweiligen Channel unzulässige Transkriptfelder.
+- Performance- und Auditkanal enthalten grundsätzlich keinen Transkripttext.
+- IP-Adressen werden nicht als Clientkennung protokolliert.
+- Browserclients persistieren eine stabile `clientId`; API-Clients können sie
+  über `X-VoiceSTT-Client-ID` liefern. `clientId`, `sessionId`, `requestId` und
+  `transcriptionId` bleiben strukturell getrennt.
 
 ## 5. Vorgesehene Umsetzungsreihenfolge
 
@@ -308,6 +329,14 @@ Der vollständige Vertrag steht in `docs/structured-logging.md`.
 - Wiederaufnahme derselben Tagesdatei nach einem Serverneustart.
 - Größenrotation innerhalb eines Tages und bestehendes JSONL-Schema.
 - Transkriptunterdrückung bei `request_log_transcripts=False`.
+- Alle drei Varianten von `transcript_log_mode`.
+- Rekursive Redaction in Datei, Store und Live-Ausgabe.
+- SQLite-Ausfall ohne doppelte oder rückläufige Cursor.
+- Langsamer Dateisink und Queue-Sättigung ohne Blockade des Emit-Pfads,
+  einschließlich `log.gap`.
+- Opt-in-Retention für Kalenderdateien und SQLite.
+- History-Routen für Session und Transkription.
+- `log.subscribed`, `log.pong` und stabile transportübergreifende `clientId`.
 - Falls umgesetzt: genau ein WebSocket-Auditabschluss pro finalem Segment und korrekte Fehlerereignisse.
 
 ### 6.2 Regression
@@ -318,16 +347,16 @@ Der vollständige Vertrag steht in `docs/structured-logging.md`.
 
 ### 6.3 Ergebnis
 
-- Gezielte Logging-, HTTP- und WebSocket-Tests: 65 bestanden.
-- Vollständige Projektsuite: 355 bestanden, 13 übersprungen und 71 Subtests
+- Gezielte Logging-, HTTP- und WebSocket-Tests: 69 bestanden.
+- Vollständige Projektsuite: 359 bestanden, 13 übersprungen und 71 Subtests
   bestanden.
 - Inline-JavaScript des Browserclients: Syntaxprüfung bestanden.
 
 ## 7. Nicht Bestandteil dieses Planstands
 
 - Änderungen am Wakeword-Verhalten.
-- Automatische Aufbewahrung/Löschung historischer Tagesdateien; ohne
-  bestätigte Retention-Regel wird nichts gelöscht.
+- Automatische Aufbewahrung ohne explizit positiven Retention-Wert; der
+  Standardwert `0` löscht nichts.
 - Ungefilterte Weiterleitung beliebiger Python-/Uvicorn-Textlogzeilen an
   Clients; der Clientzugriff gilt ausschließlich für strukturierte Events.
 - Änderungen an ASR-Modellen, Schedulerlogik oder Audiopipeline außerhalb der für die Logging-Fixes zwingend notwendigen Stellen.

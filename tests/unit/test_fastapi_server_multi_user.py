@@ -919,10 +919,13 @@ class FastAPIMultiUserWebSocketTests(unittest.TestCase):
             )
 
             with TestClient(app) as client:
-                with client.websocket_connect("/ws/transcribe") as transcribe:
+                with client.websocket_connect(
+                    "/ws/transcribe?clientId=browser-client-42"
+                ) as transcribe:
                     hello = transcribe.receive_json()
                     session_id = hello["sessionId"]
                     access = hello["logAccess"]
+                    self.assertEqual(hello["clientId"], "browser-client-42")
                     for sequence in range(1005):
                         app.state.voicestt_service.events.emit(
                             "transcription",
@@ -976,10 +979,13 @@ class FastAPIMultiUserWebSocketTests(unittest.TestCase):
             )
 
             with TestClient(app) as client:
-                with client.websocket_connect("/ws/transcribe") as transcribe:
+                with client.websocket_connect(
+                    "/ws/transcribe?clientId=browser-client-42"
+                ) as transcribe:
                     hello = transcribe.receive_json()
                     session_id = hello["sessionId"]
                     access = hello["logAccess"]
+                    self.assertEqual(hello["clientId"], "browser-client-42")
                     forbidden_history = client.get(
                         "/api/logs/events",
                         params={
@@ -1005,6 +1011,10 @@ class FastAPIMultiUserWebSocketTests(unittest.TestCase):
                             forbidden_logs.receive_json()["type"],
                             "log.hello",
                         )
+                        self.assertEqual(
+                            forbidden_logs.receive_json()["type"],
+                            "log.subscribed",
+                        )
                         forbidden_replay = forbidden_logs.receive_json()
                         self.assertEqual(
                             forbidden_replay["type"],
@@ -1021,10 +1031,20 @@ class FastAPIMultiUserWebSocketTests(unittest.TestCase):
                             "afterCursor": 0,
                         })
                         self.assertEqual(logs.receive_json()["type"], "log.hello")
+                        subscribed = logs.receive_json()
+                        self.assertEqual(subscribed["type"], "log.subscribed")
+                        self.assertEqual(
+                            subscribed["sessionId"],
+                            session_id,
+                        )
                         while True:
                             replay_message = logs.receive_json()
                             if replay_message["type"] == "log.replay_completed":
                                 break
+                        logs.send_json({"type": "ping"})
+                        pong = logs.receive_json()
+                        self.assertEqual(pong["type"], "log.pong")
+                        self.assertIn("serverTime", pong)
 
                         transcribe.send_text('{"type":"start"}')
                         transcribe.send_bytes(encode_audio_packet(
@@ -1052,8 +1072,18 @@ class FastAPIMultiUserWebSocketTests(unittest.TestCase):
                             event.get("sessionId") == session_id
                             for event in received
                         ))
+                        missing_client_ids = [
+                            (event["event"], event.get("clientId"))
+                            for event in received
+                            if event.get("clientId") != "browser-client-42"
+                        ]
+                        self.assertEqual(missing_client_ids, [])
                         self.assertIn(
                             "transcription.completed",
+                            {event["event"] for event in received},
+                        )
+                        self.assertIn(
+                            "transcription.accepted",
                             {event["event"] for event in received},
                         )
 

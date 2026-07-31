@@ -1,5 +1,7 @@
 import json
 import logging
+import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -124,6 +126,7 @@ class LogSettings:
     request_log_transcripts: bool = True
     request_log_max_bytes: int = 1024 * 1024
     request_log_backup_count: int = 2
+    request_log_retention_days: int = 0
     save_audio_files: bool = True
     audio_log_dir: str = ""
     performance_logging_enabled: bool = True
@@ -131,21 +134,25 @@ class LogSettings:
     performance_log_path: str = ""
     performance_log_max_bytes: int = 1024 * 1024
     performance_log_backup_count: int = 2
+    performance_log_retention_days: int = 0
     log_calendar_timezone: str = "Europe/Berlin"
     transcription_logging_enabled: bool = False
     transcription_log_stdout: bool = False
     transcription_log_path: str = ""
     transcription_log_max_bytes: int = 1024 * 1024
     transcription_log_backup_count: int = 2
+    transcription_log_retention_days: int = 0
     system_event_logging_enabled: bool = False
     system_event_log_stdout: bool = False
     system_event_log_path: str = ""
     system_event_log_max_bytes: int = 1024 * 1024
     system_event_log_backup_count: int = 2
+    system_event_log_retention_days: int = 0
     event_store_enabled: bool = False
     event_store_path: str = ""
     event_log_queue_size: int = 1000
     realtime_log_detail: str = "events"
+    transcript_log_mode: str = "final"
 
 
 def read_channel_events(root):
@@ -173,7 +180,8 @@ def test_audit_logger_writes_json_and_archives_audio(tmp_path):
     assert payload["channel"] == "audit"
     assert payload["event"] == "transcription.completed"
     assert payload["meldung"] == "Transkription abgeschlossen"
-    assert payload["data"]["text"] == "Hallo Welt"
+    # Transcript content belongs exclusively to the transcription channel.
+    assert "text" not in payload["data"]
     assert payload["requestId"] == "abc"
     assert payload["timestamp"].endswith("Z")
     assert archive.endswith(".wav")
@@ -321,6 +329,229 @@ def test_event_hub_persists_and_publishes_session_scoped_events(tmp_path):
     assert history[0]["data"]["text"] == "Hallo"
     hub.unsubscribe(subscription)
     hub.close()
+
+
+def test_event_hub_redacts_secrets_audio_queries_and_transcripts_centrally(tmp_path):
+    settings = LogSettings(
+        request_log_path=str(tmp_path / "audit"),
+        performance_log_path=str(tmp_path / "performance"),
+        transcription_logging_enabled=True,
+        transcription_log_path=str(tmp_path / "transcription"),
+        event_store_enabled=True,
+        event_store_path=str(tmp_path / "events.sqlite3"),
+        transcript_log_mode="final",
+    )
+    hub = StructuredEventHub(settings)
+    received = []
+    subscription = hub.subscribe(received.append)
+
+    hub.emit(
+        "performance",
+        "inference.completed",
+        text="must not leak",
+        audio=b"raw-audio",
+        nested={
+            "authorization": "Bearer secret-token",
+            "access_token": "secret-token",
+            "safe": "visible",
+        },
+        requestUrl="https://example.test/path?token=secret",
+    )
+    hub.emit(
+        "transcription",
+        "transcription.completed",
+        text="final text",
+        authorization="Bearer secret-token",
+    )
+    hub.flush()
+
+    history = hub.query()
+    performance = next(
+        event for event in history if event["channel"] == "performance"
+    )
+    transcription = next(
+        event for event in history if event["channel"] == "transcription"
+    )
+    assert "text" not in performance["data"]
+    assert "audio" not in performance["data"]
+    assert performance["data"]["nested"] == {"safe": "visible"}
+    assert performance["data"]["requestUrl"] == "https://example.test/path"
+    assert transcription["data"]["text"] == "final text"
+    assert "authorization" not in transcription["data"]
+    assert all("secret-token" not in json.dumps(event) for event in received)
+
+    settings.transcript_log_mode = "none"
+    hub.configure(settings)
+    hub.emit(
+        "transcription",
+        "transcription.completed",
+        text="disabled text",
+    )
+    hub.flush()
+    assert "text" not in hub.query()[-1]["data"]
+
+    settings.transcript_log_mode = "full"
+    hub.configure(settings)
+    hub.emit(
+        "transcription",
+        "transcription.realtime_emitted",
+        text="realtime text",
+    )
+    hub.flush()
+    assert hub.query()[-1]["data"]["text"] == "realtime text"
+    hub.unsubscribe(subscription)
+    hub.close()
+
+
+def test_event_hub_cursor_remains_unique_after_store_write_failure(tmp_path):
+    settings = LogSettings(
+        request_log_stdout=False,
+        request_log_path=str(tmp_path / "audit"),
+        performance_logging_enabled=False,
+        system_event_logging_enabled=True,
+        system_event_log_path=str(tmp_path / "system"),
+        event_store_enabled=True,
+        event_store_path=str(tmp_path / "events.sqlite3"),
+    )
+    hub = StructuredEventHub(settings)
+    received = []
+    subscription = hub.subscribe(received.append)
+    original_append = hub._store.append
+    failed_once = False
+
+    def fail_first_append(event):
+        nonlocal failed_once
+        if not failed_once:
+            failed_once = True
+            raise OSError("simulated store outage")
+        return original_append(event)
+
+    hub._store.append = fail_first_append
+    hub.emit("audit", "session.accepted", sessionId="a")
+    hub.flush()
+    hub.emit("audit", "session.closed", sessionId="a")
+    hub.flush()
+
+    event_cursors = [
+        item["cursor"] for item in received if item.get("eventId")
+    ]
+    stored_cursors = [item["cursor"] for item in hub.query()]
+    store_gap = next(
+        item
+        for item in received
+        if item.get("_logControl") == "gap" and item.get("sink") == "store"
+    )
+    assert event_cursors == sorted(event_cursors)
+    assert len(event_cursors) == len(set(event_cursors))
+    assert stored_cursors == sorted(stored_cursors)
+    assert len(stored_cursors) == len(set(stored_cursors))
+    assert store_gap["cursor"] not in stored_cursors
+    assert hub.latest_cursor() == max(event_cursors)
+    assert any(item.get("event") == "storage.failed" for item in received)
+    hub.unsubscribe(subscription)
+    hub.close()
+
+
+def test_event_hub_overload_never_blocks_emit_and_reports_gap(tmp_path):
+    settings = LogSettings(
+        request_logging_enabled=False,
+        performance_log_path=str(tmp_path / "performance"),
+        event_log_queue_size=1,
+    )
+    hub = StructuredEventHub(settings)
+    received = []
+    subscription = hub.subscribe(received.append)
+    sink = hub._sinks["performance"]
+    original_write = sink.write
+    writer_entered = threading.Event()
+    release_writer = threading.Event()
+    first_write = True
+
+    def slow_first_write(event):
+        nonlocal first_write
+        if first_write:
+            first_write = False
+            writer_entered.set()
+            release_writer.wait(timeout=2)
+        original_write(event)
+
+    sink.write = slow_first_write
+    hub.emit("performance", "inference.completed", sequence=0)
+    assert writer_entered.wait(timeout=1)
+
+    started = time.monotonic()
+    for sequence in range(1, 100):
+        hub.emit(
+            "performance",
+            "transcription.realtime_emitted",
+            sequence=sequence,
+        )
+    elapsed = time.monotonic() - started
+    release_writer.set()
+    hub.flush()
+
+    assert elapsed < 0.25
+    assert hub.drop_counts().get("file", 0) > 0
+    assert any(
+        item.get("_logControl") == "gap" and item.get("sink") == "file"
+        for item in received
+    )
+    hub.unsubscribe(subscription)
+    hub.close()
+
+
+def test_calendar_and_sqlite_retention_are_opt_in_and_channel_scoped(tmp_path):
+    root = tmp_path / "audit"
+    old_path = root / "2026-05" / "2026-05-01.jsonl"
+    old_path.parent.mkdir(parents=True)
+    old_path.write_text("{}\n", encoding="utf-8")
+    disabled = CalendarJsonlSink(root, "Europe/Berlin", retention_days=0)
+    disabled.write({"timestamp": "2026-07-31T12:00:00.000Z", "event": "keep"})
+    disabled.close()
+    assert old_path.is_file()
+
+    enabled = CalendarJsonlSink(root, "Europe/Berlin", retention_days=30)
+    enabled.write({"timestamp": "2026-08-01T12:00:00.000Z", "event": "prune"})
+    enabled.close()
+    assert not old_path.exists()
+
+    store_path = tmp_path / "events.sqlite3"
+    store = SQLiteEventStore(store_path)
+    common = {
+        "schemaVersion": 1,
+        "cursor": None,
+        "channel": "audit",
+        "severity": "info",
+        "serverInstanceId": "server",
+        "transport": "http",
+        "clientId": None,
+        "sessionId": None,
+        "requestId": None,
+        "transcriptionId": None,
+        "segmentId": None,
+        "data": {},
+    }
+    store.append(dict(
+        common,
+        eventId="old",
+        event="session.closed",
+        timestamp="2020-01-01T00:00:00.000Z",
+    ))
+    store.close()
+
+    reopened = SQLiteEventStore(store_path)
+    reopened.set_retention({"audit": 30})
+    new_cursor = reopened.append(dict(
+        common,
+        eventId="new",
+        event="session.accepted",
+        timestamp=datetime.now(timezone.utc).isoformat(
+            timespec="milliseconds"
+        ).replace("+00:00", "Z"),
+    ))
+    assert [event["eventId"] for event in reopened.query()] == ["new"]
+    assert new_cursor > 1
+    reopened.close()
 
 
 def test_recorder_logger_configuration_is_idempotent_and_keeps_external_handlers():

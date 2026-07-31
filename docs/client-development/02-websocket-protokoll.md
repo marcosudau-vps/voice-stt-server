@@ -53,8 +53,9 @@ sequenceDiagram
 
 ### Handshake-Regeln
 
-- `hello` bestätigt die Aufnahme der Session und liefert die zugewiesene
-  `sessionId` (identisch mit `clientId`).
+- `hello` bestätigt die Aufnahme der Session und liefert die neue `sessionId`
+  sowie die separat vom Client übermittelte oder serverseitig erzeugte
+  `clientId`. Beide IDs haben unterschiedliche Lebenszyklen.
 - `hello.logAccess` liefert einen kurzlebigen, auf diese Session begrenzten
   Zugriff auf `/ws/logs` und `/api/logs/events`. Der Token gehört in Header
   beziehungsweise erste Subscribe-Nachricht, nicht in eine URL.

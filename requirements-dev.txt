@@ -1,0 +1,6 @@
+-r api_fastapi_server/requirements.txt
+
+# Test runner and FastAPI/TestClient test dependencies.
+pytest>=8.0
+httpx>=0.27
+python-multipart>=0.0.9

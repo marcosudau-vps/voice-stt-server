@@ -17,6 +17,7 @@ KROKO_MODEL_ROOT_ENV = "VOICESTT_KROKO_MODEL_ROOT"
 OPENWAKEWORD_MODEL_ROOT_ENV = "VOICESTT_OPENWAKEWORD_MODEL_ROOT"
 
 AUDIT_EVENT_MESSAGES_DE = {
+    "authentication.failed": "Authentifizierung fehlgeschlagen",
     "config.updated": "Konfiguration aktualisiert",
     "language.updated": "Sprache aktualisiert",
     "models.loaded": "Modelle geladen",
@@ -42,6 +43,7 @@ PERFORMANCE_EVENT_MESSAGES_DE = {
     "models.loaded": "Modelle geladen",
     "models.switched": "Modelle gewechselt",
     "models.unloaded": "Modelle aus dem RAM entladen",
+    "queue.limit_reached": "Scheduler-Limit erreicht",
     "stream.final_text": "Finaler Streamtext ausgegeben",
     "stream.first_text": "Erster Streamtext ausgegeben",
     "transcription.performance_summary": "Transkriptionsleistung zusammengefasst",
