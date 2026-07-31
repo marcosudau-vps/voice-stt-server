@@ -31,6 +31,7 @@ from .voice_activity import warmup_voice_activity_detectors
 
 
 logger = logging.getLogger("voicestt")
+_logger_configuration_lock = threading.RLock()
 
 
 def initialize_recorder(
@@ -309,30 +310,55 @@ def _configure_logger(recorder, no_log_file, init_args=None):
     Uses the package's historical default handlers.
     """
 
-    logger.setLevel(logging.DEBUG)  # We capture all, then filter via handlers
+    with _logger_configuration_lock:
+        logger.setLevel(logging.DEBUG)  # Handlers apply the requested output level.
 
-    log_format = "RealTimeSTT: %(name)s - %(levelname)s - %(message)s"
-    if init_args is not None:
-        init_args["log_format"] = log_format
-    file_log_format = "%(asctime)s.%(msecs)03d - " + log_format
-    if init_args is not None:
-        init_args["file_log_format"] = file_log_format
-
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(recorder.level)
-    console_handler.setFormatter(logging.Formatter(log_format))
-    if init_args is not None:
-        init_args["console_handler"] = console_handler
-
-    logger.addHandler(console_handler)
-
-    if not no_log_file:
-        file_handler = logging.FileHandler('realtimesst.log')
-        file_handler.setLevel(logging.DEBUG)
-        file_handler.setFormatter(logging.Formatter(file_log_format, datefmt='%Y-%m-%d %H:%M:%S'))
+        log_format = "RealTimeSTT: %(name)s - %(levelname)s - %(message)s"
         if init_args is not None:
-            init_args["file_handler"] = file_handler
-        logger.addHandler(file_handler)
+            init_args["log_format"] = log_format
+        file_log_format = "%(asctime)s.%(msecs)03d - " + log_format
+        if init_args is not None:
+            init_args["file_log_format"] = file_log_format
+
+        console_handler = next(
+            (
+                handler
+                for handler in logger.handlers
+                if getattr(handler, "_voicestt_console_handler", False)
+            ),
+            None,
+        )
+        if console_handler is None:
+            console_handler = logging.StreamHandler()
+            console_handler._voicestt_console_handler = True
+            logger.addHandler(console_handler)
+        console_handler.setLevel(recorder.level)
+        console_handler.setFormatter(logging.Formatter(log_format))
+        if init_args is not None:
+            init_args["console_handler"] = console_handler
+
+        if not no_log_file:
+            file_handler = next(
+                (
+                    handler
+                    for handler in logger.handlers
+                    if getattr(handler, "_voicestt_file_handler", False)
+                ),
+                None,
+            )
+            if file_handler is None:
+                file_handler = logging.FileHandler("realtimesst.log")
+                file_handler._voicestt_file_handler = True
+                logger.addHandler(file_handler)
+            file_handler.setLevel(logging.DEBUG)
+            file_handler.setFormatter(
+                logging.Formatter(
+                    file_log_format,
+                    datefmt="%Y-%m-%d %H:%M:%S",
+                )
+            )
+            if init_args is not None:
+                init_args["file_handler"] = file_handler
 
 
 def _initialize_shutdown_state(recorder):

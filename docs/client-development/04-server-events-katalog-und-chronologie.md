@@ -104,6 +104,7 @@ erreichtem Sessionlimit gibt es kein `hello`, sondern einen Admission-Fehler.
 | `limits` | Object | kompakte Kapazitätsgrenzen |
 | `supportedEngines` | Array | Namen der im Code registrierten Transkriptionsengines |
 | `runtimeSettings` | Object | Listen `activeSessionSafe`, `newSessionOnly`, `startupOnly` |
+| `logAccess` | Object | sessiongebundener Token sowie Pfade für Live- und historische strukturierte Logs |
 
 `limits` enthält exakt:
 
@@ -143,9 +144,21 @@ aktualisieren, aber auf `ready` warten.
     "activeSessionSafe": ["max_sessions"],
     "newSessionOnly": ["wake_words"],
     "startupOnly": ["model"]
+  },
+  "logAccess": {
+    "websocketPath": "/ws/logs",
+    "historyPath": "/api/logs/events",
+    "accessToken": "…",
+    "sessionId": "7cb1…",
+    "expiresAt": "2026-07-31T14:26:41.537Z"
   }
 }
 ```
+
+Der Log-Token ist nur für Ereignisse dieser Session und die Kanäle `audit`,
+`transcription` und `performance` gültig. Details zu Replay, Cursor und
+Historienabruf stehen unter
+[Structured logging and client log access](../structured-logging.md).
 
 Die gekürzten Arrays im Beispiel sind nicht vollständig.
 

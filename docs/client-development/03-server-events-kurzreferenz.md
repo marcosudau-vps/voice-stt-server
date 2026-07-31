@@ -10,7 +10,7 @@ einen Client senden.
 
 | `type` | Scope | Wann | Kernfelder | Empfohlene Clientreaktion |
 | --- | --- | --- | --- | --- |
-| `hello` | Session | direkt nach Annahme | `sessionId`, `clientId`, `settings`, `limits`, `supportedEngines`, `runtimeSettings` | Session initialisieren; noch nicht streamen |
+| `hello` | Session | direkt nach Annahme | `sessionId`, `clientId`, `settings`, `limits`, `supportedEngines`, `runtimeSettings`, `logAccess` | Session initialisieren; noch nicht streamen |
 | `ready` | Server bzw. Session | Modelle/Service bereit oder bereits bereit | `ok`, `settings`, `limits`, `runtimeSettings`, optional `sessionId`, `models` | Audiostart bei `ok: true` freigeben |
 | `status` | Session | Start/Stop, VAD, Aufnahme, Transkription, Wake-Zustand | `state`, `queueDepth`, Drops, Aktivzahlen, Wake-Info, Zeit | UI-/Zustandsanzeige aktualisieren |
 | `timeline` | Session | fachlicher Stream-Meilenstein | `event`, Zeit, optional `segmentId`, `segment` und eventspezifische Felder | Historie/Diagnose aktualisieren; nicht als Transkriptquelle verwenden |

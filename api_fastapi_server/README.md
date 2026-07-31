@@ -328,6 +328,13 @@ Transcript-bearing events include `sessionId` and are routed only to that
 session. `clear` resets only the issuing session and discards pending stale
 results from earlier session generations.
 
+`hello.logAccess` provides a short-lived session-scoped token for the separate
+`/ws/logs` connection and `/api/logs/events` history endpoint. Structured
+events use the `system`, `audit`, `transcription`, and `performance` channels.
+The log WebSocket supports cursor replay followed by live delivery without
+mixing log traffic into the audio/transcription socket. See
+`docs/structured-logging.md` for the event schema and subscription protocol.
+
 Wake Word behavior can be selected per connection:
 
 ```text

@@ -51,7 +51,7 @@ startup error; runtime model downloads are not attempted.
   --language de --device cpu --compute-type int8 `
   --admin-api-key "replace-this-admin-key" `
   --runtime-config ".\data\config\runtime.json" `
-  --request-log-path ".\data\logs\voicestt-requests.jsonl" `
+  --request-log-path ".\data\logs\audit" `
   --max-sessions 8 --max-active-speakers 4
 ```
 
@@ -140,8 +140,9 @@ switch. Other connected clients must be disconnected first. Runtime changes are
 atomically persisted when `--runtime-config` is configured; API and admin keys
 are never written to that file.
 
-Request events are one-line JSON, suitable for both stdout/Dozzle and rotating
-files. They include request ID, chosen model/lane, timings, language, status and,
+Request events are one-line JSON, suitable for both stdout/Dozzle and
+calendar-organized files below `YYYY-MM\YYYY-MM-DD.jsonl`. They include request
+ID, chosen model/lane, timings, language, status and,
 when enabled, transcript text. Uploaded audio archiving is opt-in. Configure it
 with `--request-logging`, `--request-log-stdout`, `--request-log-path`,
 `--request-log-transcripts`, `--save-audio-files`, and `--audio-log-dir` or use
@@ -150,8 +151,8 @@ with `--request-logging`, `--request-log-stdout`, `--request-log-path`,
 Performance measurements use their own transcript-free JSONL channel. Enable
 and route it with `--performance-logging`, `--performance-log-stdout`, and
 `--performance-log-path` (or the matching `VOICESTT_PERFORMANCE_*`
-variables). The Docker default writes `/data/logs/voicestt-performance.jsonl`
-and mirrors the same events to stdout for Dozzle. These events contain model
+variables). The Docker default writes below `/data/logs/performance/` and
+mirrors the same events to stdout for Dozzle. These events contain model
 load/unload RAM deltas, queue/inference/total latency, realtime factor, time to
 first realtime text, and finalization latency.
 

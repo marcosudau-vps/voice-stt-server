@@ -131,15 +131,22 @@ Die Einteilung ist deshalb Teil des aktuell implementierten Verwaltungsvertrags.
 | `realtime_degradation_threshold_ms` | Schwelle für degradierte Realtime-Planung |
 | `request_logging_enabled` | Audit-/Request-Logging aktiv |
 | `request_log_stdout` | Audit-Events zusätzlich auf stdout |
-| `request_log_path` | Audit-JSONL-Datei |
+| `request_log_path` | Wurzelverzeichnis des Audit-Kanals |
 | `request_log_transcripts` | Transkripttext in Audit-Logs aufnehmen |
 | `request_log_max_bytes` | Rotationsgröße der Audit-Datei |
 | `request_log_backup_count` | Anzahl Audit-Backups |
 | `performance_logging_enabled` | Performance-Kanal aktiv |
 | `performance_log_stdout` | Performance-Events zusätzlich auf stdout |
-| `performance_log_path` | Performance-JSONL-Datei |
+| `performance_log_path` | Wurzelverzeichnis des Performance-Kanals |
 | `performance_log_max_bytes` | Rotationsgröße der Performance-Datei |
 | `performance_log_backup_count` | Anzahl Performance-Backups |
+| `transcription_logging_enabled` | transportübergreifender Transkriptionskanal aktiv |
+| `transcription_log_path` | Wurzelverzeichnis des Transkriptionskanals |
+| `system_event_logging_enabled` | strukturierter Systemkanal aktiv |
+| `system_event_log_path` | Wurzelverzeichnis des Systemkanals |
+| `log_calendar_timezone` | Zeitzone für Monats-/Tagesordner |
+| `realtime_log_detail` | Realtime-Messung `off`, `summary` oder `events` |
+| `log_live_enabled` | separaten Live-Log-WebSocket aktivieren |
 | `save_audio_files` | Upload-/Anfrageaudio archivieren |
 
 ### `newSessionOnly` – Kopie beim Session-Aufbau
@@ -226,8 +233,8 @@ mutiert wird. Beispiele:
 - Globale Limits wie `max_sessions`, `max_active_speakers` und
   `max_audio_packet_bytes` werden direkt aus dem geteilten Settings-Objekt
   gelesen und wirken auf laufende Serverlogik.
-- `log_level` wird als Setting geändert; die bereits initialisierte Python-
-  Logging-Konfiguration wird durch `update_settings` nicht erneut gesetzt.
+- `log_level` wird unmittelbar auf Root-, FastAPI-, Uvicorn- und den verwalteten
+  VoiceSTT-Console-Logger angewendet.
 
 Für vorhersehbares Verhalten sollte ein Admin-Client nach größeren
 Konfigurationsänderungen neue WebSocket-Sessions aufbauen.
@@ -251,9 +258,6 @@ sind:
   nicht neu. Der neue Wert wird für neu erzeugte Recorder kopiert und spätestens
   bei einem späteren Worker-Neuladen/Modellwechsel auch für die Shared Engine
   wirksam.
-- `log_level` wird als Runtimewert akzeptiert, `update_settings` setzt aber den
-  bereits durch `logging.basicConfig` initialisierten Root-Logger nicht neu.
-
 Clientcode sollte diese Werte hauptsächlich zur Diagnose anzeigen und nicht aus
 ihnen stärkere Laufzeitgarantien ableiten, als die beobachteten Events liefern.
 
@@ -295,7 +299,8 @@ Transcript-Events werden mit `publish_session(sessionId, ...)` gezielt an die
 zugehörige Verbindung gesendet. `ready` und Startfehler können bewusst über
 `publish_all(...)` an alle Verbindungen gehen. Audio wird nicht broadcastet.
 
-Serverweite Audit-Logs können – abhängig von `request_log_transcripts` –
-Transkripttext enthalten. Bei `save_audio_files: true` kann außerdem Audio auf
-dem Server persistiert werden. Stream-Isolation bedeutet daher nicht
-automatisch, dass keine serverweite Protokollierung stattfindet.
+Audit- und Transkriptionslogs können – abhängig von
+`request_log_transcripts` – Transkripttext enthalten. Bei
+`save_audio_files: true` kann außerdem Audio auf dem Server persistiert werden.
+Stream-Isolation bedeutet daher nicht automatisch, dass keine serverweite
+Protokollierung stattfindet.

@@ -84,15 +84,31 @@ settings:
   # Protokollierung und Laufzeitdaten
   request_logging_enabled: true
   request_log_stdout: true
-  request_log_path: /data/logs/voicestt-requests.jsonl
+  request_log_path: /data/logs/audit
   request_log_transcripts: true
   request_log_max_bytes: 10485760
   request_log_backup_count: 12
   performance_logging_enabled: true
   performance_log_stdout: true
-  performance_log_path: /data/logs/voicestt-performance.jsonl
+  performance_log_path: /data/logs/performance
   performance_log_max_bytes: 10485760
   performance_log_backup_count: 12
+  transcription_logging_enabled: true
+  transcription_log_stdout: false
+  transcription_log_path: /data/logs/transcription
+  transcription_log_max_bytes: 10485760
+  transcription_log_backup_count: 12
+  system_event_logging_enabled: true
+  system_event_log_stdout: false
+  system_event_log_path: /data/logs/system
+  system_event_log_max_bytes: 10485760
+  system_event_log_backup_count: 12
+  log_calendar_timezone: Europe/Berlin
+  realtime_log_detail: events
+  event_store_enabled: true
+  event_store_path: /data/logs/voicestt-events.sqlite3
+  event_log_queue_size: 10000
+  log_live_enabled: true
   save_audio_files: false
   audio_log_dir: /data/logs/audio
   runtime_config_path: /data/config/runtime.json

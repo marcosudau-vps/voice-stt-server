@@ -499,11 +499,52 @@ def test_structured_request_log_contains_completed_event(tmp_path):
         )
 
     assert response.status_code == 200
-    events = [json.loads(line) for line in log_path.read_text(encoding="utf-8").splitlines()]
+    log_files = list((tmp_path / "requests").glob("*/*.jsonl"))
+    assert len(log_files) == 1
+    events = [
+        json.loads(line)
+        for line in log_files[0].read_text(encoding="utf-8").splitlines()
+    ]
     completed = next(event for event in events if event["event"] == "transcription.completed")
-    assert completed["text"] == "hello world"
-    assert completed["language"] == "de"
+    assert completed["data"]["text"] == "hello world"
+    assert completed["data"]["language"] == "de"
     assert completed["requestId"] == response.headers["x-request-id"]
+
+
+def test_log_history_api_returns_unified_http_transcription_events(tmp_path):
+    settings = ServerSettings(
+        model_warmup=False,
+        request_log_stdout=False,
+        request_log_path=str(tmp_path / "audit"),
+        performance_log_stdout=False,
+        performance_log_path=str(tmp_path / "performance"),
+        transcription_log_path=str(tmp_path / "transcription"),
+        system_event_log_path=str(tmp_path / "system"),
+        event_store_path=str(tmp_path / "events.sqlite3"),
+    )
+    app = create_app(settings, scheduler_factory=ImmediateScheduler)
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/audio/transcriptions",
+            data={"model": "whisper-1"},
+            files={"file": ("sample.wav", wav_bytes(), "audio/wav")},
+        )
+        request_id = response.headers["x-request-id"]
+        history = client.get(
+            "/api/logs/events",
+            params={
+                "sessionId": request_id,
+                "channels": "transcription,performance",
+            },
+        )
+
+    assert history.status_code == 200
+    events = history.json()["data"]
+    names = {event["event"] for event in events}
+    assert "transcription.started" in names
+    assert "transcription.completed" in names
+    assert all(event["sessionId"] == request_id for event in events)
+    assert all(event["transport"] == "http" for event in events)
 
 
 def test_model_switch_uses_only_mounted_models_and_reloads_workers(tmp_path, monkeypatch):

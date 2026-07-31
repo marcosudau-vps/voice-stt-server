@@ -349,6 +349,11 @@ class FakeRecorder:
 
 def make_service(**overrides):
     model_warmup = overrides.pop("model_warmup", False)
+    overrides.setdefault("request_logging_enabled", False)
+    overrides.setdefault("performance_logging_enabled", False)
+    overrides.setdefault("transcription_logging_enabled", False)
+    overrides.setdefault("system_event_logging_enabled", False)
+    overrides.setdefault("event_store_enabled", False)
     settings = ServerSettings(
         model_warmup=model_warmup,
         realtime_processing_pause=0.0,
@@ -894,6 +899,164 @@ else:
 
 @unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
 class FastAPIMultiUserWebSocketTests(unittest.TestCase):
+    def test_session_log_websocket_replays_more_than_one_page(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = ServerSettings(
+                model_warmup=False,
+                request_log_stdout=False,
+                request_log_path=str(root / "audit"),
+                performance_log_stdout=False,
+                performance_log_path=str(root / "performance"),
+                transcription_log_path=str(root / "transcription"),
+                system_event_log_path=str(root / "system"),
+                event_store_path=str(root / "events.sqlite3"),
+            )
+            app = create_app(
+                settings,
+                scheduler_factory=AutoScheduler,
+                recorder_factory=FakeRecorder,
+            )
+
+            with TestClient(app) as client:
+                with client.websocket_connect("/ws/transcribe") as transcribe:
+                    hello = transcribe.receive_json()
+                    session_id = hello["sessionId"]
+                    access = hello["logAccess"]
+                    for sequence in range(1005):
+                        app.state.voicestt_service.events.emit(
+                            "transcription",
+                            "transcription.realtime_test",
+                            sessionId=session_id,
+                            transcriptionId=f"{session_id}:test",
+                            sequence=sequence,
+                        )
+                    app.state.voicestt_service.events.flush()
+
+                    with client.websocket_connect("/ws/logs") as logs:
+                        logs.send_json({
+                            "type": "subscribe",
+                            "accessToken": access["accessToken"],
+                            "sessionId": session_id,
+                            "channels": ["transcription"],
+                            "afterCursor": 0,
+                        })
+                        self.assertEqual(logs.receive_json()["type"], "log.hello")
+                        replayed = 0
+                        while True:
+                            message = logs.receive_json()
+                            if message["type"] == "log.event":
+                                replayed += 1
+                            elif message["type"] == "log.replay_completed":
+                                self.assertEqual(message["count"], 1005)
+                                break
+                        self.assertEqual(replayed, 1005)
+
+    def test_session_log_websocket_replays_and_streams_only_own_events(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            settings = ServerSettings(
+                model_warmup=False,
+                realtime_processing_pause=0.0,
+                realtime_min_audio_seconds=0.01,
+                min_length_of_recording=0.0,
+                post_speech_silence_duration=60.0,
+                request_log_stdout=False,
+                request_log_path=str(root / "audit"),
+                performance_log_stdout=False,
+                performance_log_path=str(root / "performance"),
+                transcription_log_path=str(root / "transcription"),
+                system_event_log_path=str(root / "system"),
+                event_store_path=str(root / "events.sqlite3"),
+            )
+            app = create_app(
+                settings,
+                scheduler_factory=AutoScheduler,
+                recorder_factory=FakeRecorder,
+            )
+
+            with TestClient(app) as client:
+                with client.websocket_connect("/ws/transcribe") as transcribe:
+                    hello = transcribe.receive_json()
+                    session_id = hello["sessionId"]
+                    access = hello["logAccess"]
+                    forbidden_history = client.get(
+                        "/api/logs/events",
+                        params={
+                            "sessionId": session_id,
+                            "channels": "system",
+                        },
+                        headers={
+                            "X-VoiceSTT-Log-Token": access["accessToken"],
+                        },
+                    )
+                    self.assertEqual(forbidden_history.status_code, 200)
+                    self.assertEqual(forbidden_history.json()["data"], [])
+
+                    with client.websocket_connect("/ws/logs") as forbidden_logs:
+                        forbidden_logs.send_json({
+                            "type": "subscribe",
+                            "accessToken": access["accessToken"],
+                            "sessionId": session_id,
+                            "channels": ["system"],
+                            "afterCursor": 0,
+                        })
+                        self.assertEqual(
+                            forbidden_logs.receive_json()["type"],
+                            "log.hello",
+                        )
+                        forbidden_replay = forbidden_logs.receive_json()
+                        self.assertEqual(
+                            forbidden_replay["type"],
+                            "log.replay_completed",
+                        )
+                        self.assertEqual(forbidden_replay["count"], 0)
+
+                    with client.websocket_connect("/ws/logs") as logs:
+                        logs.send_json({
+                            "type": "subscribe",
+                            "accessToken": access["accessToken"],
+                            "sessionId": session_id,
+                            "channels": ["audit", "transcription", "performance"],
+                            "afterCursor": 0,
+                        })
+                        self.assertEqual(logs.receive_json()["type"], "log.hello")
+                        while True:
+                            replay_message = logs.receive_json()
+                            if replay_message["type"] == "log.replay_completed":
+                                break
+
+                        transcribe.send_text('{"type":"start"}')
+                        transcribe.send_bytes(encode_audio_packet(
+                            {
+                                "sampleRate": 16000,
+                                "channels": 1,
+                                "format": "pcm_s16le",
+                                "frames": 640,
+                            },
+                            np.full(640, 2000, dtype=np.int16).tobytes(),
+                        ))
+                        transcribe.send_text('{"type":"stop"}')
+                        self._receive_type(transcribe, "final")
+
+                        received = []
+                        while "transcription.completed" not in {
+                            event["event"] for event in received
+                        }:
+                            message = logs.receive_json()
+                            if message["type"] == "log.event":
+                                received.append(message["event"])
+
+                        self.assertTrue(received)
+                        self.assertTrue(all(
+                            event.get("sessionId") == session_id
+                            for event in received
+                        ))
+                        self.assertIn(
+                            "transcription.completed",
+                            {event["event"] for event in received},
+                        )
+
     def test_config_endpoint_exposes_and_updates_runtime_settings(self):
         settings = ServerSettings(model_warmup=False, max_sessions=1)
         app = create_app(settings, scheduler_factory=AutoScheduler, recorder_factory=FakeRecorder)

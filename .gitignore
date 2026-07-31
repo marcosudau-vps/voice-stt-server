@@ -200,6 +200,7 @@ test_outputs/
 .playwright-mcp/
 output/playwright/
 .test-tmp*/
+.pytest-tmp/
 .pytest_tmp/
 .pytest_runtime*/
 data/

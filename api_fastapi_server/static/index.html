@@ -887,6 +887,11 @@
 
     const state = {
       socket: null,
+      logSocket: null,
+      logCursor: 0,
+      logSessionId: null,
+      logAccess: null,
+      logReconnectTimer: null,
       clientId: null,
       connected: false,
       streaming: false,
@@ -1090,6 +1095,67 @@
     function wsUrl() {
       const proto = location.protocol === "https:" ? "wss:" : "ws:";
       return proto + "//" + location.host + "/ws/transcribe";
+    }
+
+    function logWsUrl(path) {
+      const proto = location.protocol === "https:" ? "wss:" : "ws:";
+      return proto + "//" + location.host + (path || "/ws/logs");
+    }
+
+    function connectLogSocket(logAccess) {
+      if (!logAccess?.accessToken || !logAccess?.sessionId) return;
+      state.logAccess = logAccess;
+      clearTimeout(state.logReconnectTimer);
+      state.logReconnectTimer = null;
+      if (state.logSocket) {
+        state.logSocket.onclose = null;
+        state.logSocket.close();
+      }
+      if (state.logSessionId !== logAccess.sessionId) {
+        state.logCursor = 0;
+        state.logSessionId = logAccess.sessionId;
+      }
+
+      const socket = new WebSocket(logWsUrl(logAccess.websocketPath));
+      state.logSocket = socket;
+      socket.onopen = () => {
+        socket.send(JSON.stringify({
+          type: "subscribe",
+          accessToken: logAccess.accessToken,
+          sessionId: logAccess.sessionId,
+          channels: ["audit", "transcription", "performance"],
+          afterCursor: state.logCursor
+        }));
+      };
+      socket.onmessage = event => {
+        const message = JSON.parse(event.data);
+        if (message.type === "log.event" && message.event) {
+          const entry = message.event;
+          state.logCursor = Math.max(state.logCursor, Number(entry.cursor) || 0);
+          const detail = entry.meldung
+            ? `${entry.channel} · ${entry.meldung}`
+            : entry.channel;
+          addEvent(entry.event, detail, Date.parse(entry.timestamp) / 1000);
+        } else if (message.type === "log.gap") {
+          addEvent("Log-Lücke", `${message.dropped || 0} Ereignisse verworfen`);
+          socket.close();
+        } else if (message.type === "log.error") {
+          addEvent("Log-Verbindung abgelehnt", message.message);
+        }
+      };
+      socket.onerror = () => addEvent("Live-Log-Verbindung fehlgeschlagen");
+      socket.onclose = () => {
+        if (
+          state.logSocket === socket
+          && state.connected
+          && state.logAccess?.sessionId === logAccess.sessionId
+        ) {
+          state.logReconnectTimer = setTimeout(
+            () => connectLogSocket(state.logAccess),
+            1000
+          );
+        }
+      };
     }
 
     function adminHeaders(includeJson = false) {
@@ -1360,6 +1426,14 @@
 
         socket.onclose = () => {
           state.connected = false;
+          state.logAccess = null;
+          clearTimeout(state.logReconnectTimer);
+          state.logReconnectTimer = null;
+          if (state.logSocket) {
+            state.logSocket.onclose = null;
+            state.logSocket.close();
+            state.logSocket = null;
+          }
           setServerState("Getrennt", "wait");
           addEvent("WebSocket getrennt");
         };
@@ -1370,6 +1444,7 @@
       if (message.type === "hello") {
         state.clientId = message.clientId;
         applySettings(message.settings);
+        connectLogSocket(message.logAccess);
       } else if (message.type === "ready") {
         applySettings(message.settings);
         setServerState("Bereit", "ready");

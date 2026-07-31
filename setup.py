@@ -189,6 +189,7 @@ server_requirements = [
     "sse-starlette",
     "httpx",
     "PyYAML>=6.0",
+    "tzdata",
 ]
 app_talk_with_llm_requirements = [
     "RealtimeTTS[edge,system]==0.7.3",

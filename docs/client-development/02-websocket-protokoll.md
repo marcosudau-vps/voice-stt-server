@@ -55,6 +55,9 @@ sequenceDiagram
 
 - `hello` bestätigt die Aufnahme der Session und liefert die zugewiesene
   `sessionId` (identisch mit `clientId`).
+- `hello.logAccess` liefert einen kurzlebigen, auf diese Session begrenzten
+  Zugriff auf `/ws/logs` und `/api/logs/events`. Der Token gehört in Header
+  beziehungsweise erste Subscribe-Nachricht, nicht in eine URL.
 - `ready` kann direkt nach `hello` oder später eintreffen.
 - Jede `ready`-Nachricht ist sessionspezifisch und enthält dieselbe
   `sessionConfig` wie `hello`.

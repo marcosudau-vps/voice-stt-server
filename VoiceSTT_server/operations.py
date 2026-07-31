@@ -1,17 +1,16 @@
 """Operational helpers for model discovery, audit logging, and runtime config."""
 
 import json
-import logging
 import os
 import sys
 import threading
 import uuid
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 from VoiceSTT.core.openwakeword_catalog import OpenWakeWordCatalog
+from VoiceSTT_server.event_logging import ChannelLogManager
 
 FASTER_MODEL_ROOT_ENV = "VOICESTT_FASTER_WHISPER_MODEL_ROOT"
 KROKO_MODEL_ROOT_ENV = "VOICESTT_KROKO_MODEL_ROOT"
@@ -30,6 +29,9 @@ AUDIT_EVENT_MESSAGES_DE = {
     "websocket.connected": "WebSocket verbunden",
     "websocket.disconnected": "WebSocket getrennt",
     "websocket.session_config_rejected": "WebSocket-Sitzungskonfiguration abgelehnt",
+    "session.accepted": "Sitzung angenommen",
+    "session.closed": "Sitzung beendet",
+    "session.rejected": "Sitzung abgelehnt",
 }
 
 PERFORMANCE_EVENT_MESSAGES_DE = {
@@ -42,6 +44,8 @@ PERFORMANCE_EVENT_MESSAGES_DE = {
     "models.unloaded": "Modelle aus dem RAM entladen",
     "stream.final_text": "Finaler Streamtext ausgegeben",
     "stream.first_text": "Erster Streamtext ausgegeben",
+    "transcription.performance_summary": "Transkriptionsleistung zusammengefasst",
+    "transcription.realtime_emitted": "Realtime-Transkript ausgegeben",
 }
 
 
@@ -264,58 +268,31 @@ class WakeWordRegistry:
 
 
 class AuditLogManager:
-    """Write the same structured request events to stdout and a rotating file."""
+    """Compatibility facade for structured audit events and audio archives."""
 
-    def __init__(self, settings):
-        self._lock = threading.RLock()
-        self.logger = logging.getLogger("voicestt.audit")
-        self.logger.propagate = False
+    def __init__(self, settings, event_hub=None):
+        self._manager = ChannelLogManager(
+            settings,
+            "audit",
+            AUDIT_EVENT_MESSAGES_DE,
+            event_hub,
+        )
         self.configure(settings)
 
-    def configure(self, settings):
-        with self._lock:
-            for handler in list(self.logger.handlers):
-                self.logger.removeHandler(handler)
-                try:
-                    handler.close()
-                except Exception:
-                    pass
-            self.enabled = bool(settings.request_logging_enabled)
-            self.include_transcripts = bool(settings.request_log_transcripts)
-            self.save_audio = bool(settings.save_audio_files)
-            self.audio_dir = Path(settings.audio_log_dir or "logs/audio").expanduser()
-            self.logger.setLevel(logging.INFO)
-            formatter = logging.Formatter("%(message)s")
-            if self.enabled and settings.request_log_stdout:
-                stream = logging.StreamHandler()
-                stream.setFormatter(formatter)
-                self.logger.addHandler(stream)
-            if self.enabled and settings.request_log_path:
-                path = Path(settings.request_log_path).expanduser()
-                path.parent.mkdir(parents=True, exist_ok=True)
-                file_handler = RotatingFileHandler(
-                    path,
-                    maxBytes=int(settings.request_log_max_bytes),
-                    backupCount=int(settings.request_log_backup_count),
-                    encoding="utf-8",
-                )
-                file_handler.setFormatter(formatter)
-                self.logger.addHandler(file_handler)
-            if self.save_audio:
-                self.audio_dir.mkdir(parents=True, exist_ok=True)
+    @property
+    def hub(self):
+        return self._manager.hub
+
+    def configure(self, settings, configure_hub=True):
+        if configure_hub:
+            self._manager.configure(settings)
+        self.save_audio = bool(settings.save_audio_files)
+        self.audio_dir = Path(settings.audio_log_dir or "logs/audio").expanduser()
+        if self.save_audio:
+            self.audio_dir.mkdir(parents=True, exist_ok=True)
 
     def event(self, event, **fields):
-        if not self.enabled:
-            return
-        payload = {
-            "timestamp": _utc_now(),
-            "event": event,
-            "meldung": AUDIT_EVENT_MESSAGES_DE.get(event, event),
-        }
-        payload.update({key: value for key, value in fields.items() if value is not None})
-        if not self.include_transcripts:
-            payload.pop("text", None)
-        self.logger.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str))
+        return self._manager.event(event, **fields)
 
     def archive_audio(self, data, original_filename, request_id):
         if not self.save_audio:
@@ -328,71 +305,32 @@ class AuditLogManager:
         return str(path.resolve())
 
     def close(self):
-        with self._lock:
-            for handler in list(self.logger.handlers):
-                self.logger.removeHandler(handler)
-                try:
-                    handler.close()
-                except Exception:
-                    pass
+        self._manager.close()
 
 
 class PerformanceLogManager:
-    """Write operational performance measurements to a separate JSONL channel."""
+    """Compatibility facade for operational performance events."""
 
-    def __init__(self, settings):
-        self._lock = threading.RLock()
-        self.logger = logging.getLogger("voicestt.performance")
-        self.logger.propagate = False
-        self.configure(settings)
+    def __init__(self, settings, event_hub=None):
+        self._manager = ChannelLogManager(
+            settings,
+            "performance",
+            PERFORMANCE_EVENT_MESSAGES_DE,
+            event_hub,
+        )
+
+    @property
+    def hub(self):
+        return self._manager.hub
 
     def configure(self, settings):
-        with self._lock:
-            for handler in list(self.logger.handlers):
-                self.logger.removeHandler(handler)
-                try:
-                    handler.close()
-                except Exception:
-                    pass
-            self.enabled = bool(settings.performance_logging_enabled)
-            self.logger.setLevel(logging.INFO)
-            formatter = logging.Formatter("%(message)s")
-            if self.enabled and settings.performance_log_stdout:
-                stream = logging.StreamHandler()
-                stream.setFormatter(formatter)
-                self.logger.addHandler(stream)
-            if self.enabled and settings.performance_log_path:
-                path = Path(settings.performance_log_path).expanduser()
-                path.parent.mkdir(parents=True, exist_ok=True)
-                file_handler = RotatingFileHandler(
-                    path,
-                    maxBytes=int(settings.performance_log_max_bytes),
-                    backupCount=int(settings.performance_log_backup_count),
-                    encoding="utf-8",
-                )
-                file_handler.setFormatter(formatter)
-                self.logger.addHandler(file_handler)
+        self._manager.configure(settings)
 
     def event(self, event, **fields):
-        if not self.enabled:
-            return
-        payload = {
-            "timestamp": _utc_now(),
-            "channel": "performance",
-            "event": event,
-            "meldung": PERFORMANCE_EVENT_MESSAGES_DE.get(event, event),
-        }
-        payload.update({key: value for key, value in fields.items() if value is not None})
-        self.logger.info(json.dumps(payload, ensure_ascii=False, separators=(",", ":"), default=str))
+        return self._manager.event(event, **fields)
 
     def close(self):
-        with self._lock:
-            for handler in list(self.logger.handlers):
-                self.logger.removeHandler(handler)
-                try:
-                    handler.close()
-                except Exception:
-                    pass
+        self._manager.close()
 
 
 class RuntimeConfigStore:

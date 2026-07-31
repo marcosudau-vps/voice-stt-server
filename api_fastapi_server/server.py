@@ -25,6 +25,12 @@ from VoiceSTT_server.openai_compat import (
     sse_data,
     validate_audio_filename,
 )
+from VoiceSTT_server.event_logging import (
+    StructuredEventHub,
+    apply_process_log_level,
+    resolve_calendar_timezone,
+    resolve_log_level,
+)
 from VoiceSTT_server.operations import (
     AuditLogManager,
     LocalModelRegistry,
@@ -124,7 +130,9 @@ TUNING_PROFILES = {
 
 ACTIVE_RUNTIME_SETTINGS = {
     "audio_log_dir",
+    "log_calendar_timezone",
     "log_level",
+    "log_live_enabled",
     "max_active_speakers",
     "max_audio_packet_bytes",
     "max_final_queue_depth_per_session",
@@ -146,7 +154,18 @@ ACTIVE_RUNTIME_SETTINGS = {
     "performance_log_path",
     "performance_log_stdout",
     "performance_logging_enabled",
+    "realtime_log_detail",
     "save_audio_files",
+    "system_event_log_backup_count",
+    "system_event_log_max_bytes",
+    "system_event_log_path",
+    "system_event_log_stdout",
+    "system_event_logging_enabled",
+    "transcription_log_backup_count",
+    "transcription_log_max_bytes",
+    "transcription_log_path",
+    "transcription_log_stdout",
+    "transcription_logging_enabled",
     "realtime_degradation_threshold_ms",
 }
 
@@ -210,6 +229,9 @@ STARTUP_ONLY_SETTINGS = {
     "openai_max_file_bytes",
     "openai_model_aliases",
     "runtime_config_path",
+    "event_log_queue_size",
+    "event_store_enabled",
+    "event_store_path",
 }
 
 INT_SETTINGS = {
@@ -232,6 +254,11 @@ INT_SETTINGS = {
     "request_log_max_bytes",
     "performance_log_backup_count",
     "performance_log_max_bytes",
+    "system_event_log_backup_count",
+    "system_event_log_max_bytes",
+    "transcription_log_backup_count",
+    "transcription_log_max_bytes",
+    "event_log_queue_size",
 }
 
 FLOAT_SETTINGS = {
@@ -268,6 +295,12 @@ BOOL_SETTINGS = {
     "request_logging_enabled",
     "performance_log_stdout",
     "performance_logging_enabled",
+    "system_event_log_stdout",
+    "system_event_logging_enabled",
+    "transcription_log_stdout",
+    "transcription_logging_enabled",
+    "event_store_enabled",
+    "log_live_enabled",
     "save_audio_files",
     "model_idle_unload_enabled",
     "model_memory_policy_enabled",
@@ -284,6 +317,9 @@ OPTIONAL_STRING_SETTINGS = {
     "openai_api_key",
     "request_log_path",
     "performance_log_path",
+    "system_event_log_path",
+    "transcription_log_path",
+    "event_store_path",
     "runtime_config_path",
 }
 
@@ -346,15 +382,31 @@ class ServerSettings:
     log_level: str = "INFO"
     request_logging_enabled: bool = True
     request_log_stdout: bool = True
-    request_log_path: Optional[str] = "logs/voicestt-requests.jsonl"
+    request_log_path: Optional[str] = "logs/audit"
     request_log_transcripts: bool = True
     request_log_max_bytes: int = 10 * 1024 * 1024
     request_log_backup_count: int = 12
     performance_logging_enabled: bool = True
     performance_log_stdout: bool = True
-    performance_log_path: Optional[str] = "logs/voicestt-performance.jsonl"
+    performance_log_path: Optional[str] = "logs/performance"
     performance_log_max_bytes: int = 10 * 1024 * 1024
     performance_log_backup_count: int = 12
+    transcription_logging_enabled: bool = True
+    transcription_log_stdout: bool = False
+    transcription_log_path: Optional[str] = "logs/transcription"
+    transcription_log_max_bytes: int = 10 * 1024 * 1024
+    transcription_log_backup_count: int = 12
+    system_event_logging_enabled: bool = True
+    system_event_log_stdout: bool = False
+    system_event_log_path: Optional[str] = "logs/system"
+    system_event_log_max_bytes: int = 10 * 1024 * 1024
+    system_event_log_backup_count: int = 12
+    log_calendar_timezone: str = "Europe/Berlin"
+    realtime_log_detail: str = "events"
+    event_store_enabled: bool = True
+    event_store_path: Optional[str] = "logs/voicestt-events.sqlite3"
+    event_log_queue_size: int = 10000
+    log_live_enabled: bool = True
     save_audio_files: bool = False
     audio_log_dir: str = "logs/audio"
     max_sessions: int = 4
@@ -818,6 +870,18 @@ def runtime_settings_contract():
 
 
 def coerce_setting_value(name, value):
+    if name == "log_level":
+        return str(logging.getLevelName(resolve_log_level(value)))
+    if name == "realtime_log_detail":
+        normalized = str(value or "").strip().lower()
+        if normalized not in {"off", "summary", "events"}:
+            raise ValueError(
+                "realtime_log_detail muss off, summary oder events sein"
+            )
+        return normalized
+    if name == "log_calendar_timezone":
+        resolve_calendar_timezone(str(value))
+        return str(value)
     if name in BOOL_SETTINGS:
         if not isinstance(value, bool):
             raise ValueError(f"{name} muss ein boolescher Wert sein")
@@ -825,6 +889,12 @@ def coerce_setting_value(name, value):
     if name in INT_SETTINGS:
         if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError(f"{name} muss eine Ganzzahl sein")
+        if name.endswith("_max_bytes") and value <= 0:
+            raise ValueError(f"{name} muss größer als null sein")
+        if name.endswith("_backup_count") and value < 0:
+            raise ValueError(f"{name} muss null oder größer sein")
+        if name == "event_log_queue_size" and value < 100:
+            raise ValueError("event_log_queue_size muss mindestens 100 sein")
         return value
     if name in FLOAT_SETTINGS:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -2255,6 +2325,7 @@ class RecorderBackedRealtimeSession:
         self._wakeword_voice_window = False
         self._wakeword_followup_generation = 0
         self._performance_first_text_segments = set()
+        self._realtime_event_stats = {}
         self._recorder_wake_word_timeout_before_followup = None
         self._recorder_start_recording_before_followup = None
         self._recorder_stop_recording_before_followup = None
@@ -2286,6 +2357,7 @@ class RecorderBackedRealtimeSession:
         config = {
             "spinner": False,
             "use_microphone": False,
+            "level": resolve_log_level(self.settings.log_level),
             "model": self.settings.model,
             "realtime_model_type": self.settings.realtime_model,
             "language": self.settings.language,
@@ -2399,6 +2471,7 @@ class RecorderBackedRealtimeSession:
             self.status = "closed"
             self.timeline.reset()
             self._performance_first_text_segments.clear()
+            self._realtime_event_stats.clear()
             self._wakeword_voice_window = False
             self._wakeword_followup_generation += 1
             self._clear_recorder_followup_gate_locked()
@@ -2418,6 +2491,7 @@ class RecorderBackedRealtimeSession:
             next_segment = self.segment_state.reset()
             self.timeline.reset()
             self._performance_first_text_segments.clear()
+            self._realtime_event_stats.clear()
             self.reject_current_recording = True
             self.recording_sample_count = 0
             self._wakeword_voice_window = False
@@ -2603,6 +2677,15 @@ class RecorderBackedRealtimeSession:
                 if getattr(self.recorder, "is_shut_down", False):
                     break
                 LOGGER.exception("Textschleife des Sitzungs-Recorders fehlgeschlagen")
+                segment_id = self.segment_state.current()
+                self._emit_structured_event(
+                    "transcription",
+                    "transcription.failed",
+                    segment_id=segment_id,
+                    severity="error",
+                    error=str(exc),
+                    where="recorder",
+                )
                 self.service.manager.publish_session(
                     self.session_id,
                     {
@@ -2659,6 +2742,8 @@ class RecorderBackedRealtimeSession:
             performance.event(
                 "stream.final_text",
                 sessionId=self.session_id,
+                transcriptionId=self._transcription_id(segment_id),
+                transport="websocket",
                 segmentId=segment_id,
                 engine=self.settings.transcription_engine,
                 model=self.settings.model,
@@ -2674,6 +2759,21 @@ class RecorderBackedRealtimeSession:
                 wordCount=len(text.split()),
                 memory=process_memory_snapshot(),
             )
+        self._emit_realtime_summary(segment_id, timestamp, segment)
+        self._emit_structured_event(
+            "transcription",
+            "transcription.completed",
+            segment_id=segment_id,
+            text=text,
+            language=self.settings.language,
+            engine=self.settings.transcription_engine,
+            model=self.settings.model,
+            audioDurationMs=(
+                round(float(segment.get("durationSeconds")) * 1000.0, 3)
+                if segment and segment.get("durationSeconds") is not None
+                else None
+            ),
+        )
         self.publish_status(self._waiting_state_locked(streaming))
         return True
 
@@ -2687,7 +2787,12 @@ class RecorderBackedRealtimeSession:
         if not text:
             return
         timestamp = time.time()
-        self._record_first_text_performance(segment_id, timestamp, segment, text)
+        self._record_realtime_performance(
+            segment_id,
+            timestamp,
+            segment,
+            text,
+        )
         payload = {
             "type": "realtime",
             "sessionId": self.session_id,
@@ -2745,7 +2850,16 @@ class RecorderBackedRealtimeSession:
         timing = getattr(event, "timing", None)
         timestamp = time.time()
         segment = self._timeline_snapshot(segment_id)
-        self._record_first_text_performance(segment_id, timestamp, segment, text)
+        self._record_realtime_performance(
+            segment_id,
+            timestamp,
+            segment,
+            text,
+            sequence=getattr(event, "sequence", None),
+            stable_text=committed_stable_text,
+            unstable_text=unstable_text,
+            is_outlier=bool(getattr(event, "is_outlier", False)),
+        )
         payload = {
             "type": "realtime",
             "sessionId": self.session_id,
@@ -2817,6 +2931,8 @@ class RecorderBackedRealtimeSession:
         performance.event(
             "stream.first_text",
             sessionId=self.session_id,
+            transcriptionId=self._transcription_id(segment_id),
+            transport="websocket",
             segmentId=segment_id,
             engine=(
                 self.settings.realtime_transcription_engine
@@ -2833,6 +2949,138 @@ class RecorderBackedRealtimeSession:
             ),
             memory=process_memory_snapshot(),
         )
+
+    def _record_realtime_performance(
+        self,
+        segment_id,
+        timestamp,
+        segment,
+        text,
+        *,
+        sequence=None,
+        stable_text="",
+        unstable_text="",
+        is_outlier=False,
+    ):
+        self._record_first_text_performance(
+            segment_id,
+            timestamp,
+            segment,
+            text,
+        )
+        now_monotonic = time.monotonic()
+        with self.lock:
+            realtime_stats = getattr(self, "_realtime_event_stats", None)
+            if realtime_stats is None:
+                realtime_stats = {}
+                self._realtime_event_stats = realtime_stats
+            stats = realtime_stats.setdefault(
+                segment_id,
+                {
+                    "count": 0,
+                    "firstMonotonic": now_monotonic,
+                    "firstTimestamp": timestamp,
+                    "lastMonotonic": None,
+                    "intervalsMs": [],
+                },
+            )
+            previous = stats["lastMonotonic"]
+            interval_ms = (
+                round((now_monotonic - previous) * 1000.0, 3)
+                if previous is not None
+                else None
+            )
+            if interval_ms is not None:
+                stats["intervalsMs"].append(interval_ms)
+            stats["count"] += 1
+            stats["lastMonotonic"] = now_monotonic
+            emitted_sequence = sequence or stats["count"]
+        if self.settings.realtime_log_detail != "events":
+            return
+        started_at = segment.get("recordingStartedAt") if segment else None
+        performance = getattr(self.service, "performance", None)
+        if performance is not None:
+            performance.event(
+                "transcription.realtime_emitted",
+                sessionId=self.session_id,
+                transcriptionId=self._transcription_id(segment_id),
+                transport="websocket",
+                segmentId=segment_id,
+                sequence=emitted_sequence,
+                sincePreviousMs=interval_ms,
+                sinceRecordingStartMs=(
+                    round((timestamp - started_at) * 1000.0, 3)
+                    if started_at is not None
+                    else None
+                ),
+                characterCount=len(str(text or "")),
+                stableCharacterCount=len(str(stable_text or "")),
+                unstableCharacterCount=len(str(unstable_text or "")),
+                isOutlier=bool(is_outlier),
+            )
+
+    def _emit_realtime_summary(self, segment_id, timestamp, segment):
+        with self.lock:
+            stats = getattr(self, "_realtime_event_stats", {}).pop(
+                segment_id,
+                None,
+            )
+        if self.settings.realtime_log_detail == "off":
+            return
+        stats = stats or {
+            "count": 0,
+            "firstMonotonic": None,
+            "firstTimestamp": None,
+            "lastMonotonic": None,
+            "intervalsMs": [],
+        }
+        intervals = sorted(stats["intervalsMs"])
+
+        def percentile(values, fraction):
+            if not values:
+                return None
+            index = max(
+                0,
+                min(len(values) - 1, math.ceil(len(values) * fraction) - 1),
+            )
+            return round(values[index], 3)
+
+        started_at = segment.get("recordingStartedAt") if segment else None
+        performance = getattr(self.service, "performance", None)
+        if performance is not None:
+            performance.event(
+                "transcription.performance_summary",
+                sessionId=self.session_id,
+                transcriptionId=self._transcription_id(segment_id),
+                transport="websocket",
+                segmentId=segment_id,
+                realtimeEventCount=stats["count"],
+                averageRealtimeIntervalMs=(
+                    round(sum(intervals) / len(intervals), 3)
+                    if intervals
+                    else None
+                ),
+                minRealtimeIntervalMs=min(intervals) if intervals else None,
+                maxRealtimeIntervalMs=max(intervals) if intervals else None,
+                p50RealtimeIntervalMs=percentile(intervals, 0.50),
+                p95RealtimeIntervalMs=percentile(intervals, 0.95),
+                timeToFirstRealtimeMs=(
+                    round(
+                        (stats["firstTimestamp"] - started_at) * 1000.0,
+                        3,
+                    )
+                    if (
+                        stats["firstTimestamp"] is not None
+                        and started_at is not None
+                    )
+                    else None
+                ),
+                timeToFinalMs=(
+                    round((timestamp - started_at) * 1000.0, 3)
+                    if started_at is not None
+                    else None
+                ),
+            )
 
     def _on_recording_start(self):
         segment = None
@@ -3102,6 +3350,36 @@ class RecorderBackedRealtimeSession:
         )
         self.publish_status("wakeword_timeout")
 
+    def _transcription_id(self, segment_id):
+        return f"{self.session_id}:{self.generation}:{segment_id}"
+
+    def _emit_structured_event(
+        self,
+        channel,
+        event,
+        *,
+        segment_id=None,
+        severity="info",
+        **fields,
+    ):
+        hub = getattr(self.service, "events", None)
+        if hub is None:
+            return None
+        return hub.emit(
+            channel,
+            event,
+            severity=severity,
+            transport="websocket",
+            sessionId=self.session_id,
+            transcriptionId=(
+                self._transcription_id(segment_id)
+                if segment_id is not None
+                else None
+            ),
+            segmentId=segment_id,
+            **fields,
+        )
+
     def _publish_timeline_event(
         self,
         event,
@@ -3129,6 +3407,30 @@ class RecorderBackedRealtimeSession:
             if value is not None:
                 payload[key] = value
         self.service.manager.publish_session(self.session_id, payload)
+        structured_events = {
+            "recording_started": "transcription.recording_started",
+            "recording_ended": "transcription.recording_ended",
+            "transcription_started": "transcription.started",
+            "wakeword_detected": "wakeword.detected",
+            "wakeword_followup_started": "wakeword.followup_started",
+            "wakeword_followup_timeout": "wakeword.followup_timeout",
+            "wakeword_timeout": "wakeword.timeout",
+            "wakeword_wait_ended": "wakeword.wait_ended",
+            "wakeword_wait_started": "wakeword.wait_started",
+        }
+        structured_name = structured_events.get(event)
+        if structured_name is not None:
+            event_fields = {
+                key: value
+                for key, value in fields.items()
+                if key != "text" and value is not None
+            }
+            self._emit_structured_event(
+                "transcription",
+                structured_name,
+                segment_id=segment_id,
+                **event_fields,
+            )
 
     def _timeline_snapshot(self, segment_id=None):
         timeline = getattr(self, "timeline", None)
@@ -3397,9 +3699,12 @@ class VoiceSTTService:
         self.model_registry = LocalModelRegistry()
         self.wakeword_registry = WakeWordRegistry()
         self._apply_openwakeword_manifest_default()
-        self.audit = AuditLogManager(settings)
-        self.performance = PerformanceLogManager(settings)
+        self.events = StructuredEventHub(settings)
+        self.audit = AuditLogManager(settings, self.events)
+        self.performance = PerformanceLogManager(settings, self.events)
         self.config_store = RuntimeConfigStore(settings.runtime_config_path)
+        self._log_access_tokens = {}
+        self._log_access_lock = threading.RLock()
         self.ready_thread = None
         self.idle_thread = None
 
@@ -3441,6 +3746,13 @@ class VoiceSTTService:
     def start(self, loop):
         self.loop = loop
         self.manager.bind_loop(loop)
+        self.events.emit(
+            "system",
+            "server.starting",
+            message="Server wird gestartet",
+            host=self.settings.host,
+            port=self.settings.port,
+        )
         load_started = time.monotonic()
         memory_before = process_memory_snapshot()
         with self._scheduler_lock:
@@ -3474,6 +3786,12 @@ class VoiceSTTService:
             self.idle_thread.join(timeout=5)
         self.audit.close()
         self.performance.close()
+        self.events.emit(
+            "system",
+            "server.stopping",
+            message="Server wird beendet",
+        )
+        self.events.close()
 
     def admit_session(self, session_id, wake_word_request=None):
         self.touch_model_activity("websocket_connection")
@@ -3818,6 +4136,40 @@ class VoiceSTTService:
             },
         }
 
+    def create_log_access(self, session_id):
+        token = uuid.uuid4().hex + uuid.uuid4().hex
+        expires_at = time.time() + 24 * 60 * 60
+        with self._log_access_lock:
+            now = time.time()
+            self._log_access_tokens = {
+                existing: value
+                for existing, value in self._log_access_tokens.items()
+                if value["expiresAt"] > now
+            }
+            self._log_access_tokens[token] = {
+                "sessionId": session_id,
+                "expiresAt": expires_at,
+            }
+        return {
+            "websocketPath": "/ws/logs",
+            "historyPath": "/api/logs/events",
+            "accessToken": token,
+            "sessionId": session_id,
+            "expiresAt": timestamp_iso(expires_at),
+        }
+
+    def validate_log_access(self, token, session_id=None):
+        if not token:
+            return None
+        with self._log_access_lock:
+            access = self._log_access_tokens.get(str(token))
+            if access is None or access["expiresAt"] <= time.time():
+                self._log_access_tokens.pop(str(token), None)
+                return None
+            if session_id and access["sessionId"] != session_id:
+                return None
+            return dict(access)
+
     def ready_payload(self, session):
         model_status = self.model_lifecycle_status()
         return {
@@ -3871,14 +4223,39 @@ class VoiceSTTService:
                 }
 
         if applied:
-            if any(name in {
-                "audio_log_dir", "request_log_backup_count", "request_log_max_bytes",
-                "request_log_path", "request_log_stdout", "request_log_transcripts",
-                "request_logging_enabled", "save_audio_files",
-            } for name in applied):
-                self.audit.configure(self.settings)
-            if any(name.startswith("performance_log") for name in applied):
-                self.performance.configure(self.settings)
+            logging_names = {
+                "audio_log_dir",
+                "log_calendar_timezone",
+                "log_live_enabled",
+                "realtime_log_detail",
+                "request_log_backup_count",
+                "request_log_max_bytes",
+                "request_log_path",
+                "request_log_stdout",
+                "request_log_transcripts",
+                "request_logging_enabled",
+                "save_audio_files",
+                "performance_log_backup_count",
+                "performance_log_max_bytes",
+                "performance_log_path",
+                "performance_log_stdout",
+                "performance_logging_enabled",
+                "system_event_log_backup_count",
+                "system_event_log_max_bytes",
+                "system_event_log_path",
+                "system_event_log_stdout",
+                "system_event_logging_enabled",
+                "transcription_log_backup_count",
+                "transcription_log_max_bytes",
+                "transcription_log_path",
+                "transcription_log_stdout",
+                "transcription_logging_enabled",
+            }
+            if any(name in logging_names for name in applied):
+                self.events.configure(self.settings)
+                self.audit.configure(self.settings, configure_hub=False)
+            if "log_level" in applied:
+                apply_process_log_level(self.settings.log_level)
             self.audit.event("config.updated", applied=applied)
             self.persist_settings()
 
@@ -4146,12 +4523,25 @@ class VoiceSTTService:
         holder["event"].set()
         return True
 
-    def transcribe_openai(self, lane, audio, language=None, options=None, timeout=600.0):
+    def transcribe_openai(
+        self,
+        lane,
+        audio,
+        language=None,
+        options=None,
+        timeout=600.0,
+        correlation_id=None,
+    ):
         """Submit an OpenAI request to the same fair queues as realtime clients."""
 
         request_id = uuid.uuid4().hex
         session_id = f"openai-{request_id}"
-        holder = {"event": threading.Event(), "result": None, "error": None}
+        holder = {
+            "event": threading.Event(),
+            "result": None,
+            "error": None,
+            "correlationId": correlation_id,
+        }
         with self._pending_api_lock:
             self._pending_api_results[request_id] = holder
         job = InferenceJob(
@@ -4292,6 +4682,13 @@ class VoiceSTTService:
     def _ready_worker(self, scheduler, load_started=None, memory_before=None):
         scheduler.wait_ready()
         self.ready.set()
+        self.events.emit(
+            "system",
+            "server.ready",
+            message="Server ist bereit",
+            healthy=scheduler.healthy(),
+            models=self.active_models(),
+        )
         if load_started is not None:
             self._log_model_performance(
                 "models.loaded" if scheduler.healthy() else "models.load_failed",
@@ -4314,10 +4711,31 @@ class VoiceSTTService:
         inference_duration = max(0.0, float(result.inference_duration or 0.0))
         lane = "realtime" if result.kind == "realtime" else "final"
         active = self.active_models()[lane]
+        with self._pending_api_lock:
+            api_holder = self._pending_api_results.get(result.request_id)
+        external_request_id = (
+            api_holder.get("correlationId")
+            if api_holder is not None
+            else None
+        )
+        transport = "http" if external_request_id else "websocket"
+        correlated_session_id = external_request_id or result.session_id
+        transcription_id = (
+            external_request_id
+            or (
+                f"{result.session_id}:{result.generation}:{result.segment_id}"
+                if result.session_id
+                else result.request_id
+            )
+        )
         self.performance.event(
             "inference.completed",
-            requestId=result.request_id,
-            sessionId=result.session_id,
+            requestId=external_request_id or result.request_id,
+            schedulerRequestId=result.request_id,
+            sessionId=correlated_session_id,
+            transcriptionId=transcription_id,
+            transport=transport,
+            segmentId=result.segment_id,
             lane=lane,
             engine=active["engine"],
             model=active["model"],
@@ -4369,6 +4787,15 @@ class VoiceSTTService:
             "message": str(exc),
             "where": f"{lane}_engine",
         }
+        self.events.emit(
+            "system",
+            "server.component_failed",
+            message="Serverkomponente fehlgeschlagen",
+            severity="error",
+            component=f"{lane}_engine",
+            errorType=type(exc).__name__,
+            error=str(exc),
+        )
         self.startup_errors.append(message)
         self.manager.publish_all(message)
 
@@ -4851,6 +5278,27 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 "maxBytes": settings.performance_log_max_bytes,
                 "backupCount": settings.performance_log_backup_count,
             },
+            "transcription": {
+                "enabled": settings.transcription_logging_enabled,
+                "stdout": settings.transcription_log_stdout,
+                "directory": settings.transcription_log_path,
+                "maxBytes": settings.transcription_log_max_bytes,
+                "backupCount": settings.transcription_log_backup_count,
+            },
+            "system": {
+                "enabled": settings.system_event_logging_enabled,
+                "stdout": settings.system_event_log_stdout,
+                "directory": settings.system_event_log_path,
+                "maxBytes": settings.system_event_log_max_bytes,
+                "backupCount": settings.system_event_log_backup_count,
+            },
+            "calendarTimezone": settings.log_calendar_timezone,
+            "realtimeDetail": settings.realtime_log_detail,
+            "liveEnabled": settings.log_live_enabled,
+            "eventStore": {
+                "enabled": settings.event_store_enabled,
+                "path": settings.event_store_path,
+            },
         })
 
     @app.put("/api/logging")
@@ -4868,6 +5316,19 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "performanceFile": "performance_log_path",
             "performanceMaxBytes": "performance_log_max_bytes",
             "performanceBackupCount": "performance_log_backup_count",
+            "transcriptionEnabled": "transcription_logging_enabled",
+            "transcriptionStdout": "transcription_log_stdout",
+            "transcriptionDirectory": "transcription_log_path",
+            "transcriptionMaxBytes": "transcription_log_max_bytes",
+            "transcriptionBackupCount": "transcription_log_backup_count",
+            "systemEnabled": "system_event_logging_enabled",
+            "systemStdout": "system_event_log_stdout",
+            "systemDirectory": "system_event_log_path",
+            "systemMaxBytes": "system_event_log_max_bytes",
+            "systemBackupCount": "system_event_log_backup_count",
+            "calendarTimezone": "log_calendar_timezone",
+            "realtimeDetail": "realtime_log_detail",
+            "liveEnabled": "log_live_enabled",
         }
         updates = {target: payload[source] for source, target in mapping.items() if source in payload}
         try:
@@ -4883,6 +5344,223 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             return JSONResponse({"error": str(exc)}, status_code=400)
         result = service.update_settings(updates)
         return JSONResponse(result, status_code=400 if result["rejected"] else 200)
+
+    def _split_filter(value):
+        return [
+            item.strip()
+            for item in str(value or "").split(",")
+            if item.strip()
+        ]
+
+    def _log_access_scope(request, requested_session_id=None):
+        configured_key = settings.admin_api_key or os.getenv(
+            "VOICESTT_ADMIN_API_KEY"
+        )
+        authorization = request.headers.get("authorization", "")
+        supplied = request.headers.get("x-voicestt-admin-key")
+        bearer = authorization[7:] if authorization.startswith("Bearer ") else ""
+        supplied = supplied or bearer
+        if configured_key and supplied == configured_key:
+            return {"admin": True, "sessionId": requested_session_id}
+        client_host = getattr(getattr(request, "client", None), "host", "")
+        if not configured_key and client_host in {
+            "127.0.0.1",
+            "::1",
+            "localhost",
+            "testclient",
+        }:
+            return {"admin": True, "sessionId": requested_session_id}
+        token = request.headers.get("x-voicestt-log-token") or bearer
+        access = service.validate_log_access(token, requested_session_id)
+        if access is None:
+            return None
+        return {"admin": False, "sessionId": access["sessionId"]}
+
+    @app.get("/api/logs/events")
+    async def get_log_events(request: Request):
+        requested_session_id = request.query_params.get("sessionId")
+        scope = _log_access_scope(request, requested_session_id)
+        if scope is None:
+            return JSONResponse(
+                {"error": "Logzugriff nicht autorisiert."},
+                status_code=401,
+            )
+        session_id = (
+            requested_session_id
+            if scope["admin"]
+            else scope["sessionId"]
+        )
+        channels = _split_filter(request.query_params.get("channels"))
+        if not scope["admin"]:
+            allowed = {"audit", "performance", "transcription"}
+            if channels:
+                channels = [
+                    channel for channel in channels if channel in allowed
+                ] or ["__not_authorized__"]
+            else:
+                channels = sorted(allowed)
+        try:
+            events = service.events.query(
+                channels=channels,
+                events=_split_filter(request.query_params.get("events")),
+                session_id=session_id,
+                transcription_id=request.query_params.get("transcriptionId"),
+                from_timestamp=request.query_params.get("from"),
+                to_timestamp=request.query_params.get("to"),
+                after_cursor=int(request.query_params.get("afterCursor") or 0),
+                limit=int(request.query_params.get("limit") or 200),
+            )
+        except (TypeError, ValueError) as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+        return JSONResponse({
+            "object": "list",
+            "data": events,
+            "nextCursor": events[-1]["cursor"] if events else None,
+            "latestCursor": service.events.latest_cursor(),
+        })
+
+    @app.websocket("/ws/logs")
+    async def websocket_logs(websocket: WebSocket):
+        await websocket.accept()
+        if not settings.log_live_enabled:
+            await websocket.send_text(json.dumps({
+                "type": "log.error",
+                "message": "Der Live-Logzugriff ist deaktiviert.",
+            }))
+            await websocket.close(code=1008)
+            return
+        subscription_id = None
+        try:
+            raw = await websocket.receive_text()
+            request_payload = json.loads(raw)
+            if (
+                not isinstance(request_payload, dict)
+                or request_payload.get("type") != "subscribe"
+            ):
+                raise ValueError("Erste Nachricht muss ein subscribe-Objekt sein.")
+            token = str(request_payload.get("accessToken") or "")
+            requested_session_id = request_payload.get("sessionId")
+            configured_key = settings.admin_api_key or os.getenv(
+                "VOICESTT_ADMIN_API_KEY"
+            )
+            is_admin = bool(configured_key and token == configured_key)
+            access = (
+                None
+                if is_admin
+                else service.validate_log_access(token, requested_session_id)
+            )
+            if not is_admin and access is None:
+                await websocket.send_text(json.dumps({
+                    "type": "log.error",
+                    "message": "Logzugriff nicht autorisiert.",
+                }))
+                await websocket.close(code=1008)
+                return
+            session_id = (
+                requested_session_id
+                if is_admin
+                else access["sessionId"]
+            )
+            channels = {
+                str(channel)
+                for channel in request_payload.get("channels", [])
+                if str(channel)
+            }
+            if not is_admin:
+                allowed = {"audit", "performance", "transcription"}
+                channels = (
+                    channels & allowed
+                    if channels
+                    else allowed
+                ) or {"__not_authorized__"}
+            after_cursor = max(
+                0,
+                int(request_payload.get("afterCursor") or 0),
+            )
+            latest_cursor = service.events.latest_cursor()
+            live_queue = asyncio.Queue(maxsize=1000)
+            subscription_id = service.events.subscribe_async(
+                asyncio.get_running_loop(),
+                live_queue,
+                channels=channels,
+                session_id=session_id,
+            )
+            await websocket.send_text(json.dumps({
+                "type": "log.hello",
+                "schemaVersion": 1,
+                "serverInstanceId": service.events.server_instance_id,
+                "latestCursor": latest_cursor,
+            }))
+            replay_cursor = after_cursor
+            replay_count = 0
+            while replay_cursor < latest_cursor:
+                replay = service.events.query(
+                    channels=channels,
+                    session_id=session_id,
+                    after_cursor=replay_cursor,
+                    until_cursor=latest_cursor,
+                    limit=1000,
+                )
+                if not replay:
+                    break
+                for event in replay:
+                    await websocket.send_text(json.dumps({
+                        "type": "log.event",
+                        "event": event,
+                        "replay": True,
+                    }))
+                replay_count += len(replay)
+                replay_cursor = int(replay[-1]["cursor"])
+                if len(replay) < 1000:
+                    break
+            await websocket.send_text(json.dumps({
+                "type": "log.replay_completed",
+                "cursor": latest_cursor,
+                "count": replay_count,
+            }))
+            last_sent_cursor = latest_cursor
+            while True:
+                try:
+                    event = await asyncio.wait_for(
+                        live_queue.get(),
+                        timeout=30.0,
+                    )
+                except asyncio.TimeoutError:
+                    await websocket.send_text(json.dumps({
+                        "type": "log.keepalive",
+                        "cursor": last_sent_cursor,
+                    }))
+                    continue
+                if event.get("_logControl") == "gap":
+                    last_sent_cursor = max(
+                        last_sent_cursor,
+                        int(event.get("cursor") or 0),
+                    )
+                    await websocket.send_text(json.dumps({
+                        "type": "log.gap",
+                        "dropped": event["dropped"],
+                        "cursor": event.get("cursor"),
+                    }))
+                    continue
+                if int(event.get("cursor") or 0) <= latest_cursor:
+                    continue
+                last_sent_cursor = int(event.get("cursor") or last_sent_cursor)
+                await websocket.send_text(json.dumps({
+                    "type": "log.event",
+                    "event": event,
+                    "replay": False,
+                }))
+        except WebSocketDisconnect:
+            pass
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            await websocket.send_text(json.dumps({
+                "type": "log.error",
+                "message": str(exc),
+            }))
+            await websocket.close(code=1008)
+        finally:
+            if subscription_id is not None:
+                service.events.unsubscribe(subscription_id)
 
     @app.post("/api/config/validate")
     async def validate_config(payload: dict, request: Request):
@@ -4967,7 +5645,29 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         response_headers = {"X-Request-ID": request_id}
         resolution = None
         archived_audio = None
+
+        def emit_http_transcription(event, severity="info", **fields):
+            return service.events.emit(
+                "transcription",
+                event,
+                severity=severity,
+                transport="http",
+                clientId=getattr(
+                    getattr(request, "client", None),
+                    "host",
+                    None,
+                ),
+                sessionId=request_id,
+                requestId=request_id,
+                transcriptionId=request_id,
+                **fields,
+            )
         if not settings.openai_api_enabled:
+            emit_http_transcription(
+                "transcription.rejected",
+                severity="warning",
+                reason="api_disabled",
+            )
             return JSONResponse(
                 openai_error("Die OpenAI-kompatible API ist deaktiviert."),
                 status_code=404,
@@ -4975,6 +5675,11 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             )
         auth_error = await authenticate_openai(request)
         if auth_error is not None:
+            emit_http_transcription(
+                "transcription.rejected",
+                severity="warning",
+                reason="authentication_failed",
+            )
             return auth_error
         try:
             form = await request.form()
@@ -5025,6 +5730,9 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             selected_language = parameters.language or settings.language
             service.audit.event(
                 "transcription.started",
+                transport="http",
+                sessionId=request_id,
+                transcriptionId=request_id,
                 requestId=request_id,
                 client=getattr(getattr(request, "client", None), "host", None),
                 filename=getattr(upload, "filename", None),
@@ -5040,6 +5748,18 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 responseFormat=parameters.response_format,
                 archivedAudio=archived_audio,
             )
+            emit_http_transcription(
+                "transcription.started",
+                filename=getattr(upload, "filename", None),
+                bytes=len(audio_bytes),
+                audioDurationMs=round(duration * 1000.0, 3),
+                requestedModel=resolution["requested"],
+                resolvedModel=resolution["resolved"],
+                lane=lane,
+                language=selected_language,
+                stream=parameters.stream,
+                responseFormat=parameters.response_format,
+            )
             request_options = {
                 "prompt": parameters.prompt,
                 "temperature": parameters.temperature,
@@ -5052,6 +5772,10 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 event_loop = asyncio.get_running_loop()
                 first_delta_lock = threading.Lock()
                 first_delta_seen = False
+                first_delta_at = None
+                last_delta_at = None
+                realtime_intervals_ms = []
+                realtime_event_count = 0
 
                 def record_http_first_text(text):
                     nonlocal first_delta_seen
@@ -5061,6 +5785,9 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                                 first_delta_seen = True
                                 service.performance.event(
                                     "http.first_text",
+                                    transport="http",
+                                    sessionId=request_id,
+                                    transcriptionId=request_id,
                                     requestId=request_id,
                                     lane=lane,
                                     engine=service.active_models()[lane]["engine"],
@@ -5074,10 +5801,95 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                                 )
 
                 def stream_callback(text, _detail):
+                    nonlocal first_delta_at, last_delta_at, realtime_event_count
                     record_http_first_text(text)
+                    now = time.monotonic()
+                    with first_delta_lock:
+                        if first_delta_at is None:
+                            first_delta_at = now
+                        interval_ms = (
+                            round((now - last_delta_at) * 1000.0, 3)
+                            if last_delta_at is not None
+                            else None
+                        )
+                        if interval_ms is not None:
+                            realtime_intervals_ms.append(interval_ms)
+                        last_delta_at = now
+                        realtime_event_count += 1
+                        sequence = realtime_event_count
+                    if settings.realtime_log_detail == "events":
+                        service.performance.event(
+                            "transcription.realtime_emitted",
+                            transport="http",
+                            sessionId=request_id,
+                            transcriptionId=request_id,
+                            requestId=request_id,
+                            sequence=sequence,
+                            sincePreviousMs=interval_ms,
+                            sinceRequestStartMs=round(
+                                (now - request_started) * 1000.0,
+                                3,
+                            ),
+                            characterCount=len(str(text or "")),
+                        )
                     event_loop.call_soon_threadsafe(
                         queue.put_nowait,
                         {"type": "transcript.text.delta", "delta": text},
+                    )
+
+                def emit_http_realtime_summary():
+                    if settings.realtime_log_detail == "off":
+                        return
+                    with first_delta_lock:
+                        intervals = sorted(realtime_intervals_ms)
+                        count = realtime_event_count
+                        first_realtime_at = first_delta_at
+
+                    def selected_percentile(fraction):
+                        if not intervals:
+                            return None
+                        index = max(
+                            0,
+                            min(
+                                len(intervals) - 1,
+                                math.ceil(len(intervals) * fraction) - 1,
+                            ),
+                        )
+                        return round(intervals[index], 3)
+
+                    service.performance.event(
+                        "transcription.performance_summary",
+                        transport="http",
+                        sessionId=request_id,
+                        transcriptionId=request_id,
+                        requestId=request_id,
+                        realtimeEventCount=count,
+                        averageRealtimeIntervalMs=(
+                            round(sum(intervals) / len(intervals), 3)
+                            if intervals
+                            else None
+                        ),
+                        minRealtimeIntervalMs=(
+                            min(intervals) if intervals else None
+                        ),
+                        maxRealtimeIntervalMs=(
+                            max(intervals) if intervals else None
+                        ),
+                        p50RealtimeIntervalMs=selected_percentile(0.50),
+                        p95RealtimeIntervalMs=selected_percentile(0.95),
+                        timeToFirstRealtimeMs=(
+                            round(
+                                (first_realtime_at - request_started)
+                                * 1000.0,
+                                3,
+                            )
+                            if first_realtime_at is not None
+                            else None
+                        ),
+                        timeToFinalMs=round(
+                            (time.monotonic() - request_started) * 1000.0,
+                            3,
+                        ),
                     )
 
                 request_options["stream_callback"] = stream_callback
@@ -5089,6 +5901,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                         samples,
                         selected_language,
                         request_options,
+                        correlation_id=request_id,
                     ))
                     while not task.done() or not queue.empty():
                         try:
@@ -5100,10 +5913,24 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                     except Exception as exc:
                         service.audit.event(
                             "transcription.failed",
+                            transport="http",
+                            sessionId=request_id,
+                            transcriptionId=request_id,
                             requestId=request_id,
                             resolvedModel=resolution["resolved"],
                             lane=lane,
                             latencyMs=round((time.monotonic() - request_started) * 1000, 3),
+                            error=str(exc),
+                        )
+                        emit_http_transcription(
+                            "transcription.failed",
+                            severity="error",
+                            resolvedModel=resolution["resolved"],
+                            lane=lane,
+                            latencyMs=round(
+                                (time.monotonic() - request_started) * 1000,
+                                3,
+                            ),
                             error=str(exc),
                         )
                         yield sse_data({"type": "error", "error": openai_error(str(exc))["error"]})
@@ -5128,6 +5955,9 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                     record_http_first_text(inference.text)
                     service.audit.event(
                         "transcription.completed",
+                        transport="http",
+                        sessionId=request_id,
+                        transcriptionId=request_id,
                         requestId=request_id,
                         resolvedModel=resolution["resolved"],
                         lane=lane,
@@ -5140,8 +5970,29 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                         archivedAudio=archived_audio,
                         stream=True,
                     )
+                    emit_http_transcription(
+                        "transcription.completed",
+                        resolvedModel=resolution["resolved"],
+                        lane=lane,
+                        language=selected_language,
+                        audioDurationMs=round(duration * 1000.0, 3),
+                        queueDelayMs=round(inference.queue_delay * 1000, 3),
+                        inferenceMs=round(
+                            inference.inference_duration * 1000,
+                            3,
+                        ),
+                        totalLatencyMs=round(
+                            (time.monotonic() - request_started) * 1000,
+                            3,
+                        ),
+                        text=inference.text,
+                        stream=True,
+                    )
                     service.performance.event(
                         "http.completed",
+                        transport="http",
+                        sessionId=request_id,
+                        transcriptionId=request_id,
                         requestId=request_id,
                         lane=lane,
                         engine=service.active_models()[lane]["engine"],
@@ -5154,6 +6005,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                         ),
                         memory=process_memory_snapshot(),
                     )
+                    emit_http_realtime_summary()
                     yield sse_data(done)
 
                 return StreamingResponse(
@@ -5172,6 +6024,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 samples,
                 selected_language,
                 request_options,
+                correlation_id=request_id,
             )
             from VoiceSTT.transcription_engines import TranscriptionInfo, TranscriptionResult
             result = TranscriptionResult(
@@ -5181,6 +6034,9 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             )
             service.audit.event(
                 "transcription.completed",
+                transport="http",
+                sessionId=request_id,
+                transcriptionId=request_id,
                 requestId=request_id,
                 resolvedModel=resolution["resolved"],
                 lane=lane,
@@ -5193,8 +6049,26 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 archivedAudio=archived_audio,
                 stream=False,
             )
+            emit_http_transcription(
+                "transcription.completed",
+                resolvedModel=resolution["resolved"],
+                lane=lane,
+                language=selected_language,
+                audioDurationMs=round(duration * 1000.0, 3),
+                queueDelayMs=round(inference.queue_delay * 1000, 3),
+                inferenceMs=round(inference.inference_duration * 1000, 3),
+                totalLatencyMs=round(
+                    (time.monotonic() - request_started) * 1000,
+                    3,
+                ),
+                text=inference.text,
+                stream=False,
+            )
             service.performance.event(
                 "http.completed",
+                transport="http",
+                sessionId=request_id,
+                transcriptionId=request_id,
                 requestId=request_id,
                 lane=lane,
                 engine=service.active_models()[lane]["engine"],
@@ -5207,6 +6081,19 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 ),
                 memory=process_memory_snapshot(),
             )
+            if settings.realtime_log_detail != "off":
+                service.performance.event(
+                    "transcription.performance_summary",
+                    transport="http",
+                    sessionId=request_id,
+                    transcriptionId=request_id,
+                    requestId=request_id,
+                    realtimeEventCount=0,
+                    timeToFinalMs=round(
+                        (time.monotonic() - request_started) * 1000.0,
+                        3,
+                    ),
+                )
             if parameters.response_format in {"text", "srt", "vtt"}:
                 body = format_caption_response(parameters, result, duration)
                 media_type = "text/vtt" if parameters.response_format == "vtt" else "text/plain"
@@ -5218,9 +6105,24 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         except OpenAIRequestError as exc:
             service.audit.event(
                 "transcription.rejected",
+                transport="http",
+                sessionId=request_id,
+                transcriptionId=request_id,
                 requestId=request_id,
                 requestedModel=(resolution or {}).get("requested"),
                 latencyMs=round((time.monotonic() - request_started) * 1000, 3),
+                error=str(exc),
+                param=exc.param,
+                code=exc.code,
+            )
+            emit_http_transcription(
+                "transcription.rejected",
+                severity="warning",
+                requestedModel=(resolution or {}).get("requested"),
+                latencyMs=round(
+                    (time.monotonic() - request_started) * 1000,
+                    3,
+                ),
                 error=str(exc),
                 param=exc.param,
                 code=exc.code,
@@ -5234,10 +6136,24 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             LOGGER.exception("OpenAI-kompatible Transkription fehlgeschlagen")
             service.audit.event(
                 "transcription.failed",
+                transport="http",
+                sessionId=request_id,
+                transcriptionId=request_id,
                 requestId=request_id,
                 requestedModel=(resolution or {}).get("requested"),
                 resolvedModel=(resolution or {}).get("resolved"),
                 latencyMs=round((time.monotonic() - request_started) * 1000, 3),
+                error=str(exc),
+            )
+            emit_http_transcription(
+                "transcription.failed",
+                severity="error",
+                requestedModel=(resolution or {}).get("requested"),
+                resolvedModel=(resolution or {}).get("resolved"),
+                latencyMs=round(
+                    (time.monotonic() - request_started) * 1000,
+                    3,
+                ),
                 error=str(exc),
             )
             return JSONResponse(
@@ -5257,8 +6173,10 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             await websocket.send_text(json.dumps(exc.payload()))
             await websocket.close(code=1008)
             service.audit.event(
-                "websocket.session_config_rejected",
+                "session.rejected",
+                transport="websocket",
                 code=exc.code,
+                reason="session_config",
                 client=getattr(getattr(websocket, "client", None), "host", None),
             )
             return
@@ -5274,9 +6192,11 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             await websocket.send_text(json.dumps(exc.payload()))
             await websocket.close(code=1008)
             service.audit.event(
-                "websocket.session_config_rejected",
+                "session.rejected",
                 sessionId=session_id,
+                transport="websocket",
                 code=exc.code,
+                reason="session_config",
                 client=getattr(getattr(websocket, "client", None), "host", None),
             )
             return
@@ -5293,6 +6213,13 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             return
         if session is None:
             await websocket.accept()
+            service.audit.event(
+                "session.rejected",
+                sessionId=session_id,
+                transport="websocket",
+                reason="session_limit",
+                client=getattr(getattr(websocket, "client", None), "host", None),
+            )
             await websocket.send_text(json.dumps({
                 "type": "error",
                 "where": "admission",
@@ -5304,8 +6231,9 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
 
         await manager.connect(session_id, websocket)
         service.audit.event(
-            "websocket.connected",
+            "session.accepted",
             sessionId=session_id,
+            transport="websocket",
             client=getattr(getattr(websocket, "client", None), "host", None),
             requestedWakeWordEnabled=(
                 session.session_config.requested_enabled
@@ -5314,6 +6242,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 session.session_config.effective_enabled
             ),
         )
+        log_access = service.create_log_access(session_id)
         await websocket.send_text(json.dumps({
             "type": "hello",
             "clientId": session_id,
@@ -5324,6 +6253,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "limits": service.limits_dict(),
             "supportedEngines": get_supported_transcription_engines(),
             "runtimeSettings": service.runtime_settings_contract(),
+            "logAccess": log_access,
         }))
         if service.ready.is_set():
             await websocket.send_text(json.dumps(
@@ -5418,7 +6348,11 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         finally:
             service.remove_session(session_id)
             await manager.disconnect(session_id)
-            service.audit.event("websocket.disconnected", sessionId=session_id)
+            service.audit.event(
+                "session.closed",
+                sessionId=session_id,
+                transport="websocket",
+            )
 
     app.state.voicestt_service = service
     return app
@@ -5437,6 +6371,8 @@ YAML_CONFIG_TO_ARG_DEST = {
     "model_warmup": ("no_model_warmup", lambda value: not value),
     "openai_api_enabled": ("disable_openai_api", lambda value: not value),
     "performance_logging_enabled": ("performance_logging", bool),
+    "system_event_logging_enabled": ("system_event_logging", bool),
+    "transcription_logging_enabled": ("transcription_logging", bool),
     "realtime_transcription_use_syllable_boundaries": (
         "realtime_use_syllable_boundaries",
         bool,
@@ -5647,7 +6583,7 @@ def parse_args(argv=None):
     )
     parser.add_argument(
         "--request-log-path",
-        default=os.getenv("VOICESTT_REQUEST_LOG_PATH", "logs/voicestt-requests.jsonl"),
+        default=os.getenv("VOICESTT_REQUEST_LOG_PATH", "logs/audit"),
     )
     parser.add_argument(
         "--request-log-transcripts",
@@ -5670,11 +6606,91 @@ def parse_args(argv=None):
         "--performance-log-path",
         default=os.getenv(
             "VOICESTT_PERFORMANCE_LOG_PATH",
-            "logs/voicestt-performance.jsonl",
+            "logs/performance",
         ),
     )
     parser.add_argument("--performance-log-max-bytes", type=int, default=10 * 1024 * 1024)
     parser.add_argument("--performance-log-backup-count", type=int, default=12)
+    parser.add_argument(
+        "--transcription-logging",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("VOICESTT_TRANSCRIPTION_LOGGING", True),
+    )
+    parser.add_argument(
+        "--transcription-log-stdout",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("VOICESTT_TRANSCRIPTION_LOG_STDOUT", False),
+    )
+    parser.add_argument(
+        "--transcription-log-path",
+        default=os.getenv(
+            "VOICESTT_TRANSCRIPTION_LOG_PATH",
+            "logs/transcription",
+        ),
+    )
+    parser.add_argument(
+        "--transcription-log-max-bytes",
+        type=int,
+        default=10 * 1024 * 1024,
+    )
+    parser.add_argument(
+        "--transcription-log-backup-count",
+        type=int,
+        default=12,
+    )
+    parser.add_argument(
+        "--system-event-logging",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("VOICESTT_SYSTEM_EVENT_LOGGING", True),
+    )
+    parser.add_argument(
+        "--system-event-log-stdout",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("VOICESTT_SYSTEM_EVENT_LOG_STDOUT", False),
+    )
+    parser.add_argument(
+        "--system-event-log-path",
+        default=os.getenv("VOICESTT_SYSTEM_EVENT_LOG_PATH", "logs/system"),
+    )
+    parser.add_argument(
+        "--system-event-log-max-bytes",
+        type=int,
+        default=10 * 1024 * 1024,
+    )
+    parser.add_argument(
+        "--system-event-log-backup-count",
+        type=int,
+        default=12,
+    )
+    parser.add_argument(
+        "--log-calendar-timezone",
+        default=os.getenv("VOICESTT_LOG_CALENDAR_TIMEZONE", "Europe/Berlin"),
+    )
+    parser.add_argument(
+        "--realtime-log-detail",
+        choices=("off", "summary", "events"),
+        default=os.getenv("VOICESTT_REALTIME_LOG_DETAIL", "events"),
+    )
+    parser.add_argument(
+        "--event-store",
+        dest="event_store_enabled",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("VOICESTT_EVENT_STORE", True),
+    )
+    parser.add_argument(
+        "--event-store-path",
+        default=os.getenv(
+            "VOICESTT_EVENT_STORE_PATH",
+            "logs/voicestt-events.sqlite3",
+        ),
+    )
+    parser.add_argument("--event-log-queue-size", type=int, default=10000)
+    parser.add_argument(
+        "--log-live",
+        dest="log_live_enabled",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("VOICESTT_LOG_LIVE", True),
+    )
     parser.add_argument(
         "--save-audio-files",
         action=argparse.BooleanOptionalAction,
@@ -5791,7 +6807,7 @@ def settings_from_args(args):
         model_idle_timeout_seconds=args.model_idle_timeout_seconds,
         model_memory_policy_enabled=args.model_memory_policy,
         allow_two_medium_models=args.allow_two_medium_models,
-        log_level=args.log_level.upper(),
+        log_level=coerce_setting_value("log_level", args.log_level),
         openai_api_enabled=not args.disable_openai_api,
         openai_api_key=args.openai_api_key,
         admin_api_key=args.admin_api_key,
@@ -5808,6 +6824,28 @@ def settings_from_args(args):
         performance_log_path=args.performance_log_path,
         performance_log_max_bytes=args.performance_log_max_bytes,
         performance_log_backup_count=args.performance_log_backup_count,
+        transcription_logging_enabled=args.transcription_logging,
+        transcription_log_stdout=args.transcription_log_stdout,
+        transcription_log_path=args.transcription_log_path,
+        transcription_log_max_bytes=args.transcription_log_max_bytes,
+        transcription_log_backup_count=args.transcription_log_backup_count,
+        system_event_logging_enabled=args.system_event_logging,
+        system_event_log_stdout=args.system_event_log_stdout,
+        system_event_log_path=args.system_event_log_path,
+        system_event_log_max_bytes=args.system_event_log_max_bytes,
+        system_event_log_backup_count=args.system_event_log_backup_count,
+        log_calendar_timezone=coerce_setting_value(
+            "log_calendar_timezone",
+            args.log_calendar_timezone,
+        ),
+        realtime_log_detail=coerce_setting_value(
+            "realtime_log_detail",
+            args.realtime_log_detail,
+        ),
+        event_store_enabled=args.event_store_enabled,
+        event_store_path=args.event_store_path,
+        event_log_queue_size=args.event_log_queue_size,
+        log_live_enabled=args.log_live_enabled,
         save_audio_files=args.save_audio_files,
         audio_log_dir=args.audio_log_dir,
         runtime_config_path=args.runtime_config_path,
@@ -5818,9 +6856,10 @@ def main(argv=None):
     args = parse_args(argv)
     settings = settings_from_args(args)
     logging.basicConfig(
-        level=getattr(logging, settings.log_level, logging.INFO),
+        level=resolve_log_level(settings.log_level),
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    apply_process_log_level(settings.log_level)
 
     try:
         import uvicorn

@@ -143,12 +143,21 @@ Netzwerkebene begrenzen.
 | `request_log_stdout` | kann Daten in zentrale Containerlogs/Dozzle spiegeln |
 | `save_audio_files` | speichert Audio auf Serverdisk |
 | `performance_logging_enabled` | schreibt Latenz-/Ressourcendaten, laut Implementierung ohne Transkripttext |
+| `transcription_logging_enabled` | schreibt transportübergreifende Transkriptionsereignisse; Finaltext folgt `request_log_transcripts` |
+| `event_store_enabled` | persistiert strukturierte Ereignisse zusätzlich in SQLite für Historienabfragen |
+| `log_live_enabled` | erlaubt einen separaten, authentifizierten Log-WebSocket |
 
 Im Produktionsprofil sind Requestlogging und Transkriptlogging aktiv,
 Audioarchivierung ist deaktiviert. Ein Clientprodukt sollte Nutzer über die
 tatsächliche serverseitige Datenverarbeitung informieren und nicht allein aus
 `save_audio_files: false` ableiten, dass keine textuellen Inhalte protokolliert
 werden.
+
+Ein Sessionclient erhält den Log-Zugriffstoken ausschließlich in `hello`.
+Dieser Token darf nur die eigene Session und die Kanäle `audit`,
+`transcription` und `performance` lesen. Der Systemkanal und
+sessionübergreifende Abfragen bleiben dem Adminzugriff vorbehalten. Tokens
+gehören nicht in URLs, damit sie nicht in Proxy- und Accesslogs auftauchen.
 
 ## Audioqualität und Paketierung
 

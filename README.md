@@ -173,6 +173,8 @@ audio, logging, and executor injection.
   legacy experiments under `tests/`.
 - [FastAPI server](docs/fastapi-server.md): browser server configuration,
   protocol, metrics, and deployment notes.
+- [Structured logging](docs/structured-logging.md): event channels, daily
+  JSONL layout, history API, realtime measurements, and live log WebSocket.
 - [Session-local Wake Word](docs/session-wakeword-erweiterung.md): architecture,
   handshake contract, fallbacks, isolation and live PowerShell verification.
 - [Troubleshooting](docs/troubleshooting.md): common install, audio, model,

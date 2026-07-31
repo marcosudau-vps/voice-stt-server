@@ -143,9 +143,19 @@ Capacity and scheduling flags:
 | `--allow-two-medium-models` / `--no-allow-two-medium-models` | Allows two medium-equivalent lanes (default) or restores the one-medium limit. Standard `large-v3-turbo` counts as medium. |
 | `--performance-logging` / `--no-performance-logging` | Enables/disables the separate performance JSONL channel. |
 | `--performance-log-stdout` / `--no-performance-log-stdout` | Mirrors performance events to stdout for Dozzle. |
-| `--performance-log-path` | Rotating performance JSONL file; default `logs/voicestt-performance.jsonl`. |
+| `--performance-log-path` | Calendar JSONL root for performance events; default `logs/performance`. |
 | `--performance-log-max-bytes` | Maximum size of one performance log file. |
-| `--performance-log-backup-count` | Number of rotated performance log files retained. |
+| `--performance-log-backup-count` | Legacy compatibility setting; calendar files are not deleted automatically. |
+| `--transcription-logging` / `--no-transcription-logging` | Enables/disables the transport-independent transcription event channel. |
+| `--transcription-log-stdout` / `--no-transcription-log-stdout` | Mirrors transcription events to stdout. |
+| `--transcription-log-path` | Calendar JSONL root for transcription events. |
+| `--system-event-logging` / `--no-system-event-logging` | Enables/disables selected structured server lifecycle events. |
+| `--system-event-log-path` | Calendar JSONL root for system events. |
+| `--log-calendar-timezone` | Calendar timezone for `YYYY-MM/YYYY-MM-DD.jsonl` paths; default `Europe/Berlin`. |
+| `--realtime-log-detail` | `off`, `summary`, or `events` for realtime cadence measurements. |
+| `--event-store` / `--no-event-store` | Enables/disables the indexed SQLite history. |
+| `--event-store-path` | SQLite event history path. |
+| `--log-live` / `--no-log-live` | Enables/disables `/ws/logs`. |
 
 Named tuning profiles are available through `--profile`; explicit flags
 override profile defaults.
@@ -205,6 +215,12 @@ Structured audit and performance events retain their stable technical `event`
 identifier and include a German human-readable `meldung` field for logs and
 Dozzle.
 
+The server also writes transport-independent `transcription` events for HTTP
+requests and WebSocket segments. All structured channels share a versioned
+event envelope, daily calendar files, SQLite history through
+`GET /api/logs/events`, and optional live delivery through `/ws/logs`. See
+[structured logging](structured-logging.md) for the complete contract.
+
 An RSS delta is an approximate process-level model footprint. It is closest to
 a per-model value when both lanes share the same engine/model; if two different
 models load together, the delta represents their combined footprint. Compare
@@ -213,10 +229,10 @@ p50, p95, and p99) over repeated runs. Accuracy comparisons require a reference
 transcript and should report WER/CER in an offline benchmark; they cannot be
 derived safely from production traffic alone.
 
-`GET /api/logging` returns the performance-channel configuration. It can be
-changed without UI coupling through `PUT /api/logging` using
-`performanceEnabled`, `performanceStdout`, `performanceFile`,
-`performanceMaxBytes`, and `performanceBackupCount`.
+`GET /api/logging` returns all structured channel, calendar, realtime and live
+delivery settings. Runtime-safe values can be changed without UI coupling
+through `PUT /api/logging`; the response reports applied and rejected fields.
+SQLite store activation and its path remain startup-only.
 
 ## Engine Recipes
 
