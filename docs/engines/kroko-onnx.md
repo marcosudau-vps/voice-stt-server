@@ -229,14 +229,13 @@ python -m unittest -v tests.unit.test_kroko_onnx_engine.KrokoOnnxGoldenTranscrip
 Pip-only users usually do not have the repository's `tests.unit` package. For a
 standalone install smoke test, use the Kroko test script from the same branch or
 tag as the docs you are reading:
-[tests/voicestt_kroko_test.py](../../tests/voicestt_kroko_test.py).
+[tests/realtimestt_kroko_test.py](../../tests/realtimestt_kroko_test.py).
 
-Save that file as `voicestt_kroko_test.py` in your current directory, then
-run its init-only mode:
+Run the repository script in init-only mode:
 
 ```powershell
 python -m pip install rich
-python .\voicestt_kroko_test.py --model "test-model-cache\kroko-onnx\Kroko-EN-Community-64-L-Streaming-001.data" --realtime-model "test-model-cache\kroko-onnx\Kroko-EN-Community-64-L-Streaming-001.data" --provider cpu --no-keyboard --init-only
+python .\tests\realtimestt_kroko_test.py --model "test-model-cache\kroko-onnx\Kroko-EN-Community-64-L-Streaming-001.data" --realtime-model "test-model-cache\kroko-onnx\Kroko-EN-Community-64-L-Streaming-001.data" --provider cpu --no-keyboard --init-only
 ```
 
 This script constructs `AudioToTextRecorder`, so it needs both Kroko-ONNX and a

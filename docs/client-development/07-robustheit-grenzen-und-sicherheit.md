@@ -176,20 +176,20 @@ gehören nicht in URLs, damit sie nicht in Proxy- und Accesslogs auftauchen.
 ## Race Conditions, die der Client tolerieren muss
 
 1. `status(idle)` kann vor einem nachlaufenden `final` eintreffen.
-2. `ready` als Broadcast kann ohne `sessionId` und `models` eintreffen.
-3. `error` eines Startworkers kann serverweit ohne `sessionId` eintreffen.
-4. `clear` und bereits unterwegs befindliche Events können sehr eng
+2. `error` eines Startworkers kann serverweit ohne `sessionId` eintreffen.
+3. `clear` und bereits unterwegs befindliche Events können sehr eng
    aufeinanderfolgen; nach verarbeitetem `clear` sollte der Client ältere lokale
    Arbeit verwerfen.
-5. `status` darf denselben State mehrfach melden.
-6. Final kann ohne vorheriges Realtime eintreffen.
-7. Bei Disconnect gibt es kein letztes garantiertes Status-/Finalevent.
+4. `status` darf denselben State mehrfach melden.
+5. Final kann ohne vorheriges Realtime eintreffen.
+6. Bei Disconnect gibt es kein letztes garantiertes Status-/Finalevent.
 
 ## Abnahmetest-Checkliste für einen neuen Client
 
 ### Handshake und Transport
 
-- [ ] `hello` und beide gültigen `ready`-Formen werden akzeptiert.
+- [ ] `hello` und das sessionspezifische `ready` mit `sessionId`,
+      `sessionConfig`, `sessionCapabilities` und `models` werden akzeptiert.
 - [ ] Admission-Fehler vor `hello` wird korrekt angezeigt.
 - [ ] Close 1013 führt nicht zu einer aggressiven Reconnect-Schleife.
 - [ ] Text- und Binärframes werden strikt getrennt.

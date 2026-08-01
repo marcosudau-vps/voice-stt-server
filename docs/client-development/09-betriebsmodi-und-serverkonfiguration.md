@@ -103,9 +103,12 @@ Contract ist versioniert und wird in `hello.sessionCapabilities` sowie
 | `wakeWordBufferDuration` | `0.0`–`60.0` s | Wake-Word-Puffer |
 | `wakeWordFollowupWindow` | `0.0`–`3600.0` s | Follow-up-Fenster |
 
-Querywerte müssen URL-kodiert werden. Parameter dürfen höchstens einmal
-vorkommen; mehrfache gleichnamige Werte gelten als mehrdeutig und führen vor
-der Sessionaufnahme zu einem Konfigurationsfehler.
+Querywerte müssen URL-kodiert werden. `wakeWordEnabled` darf unabhängig vom
+Modus höchstens einmal vorkommen. Bei `wakeWordEnabled=true` dürfen auch die
+übrigen Wake-Word-Felder nicht mehrfach vorkommen; mehrdeutige Angaben führen
+vor der Sessionaufnahme zu einem Konfigurationsfehler. Im Modus `inherit` oder
+`false` werden zusätzliche Wake-Word-Felder nicht angewendet und als ignoriert
+bestätigt.
 
 ### `wakeWordEnabled` fehlt, ist `null` oder `inherit`
 

@@ -1,6 +1,6 @@
 # VoiceSTT – Leitfaden für die Client-Entwicklung
 
-> **Status:** aus dem implementierten Code abgeleitet · **Stand:** 25. Juli 2026  
+> **Status:** aus dem implementierten Code abgeleitet · **Stand:** 1. August 2026
 > **Primäre Live-Schnittstelle:** `WS /ws/transcribe` · **Serverversion:** `2.0.0`
 
 Diese Dokumentation beschreibt den Server so, wie er im Repository tatsächlich
@@ -22,7 +22,7 @@ Client bewusst tolerant sein sollte.
 | [Server-Events – Kurzreferenz](03-server-events-kurzreferenz.md) | Alle vom Server sendbaren Eventtypen und ihre Felder in kompakter Form | Nachschlagen beim Implementieren |
 | [Server-Events – Katalog & Chronologie](04-server-events-katalog-und-chronologie.md) | Auslöser, Semantik und Felder jedes Events sowie normale Abläufe mit und ohne Weckwort | Event-Reducer, UI und Fehlersuche |
 | [Client-Zustandsmodell](05-client-zustandsmodell.md) | Empfohlener Reducer, Segment-Merging, Statusautomat und Reconnect-Verhalten | Anwendungsarchitektur |
-| [HTTP-API & Authentifizierung](06-http-api-und-authentifizierung.md) | Health, Konfiguration, Metriken, Admin-API und OpenAI-kompatible Datei-Transkription | Administration und Datei-Uploads |
+| [HTTP-API & Authentifizierung](06-http-api-und-authentifizierung.md) | Health, Konfiguration, Metriken, Log-Historie, Admin-API und OpenAI-kompatible Datei-Transkription | Administration, Logs und Datei-Uploads |
 | [Robustheit, Grenzen & Sicherheit](07-robustheit-grenzen-und-sicherheit.md) | Fehlerklassen, Überlast, Timeouts, Datenschutz und Abnahmetests | Produktionsreife Clients |
 | [Abgrenzung der Serverprotokolle](08-protokollabgrenzung.md) | Klare Unterscheidung des produktiven Single-WebSocket-Protokolls von der separaten Zwei-Port-Implementierung | Auswahl des richtigen Einstiegspunkts |
 | [Betriebsmodi & sessionlokale Wake-Word-Konfiguration](09-betriebsmodi-und-serverkonfiguration.md) | Hotkey- und Wake-Word-Betrieb, Session-Create-Contract, `models.json`, Fallbacks, Admin-Baseline und UI-Konzept | Desktop-Client, Aufnahmeautomation und Administration |
@@ -72,15 +72,19 @@ flowchart LR
 6. **Der Wake-Word-Modus wird beim Verbindungsaufbau festgelegt.**
    `hello.sessionConfig` ist die verbindliche Bestätigung der effektiven
    sessionlokalen Konfiguration.
+7. **Logs verwenden einen getrennten Zugriffskanal.** `hello.logAccess` liefert
+   den Sessiontoken; er gehört in `X-VoiceSTT-Log-Token` beziehungsweise die
+   erste `/ws/logs`-Subscribe-Nachricht, nie in eine URL. Beim Reconnect wird
+   mit dem letzten verarbeiteten Cursor fortgesetzt.
 
-## Aktuelles versioniertes Produktionsprofil
+## Aktuelle versionierte Repository-Baseline
 
 Eine zusammenhängende Architektur-, Migrations- und Betriebsbeschreibung der
 Session-Wake-Word-Erweiterung einschließlich eines ausführbaren
 PowerShell-Nachweises steht unter
 [`docs/session-wakeword-erweiterung.md`](../session-wakeword-erweiterung.md).
 
-Das zentrale Profil `config.yaml` konfiguriert:
+Das zentrale Entwicklungs- und Deploymentprofil `config.yaml` konfiguriert:
 
 | Bereich | Wert |
 | --- | --- |
@@ -93,10 +97,12 @@ Das zentrale Profil `config.yaml` konfiguriert:
 | Aufnahmegrenze | 30 s pro fortlaufendem Segment |
 | Modell-Lifecycle | automatisches Entladen nach 3600 s Inaktivität |
 
-Diese Werte sind eine Deploy-Konfiguration, **kein fest verdrahteter
-Protokollvertrag**. Eine persistierte Runtime-Konfiguration kann sie beim Start
-überschreiben. Für einen Client sind deshalb `hello.settings`, `ready.settings`
-oder `GET /api/config` die maßgebliche Laufzeitauskunft.
+Diese Werte sind eine versionierte Ausgangskonfiguration, **kein fest
+verdrahteter Protokollvertrag und kein garantierter Live-VPS-Zustand**. Ein
+Deployment kann eine eigene YAML-Datei verwenden; zusätzlich kann eine
+persistierte Runtime-Konfiguration die Startwerte überschreiben. Für einen
+Client sind deshalb `hello.settings`, `ready.settings` oder `GET /api/config`
+die maßgebliche Laufzeitauskunft.
 
 ## Dokumentationskonventionen
 
@@ -119,7 +125,8 @@ geprüft:
 | `api_fastapi_server/server.py` | Settings, Sessions, Scheduler, Events, Endpunkte und Lifecycle |
 | `api_fastapi_server/protocol.py` | binäres Audiopaket und Validierung |
 | `VoiceSTT_server/openai_compat.py` | Multipartparameter, Antwort- und Fehlerformate |
-| `VoiceSTT_server/operations.py` | Modellregistrys, Runtime-Persistenz und Logging |
+| `VoiceSTT_server/operations.py` | Modellregistrys, Runtime-Persistenz und Logging-Fassaden |
+| `VoiceSTT_server/event_logging.py` | Event-Envelope, Redaction, Queues, Kalenderdateien, SQLite und Live-Fan-out |
 | `api_fastapi_server/static/index.html` | tatsächlich genutzter Browser-Clientablauf |
 | `config.yaml` | zentrale versionierte Laufzeitkonfiguration |
 | `tests/unit/test_fastapi_server_*.py` | Protokoll-, Isolation-, Event- und Integrationsverhalten |

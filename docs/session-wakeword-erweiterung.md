@@ -26,9 +26,11 @@ Session-Wake-Word-Contract hat unabhängig davon die Contract-Version `1`.
 
 Die unveränderten ursprünglichen Planungsunterlagen bleiben separat erhalten:
 
-- [ursprünglicher Prüf- und Implementierungsbericht](archive/session-wakeword-planung/SERVER_SESSION_PROFILE_IMPLEMENTATION_REPORT.md)
-- [ursprüngliche Anforderungsspezifikation](archive/session-wakeword-planung/SERVER_SESSION_PROFILE_SPECIFICATION.md)
-- [Archivhinweise und SHA-256-Prüfsummen](archive/session-wakeword-planung/README.md)
+- [ursprünglicher Prüf- und Implementierungsbericht](.archiv/session-wakeword/2026-07-25_SERVER_SESSION_PROFILE_IMPLEMENTATION_REPORT.md)
+- [ursprüngliche Anforderungsspezifikation](.archiv/session-wakeword/2026-07-25_SERVER_SESSION_PROFILE_SPECIFICATION.md)
+- [nachträglicher Soll-/Ist-Vergleich](.archiv/session-wakeword/2026-08-01_SESSION_WAKEWORD_UMSETZUNGSVERGLEICH.md)
+- [begründete Abweichungen vom ursprünglichen Profilentwurf](.archiv/session-wakeword/2026-08-01_SESSION_WAKEWORD_ABWEICHUNGEN.md)
+- [historische Archivhinweise und SHA-256-Prüfsummen](.archiv/session-wakeword/2026-07-25_SESSION_WAKEWORD_ARCHIVHINWEISE.md)
 
 ## Ausgangslage
 

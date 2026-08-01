@@ -70,7 +70,11 @@ The server exposes:
 - `GET /api/config`: public settings, limits, and supported engines.
 - `GET /api/metrics`: counters, queue depth, latency, coalescing, drops, and
   worker utilization.
+- `GET /api/logs/events`, `/api/logs/sessions/{sessionId}`, and
+  `/api/logs/transcriptions/{transcriptionId}`: authenticated structured event
+  history.
 - `WS /ws/transcribe`: browser audio stream and command channel.
+- `WS /ws/logs`: session- or admin-scoped cursor replay and live events.
 
 ## Configuration
 
@@ -142,6 +146,10 @@ Capacity and scheduling flags:
 | `--model-memory-policy` / `--no-model-memory-policy` | Enables/disables the CPU model memory guard. |
 | `--allow-two-medium-models` / `--no-allow-two-medium-models` | Allows two medium-equivalent lanes (default) or restores the one-medium limit. Standard `large-v3-turbo` counts as medium. |
 | `--data-root` | Single root for generated runtime data. Docker uses `/data`; channel directories, audio, SQLite and `config/runtime.json` are derived internally. |
+| `--request-logging` / `--no-request-logging` | Enables/disables the audit/request event channel. |
+| `--request-log-stdout` / `--no-request-log-stdout` | Mirrors audit events to stdout. |
+| `--request-log-max-bytes` | Maximum size of one audit daily segment. |
+| `--request-log-backup-count` | Legacy compatibility setting; calendar files are not deleted automatically. |
 | `--performance-logging` / `--no-performance-logging` | Enables/disables the separate performance JSONL channel. |
 | `--performance-log-stdout` / `--no-performance-log-stdout` | Mirrors performance events to stdout for Dozzle. |
 | `--performance-log-max-bytes` | Maximum size of one performance log file. |
@@ -149,15 +157,22 @@ Capacity and scheduling flags:
 | `--performance-log-retention-days` | Deletes older performance calendar files and store entries; `0` disables deletion. |
 | `--transcription-logging` / `--no-transcription-logging` | Enables/disables the transport-independent transcription event channel. |
 | `--transcription-log-stdout` / `--no-transcription-log-stdout` | Mirrors transcription events to stdout. |
+| `--transcription-log-max-bytes` | Maximum size of one transcription daily segment. |
+| `--transcription-log-backup-count` | Legacy compatibility setting. |
 | `--transcription-log-retention-days` | Deletes older transcription calendar files and store entries; `0` disables deletion. |
 | `--system-event-logging` / `--no-system-event-logging` | Enables/disables selected structured server lifecycle events. |
+| `--system-event-log-stdout` / `--no-system-event-log-stdout` | Mirrors system events to stdout. |
+| `--system-event-log-max-bytes` | Maximum size of one system daily segment. |
+| `--system-event-log-backup-count` | Legacy compatibility setting. |
 | `--system-event-log-retention-days` | Deletes older system calendar files and store entries; `0` disables deletion. |
 | `--transcript-mode` | Transcript policy `none`, `final`, or `full`; text is permitted only in the transcription channel. |
 | `--request-log-retention-days` | Deletes older audit calendar files and store entries; `0` disables deletion. |
 | `--log-calendar-timezone` | Calendar timezone for `YYYY-MM/YYYY-MM-DD.jsonl` paths; default `Europe/Berlin`. |
 | `--realtime-log-detail` | `off`, `summary`, or `events` for realtime cadence measurements. |
 | `--event-store` / `--no-event-store` | Enables/disables the indexed SQLite history. |
+| `--event-log-queue-size` | Bounded queue capacity used by the structured event sinks. |
 | `--log-live` / `--no-log-live` | Enables/disables `/ws/logs`. |
+| `--save-audio-files` / `--no-save-audio-files` | Enables/disables optional uploaded-audio archiving below the data root. |
 
 Named tuning profiles are available through `--profile`; explicit flags
 override profile defaults.
@@ -237,6 +252,12 @@ derived safely from production traffic alone.
 delivery settings. Runtime-safe values can be changed without UI coupling
 through `PUT /api/logging`; the response reports applied and rejected fields.
 SQLite store activation and its path remain startup-only.
+
+A normal session receives `hello.logAccess` and can use its token only for its
+own `audit`, `transcription`, and `performance` history. Administrators can
+query across sessions and include `system`. Tokens are sent through
+`X-VoiceSTT-Log-Token` or the first `/ws/logs` subscribe message, never in a
+URL.
 
 ## Engine Recipes
 

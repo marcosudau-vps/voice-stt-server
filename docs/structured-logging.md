@@ -39,10 +39,13 @@ Every structured event uses the same versioned outer schema:
 ```
 
 Context identifiers remain at the top level. Event-specific values are stored
-under `data`. `eventId` is unique; `cursor` is assigned centrally before fan-out
+under `data`. Optional context identifiers are omitted when unavailable; the
+`null` values in the example only illustrate their position. `eventId` is
+unique; `cursor` is assigned centrally before fan-out
 and is strictly increasing even if an individual sink temporarily fails. It is
-used for pagination and live reconnect. A sink failure creates an explicit gap
-rather than reusing a cursor.
+used for pagination and live reconnect. A sink failure never reuses a cursor.
+Gap notifications are best effort because their own control queue is bounded;
+the per-sink drop counters remain the authoritative overload signal.
 
 HTTP and WebSocket transcription events use the same `transcription.*` event
 names. `transport` records the protocol difference. One HTTP request owns one
@@ -140,6 +143,12 @@ The per-event measurement contains sequence, interval from the previous
 realtime output, elapsed time, character counts and stabilization metadata but
 no transcript text.
 
+Current implementation boundary: when the recorder returns an empty final
+WebSocket text, the segment is skipped and does not receive a terminal
+`transcription.completed`, `transcription.failed`, or
+`transcription.cancelled` event. This is tracked as a documented follow-up in
+the [logging action archive](.archiv/neues_logging_event_system/2026-08-01_NEUES_LOGGING_EVENT_SYSTEM_ABWEICHUNGEN.md).
+
 ## Persistent history
 
 When `event_store_enabled` is true, all structured events are also stored in
@@ -214,7 +223,7 @@ The server responds with:
 - subsequent live `log.event` messages
 - `log.keepalive` during idle periods
 - `log.pong` in response to `{"type":"ping"}`
-- `log.gap` if a sink or subscriber queue dropped data
+- best-effort `log.gap` when a sink or subscriber queue dropped data
 - `log.error` for protocol or authorization failures
 
 After a subscriber-local `log.gap`, a client should reconnect with the cursor
@@ -239,9 +248,12 @@ addresses and access tokens are not part of session events.
 
 ## Configuration
 
-The versioned YAML configuration and `GET`/`PUT /api/logging` expose channel
-enablement, stdout mirroring, channel directories, daily segment sizes,
-calendar timezone, realtime detail and live access.
+The versioned YAML configuration and `GET /api/logging` expose channel
+enablement, stdout mirroring, derived channel directories, daily segment
+sizes, calendar timezone, realtime detail and live access. `PUT /api/logging`
+can change the runtime-safe behavior settings, but rejects individual file,
+audio, performance, system, and transcription paths. All generated locations
+are derived from the single startup setting `data_root_path`.
 
 The SQLite path, queue size and store enablement are startup settings. File
 channel settings, timezone, transcript policy and live access can be changed
@@ -252,6 +264,8 @@ Store, channel files, stdout, and live publishing each use an independent
 bounded background queue. Emission is non-blocking. On saturation, audit,
 errors, and terminal transcription events have higher preservation priority
 than performance detail. Every eviction or failed write increments a per-sink
-counter and emits a `log.gap`; storage failures additionally create a throttled
-`storage.failed` event. Live subscribers have their own bounded queues and
-report recovered drops through `log.subscriber.dropped`.
+counter and schedules a best-effort `log.gap`; under simultaneous saturation
+the bounded control queue can coalesce or drop an individual sink notice.
+Storage failures additionally create a throttled `storage.failed` event. Live
+subscribers have their own bounded queues and report recovered drops through
+`log.subscriber.dropped`.

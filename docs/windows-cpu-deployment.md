@@ -128,6 +128,9 @@ Bearer token) and remote administration stays disabled if no admin key is set.
 - `GET/PUT /api/language`
 - `GET/PUT /api/wake-word`
 - `GET/PUT /api/logging`
+- `GET /api/logs/events`, `/api/logs/sessions/{sessionId}`, and
+  `/api/logs/transcriptions/{transcriptionId}` for structured history
+- `WS /ws/logs` for cursor replay and live structured events
 - `GET /api/models` and `GET/PUT /api/models/active`
 - `POST /api/config/validate` and `POST /api/config/reload`
 - `GET/PATCH /api/config` for the complete existing configuration surface
@@ -139,20 +142,22 @@ switch. Other connected clients must be disconnected first. Runtime changes are
 atomically persisted below `<data-root>/config/runtime.json`; API and admin keys
 are never written to that file.
 
-Request events are one-line JSON, suitable for both stdout/Dozzle and
-calendar-organized files below `YYYY-MM\YYYY-MM-DD.jsonl`. They include request
-ID, chosen model/lane, timings, language, status and,
-when enabled, transcript text. Uploaded audio archiving is opt-in. Configure it
-with `--request-logging`, `--request-log-stdout`,
-`--request-log-transcripts`, and `--save-audio-files` or use `PUT /api/logging`.
-All generated files remain below the single `--data-root`.
+The server writes four structured JSONL channels below
+`<data-root>/logs/<channel>/YYYY-MM/YYYY-MM-DD.jsonl`: `system`, `audit`,
+`transcription`, and `performance`. Audit contains request, configuration, and
+model metadata but never transcript text. Transcript text is permitted only in
+the transcription channel and follows `--transcript-mode none|final|full`.
+Performance remains numeric and transcript-free. Each channel can be mirrored
+to stdout independently.
 
-Performance measurements use their own transcript-free JSONL channel. Enable
-it with `--performance-logging` and `--performance-log-stdout`. The Docker
-default writes below `/data/logs/performance/` and
-mirrors the same events to stdout for Dozzle. These events contain model
-load/unload RAM deltas, queue/inference/total latency, realtime factor, time to
-first realtime text, and finalization latency.
+The same events are indexed in SQLite when `--event-store` is enabled. A
+normal WebSocket session receives a scoped token in `hello.logAccess` for its
+own history and `/ws/logs`; admins may read across sessions and include the
+system channel. Uploaded audio archiving stays opt-in through
+`--save-audio-files`. Configure runtime-safe channel behavior through
+`PUT /api/logging`; all generated paths remain derived from the single
+`--data-root`. See [structured logging](structured-logging.md) for the full
+schema, retention, authentication, and replay contract.
 
 ## Wake-word smoke test
 
@@ -168,8 +173,9 @@ Start the server with the German model pair and:
 Open the UI, press **Start stream**, say “Hey Jarvis”, then speak German. The
 state rail and event log must move from wake-word wait to recording, realtime
 updates, and a final transcript. Backend, word/model, sensitivity, timeout and
-follow-up window can then be changed in **Settings**. Porcupine uses backend
-`pvporcupine`, a Porcupine keyword, and requires `PICOVOICE_ACCESS_KEY`.
+follow-up window can then be changed in **Settings**. The current FastAPI
+session and admin contracts expose OpenWakeWord only; Porcupine remains a
+library-level recorder backend and is not selectable in this server UI.
 
 ## Docker on Windows
 

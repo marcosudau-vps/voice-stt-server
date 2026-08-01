@@ -26,6 +26,11 @@ Wichtig: `stream=true` am OpenAI-Endpunkt streamt Ergebnisse während der Verarb
 
 ## 2. Aktueller Produktionsstand
 
+Die folgende Tabelle beschreibt den auf dem VPS geprüften Laufzeitstand vom
+01.08.2026, nicht die davon abweichenden Entwicklungsdefaults in der Root-Datei
+`config.yaml`. Für Clients bleiben `hello`, `ready`, `/health` und
+`GET /api/config` maßgeblich.
+
 | Eigenschaft | Aktueller Wert |
 | --- | --- |
 | Sprache | Deutsch, `de` |
@@ -44,11 +49,15 @@ Wichtig: `stream=true` am OpenAI-Endpunkt streamt Ergebnisse während der Verarb
 | Maximale WebSocket-Sitzungen | 8 |
 | Gleichzeitig aktive Sprecher | 4 |
 | Maximaler fortlaufender Audiopuffer | 30 Sekunden |
-| Automatisches Modell-Entladen | nach 3600 Sekunden Inaktivität |
-| Modell-Memory-Policy | aktiv |
-| Zwei Medium-äquivalente Modelle | erlaubt |
+| Automatisches Modell-Entladen | im geprüften gemeinsamen Ein-Lane-Laufzeitmodus deaktiviert; Baseline-Timeout 3600 Sekunden |
+| Modell-Memory-Policy | im geprüften gemeinsamen Ein-Lane-Laufzeitmodus nicht aktiv |
+| Zwei Medium-äquivalente Modelle | für den aktuellen Shared-Lane-Betrieb nicht relevant |
 | OpenAI-Dateilimit | 25 MiB |
 | Serverversion | FastAPI-Anwendung `2.0.0` |
+| Strukturiertes Logging | `system`, `audit`, `transcription`, `performance` |
+| Log-Historie | SQLite und drei `/api/logs/*`-Routen |
+| Live-Logs | separater, session- oder adminbegrenzter `WS /ws/logs` |
+| Transkriptmodus | `final`, Text ausschließlich im Transkriptionskanal |
 
 ---
 
@@ -68,7 +77,8 @@ Bedeutung:
 
 - `/` liefert die deutsche Browseroberfläche.
 - `/health` liefert Bereitschaft, Sitzungszahlen, Scheduler- und Modellzustand.
-- `/api/config` liefert öffentliche Konfiguration, Limits, Engines und Runtime-Vertrag.
+- `/api/config` liefert öffentliche Konfiguration, Limits, Engines,
+  Sessionfähigkeiten und Runtime-Vertrag.
 - `/api/metrics` liefert Queue-, Latenz-, Drop- und Worker-Metriken.
 - `/ws/transcribe` ist der Live-Audiokanal.
 
@@ -125,6 +135,22 @@ Authorization: Bearer <VOICESTT_ADMIN_API_KEY>
 
 Der normale OpenAI-API-Key und der Admin-Key sind zwei unterschiedliche Secrets.
 
+### Log-Sessiontoken oder Admin-Key erforderlich
+
+```text
+GET /api/logs/events
+GET /api/logs/sessions/{sessionId}
+GET /api/logs/transcriptions/{transcriptionId}
+WS  /ws/logs
+```
+
+Ein Admin-Key erlaubt serverweite Abfragen. Ein normaler Transkriptionsclient
+erhält dagegen in `hello.logAccess` einen 24 Stunden innerhalb des laufenden
+Serverprozesses gültigen Token. Dieser Token ist auf die eigene Session und die
+Channels `audit`, `transcription` und `performance` begrenzt. Für HTTP gehört er
+in `X-VoiceSTT-Log-Token`; für `/ws/logs` in die erste
+`subscribe`-Nachricht. Tokens dürfen nicht in URLs stehen.
+
 ---
 
 ## 4. Wichtiger aktueller Sicherheitshinweis
@@ -160,12 +186,29 @@ Beispiel:
 ```json
 {
   "type": "hello",
-  "clientId": "966fc4a78c0c4000a3a8e61219656773",
+  "clientId": "desktop-client-7f9a",
   "sessionId": "966fc4a78c0c4000a3a8e61219656773",
   "settings": {},
   "limits": {},
   "supportedEngines": [],
-  "runtimeSettings": {}
+  "runtimeSettings": {},
+  "sessionConfig": {
+    "version": 1,
+    "effectiveWakeWordEnabled": true,
+    "effectiveWakeWordBackend": "openwakeword",
+    "effectiveWakeWords": ["hey_jarvis"]
+  },
+  "sessionCapabilities": {
+    "version": 1,
+    "availableWakeWords": []
+  },
+  "logAccess": {
+    "websocketPath": "/ws/logs",
+    "historyPath": "/api/logs/events",
+    "accessToken": "<session-token>",
+    "sessionId": "966fc4a78c4000a3a8e61219656773",
+    "expiresAt": "<utc-timestamp>"
+  }
 }
 ```
 
@@ -176,6 +219,9 @@ Danach:
   "type": "ready",
   "sessionId": "966fc4a78c0c4000a3a8e61219656773",
   "ok": true,
+  "settings": {},
+  "sessionConfig": {},
+  "sessionCapabilities": {},
   "models": {
     "state": "loaded",
     "loaded": true
@@ -183,7 +229,10 @@ Danach:
 }
 ```
 
-Jede Verbindung bekommt eine neue `sessionId`. Nach einem Reconnect darf die alte Sitzung nicht fortgesetzt oder mit der neuen Sitzung vermischt werden.
+Jede Verbindung bekommt eine neue `sessionId`. `clientId` ist davon getrennt
+und darf vom Client über Reconnects stabil gehalten werden. Nach einem
+Reconnect darf die alte Sitzung nicht fortgesetzt oder mit der neuen Sitzung
+vermischt werden.
 
 `ready` bedeutet, dass der Server die Sitzung bedienen kann. Falls die Modelle wegen Inaktivität entladen wurden, kann `ready` trotzdem erfolgreich sein und `models.loaded=false` enthalten. Das Modell wird dann bei der nächsten tatsächlichen Transkription automatisch geladen.
 
@@ -580,7 +629,7 @@ Fehler sollten protokolliert und anhand des Bereichs behandelt werden. Nicht jed
 
 ## 8. Wake-Word-Verhalten
 
-Wake Word ist derzeit global aktiviert:
+Die Serverbaseline ist derzeit mit OpenWakeWord und `hey_jarvis` aktiviert:
 
 ```text
 Backend: OpenWakeWord
@@ -588,7 +637,8 @@ Wake Word: hey_jarvis
 Sensitivität: 0.5
 ```
 
-Nach `start` muss der Client kontinuierlich Mikrofon-Audio übertragen.
+Nach `start` muss der Client im Wake-Word-Modus kontinuierlich Mikrofon-Audio
+übertragen.
 
 Typischer Ablauf:
 
@@ -606,14 +656,40 @@ stateDiagram-v2
 
 Nach erkanntem Wake Word wartet der Server bis zu sieben Sekunden auf Sprache. Nach einer abgeschlossenen Äußerung bleibt ein Follow-up-Fenster von sieben Sekunden geöffnet. Innerhalb dieses Zeitraums kann ohne erneutes „Hey Jarvis“ weitergesprochen werden.
 
-Eine Änderung über `PUT /api/wake-word` ist global und gilt für neue Sitzungen. Sie ist keine private Einstellung einer einzelnen Desktop-Verbindung.
+Eine Änderung über `PUT /api/wake-word` ist global und gilt für neue Sitzungen.
+Sie ist keine private Einstellung einer einzelnen Desktop-Verbindung.
 
-Wenn der Desktop-Client ohne Wake Word dauerhaft diktieren soll, gibt es momentan zwei Möglichkeiten:
+Der Desktop-Client kann den Modus inzwischen ohne Adminzugriff ausschließlich
+für seine neue Verbindung auswählen:
 
-- Wake Word global über die Admin-API deaktivieren und danach die WebSocket-Sitzung neu verbinden.
-- Später eine per-session Wake-Word-Option in das WebSocket-Protokoll aufnehmen.
+```text
+# Serverbaseline erben
+wss://stt.voice.marcosudau.com/ws/transcribe
 
-Die zweite Variante wäre langfristig sauberer, falls Browser, Desktop-Client und andere Benutzer unterschiedliche Verhaltensweisen benötigen.
+# Hotkey-/Direktmodus ohne Wake Word
+wss://stt.voice.marcosudau.com/ws/transcribe?wakeWordEnabled=false
+
+# Wake Word aktivieren und logisches Modell auswählen
+wss://stt.voice.marcosudau.com/ws/transcribe?wakeWordEnabled=true&wakeWords=hey_jarvis
+```
+
+Zusätzliche Sessionparameter sind `wakeWordBackend`, `wakeWords`,
+`wakeWordInferenceFramework`, `wakeWordSensitivity`,
+`wakeWordActivationDelay`, `wakeWordTimeout`, `wakeWordBufferDuration` und
+`wakeWordFollowupWindow`. Der aktuelle Serververtrag veröffentlicht nur
+OpenWakeWord und logische Modell-IDs aus `models.json`; interne Modellpfade
+bleiben verborgen.
+
+Maßgeblich ist nicht die angeforderte URL, sondern
+`hello.sessionConfig.effectiveWakeWordEnabled` zusammen mit
+`sessionCapabilities`. Nicht erfüllbare Aktivierungen werden vor der
+Audioverarbeitung mit `where: "session_config"` und Close-Code `1008`
+abgelehnt. Fallbacks und ignorierte Felder werden sichtbar bestätigt.
+
+Der vollständige Vertrag steht unter
+[Sitzungslokale Wake-Word-Konfiguration](session-wakeword-erweiterung.md)
+und im
+[Clientkapitel zu Betriebsmodi](client-development/09-betriebsmodi-und-serverkonfiguration.md).
 
 ---
 
@@ -947,19 +1023,36 @@ Wake-Word- und Sprachänderungen gelten für neue Sitzungen beziehungsweise neue
 
 ## 15. Logging und Datenschutz
 
-Aktueller Serverzustand:
+Der Server verwendet vier strukturierte Channels mit einem gemeinsamen,
+versionierten Event-Envelope:
 
-- Request-Logging aktiv.
-- Performance-Logging aktiv.
-- Logs werden nach stdout geschrieben und sind in Dozzle sichtbar.
-- Zusätzlich rotierende JSONL-Dateien im persistenten Data-Volume.
-- Transkripttexte werden protokolliert.
-- Audiodateien werden nicht dauerhaft gespeichert.
-- `save_audio_files=false`.
+| Channel | Inhalt | Transkripttext |
+| --- | --- | --- |
+| `system` | Lifecycle und ausgewählte Betriebsfehler | nie |
+| `audit` | Authentifizierung, Konfiguration, Modelle und Sessionaktionen | nie |
+| `transcription` | HTTP-/WebSocket-Transkriptions- und Wake-Word-Lifecycle | abhängig von `transcript_log_mode` |
+| `performance` | Queue-, Inferenz-, Latenz- und Realtime-Kadenzwerte | nie |
 
-Der Desktop-Client sollte daher davon ausgehen, dass erkannte Texte serverseitig in Betriebslogs auftauchen können, das rohe Mikrofon-Audio aber momentan nicht archiviert wird.
+Die Events werden kalenderbasiert unter
+`/data/logs/<channel>/YYYY-MM/YYYY-MM-DD.jsonl` abgelegt und zusätzlich in
+`/data/logs/voicestt-events.sqlite3` indexiert. Die drei History-Routen und der
+separate WebSocket `/ws/logs` liefern älteren beziehungsweise laufenden
+Sessionzugriff. `hello.logAccess` enthält den dafür notwendigen Sessiontoken.
 
-Für besonders sensible Inhalte könnte später ein Konfigurationsprofil mit deaktiviertem Transcript-Logging vorgesehen werden.
+`transcript_log_mode` ist bereits implementiert:
+
+- `none`: kein Transkripttext;
+- `final`: Text nur in `transcription.completed` im Transkriptionskanal;
+- `full`: Transkriptfelder ausschließlich im Transkriptionskanal.
+
+Die zentrale Redaction entfernt Secrets, Authorization-/Cookie-Werte,
+Querystrings sowie Binär- und Audiodaten vor allen Sinks. Die stdout-Spiegelung
+ist pro Channel getrennt konfigurierbar und darf nicht pauschal für alle Logs
+angenommen werden. Audiodateien werden nur mit `save_audio_files=true`
+archiviert; im aktuellen Produktionsprofil ist dies deaktiviert.
+
+Details zu Envelope, Cursorn, Retention, Replay und Zugriffsschutz stehen unter
+[Strukturiertes Logging](structured-logging.md).
 
 ---
 
@@ -1003,6 +1096,12 @@ Eine robuste Implementierung sollte mindestens diese getrennten Bausteine haben:
 
    Protokolliert Verbindungsabbrüche, Close-Codes, Warnungen und Latenzen, jedoch standardmäßig kein Roh-Audio.
 
+10. **StructuredLogClient**
+
+    Verwaltet den Sessiontoken aus `hello.logAccess`, lädt bei Bedarf ältere
+    Events über `/api/logs/*`, hält den separaten `/ws/logs`-Socket und setzt
+    nach Reconnect mit dem letzten bestätigten Cursor fort.
+
 ---
 
 ## 17. Empfohlene Zustandslogik im Client
@@ -1043,6 +1142,10 @@ Vor einer Freigabe sollte der Client mindestens real testen:
 
 - 30 Minuten kontinuierliche Mikrofonübertragung.
 - Mehrere Wake-Word-Erkennungen hintereinander.
+- Hotkey-Session mit `wakeWordEnabled=false` parallel zu einer
+  `wakeWordEnabled=true`-Session ohne gegenseitige Beeinflussung.
+- Unbekanntes Wake Word, Fallbackbestätigung und nicht erfüllbare Aktivierung
+  mit Close-Code `1008`.
 - Follow-up-Sprache ohne erneutes Wake Word.
 - WLAN-Ausfall und automatischer Reconnect.
 - Serverneustart während einer aktiven Verbindung.
@@ -1058,6 +1161,10 @@ Vor einer Freigabe sollte der Client mindestens real testen:
 - Keine Vermischung alter und neuer `sessionId`.
 - Keine dauerhafte Speicherung unfertiger Realtime-Texte.
 - OpenAI-Dateitranskription parallel zur WebSocket-Sitzung.
+- Sessionbegrenzter Abruf der eigenen Loghistorie ohne Zugriff auf `system`
+  oder fremde Sessions.
+- `/ws/logs`-Reconnect mit `afterCursor`, Replay ohne Duplikate und Übergang zu
+  Live-Events.
 
 ---
 
@@ -1065,11 +1172,11 @@ Vor einer Freigabe sollte der Client mindestens real testen:
 
 Die maßgeblichen Stellen sind:
 
-- [WebSocket- und API-Server](api_fastapi_server/server.py)
-- [Binäres Audioprotokoll](api_fastapi_server/protocol.py)
-- [OpenAI-Anfrage- und Antwortformat](VoiceSTT_server/openai_compat.py)
-- [Dokumentation des FastAPI-Servers](docs/fastapi-server.md)
-- [Realer Paralleltest](tools/validate_parallel_realtime.py)
-- [Zentrale Konfiguration](config.yaml)
+- [WebSocket- und API-Server](../api_fastapi_server/server.py)
+- [Binäres Audioprotokoll](../api_fastapi_server/protocol.py)
+- [OpenAI-Anfrage- und Antwortformat](../VoiceSTT_server/openai_compat.py)
+- [Dokumentation des FastAPI-Servers](fastapi-server.md)
+- [Realer Paralleltest](../tools/validate_parallel_realtime.py)
+- [Zentrale Konfiguration](../config.yaml)
 
 Der wichtigste Designpunkt für das Desktop-Projekt ist: eine einzige langlebige WebSocket-Sitzung, kontinuierliches kleines PCM-Audio, Realtime-Texte nur als ersetzbare Vorschau und ausschließlich `final` als dauerhaftes Ergebnis.

@@ -10,6 +10,7 @@ dev-log/
 dev-logs/
 roadmap/
 AGENTS.md
+!/AGENTS.md
 env_voicestt/
 example_rvc/assets/
 server/

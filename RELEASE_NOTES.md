@@ -14,6 +14,15 @@
   independent Hotkey and Wake Word sessions.
 - Added a detailed implementation and operations guide plus a PowerShell live
   verification script for the session-local Wake Word contract.
+- Added a versioned structured event system with `system`, `audit`,
+  `transcription`, and `performance` channels, transport-independent
+  correlation and centralized redaction.
+- Added calendar-based JSONL files, indexed SQLite history, filtered history
+  endpoints, and a separate session-scoped `/ws/logs` connection with replay
+  and live delivery.
+- Added a mandatory documentation archive process for larger change actions,
+  including a dated plan, a later plan-versus-implementation review, and a
+  separate rationale for material deviations.
 
 ### Changed
 
@@ -25,6 +34,8 @@
   only; Porcupine is omitted from the model catalog and browser selector.
 - Ready notifications are session-specific so they cannot leak another
   session's effective Wake Word profile.
+- Audit, transcription, performance, and system events now share one event
+  envelope and monotonically assigned cursor across HTTP and WebSocket paths.
 
 ## 1.0.2 - 2026-05-31
 

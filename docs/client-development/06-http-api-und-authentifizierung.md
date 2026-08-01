@@ -22,12 +22,16 @@ relevant.
 | `POST` | `/api/models/unload` | Admin | Modelle explizit entladen |
 | `GET`/`PUT` | `/api/language` | Admin | Standardsprache lesen/ändern |
 | `GET`/`PUT` | `/api/wake-word` | Admin | Wake-Konfiguration und Modellkatalog |
-| `GET`/`PUT` | `/api/logging` | Admin | Audit-/Performance-Logging konfigurieren |
+| `GET`/`PUT` | `/api/logging` | Admin | vier Eventkanäle, Kalender, Transcript-Policy und Live-Zugriff konfigurieren |
+| `GET` | `/api/logs/events` | Admin oder Sessiontoken | gefilterte Eventhistorie |
+| `GET` | `/api/logs/sessions/{sessionId}` | Admin oder passender Sessiontoken | Historie einer Session |
+| `GET` | `/api/logs/transcriptions/{transcriptionId}` | Admin oder passender Sessiontoken | Historie einer Transkription |
 | `POST` | `/api/config/validate` | Admin | Kandidatenkonfiguration prüfen |
 | `POST` | `/api/config/reload` | Admin | persistierte Runtime-Konfiguration neu anwenden |
 | `GET` | `/v1/models` | OpenAI-Key* | geladene Modelle/Aliasse |
 | `POST` | `/v1/audio/transcriptions` | OpenAI-Key* | abgeschlossene Audiodatei transkribieren |
 | `WS` | `/ws/transcribe` | keine im Handler | kontinuierliches Live-Audio |
+| `WS` | `/ws/logs` | Admin- oder Sessiontoken in erster Nachricht | Cursor-Replay und strukturierte Live-Events |
 
 \* Wenn kein OpenAI-Key konfiguriert ist, lässt der implementierte Handler die
 Anfrage ohne Authentifizierung zu. Im versionierten Deployment werden Keys über
@@ -71,6 +75,35 @@ erste Auth-Nachricht. Eine Clientimplementierung darf nicht annehmen, dass
 `Authorization: Bearer ...` vom Server ausgewertet wird. Browser-WebSockets
 können ohnehin keine beliebigen Authorization-Header setzen.
 
+### Strukturierter Logzugriff
+
+`hello.logAccess` des Transkriptions-WebSockets liefert einen zufälligen,
+24 Stunden innerhalb des aktuellen Serverprozesses gültigen Sessiontoken. Er
+erlaubt ausschließlich die eigene Session und die Channels `audit`,
+`transcription` und `performance`; `system` und fremde Sessions bleiben dem
+Adminzugriff vorbehalten.
+
+Für HTTP wird der Token so gesendet:
+
+```http
+X-VoiceSTT-Log-Token: <session-token>
+```
+
+Für `/ws/logs` gehört er in die erste Nachricht, nicht in die URL:
+
+```json
+{
+  "type": "subscribe",
+  "accessToken": "<session-token>",
+  "sessionId": "<session-id>",
+  "channels": ["transcription", "performance"],
+  "afterCursor": 1200
+}
+```
+
+Ein Admin kann stattdessen den Admin-Key verwenden und über Sessions und
+Channels hinweg lesen.
+
 ## `GET /health`
 
 Kompakte Form von `service.metrics()`:
@@ -111,6 +144,7 @@ Antwort:
   "settings": {},
   "limits": {},
   "supportedEngines": [],
+  "sessionCapabilities": {},
   "runtimeSettings": {
     "activeSessionSafe": [],
     "newSessionOnly": [],
@@ -123,6 +157,19 @@ Antwort:
 Secrets sowie `transcription_engine_options` und
 `realtime_transcription_engine_options` werden aus `settings` entfernt.
 `wake_word_enabled` wird als abgeleitetes Feld ergänzt.
+
+## Log-History-API
+
+Die drei History-Routen akzeptieren `channels`, `events`, `sessionId`,
+`transcriptionId`, `from`, `to`, `afterCursor` und `limit`. `limit` ist auf
+1000 begrenzt. Die Antwort enthält die sortierten Events sowie `nextCursor`
+und `latestCursor`, damit ein Client ohne Duplikate paginieren und anschließend
+zum Live-WebSocket wechseln kann.
+
+Ein Sessiontoken wird serverseitig immer auf seine eigene `sessionId`
+eingeschränkt, auch wenn der Client einen breiteren Filter anfordert. Nicht
+erlaubte Channels liefern keine fremden Daten. Der vollständige Vertrag steht
+unter [Strukturiertes Logging](../structured-logging.md).
 
 ## `PATCH /api/config`
 

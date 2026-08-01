@@ -150,13 +150,20 @@ audio, logging, and executor injection.
 - Voice activity detection with WebRTC VAD and Silero VAD.
 - Final and realtime transcription with selectable engines.
 - Optional wake word activation through Porcupine or OpenWakeWord.
+- Session-local OpenWakeWord selection for FastAPI WebSocket clients without
+  changing the server baseline or other sessions.
 - Direct microphone input or application-fed audio chunks.
 - Event callbacks for recording, VAD, realtime text, transcription, and wake
   word state.
 - A FastAPI browser streaming server example with multi-user session isolation,
   shared inference resources, metrics, and health endpoints.
+- Four structured server event channels with calendar JSONL files, indexed
+  history, session-scoped HTTP access, and a separate live log WebSocket.
 
 ## Documentation
+
+- [Documentation overview](docs/README.md): authoritative guides, client
+  contract, and the archive process for larger changes.
 
 - [Quick start](docs/quick-start.md): shortest demos and common recording
   patterns.
@@ -181,6 +188,18 @@ audio, logging, and executor injection.
   dependency, and runtime errors.
 - [Engine licenses](docs/licenses.md): license notes for optional engine
   runtimes and model families.
+
+### Process for larger changes
+
+Larger changes to architecture, public protocols or APIs, persisted formats,
+security boundaries, deployment structure, or cross-module behavior must be
+registered in the
+[archive for larger change actions](docs/.archiv/README.md) before
+implementation begins. Every action requires a dated overall plan before the
+change and a separate dated plan-versus-implementation review afterward.
+Material deviations require their own dated rationale file. The archive is a
+historical record; the current reference documentation under `docs/` must
+still be updated as part of the same action.
 
 Engine-specific references:
 

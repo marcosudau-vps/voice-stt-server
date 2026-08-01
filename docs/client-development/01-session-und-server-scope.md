@@ -18,7 +18,8 @@ Der Server trennt **Stream-Zustand** von **teuren Inferenzressourcen**:
 
 | Ressource / Zustand | Scope | Lebensdauer | Konsequenz für Clients |
 | --- | --- | --- | --- |
-| `sessionId` / `clientId` | Session | eine WebSocket-Verbindung | Bei Reconnect immer neu; nicht als dauerhaftes Geräte-ID verwenden |
+| `sessionId` | Session | eine WebSocket-Verbindung | Bei Reconnect immer neu; nie zur Fortsetzung alter Segmente verwenden |
+| `clientId` | Clientkorrelation | vom Client stabil lieferbar, sonst serverseitig erzeugt | Browser persistiert sie lokal; nicht mit `sessionId` gleichsetzen |
 | WebSocket-Verbindung | Session | bis Disconnect | Server sendet Session-Events nur an den Besitzer |
 | `AudioToTextRecorder` | Session | Verbindung | Eigene Stream-Zustandsmaschine je Client |
 | WebRTC-/Silero-VAD-Zustand | Session | Verbindung bzw. `clear`/Recorder-Reset | Sprache eines Clients beeinflusst keinen anderen Stream |
@@ -43,7 +44,7 @@ Der Server trennt **Stream-Zustand** von **teuren Inferenzressourcen**:
 | Public Settings / Runtime-Vertrag | Server | Prozess, teilweise änderbar | In `hello`, `ready` und `/api/config` sichtbar |
 | Limits | Server | Prozess, teilweise änderbar | Alle Sessions konkurrieren unter denselben Obergrenzen |
 | Modell- und Wake-Word-Registry | Server | Prozess | Gemeinsamer Katalog lokaler Modelle |
-| Audit-/Performance-Logging | Server | Prozess | Gemeinsame Dateien/Streams; Events enthalten ggf. `sessionId` |
+| Strukturiertes Event-Logging | Server | Prozess | Vier Channels, SQLite, Kalenderdateien und Live-Fan-out; Sessionevents enthalten ggf. `sessionId` |
 | Persistierte Runtime-Konfiguration | Server | über Neustarts | Kann Startwerte aus YAML/CLI beim App-Aufbau überschreiben |
 | `/api/metrics` | Server | Prozess | Aggregiert alle aktiven Sessions, Queues und Worker |
 
@@ -301,9 +302,9 @@ flowchart LR
 
 ## Datenschutz- und Isolationsaussage
 
-Transcript-Events werden mit `publish_session(sessionId, ...)` gezielt an die
-zugehörige Verbindung gesendet. `ready` und Startfehler können bewusst über
-`publish_all(...)` an alle Verbindungen gehen. Audio wird nicht broadcastet.
+Transcript-Events und `ready` werden gezielt mit der jeweiligen `sessionId` an
+die zugehörige Verbindung gesendet. Bestimmte serverweite Startfehler können
+weiterhin für alle Verbindungen relevant sein. Audio wird nicht broadcastet.
 
 Der Transkriptionskanal kann – abhängig von `transcript_log_mode` –
 Transkripttext enthalten; Audit- und Performancekanal enthalten keinen

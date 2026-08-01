@@ -34,6 +34,8 @@ engines, wake-word backends, and model runtimes are loaded lazily so importing
 | `VoiceSTT_server/stt_server.py` | Legacy dual-websocket server CLI and runtime callbacks. | Compatibility path; avoid mixing legacy server cleanup with recorder refactors. |
 | `api_fastapi_server/server.py` | Source-only browser streaming reference server and CLI. | Not packaged as the core wheel, but it is the maintained multi-user browser reference implementation. |
 | `api_fastapi_server/protocol.py` | Binary packet encode/decode helpers and protocol validation errors. | Packet shape is a service boundary. Keep serialized formats stable. |
+| `VoiceSTT_server/server.py` | Installed production entry point for the maintained FastAPI server. | Keep it aligned with the implementation in `api_fastapi_server/server.py`. |
+| `VoiceSTT_server/event_logging.py` | Structured event envelope, redaction, bounded fan-out, calendar JSONL, SQLite history and live subscribers. | Persisted schema and cursor behavior are client-visible contracts. |
 
 ## Core Package Modules
 
@@ -68,7 +70,10 @@ engines, wake-word backends, and model runtimes are loaded lazily so importing
 | --- | --- | --- |
 | `api_fastapi_server/protocol.py` | Binary audio packet format: little-endian metadata length, JSON metadata, then PCM bytes. | Serialized protocol boundary; validate with `tests/unit/test_fastapi_server_protocol.py`. |
 | `api_fastapi_server/server.py` | Maintained browser streaming reference server: settings, session store, websocket app, scheduler, fair queue, shared engine workers, recorder-backed sessions, metrics, and runtime settings. | Large multi-responsibility file. Split by server concern only after tests cover packet handling, scheduler behavior, and session lifecycles. |
-| `api_fastapi_server/static/index.html` | Browser UI for the reference server. | Keep websocket protocol assumptions aligned with `protocol.py`. |
+| `api_fastapi_server/static/index.html` | Browser UI, stable client ID, transcription socket and separate live-log socket. | Keep websocket, cursor and session-token assumptions aligned with the server contracts. |
+| `VoiceSTT_server/server.py` | Packaged production entry point delegating to the maintained FastAPI implementation. | Preserve installed CLI/module compatibility. |
+| `VoiceSTT_server/event_logging.py` | Common envelope, redaction, sink queues, calendar files, SQLite history, retention and live fan-out. | Treat channel names, cursor ordering and transcript policy as persisted/public contracts. |
+| `VoiceSTT_server/operations.py` | Model registry, runtime persistence and compatibility facades for audit/performance emitters. | Keep existing event names and configuration behavior compatible. |
 | `VoiceSTT_server/stt_server.py` | Legacy control/data websocket server around `AudioToTextRecorder`. | Compatibility path. Do not couple new FastAPI restructuring to legacy server cleanup. |
 | `VoiceSTT_server/stt_cli_client.py` | CLI client for the legacy server. | Keep command behavior aligned with the legacy protocol. |
 | `app_browserclient/*`, `app_webserver/*`, `app_talk_with_llm/*` | Older/manual examples and demos. | Useful for smoke testing and user workflows, but avoid treating examples as the primary architecture source. |
@@ -81,6 +86,7 @@ engines, wake-word backends, and model runtimes are loaded lazily so importing
 | Realtime behavior | `tests/unit/test_realtime_text_stabilizer.py`, `tests/unit/test_realtime_boundary_detector.py`, `tests/unit/test_realtime_streaming_transcription.py` | Partial text stabilization, boundary scheduling, streaming engine integration. |
 | VAD and pre-roll | `tests/unit/test_silero_vad_backend.py`, `tests/unit/test_preroll.py`, `tests/unit/test_audio_recorder_preroll_integration.py` | Backend selection, pure pre-roll trimming, recorder integration. |
 | FastAPI server | `tests/unit/test_fastapi_server_protocol.py`, `tests/unit/test_fastapi_server_multi_user.py`, `tests/unit/test_fastapi_server_multi_user_asr_integration.py` | Packet contract, session handling, scheduler/recorder integration. |
+| Structured logging | `tests/unit/test_server_operations.py`, `tests/unit/test_fastapi_server_multi_user.py`, `tests/unit/test_openai_compatible_endpoint.py`, `tests/unit/test_project_config.py` | Envelope, redaction, queues, calendar/SQLite persistence, history, session scope and `/data` paths. |
 | Manual and smoke scripts | `tests/voicestt_*.py`, `tests/*talk*.py`, `tests/feed_audio.py`, `tools/*` when present | Device, model, websocket, and real-audio workflows that are too expensive for fast unit tests. |
 | Docs | `docs/*.md`, `docs/engines/*.md` | User-facing setup, configuration, engine selection, troubleshooting, and refactoring guidance. |
 

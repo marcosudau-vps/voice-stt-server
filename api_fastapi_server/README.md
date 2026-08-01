@@ -335,9 +335,16 @@ results from earlier session generations.
 events use the `system`, `audit`, `transcription`, and `performance` channels.
 The log WebSocket confirms subscriptions with `log.subscribed`, supports cursor
 replay followed by live delivery, answers client pings with `log.pong`, and
-reports sink/subscriber loss through `log.gap` without mixing log traffic into
-the audio/transcription socket. See
+reports sink/subscriber loss through best-effort `log.gap` notices and
+authoritative drop counters without mixing log traffic into the
+audio/transcription socket. See
 `docs/structured-logging.md` for the event schema and subscription protocol.
+
+The session token is valid for 24 hours within the current server process and
+can read only its own session in `audit`, `transcription`, and `performance`.
+The `system` channel and cross-session access require the admin key. Send the
+token in `X-VoiceSTT-Log-Token` for HTTP or in the first `/ws/logs` subscribe
+message, never in a URL.
 
 Wake Word behavior can be selected per connection:
 

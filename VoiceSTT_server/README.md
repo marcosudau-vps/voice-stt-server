@@ -10,7 +10,10 @@ processes and may run on different hosts. One server instance provides:
 - OpenAI-compatible `POST /v1/audio/transcriptions`, including SSE streaming;
 - health, configuration, session and metrics endpoints;
 - a local model registry, transactional model switching and typed admin endpoints;
-- structured stdout/rotating-file request logs and optional audio archiving;
+- four structured event channels (`system`, `audit`, `transcription`, and
+  `performance`) with calendar JSONL files, indexed SQLite history, optional
+  stdout mirroring, session-scoped live delivery at `/ws/logs`, and optional
+  audio archiving;
 - CPU-only execution with no device-driver probing;
 - local-only model resolution when `VOICESTT_OFFLINE_MODELS=1`.
 
@@ -28,9 +31,10 @@ Open `http://localhost:8010` for the browser client. Use
 protocol remains available as `stt-server-legacy`, but the modern server is the
 supported multi-user path.
 
-The startup policy permits one model up to `medium` together with one model
-strictly smaller than `medium`. Reusing the same model consumes one model lane.
-Larger or ambiguous two-model combinations fail before any model is loaded.
+The startup memory policy validates the requested model lanes before loading.
+The current versioned default permits two medium-equivalent lanes through
+`allow_two_medium_models`; deployments can restore the stricter one-medium
+limit. Reusing the same engine and model consumes one shared lane.
 
 Clients that must send `model=whisper-1` can choose a loaded local lane with
 the `X-VoiceSTT-Model` header or the multipart field `voicestt_model`.
@@ -38,5 +42,14 @@ the `X-VoiceSTT-Model` header or the multipart field `voicestt_model`.
 uses the typed `/api/language`, `/api/wake-word`, `/api/logging`, and
 `/api/models/active` endpoints. Remote administration requires the configured
 admin key; persisted runtime JSON never contains secrets.
+
+Each `/ws/transcribe` connection can inherit, disable, or explicitly enable
+OpenWakeWord for only that session. The effective profile and logical model
+catalog are returned in `hello.sessionConfig` and `sessionCapabilities`.
+`hello.logAccess` supplies the session-scoped token used for the separate log
+WebSocket and history endpoints. See the
+[FastAPI server guide](../docs/fastapi-server.md),
+[session-local Wake Word reference](../docs/session-wakeword-erweiterung.md),
+and [structured logging contract](../docs/structured-logging.md).
 
 See [the complete Windows CPU deployment guide](../docs/windows-cpu-deployment.md).

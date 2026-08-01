@@ -1,14 +1,34 @@
 # Wake Words
 
-VoiceSTT uses OpenWakeWord to wait for a wake word before recording the
-following speech. The FastAPI server's current admin and session contracts
-publish only this backend.
+The `AudioToTextRecorder` library supports Porcupine and OpenWakeWord to wait
+for a wake word before recording the following speech. The FastAPI server's
+current admin, browser, and session contracts deliberately publish only
+OpenWakeWord.
 
 Install the OpenWakeWord extra:
 
 ```bash
 python -m pip install "VoiceSTT[openwakeword]"
 ```
+
+For the library-level Porcupine backend instead:
+
+```bash
+python -m pip install "VoiceSTT[porcupine]"
+```
+
+```python
+from VoiceSTT import AudioToTextRecorder
+
+recorder = AudioToTextRecorder(
+    wakeword_backend="pvporcupine",
+    wake_words="jarvis",
+)
+```
+
+If `wake_words` is set without an explicit backend, the recorder selects
+Porcupine for backward compatibility. This Porcupine path is a library feature;
+it is not selectable through the current FastAPI session or admin contract.
 
 ## Local model catalog
 
