@@ -85,8 +85,8 @@ Secrets stehen ausschließlich in der nicht versionierten Root-Datei `.env`.
 ### Persistierte Runtime-Konfiguration
 
 Administrative Endpunkte können die Baseline für zukünftige Sessions ändern.
-Wenn `runtime_config_path` gesetzt ist, werden erlaubte Runtime-Werte ohne
-Secrets persistiert.
+Wenn `data_root_path` gesetzt ist, werden erlaubte Runtime-Werte ohne Secrets
+unter `<data_root_path>/config/runtime.json` persistiert.
 
 ### Sitzungslokale Konfiguration
 

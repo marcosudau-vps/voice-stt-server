@@ -17,6 +17,10 @@
 
 ### Changed
 
+- Corrected the logging rollout so Docker has one generated-data root
+  (`data_root_path: /data`). Audit, performance, transcription, system, audio,
+  SQLite history, and persisted runtime configuration paths are now derived
+  internally and can no longer drift outside the mounted volume.
 - The FastAPI Wake Word admin and session contracts now expose OpenWakeWord
   only; Porcupine is omitted from the model catalog and browser selector.
 - Ready notifications are session-specific so they cannot leak another

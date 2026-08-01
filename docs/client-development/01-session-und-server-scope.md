@@ -116,7 +116,6 @@ Die Einteilung ist deshalb Teil des aktuell implementierten Verwaltungsvertrags.
 
 | Einstellung | Bedeutung |
 | --- | --- |
-| `audio_log_dir` | Zielverzeichnis archivierter Audiodateien |
 | `log_level` | gespeicherter Log-Level-Wert |
 | `max_active_speakers` | serverweites Limit gleichzeitiger Aufnahmen |
 | `max_audio_packet_bytes` | maximal akzeptierte PCM-Nutzlast pro Binärpaket |
@@ -131,7 +130,6 @@ Die Einteilung ist deshalb Teil des aktuell implementierten Verwaltungsvertrags.
 | `realtime_degradation_threshold_ms` | Schwelle für degradierte Realtime-Planung |
 | `request_logging_enabled` | Audit-/Request-Logging aktiv |
 | `request_log_stdout` | Audit-Events zusätzlich auf stdout |
-| `request_log_path` | Wurzelverzeichnis des Audit-Kanals |
 | `request_log_transcripts` | Legacy-Schalter für `transcript_log_mode` (`false` = `none`, `true` = `final`) |
 | `transcript_log_mode` | Transkripttext `none`, `final` oder `full`; ausschließlich im Transkriptionskanal |
 | `request_log_max_bytes` | Rotationsgröße der Audit-Datei |
@@ -139,19 +137,16 @@ Die Einteilung ist deshalb Teil des aktuell implementierten Verwaltungsvertrags.
 | `request_log_retention_days` | Aufbewahrung des Audit-Kanals in Tagen; `0` deaktiviert Löschung |
 | `performance_logging_enabled` | Performance-Kanal aktiv |
 | `performance_log_stdout` | Performance-Events zusätzlich auf stdout |
-| `performance_log_path` | Wurzelverzeichnis des Performance-Kanals |
 | `performance_log_max_bytes` | Rotationsgröße der Performance-Datei |
 | `performance_log_backup_count` | Legacy-Kompatibilitätswert; löscht keine Kalenderdateien |
 | `performance_log_retention_days` | Aufbewahrung des Performance-Kanals in Tagen; `0` deaktiviert Löschung |
 | `transcription_logging_enabled` | transportübergreifender Transkriptionskanal aktiv |
 | `transcription_log_stdout` | Transkriptionsereignisse zusätzlich auf stdout |
-| `transcription_log_path` | Wurzelverzeichnis des Transkriptionskanals |
 | `transcription_log_max_bytes` | Rotationsgröße einer Transkriptions-Tagesdatei |
 | `transcription_log_backup_count` | Legacy-Kompatibilitätswert; löscht keine Kalenderdateien |
 | `transcription_log_retention_days` | Aufbewahrung des Transkriptionskanals in Tagen; `0` deaktiviert Löschung |
 | `system_event_logging_enabled` | strukturierter Systemkanal aktiv |
 | `system_event_log_stdout` | Systemereignisse zusätzlich auf stdout |
-| `system_event_log_path` | Wurzelverzeichnis des Systemkanals |
 | `system_event_log_max_bytes` | Rotationsgröße einer System-Tagesdatei |
 | `system_event_log_backup_count` | Legacy-Kompatibilitätswert; löscht keine Kalenderdateien |
 | `system_event_log_retention_days` | Aufbewahrung des Systemkanals in Tagen; `0` deaktiviert Löschung |
@@ -223,7 +218,7 @@ webrtc_sensitivity
 | Gemeinsame Engineparameter | `device`, `compute_type`, `download_root`, `language`, `normalize_audio`, `model_warmup` |
 | Tuning | `tuning_profile`, `tuning_description` |
 | OpenAI-API | `openai_api_enabled`, `openai_max_file_bytes`, `openai_model_aliases` |
-| Persistenz | `runtime_config_path` |
+| Persistenz | `data_root_path`; daraus werden alle Logkanäle, Audio, Event-Store und `config/runtime.json` intern abgeleitet |
 
 Modellwechsel sind separat über `PUT /api/models/active` implementiert. Dafür
 dürfen keine WebSocket-Sessions und keine aktiven Sprecher existieren. Der

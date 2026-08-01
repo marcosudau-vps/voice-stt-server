@@ -141,25 +141,22 @@ Capacity and scheduling flags:
 | `--model-idle-timeout-seconds` | Inactivity period before automatic unloading; default `3600`. |
 | `--model-memory-policy` / `--no-model-memory-policy` | Enables/disables the CPU model memory guard. |
 | `--allow-two-medium-models` / `--no-allow-two-medium-models` | Allows two medium-equivalent lanes (default) or restores the one-medium limit. Standard `large-v3-turbo` counts as medium. |
+| `--data-root` | Single root for generated runtime data. Docker uses `/data`; channel directories, audio, SQLite and `config/runtime.json` are derived internally. |
 | `--performance-logging` / `--no-performance-logging` | Enables/disables the separate performance JSONL channel. |
 | `--performance-log-stdout` / `--no-performance-log-stdout` | Mirrors performance events to stdout for Dozzle. |
-| `--performance-log-path` | Calendar JSONL root for performance events; default `logs/performance`. |
 | `--performance-log-max-bytes` | Maximum size of one performance log file. |
 | `--performance-log-backup-count` | Legacy compatibility setting; calendar files are not deleted automatically. |
 | `--performance-log-retention-days` | Deletes older performance calendar files and store entries; `0` disables deletion. |
 | `--transcription-logging` / `--no-transcription-logging` | Enables/disables the transport-independent transcription event channel. |
 | `--transcription-log-stdout` / `--no-transcription-log-stdout` | Mirrors transcription events to stdout. |
-| `--transcription-log-path` | Calendar JSONL root for transcription events. |
 | `--transcription-log-retention-days` | Deletes older transcription calendar files and store entries; `0` disables deletion. |
 | `--system-event-logging` / `--no-system-event-logging` | Enables/disables selected structured server lifecycle events. |
-| `--system-event-log-path` | Calendar JSONL root for system events. |
 | `--system-event-log-retention-days` | Deletes older system calendar files and store entries; `0` disables deletion. |
 | `--transcript-mode` | Transcript policy `none`, `final`, or `full`; text is permitted only in the transcription channel. |
 | `--request-log-retention-days` | Deletes older audit calendar files and store entries; `0` disables deletion. |
 | `--log-calendar-timezone` | Calendar timezone for `YYYY-MM/YYYY-MM-DD.jsonl` paths; default `Europe/Berlin`. |
 | `--realtime-log-detail` | `off`, `summary`, or `events` for realtime cadence measurements. |
 | `--event-store` / `--no-event-store` | Enables/disables the indexed SQLite history. |
-| `--event-store-path` | SQLite event history path. |
 | `--log-live` / `--no-log-live` | Enables/disables `/ws/logs`. |
 
 Named tuning profiles are available through `--profile`; explicit flags

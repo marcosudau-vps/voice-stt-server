@@ -1,5 +1,6 @@
 import io
 import json
+from pathlib import Path
 import threading
 import time
 import wave
@@ -300,7 +301,18 @@ def test_override_is_rejected_unless_official_model_is_whisper_one():
 
 
 def test_admin_api_requires_key_and_typed_endpoints_persist(tmp_path, monkeypatch):
-    runtime_path = tmp_path / "runtime.json"
+    runtime_path = tmp_path / "config" / "runtime.json"
+    runtime_path.parent.mkdir()
+    runtime_path.write_text(
+        json.dumps({
+            "version": 1,
+            "settings": {
+                "max_sessions": 3,
+                "request_log_path": str(tmp_path / "legacy-outside-root"),
+            },
+        }),
+        encoding="utf-8",
+    )
     wake_root = tmp_path / "wakewords"
     wake_root.mkdir()
     (wake_root / "hey_jarvis_v0.1.onnx").write_bytes(b"wake")
@@ -308,15 +320,24 @@ def test_admin_api_requires_key_and_typed_endpoints_persist(tmp_path, monkeypatc
     settings = ServerSettings(
         model_warmup=False,
         admin_api_key="admin-secret",
-        runtime_config_path=str(runtime_path),
+        data_root_path=str(tmp_path),
         request_logging_enabled=False,
     )
     app = create_app(settings, scheduler_factory=ImmediateScheduler)
+    assert settings.max_sessions == 3
+    assert Path(settings.request_log_path) == tmp_path / "logs" / "audit"
     headers = {"X-VoiceSTT-Admin-Key": "admin-secret"}
     with TestClient(app) as client:
         assert client.get("/api/models").status_code == 401
         assert client.patch("/api/config", json={"beam_size": 3}).status_code == 401
         assert client.get("/api/models", headers=headers).status_code == 200
+        path_update = client.put(
+            "/api/logging",
+            headers=headers,
+            json={"file": str(tmp_path / "outside-root")},
+        )
+        assert path_update.status_code == 400
+        assert path_update.json()["fields"] == ["file"]
         assert client.put("/api/language", headers=headers, json={"language": "de"}).status_code == 200
         wake = client.put("/api/wake-word", headers=headers, json={
             "enabled": True, "backend": "openwakeword", "words": "hey_jarvis",
@@ -328,19 +349,18 @@ def test_admin_api_requires_key_and_typed_endpoints_persist(tmp_path, monkeypatc
         assert set(wake_config["availableModels"]) == {"openwakeword"}
         logging_response = client.put("/api/logging", headers=headers, json={
             "enabled": True, "stdout": False, "transcriptMode": "none",
-            "file": str(tmp_path / "audit.jsonl"),
             "retentionDays": 45,
             "performanceEnabled": True,
             "performanceStdout": False,
-            "performanceFile": str(tmp_path / "performance.jsonl"),
             "performanceRetentionDays": 14,
             "transcriptionRetentionDays": 90,
             "systemRetentionDays": 30,
         })
         assert logging_response.status_code == 200
         logging_config = client.get("/api/logging", headers=headers).json()
+        assert logging_config["dataRoot"] == str(tmp_path)
         assert logging_config["performance"]["enabled"] is True
-        assert logging_config["performance"]["file"].endswith("performance.jsonl")
+        assert Path(logging_config["performance"]["file"]) == tmp_path / "logs" / "performance"
         assert logging_config["transcriptMode"] == "none"
         assert logging_config["transcripts"] is False
         assert logging_config["retentionDays"] == 45
@@ -495,14 +515,12 @@ def test_openai_model_list_and_default_language_are_exposed():
 
 
 def test_structured_request_log_contains_completed_event(tmp_path):
-    log_path = tmp_path / "requests.jsonl"
-    transcription_log_path = tmp_path / "transcription"
+    transcription_log_path = tmp_path / "logs" / "transcription"
     settings = ServerSettings(
         model_warmup=False,
+        data_root_path=str(tmp_path),
         request_logging_enabled=True,
         request_log_stdout=False,
-        request_log_path=str(log_path),
-        transcription_log_path=str(transcription_log_path),
     )
     app = create_app(settings, scheduler_factory=ImmediateScheduler)
     with TestClient(app) as client:
@@ -513,7 +531,7 @@ def test_structured_request_log_contains_completed_event(tmp_path):
         )
 
     assert response.status_code == 200
-    log_files = list((tmp_path / "requests").glob("*/*.jsonl"))
+    log_files = list((tmp_path / "logs" / "audit").glob("*/*.jsonl"))
     assert len(log_files) == 1
     events = [
         json.loads(line)
@@ -540,13 +558,9 @@ def test_structured_request_log_contains_completed_event(tmp_path):
 def test_log_history_api_returns_unified_http_transcription_events(tmp_path):
     settings = ServerSettings(
         model_warmup=False,
+        data_root_path=str(tmp_path),
         request_log_stdout=False,
-        request_log_path=str(tmp_path / "audit"),
         performance_log_stdout=False,
-        performance_log_path=str(tmp_path / "performance"),
-        transcription_log_path=str(tmp_path / "transcription"),
-        system_event_log_path=str(tmp_path / "system"),
-        event_store_path=str(tmp_path / "events.sqlite3"),
     )
     app = create_app(settings, scheduler_factory=ImmediateScheduler)
     with TestClient(app) as client:

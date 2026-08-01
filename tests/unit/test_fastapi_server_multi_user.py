@@ -904,13 +904,9 @@ class FastAPIMultiUserWebSocketTests(unittest.TestCase):
             root = Path(temp_dir)
             settings = ServerSettings(
                 model_warmup=False,
+                data_root_path=str(root),
                 request_log_stdout=False,
-                request_log_path=str(root / "audit"),
                 performance_log_stdout=False,
-                performance_log_path=str(root / "performance"),
-                transcription_log_path=str(root / "transcription"),
-                system_event_log_path=str(root / "system"),
-                event_store_path=str(root / "events.sqlite3"),
             )
             app = create_app(
                 settings,
@@ -960,17 +956,13 @@ class FastAPIMultiUserWebSocketTests(unittest.TestCase):
             root = Path(temp_dir)
             settings = ServerSettings(
                 model_warmup=False,
+                data_root_path=str(root),
                 realtime_processing_pause=0.0,
                 realtime_min_audio_seconds=0.01,
                 min_length_of_recording=0.0,
                 post_speech_silence_duration=60.0,
                 request_log_stdout=False,
-                request_log_path=str(root / "audit"),
                 performance_log_stdout=False,
-                performance_log_path=str(root / "performance"),
-                transcription_log_path=str(root / "transcription"),
-                system_event_log_path=str(root / "system"),
-                event_store_path=str(root / "events.sqlite3"),
             )
             app = create_app(
                 settings,

@@ -151,6 +151,7 @@ settings:
   realtime_transcription_engine: kroko_onnx
   language: de
   device: cpu
+  data_root_path: /data
   max_sessions: 8
   model_idle_unload_enabled: true
   model_idle_timeout_seconds: 1800
@@ -169,11 +170,20 @@ settings:
         self.assertEqual(settings.max_sessions, 8)
         self.assertEqual(settings.model_idle_timeout_seconds, 1800.0)
         self.assertEqual(settings.transcription_engine_options, {"local_files_only": True})
+        self.assertEqual(Path(settings.request_log_path), Path("/data/logs/audit"))
+        self.assertEqual(
+            Path(settings.runtime_config_path),
+            Path("/data/config/runtime.json"),
+        )
 
     def test_yaml_start_config_rejects_secrets_and_gpu(self):
         for body, message in (
             ("settings:\n  admin_api_key: geheim\n", "Env-Datei"),
             ("settings:\n  device: cuda\n", "ausschließlich device: cpu"),
+            (
+                "settings:\n  request_log_path: /tmp/audit\n",
+                "automatisch abgeleitet",
+            ),
         ):
             with self.subTest(body=body), tempfile.TemporaryDirectory() as directory:
                 config = Path(directory) / "stt-config.yaml"

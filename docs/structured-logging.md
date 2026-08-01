@@ -81,7 +81,15 @@ one `YYYY-MM-DD.jsonl` file:
   system/
     2026-07/
       2026-07-30.jsonl
+  audio/
+  voicestt-events.sqlite3
+/data/config/
+  runtime.json
 ```
+
+`data_root_path` beziehungsweise `--data-root` ist der einzige konfigurierbare
+Pfad für erzeugte Laufzeitdaten. Die Kanalordner, das Audioarchiv, die
+SQLite-Datenbank und `config/runtime.json` werden intern daraus abgeleitet.
 
 An existing file is appended after a same-day restart. When a daily file
 reaches its configured size, numbered daily segments are created, for example
@@ -95,9 +103,8 @@ has an independent `*_log_retention_days` setting. The default `0` disables
 automatic deletion. A positive value prunes only dated JSONL files below that
 channel's configured root and applies the same channel policy to SQLite.
 
-Legacy values ending in `.jsonl` are accepted as channel-root hints. For
-example `/data/logs/voicestt-requests.jsonl` writes below
-`/data/logs/voicestt-requests/YYYY-MM/`.
+Einzelne Kanalpfade sind nicht konfigurierbar. Dadurch können insbesondere im
+Docker-Betrieb keine Kanäle versehentlich außerhalb des `/data`-Mounts landen.
 
 ## Transcription lifecycle
 

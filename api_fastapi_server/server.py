@@ -129,7 +129,6 @@ TUNING_PROFILES = {
 }
 
 ACTIVE_RUNTIME_SETTINGS = {
-    "audio_log_dir",
     "log_calendar_timezone",
     "log_level",
     "log_live_enabled",
@@ -145,14 +144,12 @@ ACTIVE_RUNTIME_SETTINGS = {
     "model_memory_policy_enabled",
     "request_log_backup_count",
     "request_log_max_bytes",
-    "request_log_path",
     "request_log_retention_days",
     "request_log_stdout",
     "request_log_transcripts",
     "request_logging_enabled",
     "performance_log_backup_count",
     "performance_log_max_bytes",
-    "performance_log_path",
     "performance_log_retention_days",
     "performance_log_stdout",
     "performance_logging_enabled",
@@ -160,13 +157,11 @@ ACTIVE_RUNTIME_SETTINGS = {
     "save_audio_files",
     "system_event_log_backup_count",
     "system_event_log_max_bytes",
-    "system_event_log_path",
     "system_event_log_retention_days",
     "system_event_log_stdout",
     "system_event_logging_enabled",
     "transcription_log_backup_count",
     "transcription_log_max_bytes",
-    "transcription_log_path",
     "transcription_log_retention_days",
     "transcription_log_stdout",
     "transcription_logging_enabled",
@@ -213,6 +208,7 @@ STARTUP_ONLY_SETTINGS = {
     "beam_size",
     "beam_size_realtime",
     "compute_type",
+    "data_root_path",
     "device",
     "download_root",
     "host",
@@ -233,10 +229,18 @@ STARTUP_ONLY_SETTINGS = {
     "openai_api_key",
     "openai_max_file_bytes",
     "openai_model_aliases",
-    "runtime_config_path",
     "event_log_queue_size",
     "event_store_enabled",
+}
+
+DERIVED_DATA_PATH_SETTINGS = {
+    "audio_log_dir",
     "event_store_path",
+    "performance_log_path",
+    "request_log_path",
+    "runtime_config_path",
+    "system_event_log_path",
+    "transcription_log_path",
 }
 
 INT_SETTINGS = {
@@ -317,19 +321,13 @@ BOOL_SETTINGS = {
 
 OPTIONAL_STRING_SETTINGS = {
     "admin_api_key",
-    "audio_log_dir",
+    "data_root_path",
     "download_root",
     "initial_prompt",
     "initial_prompt_realtime",
     "openwakeword_model_paths",
     "realtime_transcription_engine",
     "openai_api_key",
-    "request_log_path",
-    "performance_log_path",
-    "system_event_log_path",
-    "transcription_log_path",
-    "event_store_path",
-    "runtime_config_path",
 }
 
 DICT_SETTINGS = {
@@ -389,9 +387,10 @@ class ServerSettings:
     audio_queue_size: int = 128
     max_audio_packet_bytes: int = 512 * 1024
     log_level: str = "INFO"
+    data_root_path: Optional[str] = None
     request_logging_enabled: bool = True
     request_log_stdout: bool = True
-    request_log_path: Optional[str] = "logs/audit"
+    request_log_path: str = field(init=False)
     request_log_transcripts: bool = True
     transcript_log_mode: Optional[str] = None
     request_log_max_bytes: int = 10 * 1024 * 1024
@@ -399,30 +398,30 @@ class ServerSettings:
     request_log_retention_days: int = 0
     performance_logging_enabled: bool = True
     performance_log_stdout: bool = True
-    performance_log_path: Optional[str] = "logs/performance"
+    performance_log_path: str = field(init=False)
     performance_log_max_bytes: int = 10 * 1024 * 1024
     performance_log_backup_count: int = 12
     performance_log_retention_days: int = 0
     transcription_logging_enabled: bool = True
     transcription_log_stdout: bool = False
-    transcription_log_path: Optional[str] = "logs/transcription"
+    transcription_log_path: str = field(init=False)
     transcription_log_max_bytes: int = 10 * 1024 * 1024
     transcription_log_backup_count: int = 12
     transcription_log_retention_days: int = 0
     system_event_logging_enabled: bool = True
     system_event_log_stdout: bool = False
-    system_event_log_path: Optional[str] = "logs/system"
+    system_event_log_path: str = field(init=False)
     system_event_log_max_bytes: int = 10 * 1024 * 1024
     system_event_log_backup_count: int = 12
     system_event_log_retention_days: int = 0
     log_calendar_timezone: str = "Europe/Berlin"
     realtime_log_detail: str = "events"
     event_store_enabled: bool = True
-    event_store_path: Optional[str] = "logs/voicestt-events.sqlite3"
+    event_store_path: str = field(init=False)
     event_log_queue_size: int = 10000
     log_live_enabled: bool = True
     save_audio_files: bool = False
-    audio_log_dir: str = "logs/audio"
+    audio_log_dir: str = field(init=False)
     max_sessions: int = 4
     max_active_speakers: int = 4
     max_audio_queue_seconds_per_session: float = 30.0
@@ -447,7 +446,22 @@ class ServerSettings:
         "fast": "realtime",
     })
     openai_max_file_bytes: int = 25 * 1024 * 1024
-    runtime_config_path: Optional[str] = None
+    runtime_config_path: Optional[str] = field(init=False)
+
+    def __post_init__(self):
+        root = Path(self.data_root_path).expanduser() if self.data_root_path else None
+        logs_root = root / "logs" if root is not None else Path("logs")
+        self.request_log_path = str(logs_root / "audit")
+        self.performance_log_path = str(logs_root / "performance")
+        self.transcription_log_path = str(logs_root / "transcription")
+        self.system_event_log_path = str(logs_root / "system")
+        self.event_store_path = str(logs_root / "voicestt-events.sqlite3")
+        self.audio_log_dir = str(logs_root / "audio")
+        self.runtime_config_path = (
+            str(root / "config" / "runtime.json")
+            if root is not None
+            else None
+        )
 
     def public_dict(self):
         data = asdict(self)
@@ -4373,14 +4387,12 @@ class VoiceSTTService:
 
         if applied:
             logging_names = {
-                "audio_log_dir",
                 "log_calendar_timezone",
                 "log_live_enabled",
                 "realtime_log_detail",
                 "transcript_log_mode",
                 "request_log_backup_count",
                 "request_log_max_bytes",
-                "request_log_path",
                 "request_log_retention_days",
                 "request_log_stdout",
                 "request_log_transcripts",
@@ -4388,19 +4400,16 @@ class VoiceSTTService:
                 "save_audio_files",
                 "performance_log_backup_count",
                 "performance_log_max_bytes",
-                "performance_log_path",
                 "performance_log_retention_days",
                 "performance_log_stdout",
                 "performance_logging_enabled",
                 "system_event_log_backup_count",
                 "system_event_log_max_bytes",
-                "system_event_log_path",
                 "system_event_log_retention_days",
                 "system_event_log_stdout",
                 "system_event_logging_enabled",
                 "transcription_log_backup_count",
                 "transcription_log_max_bytes",
-                "transcription_log_path",
                 "transcription_log_retention_days",
                 "transcription_log_stdout",
                 "transcription_logging_enabled",
@@ -4426,7 +4435,8 @@ class VoiceSTTService:
             | NEW_SESSION_RUNTIME_SETTINGS
             | STARTUP_ONLY_SETTINGS
         ) - {
-            "admin_api_key", "openai_api_key", "runtime_config_path",
+            "admin_api_key", "data_root_path", "openai_api_key",
+            "runtime_config_path",
             "device", "host", "port",
         }
         return self.config_store.save(self.settings, allowed)
@@ -5115,7 +5125,15 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
     if settings.runtime_config_path:
         persisted = RuntimeConfigStore(settings.runtime_config_path).load()
         for name, value in persisted.items():
-            if hasattr(settings, name) and name not in {"admin_api_key", "openai_api_key"}:
+            if (
+                hasattr(settings, name)
+                and name not in DERIVED_DATA_PATH_SETTINGS
+                and name not in {
+                    "admin_api_key",
+                    "data_root_path",
+                    "openai_api_key",
+                }
+            ):
                 setattr(settings, name, coerce_setting_value(name, value))
     enforce_cpu_model_policy(settings)
     manager = ConnectionManager()
@@ -5427,6 +5445,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         if auth_error is not None:
             return auth_error
         return JSONResponse({
+            "dataRoot": settings.data_root_path,
             "enabled": settings.request_logging_enabled,
             "stdout": settings.request_log_stdout,
             "file": settings.request_log_path,
@@ -5482,28 +5501,41 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         auth_error = admin_auth_error(request)
         if auth_error is not None:
             return auth_error
+        derived_path_fields = {
+            "audioDirectory",
+            "file",
+            "performanceFile",
+            "systemDirectory",
+            "transcriptionDirectory",
+        }
+        supplied_path_fields = sorted(derived_path_fields.intersection(payload))
+        if supplied_path_fields:
+            return JSONResponse({
+                "error": (
+                    "Logpfade werden aus data_root_path abgeleitet und sind "
+                    "nicht einzeln konfigurierbar."
+                ),
+                "fields": supplied_path_fields,
+            }, status_code=400)
         mapping = {
             "enabled": "request_logging_enabled", "stdout": "request_log_stdout",
-            "file": "request_log_path", "transcripts": "request_log_transcripts",
+            "transcripts": "request_log_transcripts",
             "transcriptMode": "transcript_log_mode",
-            "saveAudio": "save_audio_files", "audioDirectory": "audio_log_dir",
+            "saveAudio": "save_audio_files",
             "maxBytes": "request_log_max_bytes", "backupCount": "request_log_backup_count",
             "retentionDays": "request_log_retention_days",
             "performanceEnabled": "performance_logging_enabled",
             "performanceStdout": "performance_log_stdout",
-            "performanceFile": "performance_log_path",
             "performanceMaxBytes": "performance_log_max_bytes",
             "performanceBackupCount": "performance_log_backup_count",
             "performanceRetentionDays": "performance_log_retention_days",
             "transcriptionEnabled": "transcription_logging_enabled",
             "transcriptionStdout": "transcription_log_stdout",
-            "transcriptionDirectory": "transcription_log_path",
             "transcriptionMaxBytes": "transcription_log_max_bytes",
             "transcriptionBackupCount": "transcription_log_backup_count",
             "transcriptionRetentionDays": "transcription_log_retention_days",
             "systemEnabled": "system_event_logging_enabled",
             "systemStdout": "system_event_log_stdout",
-            "systemDirectory": "system_event_log_path",
             "systemMaxBytes": "system_event_log_max_bytes",
             "systemBackupCount": "system_event_log_backup_count",
             "systemRetentionDays": "system_event_log_retention_days",
@@ -5848,7 +5880,12 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             for name, value in payload.get("settings", payload).items():
                 if not hasattr(candidate, name):
                     raise ValueError(f"Unbekannte Einstellung: {name}")
+                if name in DERIVED_DATA_PATH_SETTINGS:
+                    raise ValueError(
+                        f"{name} wird aus data_root_path abgeleitet und darf nicht gesetzt werden"
+                    )
                 setattr(candidate, name, coerce_setting_value(name, value))
+            candidate.__post_init__()
             enforce_cpu_model_policy(candidate)
             return JSONResponse({"valid": True, "settings": candidate.public_dict()})
         except ValueError as exc:
@@ -6684,7 +6721,7 @@ def _env_bool(name, default=False):
 
 
 YAML_CONFIG_SECRET_KEYS = {"admin_api_key", "openai_api_key"}
-YAML_CONFIG_DERIVED_KEYS = {"tuning_description"}
+YAML_CONFIG_DERIVED_KEYS = {"tuning_description"} | DERIVED_DATA_PATH_SETTINGS
 YAML_CONFIG_TO_ARG_DEST = {
     "model_warmup": ("no_model_warmup", lambda value: not value),
     "openai_api_enabled": ("disable_openai_api", lambda value: not value),
@@ -6698,7 +6735,6 @@ YAML_CONFIG_TO_ARG_DEST = {
     "request_logging_enabled": ("request_logging", bool),
     "model_idle_unload_enabled": ("model_idle_unload", bool),
     "model_memory_policy_enabled": ("model_memory_policy", bool),
-    "runtime_config_path": ("runtime_config_path", lambda value: value),
     "transcription_engine_options": (
         "transcription_engine_options",
         lambda value: json.dumps(value, ensure_ascii=False) if value is not None else None,
@@ -6900,8 +6936,13 @@ def parse_args(argv=None):
         default=_env_bool("VOICESTT_REQUEST_LOG_STDOUT", True),
     )
     parser.add_argument(
-        "--request-log-path",
-        default=os.getenv("VOICESTT_REQUEST_LOG_PATH", "logs/audit"),
+        "--data-root",
+        dest="data_root_path",
+        default=os.getenv("VOICESTT_DATA_ROOT"),
+        help=(
+            "Einziger Stammordner für erzeugte Laufzeitdaten. Logs, Audio, "
+            "Event-Datenbank und runtime.json werden intern darunter abgelegt."
+        ),
     )
     parser.add_argument(
         "--request-log-transcripts",
@@ -6927,13 +6968,6 @@ def parse_args(argv=None):
         action=argparse.BooleanOptionalAction,
         default=_env_bool("VOICESTT_PERFORMANCE_LOG_STDOUT", True),
     )
-    parser.add_argument(
-        "--performance-log-path",
-        default=os.getenv(
-            "VOICESTT_PERFORMANCE_LOG_PATH",
-            "logs/performance",
-        ),
-    )
     parser.add_argument("--performance-log-max-bytes", type=int, default=10 * 1024 * 1024)
     parser.add_argument("--performance-log-backup-count", type=int, default=12)
     parser.add_argument("--performance-log-retention-days", type=int, default=0)
@@ -6946,13 +6980,6 @@ def parse_args(argv=None):
         "--transcription-log-stdout",
         action=argparse.BooleanOptionalAction,
         default=_env_bool("VOICESTT_TRANSCRIPTION_LOG_STDOUT", False),
-    )
-    parser.add_argument(
-        "--transcription-log-path",
-        default=os.getenv(
-            "VOICESTT_TRANSCRIPTION_LOG_PATH",
-            "logs/transcription",
-        ),
     )
     parser.add_argument(
         "--transcription-log-max-bytes",
@@ -6978,10 +7005,6 @@ def parse_args(argv=None):
         "--system-event-log-stdout",
         action=argparse.BooleanOptionalAction,
         default=_env_bool("VOICESTT_SYSTEM_EVENT_LOG_STDOUT", False),
-    )
-    parser.add_argument(
-        "--system-event-log-path",
-        default=os.getenv("VOICESTT_SYSTEM_EVENT_LOG_PATH", "logs/system"),
     )
     parser.add_argument(
         "--system-event-log-max-bytes",
@@ -7013,13 +7036,6 @@ def parse_args(argv=None):
         action=argparse.BooleanOptionalAction,
         default=_env_bool("VOICESTT_EVENT_STORE", True),
     )
-    parser.add_argument(
-        "--event-store-path",
-        default=os.getenv(
-            "VOICESTT_EVENT_STORE_PATH",
-            "logs/voicestt-events.sqlite3",
-        ),
-    )
     parser.add_argument("--event-log-queue-size", type=int, default=10000)
     parser.add_argument(
         "--log-live",
@@ -7031,15 +7047,6 @@ def parse_args(argv=None):
         "--save-audio-files",
         action=argparse.BooleanOptionalAction,
         default=_env_bool("VOICESTT_SAVE_AUDIO_FILES", False),
-    )
-    parser.add_argument(
-        "--audio-log-dir",
-        default=os.getenv("VOICESTT_AUDIO_LOG_DIR", "logs/audio"),
-    )
-    parser.add_argument(
-        "--runtime-config",
-        dest="runtime_config_path",
-        default=os.getenv("VOICESTT_RUNTIME_CONFIG"),
     )
     parser.set_defaults(**yaml_defaults)
     return parser.parse_args(argv)
@@ -7149,9 +7156,9 @@ def settings_from_args(args):
         admin_api_key=args.admin_api_key,
         openai_model_aliases=parse_json_object(args.openai_model_aliases, "--openai-model-aliases"),
         openai_max_file_bytes=args.openai_max_file_bytes,
+        data_root_path=args.data_root_path,
         request_logging_enabled=args.request_logging,
         request_log_stdout=args.request_log_stdout,
-        request_log_path=args.request_log_path,
         request_log_transcripts=args.request_log_transcripts,
         transcript_log_mode=(
             args.transcript_log_mode
@@ -7162,19 +7169,16 @@ def settings_from_args(args):
         request_log_retention_days=args.request_log_retention_days,
         performance_logging_enabled=args.performance_logging,
         performance_log_stdout=args.performance_log_stdout,
-        performance_log_path=args.performance_log_path,
         performance_log_max_bytes=args.performance_log_max_bytes,
         performance_log_backup_count=args.performance_log_backup_count,
         performance_log_retention_days=args.performance_log_retention_days,
         transcription_logging_enabled=args.transcription_logging,
         transcription_log_stdout=args.transcription_log_stdout,
-        transcription_log_path=args.transcription_log_path,
         transcription_log_max_bytes=args.transcription_log_max_bytes,
         transcription_log_backup_count=args.transcription_log_backup_count,
         transcription_log_retention_days=args.transcription_log_retention_days,
         system_event_logging_enabled=args.system_event_logging,
         system_event_log_stdout=args.system_event_log_stdout,
-        system_event_log_path=args.system_event_log_path,
         system_event_log_max_bytes=args.system_event_log_max_bytes,
         system_event_log_backup_count=args.system_event_log_backup_count,
         system_event_log_retention_days=args.system_event_log_retention_days,
@@ -7187,12 +7191,9 @@ def settings_from_args(args):
             args.realtime_log_detail,
         ),
         event_store_enabled=args.event_store_enabled,
-        event_store_path=args.event_store_path,
         event_log_queue_size=args.event_log_queue_size,
         log_live_enabled=args.log_live_enabled,
         save_audio_files=args.save_audio_files,
-        audio_log_dir=args.audio_log_dir,
-        runtime_config_path=args.runtime_config_path,
     )
 
 

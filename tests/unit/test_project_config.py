@@ -21,6 +21,30 @@ class ProjectConfigTests(TestCase):
         self.assertEqual(payload["version"], 1)
         self.assertIn("settings", payload)
         self.assertIn("deployment", payload)
+        generated_path_keys = {
+            "data_root_path",
+            "request_log_path",
+            "performance_log_path",
+            "transcription_log_path",
+            "system_event_log_path",
+            "event_store_path",
+            "audio_log_dir",
+            "runtime_config_path",
+        }
+        self.assertEqual(
+            generated_path_keys.intersection(payload["settings"]),
+            {"data_root_path"},
+        )
+        self.assertEqual(payload["settings"]["data_root_path"], "/data")
+        compose = yaml.safe_load(
+            (root / "docker-compose.yml").read_text(encoding="utf-8")
+        )
+        data_mount = next(
+            mount
+            for mount in compose["services"]["server"]["volumes"]
+            if mount.get("target") == "/data"
+        )
+        self.assertEqual(data_mount["source"], "${VOICESTT_DATA_PATH:?Starte Compose über tools/compose.py}")
         defaults = load_example_app_defaults(root / "config.yaml")
         self.assertEqual(defaults["STT_BACKEND"], "faster_whisper")
         self.assertEqual(defaults["USER_COLOR_RGB"], "0,188,242")
