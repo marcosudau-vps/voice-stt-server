@@ -223,7 +223,9 @@ Dozzle.
 The server also writes transport-independent `transcription` events for HTTP
 requests and WebSocket segments. All structured channels share a versioned
 event envelope, daily calendar files, SQLite history through
-`GET /api/logs/events`, and optional live delivery through `/ws/logs`. See
+`GET /api/logs/events`, `GET /api/logs/sessions/{sessionId}`, and
+`GET /api/logs/transcriptions/{transcriptionId}`, plus optional live delivery
+through `/ws/logs`. See
 [structured logging](structured-logging.md) for the complete contract.
 
 An RSS delta is an approximate process-level model footprint. It is closest to

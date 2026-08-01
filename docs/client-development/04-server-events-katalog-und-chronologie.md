@@ -96,7 +96,7 @@ erreichtem Sessionlimit gibt es kein `hello`, sondern einen Admission-Fehler.
 | Feld | Typ | Bedeutung |
 | --- | --- | --- |
 | `type` | `"hello"` | Diskriminator |
-| `clientId` | String | identisch mit `sessionId`; Kompatibilitätsname |
+| `clientId` | String | stabile Clientkennung; vom Client übermittelt oder serverseitig erzeugt |
 | `sessionId` | String | zufällige hexadezimale UUID ohne Bindestriche |
 | `settings` | Object | öffentliche effektive Sessioneinstellungen; Engine-Options, Secrets und lokale Modellpfade entfernt |
 | `sessionConfig` | Object | angeforderter und effektiver Wake-Word-Modus einschließlich Fallbacks/Warnungen |
@@ -124,7 +124,7 @@ aktualisieren, aber auf `ready` warten.
 ```json
 {
   "type": "hello",
-  "clientId": "7cb1…",
+  "clientId": "browser-client-42",
   "sessionId": "7cb1…",
   "settings": { "language": "de", "wake_word_enabled": true },
   "sessionConfig": {

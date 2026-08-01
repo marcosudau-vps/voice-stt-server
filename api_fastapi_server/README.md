@@ -329,10 +329,14 @@ session. `clear` resets only the issuing session and discards pending stale
 results from earlier session generations.
 
 `hello.logAccess` provides a short-lived session-scoped token for the separate
-`/ws/logs` connection and `/api/logs/events` history endpoint. Structured
+`/ws/logs` connection and the `/api/logs/events`,
+`/api/logs/sessions/{sessionId}`, and
+`/api/logs/transcriptions/{transcriptionId}` history endpoints. Structured
 events use the `system`, `audit`, `transcription`, and `performance` channels.
-The log WebSocket supports cursor replay followed by live delivery without
-mixing log traffic into the audio/transcription socket. See
+The log WebSocket confirms subscriptions with `log.subscribed`, supports cursor
+replay followed by live delivery, answers client pings with `log.pong`, and
+reports sink/subscriber loss through `log.gap` without mixing log traffic into
+the audio/transcription socket. See
 `docs/structured-logging.md` for the event schema and subscription protocol.
 
 Wake Word behavior can be selected per connection:
