@@ -41,11 +41,13 @@ Every structured event uses the same versioned outer schema:
 Context identifiers remain at the top level. Event-specific values are stored
 under `data`. Optional context identifiers are omitted when unavailable; the
 `null` values in the example only illustrate their position. `eventId` is
-unique; `cursor` is assigned centrally before fan-out
-and is strictly increasing even if an individual sink temporarily fails. It is
-used for pagination and live reconnect. A sink failure never reuses a cursor.
-Gap notifications are best effort because their own control queue is bounded;
-the per-sink drop counters remain the authoritative overload signal.
+unique. `cursor` is assigned by the canonical SQLite append and therefore
+exists only after the transaction has committed. It is strictly increasing,
+survives retention deletes and is used for pagination and reconnect. If the
+SQLite append fails, the attempted event receives no cursor, is not sent as a
+normal `log.event`, and is not mirrored to JSONL or stdout. Failure of an
+optional JSONL/stdout mirror never changes the committed cursor or the replay
+history.
 
 HTTP and WebSocket transcription events use the same `transcription.*` event
 names. `transport` records the protocol difference. One HTTP request owns one
@@ -105,6 +107,9 @@ needed so the configured size limit is not silently abandoned. Each channel
 has an independent `*_log_retention_days` setting. The default `0` disables
 automatic deletion. A positive value prunes only dated JSONL files below that
 channel's configured root and applies the same channel policy to SQLite.
+Before deleting SQLite rows, the store persists payload-free retention
+watermarks per channel and session. They allow filtered replay to distinguish
+a deleted relevant event from a normal gap in the global cursor sequence.
 
 Einzelne Kanalpfade sind nicht konfigurierbar. Dadurch können insbesondere im
 Docker-Betrieb keine Kanäle versehentlich außerhalb des `/data`-Mounts landen.
@@ -118,14 +123,15 @@ The `transcription` channel includes:
 - `transcription.recording_started`
 - `transcription.recording_ended`
 - `transcription.completed`
+- `transcription.discarded` with `reason: "empty_final"` when the recorder
+  returns an empty final result
 - `transcription.failed`
 - `transcription.rejected`
 - `transcription.cancelled`
 - wake-word wait, detection, timeout and follow-up events
 
 The system/audit channels also report authentication failures, recorder or
-worker failures, scheduler overload, storage failures, and recovered
-subscriber drops where applicable.
+worker failures, scheduler overload, and other operational state changes.
 
 WebSocket realtime outputs are measured in the performance channel:
 
@@ -143,23 +149,31 @@ The per-event measurement contains sequence, interval from the previous
 realtime output, elapsed time, character counts and stabilization metadata but
 no transcript text.
 
-Current implementation boundary: when the recorder returns an empty final
-WebSocket text, the segment is skipped and does not receive a terminal
-`transcription.completed`, `transcription.failed`, or
-`transcription.cancelled` event. This is tracked as a documented follow-up in
-the [logging action archive](.archiv/neues_logging_event_system/2026-08-01_NEUES_LOGGING_EVENT_SYSTEM_ABWEICHUNGEN.md).
+An empty final recorder result does not create an empty `final` text frame. It
+does terminate the segment exactly once through
+`transcription.discarded(reason=empty_final)` and the session timeline event
+`final_transcript_discarded`.
 
 ## Persistent history
 
-When `event_store_enabled` is true, all structured events are also stored in
-SQLite. The default database is:
+When `event_store_enabled` is true, SQLite is the canonical source for all
+structured events. The default database is:
 
 ```text
 logs/voicestt-events.sqlite3
 ```
 
 SQLite runs in WAL mode and indexes timestamp, channel, event name, client,
-session and transcription identifiers.
+session and transcription identifiers. Sanitization, SQLite append, commit and
+cursor assignment happen before optional mirrors or live wakeups. For an event
+that has been generated, no mirror setting can suppress SQLite persistence,
+replay, or live delivery. `request_logging_enabled`,
+`transcription_logging_enabled`, and `system_event_logging_enabled` control
+their calendar JSONL/stdout mirrors. Performance is deliberately split:
+`performance_logging_enabled` is a source gate and prevents performance events
+from being generated, while `performance_log_mirror_enabled` controls only
+their optional calendar JSONL/stdout mirror. `realtime_log_detail` remains the
+source policy for high-volume realtime performance detail.
 
 History is available at:
 
@@ -182,7 +196,11 @@ Supported query parameters:
 
 Administrators authenticate like the other admin endpoints. A normal session
 client sends its token through `X-VoiceSTT-Log-Token`; it can only read its own
-session and the `audit`, `transcription`, and `performance` channels.
+session and the `audit`, `transcription`, and `performance` channels. An admin
+may omit `sessionId` for a global query, include `system`, and filter by all
+documented fields. Responses include `authorizationScope`, `allSessions`,
+`oldestCursor`, `latestCursor`, scope-specific `retentionCursor`, `nextCursor`, and
+`deliveryMode: "sqlite_first"`.
 
 ## Live log WebSocket
 
@@ -191,14 +209,25 @@ The transcription WebSocket `hello` response contains:
 ```json
 {
   "logAccess": {
+    "available": true,
     "websocketPath": "/ws/logs",
     "historyPath": "/api/logs/events",
     "accessToken": "...",
     "sessionId": "...",
-    "expiresAt": "..."
+    "expiresAt": "...",
+    "logProtocolVersion": 2,
+    "deliveryMode": "sqlite_first",
+    "replayAvailable": true,
+    "serverInstanceId": "...",
+    "oldestCursor": 1,
+    "latestCursor": 18427
   }
 }
 ```
+
+If live access is disabled or the canonical store is unavailable, `available`
+is false, no `accessToken` is issued, and `code` plus `reason` explain the
+condition.
 
 The access token is scoped to that session and is valid for 24 hours within
 the current server process. It is sent in the first WebSocket message rather
@@ -216,29 +245,47 @@ than in the URL:
 
 The server responds with:
 
-- `log.hello`
-- `log.subscribed`
+- `log.hello` with protocol version, delivery mode, server instance, the
+  committed oldest/latest cursor, and the scope-specific `retentionCursor`
+- `log.subscribed` with `authorizationScope`, effective channels,
+  `allChannels`, effective `sessionId`, and `allSessions`
 - zero or more replayed `log.event` messages
 - `log.replay_completed`
 - subsequent live `log.event` messages
 - `log.keepalive` during idle periods
 - `log.pong` in response to `{"type":"ping"}`
-- best-effort `log.gap` when a sink or subscriber queue dropped data
-- `log.error` for protocol or authorization failures
+- `log.gap(reason=retention)` when at least one event relevant to the requested
+  channel/session scope was deleted after the requested cursor
+- `log.error(code=cursor_ahead)` when a cursor is above the committed
+  high-watermark
+- `log.error(code=event_store_unavailable)` followed by close code `1011` on
+  store failure
+- `log.error` with close code `1008` for protocol or authorization failures
 
-After a subscriber-local `log.gap`, a client should reconnect with the cursor
-of its last successfully processed `log.event`; the persistent replay then
-fills the gap. A store-related gap cannot be replayed from that store and must
-remain visible as an operational data-loss signal. The bundled browser client
-reconnects automatically.
+`/ws/logs` never treats an in-memory payload queue as the event source. A
+subscriber first registers for payload-free commit wakeups, captures a SQLite
+high-watermark, replays through that watermark, and then repeatedly rescans
+SQLite from its own global scan cursor. Wakeups may be coalesced or missed
+without data loss. Filtered streams may legitimately skip global cursor
+numbers. Only a retention gap represents data no longer present in SQLite.
+Because retention is configured per channel, `oldestCursor` remains the global
+oldest stored cursor and may be lower than the reported lost range. The server
+therefore does not skip directly to `oldestCursor` or `retentionCursor`; it
+continues replay from the requested cursor and still delivers every surviving
+matching event.
 
 An administrator may use the configured admin key as `accessToken` and can
-subscribe across channels and, when omitted, across sessions.
+subscribe across channels and, when omitted, across sessions. Secret
+comparison uses constant-time `secrets.compare_digest`. The admin key is never
+placed in a URL or serialized event.
 
 The bundled browser client opens this second WebSocket automatically after
 `hello`, replays the current session from its last cursor and adds incoming
-structured events to its event log. Older or broader history remains available
-through the HTTP endpoint.
+structured events to its bounded event log. In the Admin drawer, an entered
+admin key can load bounded pages of global retained history with channel/time
+filters and switch to a clearly labelled server-wide live mode. The key stays
+only in the current page's password field; it is not persisted in browser
+storage.
 
 The browser persists a random stable client identifier locally and supplies it
 as `clientId` when opening `/ws/transcribe`. API clients can supply the same
@@ -248,24 +295,26 @@ addresses and access tokens are not part of session events.
 
 ## Configuration
 
-The versioned YAML configuration and `GET /api/logging` expose channel
-enablement, stdout mirroring, derived channel directories, daily segment
-sizes, calendar timezone, realtime detail and live access. `PUT /api/logging`
-can change the runtime-safe behavior settings, but rejects individual file,
-audio, performance, system, and transcription paths. All generated locations
-are derived from the single startup setting `data_root_path`.
+The versioned YAML configuration and `GET /api/logging` expose source and
+mirror enablement, stdout mirroring, derived channel directories, daily
+segment sizes, calendar timezone, realtime detail and live access. In the
+`performance` object, `enabled` is the source gate and `mirrorEnabled` is the
+independent optional mirror switch. `PUT /api/logging` changes them through
+`performanceEnabled` and `performanceMirrorEnabled`. It rejects individual
+file, audio, performance, system, and transcription paths. All generated
+locations are derived from the single startup setting `data_root_path`.
 
 The SQLite path, queue size and store enablement are startup settings. File
 channel settings, timezone, transcript policy and live access can be changed
 at runtime. `log_level` is also applied immediately to the active root,
 FastAPI, Uvicorn and managed VoiceSTT console loggers.
 
-Store, channel files, stdout, and live publishing each use an independent
-bounded background queue. Emission is non-blocking. On saturation, audit,
-errors, and terminal transcription events have higher preservation priority
-than performance detail. Every eviction or failed write increments a per-sink
-counter and schedules a best-effort `log.gap`; under simultaneous saturation
-the bounded control queue can coalesce or drop an individual sink notice.
-Storage failures additionally create a throttled `storage.failed` event. Live
-subscribers have their own bounded queues and report recovered drops through
-`log.subscriber.dropped`.
+`log_live_enabled=true` requires `event_store_enabled=true`; an invalid startup
+combination is rejected. The SQLite commit is synchronous and canonical.
+Calendar JSONL and stdout remain optional bounded background mirrors. Their
+queues preserve audit/errors/terminal events ahead of performance detail and
+expose local drop counters, but a mirror overload does not create a client
+protocol gap because every committed event remains replayable in SQLite. The
+bounded control queue carries only commit/store-state wakeups; missing a normal
+commit wakeup is harmless because each handler rescans the committed
+high-watermark and performs the same rescan on keepalive.

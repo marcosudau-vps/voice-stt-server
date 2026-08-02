@@ -14,8 +14,12 @@ api_fastapi_server.server
 WS /ws/transcribe auf einem HTTP-/HTTPS-Port
 ```
 
-Dieses Single-WebSocket-Protokoll ist auf den vorherigen Seiten vollständig
-dokumentiert und ist die primäre Live-Schnittstelle.
+Dieses Audio-/Sessionprotokoll bündelt Control und Audio auf genau einem
+WebSocket und ist die primäre Transkriptionsschnittstelle. Zusätzlich existiert
+auf demselben FastAPI-/HTTP-Port der eigenständige, SQLite-first
+`/ws/logs`-Eventstream. Diese zweite Verbindung transportiert weder Audio noch
+Recorderbefehle und ist nicht mit der unten beschriebenen Zwei-Port-STT-
+Implementierung zu verwechseln.
 
 ## Warum die Abgrenzung nötig ist
 
@@ -25,13 +29,13 @@ WebSocket-Serverimplementierung. Sie verwendet ein anderes Transportmodell:
 | Merkmal | Produktiver FastAPI-Server | Separate Zwei-Port-Implementierung |
 | --- | --- | --- |
 | Einstiegspunkt | `VoiceSTT_server.server` | `VoiceSTT_server.stt_server` |
-| Verbindung | ein WebSocket | Control- und Data-WebSocket getrennt |
+| Verbindung | ein Audio-/Control-WebSocket plus optional `/ws/logs` für committed Events | Control- und Data-WebSocket der Transkription getrennt |
 | Standardports | HTTP-Port 8010 | Control 8011, Data 8012 |
 | Livepfad | `/ws/transcribe` | Portbasierte Handler ohne FastAPI-Pfad |
 | Sessionmodell | unabhängiger Recorder je Verbindung | gemeinsamer Recorder-/Broadcastansatz |
 | Clientbefehle | `start`, `stop`, `clear`, `ping`, `metrics` | `set_parameter`, `get_parameter`, `call_method` |
 | Audioframe | identischer Grundaufbau mit Metadatenlänge + JSON + PCM | ebenfalls Metadatenheader + Audio, aber separater Datakanal |
-| Serverevents | `hello`, `ready`, `status`, `timeline`, `realtime`, `final`, … | Recordercallback-Nachrichten wie `realtime`, `fullSentence`, VAD-/Wake-Callbacks |
+| Serverevents | Sessionevents auf `/ws/transcribe`; strukturierter Replay/Live-Stream auf `/ws/logs` | Recordercallback-Nachrichten wie `realtime`, `fullSentence`, VAD-/Wake-Callbacks |
 | Multiuser-Isolation | explizit pro Session | Broadcast an Data-Verbindungen |
 | HTTP-/OpenAI-API | vorhanden | nicht Teil dieses Servers |
 

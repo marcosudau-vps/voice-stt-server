@@ -789,7 +789,7 @@
         <button id="settingsClose" class="secondary" type="button">Schließen</button>
       </div>
       <div class="settings-grid">
-        <div class="settings-field wide"><label for="adminKey">Admin-Schlüssel</label><input id="adminKey" type="password" autocomplete="off" placeholder="Wird nur im Browserspeicher gehalten"></div>
+        <div class="settings-field wide"><label for="adminKey">Admin-Schlüssel</label><input id="adminKey" type="password" autocomplete="off" placeholder="Bleibt nur im Arbeitsspeicher dieser Seite"></div>
         <div class="settings-group">Modelle und Sprache</div>
         <div class="settings-field"><label for="finalModelSelect">Finales Modell</label><select id="finalModelSelect"></select></div>
         <div class="settings-field"><label for="realtimeModelSelect">Realtime-Modell</label><select id="realtimeModelSelect"></select></div>
@@ -812,6 +812,12 @@
         <label class="settings-check"><input id="loggingStdout" type="checkbox"> JSON-Ereignisse an Standardausgabe / Dozzle senden</label>
         <label class="settings-check"><input id="loggingTranscripts" type="checkbox"> Transkripttext einschließen</label>
         <label class="settings-check"><input id="loggingAudio" type="checkbox"> Hochgeladene Audiodateien archivieren</label>
+        <div class="settings-group">Serverweite Ereignisse</div>
+        <div class="settings-field"><label for="adminLogChannels">Channels</label><select id="adminLogChannels"><option value="">Alle Channels</option><option value="audit">Audit</option><option value="performance">Performance</option><option value="transcription">Transkription</option><option value="system">System</option></select></div>
+        <div class="settings-field"><label for="adminLogLimit">Seitengröße</label><input id="adminLogLimit" type="number" min="1" max="1000" value="200"></div>
+        <div class="settings-field"><label for="adminLogFrom">Von (optional)</label><input id="adminLogFrom" type="datetime-local"></div>
+        <div class="settings-field"><label for="adminLogTo">Bis (optional)</label><input id="adminLogTo" type="datetime-local"></div>
+        <div class="settings-field wide"><label>Admin-Logzugriff</label><div class="settings-actions" style="justify-content:flex-start;margin-top:0"><button id="adminLogsLoad" class="secondary" type="button">Historie laden</button><button id="adminLogsMore" class="secondary" type="button">Nächste Seite</button><button id="adminLogsLive" class="secondary" type="button">Ab jetzt live</button><button id="adminLogsStop" class="secondary" type="button">Adminmodus beenden</button></div><div id="adminLogsStatus" class="settings-note">Sessionlog aktiv. Admin-Historie und Admin-Livezugriff benötigen den Admin-Schlüssel.</div></div>
       </div>
       <div class="settings-actions">
         <button id="settingsRefresh" class="secondary" type="button">Aktualisieren</button>
@@ -882,7 +888,16 @@
       loggingEnabled: document.getElementById("loggingEnabled"),
       loggingStdout: document.getElementById("loggingStdout"),
       loggingTranscripts: document.getElementById("loggingTranscripts"),
-      loggingAudio: document.getElementById("loggingAudio")
+      loggingAudio: document.getElementById("loggingAudio"),
+      adminLogChannels: document.getElementById("adminLogChannels"),
+      adminLogLimit: document.getElementById("adminLogLimit"),
+      adminLogFrom: document.getElementById("adminLogFrom"),
+      adminLogTo: document.getElementById("adminLogTo"),
+      adminLogsLoad: document.getElementById("adminLogsLoad"),
+      adminLogsMore: document.getElementById("adminLogsMore"),
+      adminLogsLive: document.getElementById("adminLogsLive"),
+      adminLogsStop: document.getElementById("adminLogsStop"),
+      adminLogsStatus: document.getElementById("adminLogsStatus")
     });
 
     const installationClientId = (() => {
@@ -909,6 +924,9 @@
       logSessionId: null,
       logAccess: null,
       logReconnectTimer: null,
+      logMode: "session",
+      adminHistoryCursor: 0,
+      adminLatestCursor: 0,
       clientId: installationClientId,
       connected: false,
       streaming: false,
@@ -1121,6 +1139,7 @@
     }
 
     function connectLogSocket(logAccess) {
+      if (state.logMode === "admin") return;
       if (!logAccess?.accessToken || !logAccess?.sessionId) return;
       state.logAccess = logAccess;
       clearTimeout(state.logReconnectTimer);
@@ -1155,9 +1174,19 @@
             : entry.channel;
           addEvent(entry.event, detail, Date.parse(entry.timestamp) / 1000);
         } else if (message.type === "log.gap") {
-          addEvent("Log-Lücke", `${message.dropped || 0} Ereignisse verworfen`);
-          socket.close();
+          if (message.reason === "retention") {
+            state.logCursor = Math.max(
+              state.logCursor,
+              Number(message.oldestCursor || 1) - 1
+            );
+            addEvent("Log-Lücke", "Ältere Ereignisse sind nicht mehr in der Retention");
+          } else {
+            addEvent("Log-Lücke", `${message.dropped || 0} Ereignisse verworfen`);
+          }
         } else if (message.type === "log.error") {
+          if (message.code === "cursor_ahead") {
+            state.logCursor = Number(message.latestCursor) || 0;
+          }
           addEvent("Log-Verbindung abgelehnt", message.message);
         }
       };
@@ -1165,6 +1194,7 @@
       socket.onclose = () => {
         if (
           state.logSocket === socket
+          && state.logMode === "session"
           && state.connected
           && state.logAccess?.sessionId === logAccess.sessionId
         ) {
@@ -1174,6 +1204,118 @@
           );
         }
       };
+    }
+
+    function selectedAdminChannels() {
+      const value = ui.adminLogChannels.value.trim();
+      return value ? [value] : [];
+    }
+
+    function renderStructuredLog(entry, scope) {
+      const detail = entry.meldung
+        ? `${scope} · ${entry.channel} · ${entry.meldung}`
+        : `${scope} · ${entry.channel}`;
+      addEvent(entry.event, detail, Date.parse(entry.timestamp) / 1000);
+    }
+
+    function adminDateParameter(input) {
+      if (!input.value) return "";
+      const value = new Date(input.value);
+      return Number.isNaN(value.getTime()) ? "" : value.toISOString();
+    }
+
+    async function loadAdminLogHistory(reset = true) {
+      if (!ui.adminKey.value.trim()) {
+        throw new Error("Gib zuerst den Admin-Schlüssel ein.");
+      }
+      if (reset) state.adminHistoryCursor = 0;
+      const parameters = new URLSearchParams({
+        afterCursor: String(state.adminHistoryCursor),
+        limit: String(Math.max(1, Math.min(1000, Number(ui.adminLogLimit.value) || 200)))
+      });
+      const channels = selectedAdminChannels();
+      if (channels.length) parameters.set("channels", channels.join(","));
+      const from = adminDateParameter(ui.adminLogFrom);
+      const to = adminDateParameter(ui.adminLogTo);
+      if (from) parameters.set("from", from);
+      if (to) parameters.set("to", to);
+      ui.adminLogsStatus.textContent = "Serverweite Historie wird geladen ...";
+      const payload = await apiJson(`/api/logs/events?${parameters.toString()}`);
+      if (payload.authorizationScope !== "admin") {
+        throw new Error("Der Server hat keinen Admin-Scope bestätigt.");
+      }
+      payload.data.forEach(entry => renderStructuredLog(entry, "Admin-Historie"));
+      if (payload.nextCursor != null) {
+        state.adminHistoryCursor = Number(payload.nextCursor) || state.adminHistoryCursor;
+      }
+      state.adminLatestCursor = Number(payload.latestCursor) || 0;
+      ui.adminLogsStatus.textContent = `${payload.data.length} Ereignisse geladen · Cursor ${state.adminHistoryCursor} / ${state.adminLatestCursor}`;
+    }
+
+    async function startAdminLogLive() {
+      if (!ui.adminKey.value.trim()) {
+        throw new Error("Gib zuerst den Admin-Schlüssel ein.");
+      }
+      if (!state.adminLatestCursor) {
+        await loadAdminLogHistory(true);
+      }
+      clearTimeout(state.logReconnectTimer);
+      state.logReconnectTimer = null;
+      if (state.logSocket) {
+        state.logSocket.onclose = null;
+        state.logSocket.close();
+      }
+      state.logMode = "admin";
+      const socket = new WebSocket(logWsUrl("/ws/logs"));
+      state.logSocket = socket;
+      socket.onopen = () => socket.send(JSON.stringify({
+        type: "subscribe",
+        accessToken: ui.adminKey.value.trim(),
+        channels: selectedAdminChannels(),
+        afterCursor: state.adminLatestCursor
+      }));
+      socket.onmessage = event => {
+        const message = JSON.parse(event.data);
+        if (message.type === "log.event" && message.event) {
+          state.adminLatestCursor = Math.max(
+            state.adminLatestCursor,
+            Number(message.event.cursor) || 0
+          );
+          renderStructuredLog(message.event, "Admin-Live");
+        } else if (message.type === "log.subscribed") {
+          if (message.authorizationScope !== "admin" || !message.allSessions) {
+            ui.adminLogsStatus.textContent = "Admin-Scope wurde nicht vollständig bestätigt.";
+            socket.close();
+            return;
+          }
+          ui.adminLogsStatus.textContent = "Serverweiter Admin-Livestream aktiv.";
+        } else if (message.type === "log.gap") {
+          addEvent("Admin-Log-Lücke", message.reason || "Retention");
+          ui.adminLogsStatus.textContent = "Historie enthält eine Retention-Lücke.";
+        } else if (message.type === "log.error") {
+          addEvent("Admin-Log abgelehnt", message.message);
+          ui.adminLogsStatus.textContent = message.message;
+        }
+      };
+      socket.onerror = () => {
+        ui.adminLogsStatus.textContent = "Admin-Liveverbindung fehlgeschlagen.";
+      };
+      socket.onclose = () => {
+        if (state.logSocket === socket && state.logMode === "admin") {
+          ui.adminLogsStatus.textContent = "Admin-Liveverbindung beendet.";
+        }
+      };
+    }
+
+    function stopAdminLogMode() {
+      if (state.logSocket) {
+        state.logSocket.onclose = null;
+        state.logSocket.close();
+        state.logSocket = null;
+      }
+      state.logMode = "session";
+      ui.adminLogsStatus.textContent = "Sessionlog aktiv.";
+      if (state.connected && state.logAccess) connectLogSocket(state.logAccess);
     }
 
     function adminHeaders(includeJson = false) {
@@ -1447,7 +1589,7 @@
           state.logAccess = null;
           clearTimeout(state.logReconnectTimer);
           state.logReconnectTimer = null;
-          if (state.logSocket) {
+          if (state.logSocket && state.logMode === "session") {
             state.logSocket.onclose = null;
             state.logSocket.close();
             state.logSocket = null;
@@ -2115,6 +2257,22 @@
       loadAdminSettings().catch(error => setSettingsStatus("Laden fehlgeschlagen: " + error.message, "error"));
     });
     ui.settingsApply.addEventListener("click", applyAdminSettings);
+    ui.adminLogsLoad.addEventListener("click", () => {
+      loadAdminLogHistory(true).catch(error => {
+        ui.adminLogsStatus.textContent = "Historie fehlgeschlagen: " + error.message;
+      });
+    });
+    ui.adminLogsMore.addEventListener("click", () => {
+      loadAdminLogHistory(false).catch(error => {
+        ui.adminLogsStatus.textContent = "Historie fehlgeschlagen: " + error.message;
+      });
+    });
+    ui.adminLogsLive.addEventListener("click", () => {
+      startAdminLogLive().catch(error => {
+        ui.adminLogsStatus.textContent = "Admin-Live fehlgeschlagen: " + error.message;
+      });
+    });
+    ui.adminLogsStop.addEventListener("click", stopAdminLogMode);
     ui.wakeBackend.addEventListener("change", () => {
       populateWakeWordSelect(ui.wakeBackend.value, "");
     });

@@ -8,6 +8,7 @@ import json
 import logging
 import math
 import os
+import secrets
 import threading
 import time
 import uuid
@@ -76,6 +77,7 @@ WARMUP_AUDIO_PATH = (
 )
 SERVER_SAMPLE_RATE = 16000
 INT16_MAX_ABS_VALUE = 32768.0
+LOG_STREAM_KEEPALIVE_SECONDS = 30.0
 
 BASE_TUNING_DEFAULTS = {
     "beam_size": 5,
@@ -150,6 +152,7 @@ ACTIVE_RUNTIME_SETTINGS = {
     "request_logging_enabled",
     "performance_log_backup_count",
     "performance_log_max_bytes",
+    "performance_log_mirror_enabled",
     "performance_log_retention_days",
     "performance_log_stdout",
     "performance_logging_enabled",
@@ -306,6 +309,7 @@ BOOL_SETTINGS = {
     "request_log_stdout",
     "request_log_transcripts",
     "request_logging_enabled",
+    "performance_log_mirror_enabled",
     "performance_log_stdout",
     "performance_logging_enabled",
     "system_event_log_stdout",
@@ -397,6 +401,7 @@ class ServerSettings:
     request_log_backup_count: int = 12
     request_log_retention_days: int = 0
     performance_logging_enabled: bool = True
+    performance_log_mirror_enabled: bool = True
     performance_log_stdout: bool = True
     performance_log_path: str = field(init=False)
     performance_log_max_bytes: int = 10 * 1024 * 1024
@@ -462,6 +467,17 @@ class ServerSettings:
             if root is not None
             else None
         )
+        self.realtime_log_detail = str(
+            self.realtime_log_detail or ""
+        ).strip().lower()
+        if self.realtime_log_detail not in {"off", "summary", "events"}:
+            raise ValueError(
+                "realtime_log_detail muss off, summary oder events sein"
+            )
+        if self.log_live_enabled and not self.event_store_enabled:
+            raise ValueError(
+                "log_live_enabled erfordert event_store_enabled"
+            )
 
     def public_dict(self):
         data = asdict(self)
@@ -2379,6 +2395,7 @@ class RecorderBackedRealtimeSession:
         self._force_finalize_in_progress = False
         self._wakeword_voice_window = False
         self._wakeword_followup_generation = 0
+        self._pending_text_terminals = collections.deque()
         self._performance_first_text_segments = set()
         self._realtime_event_stats = {}
         self._recorder_wake_word_timeout_before_followup = None
@@ -2753,8 +2770,6 @@ class RecorderBackedRealtimeSession:
 
     def _text_worker(self):
         while not self.service.stop_event.is_set():
-            with self.lock:
-                text_generation = self.generation
             try:
                 text = self.recorder.text()
             except Exception as exc:
@@ -2784,14 +2799,86 @@ class RecorderBackedRealtimeSession:
 
             if getattr(self.recorder, "is_shut_down", False):
                 break
+            with self.lock:
+                terminal = (
+                    self._pending_text_terminals.popleft()
+                    if self._pending_text_terminals
+                    else None
+                )
+            if terminal is None:
+                continue
+            text_generation, text_segment_id, rejected = terminal
+            if rejected:
+                continue
             text = (text or "").strip()
             if not text:
+                self._publish_discarded_empty_final(
+                    text_generation,
+                    expected_segment_id=text_segment_id,
+                )
                 continue
-            self._publish_final_text(text, text_generation)
+            self._publish_final_text(
+                text,
+                text_generation,
+                expected_segment_id=text_segment_id,
+            )
 
-    def _publish_final_text(self, text, text_generation):
+    def _publish_discarded_empty_final(
+        self,
+        text_generation,
+        expected_segment_id=None,
+    ):
         with self.lock:
             if text_generation != self.generation:
+                return False
+            if (
+                expected_segment_id is not None
+                and expected_segment_id != self.segment_state.current()
+            ):
+                return False
+            segment_id = self.segment_state.final()
+            streaming = self.streaming
+            segment = self._timeline_snapshot(segment_id)
+        timestamp = time.time()
+        self._publish_timeline_event(
+            "final_transcript_discarded",
+            timestamp=timestamp,
+            segment_id=segment_id,
+            segment=segment,
+            reason="empty_final",
+        )
+        self._emit_realtime_summary(segment_id, timestamp, segment)
+        self._emit_structured_event(
+            "transcription",
+            "transcription.discarded",
+            segment_id=segment_id,
+            severity="warning",
+            reason="empty_final",
+            language=self.settings.language,
+            engine=self.settings.transcription_engine,
+            model=self.settings.model,
+            audioDurationMs=(
+                round(float(segment.get("durationSeconds")) * 1000.0, 3)
+                if segment and segment.get("durationSeconds") is not None
+                else None
+            ),
+        )
+        self.publish_status(self._waiting_state_locked(streaming))
+        return True
+
+    def _publish_final_text(
+        self,
+        text,
+        text_generation,
+        expected_segment_id=None,
+    ):
+        with self.lock:
+            if text_generation != self.generation:
+                return False
+            if (
+                expected_segment_id is not None
+                and expected_segment_id != self.segment_state.current()
+            ):
                 return False
             segment_id = self.segment_state.final()
             streaming = self.streaming
@@ -3240,9 +3327,13 @@ class RecorderBackedRealtimeSession:
         self.publish_status(self._waiting_state_locked())
 
     def _on_transcription_start(self, *_):
-        segment_id = self.segment_state.current()
         with self.lock:
+            generation = self.generation
+            segment_id = self.segment_state.current()
             rejected = self.reject_current_recording
+            self._pending_text_terminals.append(
+                (generation, segment_id, bool(rejected))
+            )
         if not rejected:
             self._emit_structured_event(
                 "transcription",
@@ -4290,6 +4381,34 @@ class VoiceSTTService:
         }
 
     def create_log_access(self, session_id):
+        store_status = self.events.store_status()
+        base = {
+            "available": bool(
+                self.settings.log_live_enabled
+                and store_status["available"]
+            ),
+            "websocketPath": "/ws/logs",
+            "historyPath": "/api/logs/events",
+            "sessionId": session_id,
+            "logProtocolVersion": 2,
+            "deliveryMode": "sqlite_first",
+            "replayAvailable": bool(store_status["available"]),
+            "serverInstanceId": self.events.server_instance_id,
+            "oldestCursor": store_status["oldestCursor"],
+            "latestCursor": store_status["latestCursor"],
+        }
+        if not base["available"]:
+            if not self.settings.log_live_enabled:
+                base.update({
+                    "code": "log_live_disabled",
+                    "reason": "Der Live-Logzugriff ist deaktiviert.",
+                })
+            else:
+                base.update({
+                    "code": "event_store_unavailable",
+                    "reason": "Der kanonische SQLite-Eventstore ist nicht verfügbar.",
+                })
+            return base
         token = uuid.uuid4().hex + uuid.uuid4().hex
         expires_at = time.time() + 24 * 60 * 60
         with self._log_access_lock:
@@ -4304,10 +4423,8 @@ class VoiceSTTService:
                 "expiresAt": expires_at,
             }
         return {
-            "websocketPath": "/ws/logs",
-            "historyPath": "/api/logs/events",
+            **base,
             "accessToken": token,
-            "sessionId": session_id,
             "expiresAt": timestamp_iso(expires_at),
         }
 
@@ -4344,6 +4461,7 @@ class VoiceSTTService:
             raise ValueError("Die Einstellungsänderung muss ein JSON-Objekt sein")
 
         with self._settings_lock:
+            coerced_updates = {}
             for name, value in updates.items():
                 if name in STARTUP_ONLY_SETTINGS:
                     rejected[name] = {
@@ -4365,6 +4483,31 @@ class VoiceSTTService:
                         "message": str(exc),
                     }
                     continue
+                coerced_updates[name] = coerced
+
+            proposed_live = coerced_updates.get(
+                "log_live_enabled",
+                self.settings.log_live_enabled,
+            )
+            proposed_live = coerced_updates.get(
+                "log_live_enabled",
+                self.settings.log_live_enabled,
+            )
+            if (
+                proposed_live
+                and not self.settings.event_store_enabled
+                and "log_live_enabled" in coerced_updates
+            ):
+                rejected["log_live_enabled"] = {
+                    "reason": "invalid_dependency",
+                    "message": (
+                        "log_live_enabled erfordert den beim Start aktivierten "
+                        "event_store_enabled."
+                    ),
+                }
+                coerced_updates.pop("log_live_enabled", None)
+
+            for name, coerced in coerced_updates.items():
                 setattr(self.settings, name, coerced)
                 applied[name] = {
                     "value": coerced,
@@ -4400,6 +4543,7 @@ class VoiceSTTService:
                 "save_audio_files",
                 "performance_log_backup_count",
                 "performance_log_max_bytes",
+                "performance_log_mirror_enabled",
                 "performance_log_retention_days",
                 "performance_log_stdout",
                 "performance_logging_enabled",
@@ -4417,6 +4561,10 @@ class VoiceSTTService:
             if any(name in logging_names for name in applied):
                 self.events.configure(self.settings)
                 self.audit.configure(self.settings, configure_hub=False)
+                self.performance.configure(
+                    self.settings,
+                    configure_hub=False,
+                )
             if "log_level" in applied:
                 apply_process_log_level(self.settings.log_level)
             self.audit.event("config.updated", applied=applied)
@@ -5135,6 +5283,9 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 }
             ):
                 setattr(settings, name, coerce_setting_value(name, value))
+    # Re-derive generated paths and validate cross-setting dependencies after
+    # persisted startup/runtime values have been applied.
+    settings.__post_init__()
     enforce_cpu_model_policy(settings)
     manager = ConnectionManager()
     service = VoiceSTTService(
@@ -5163,8 +5314,13 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
     @app.get("/health")
     async def health():
         metrics = service.metrics()
+        event_store = service.events.store_status()
+        logging_ready = (
+            not settings.log_live_enabled
+            or event_store["available"]
+        )
         return JSONResponse({
-            "ok": metrics["ok"],
+            "ok": bool(metrics["ok"] and logging_ready),
             "ready": metrics["ready"],
             "activeSessions": metrics["activeSessions"],
             "activeSpeakers": metrics["activeSpeakers"],
@@ -5172,6 +5328,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "scheduler": metrics["scheduler"],
             "models": metrics["models"],
             "startupErrors": metrics["startupErrors"],
+            "eventStore": event_store,
         })
 
     @app.get("/api/config")
@@ -5185,6 +5342,14 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "adminAuthRequired": bool(settings.admin_api_key or os.getenv("VOICESTT_ADMIN_API_KEY")),
         })
 
+    def _admin_key_matches(supplied):
+        configured_key = settings.admin_api_key or os.getenv(
+            "VOICESTT_ADMIN_API_KEY"
+        )
+        if not configured_key or supplied is None:
+            return False
+        return secrets.compare_digest(str(supplied), str(configured_key))
+
     def admin_auth_error(request):
         configured_key = settings.admin_api_key or os.getenv("VOICESTT_ADMIN_API_KEY")
         supplied = request.headers.get("x-voicestt-admin-key")
@@ -5192,7 +5357,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         if not supplied and authorization.startswith("Bearer "):
             supplied = authorization[7:]
         if configured_key:
-            if supplied != configured_key:
+            if not _admin_key_matches(supplied):
                 return JSONResponse(
                     {"error": "Admin-Authentifizierung erforderlich."},
                     status_code=401,
@@ -5444,6 +5609,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         auth_error = admin_auth_error(request)
         if auth_error is not None:
             return auth_error
+        event_store = service.events.store_status()
         return JSONResponse({
             "dataRoot": settings.data_root_path,
             "enabled": settings.request_logging_enabled,
@@ -5465,6 +5631,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "retentionDays": settings.request_log_retention_days,
             "performance": {
                 "enabled": settings.performance_logging_enabled,
+                "mirrorEnabled": settings.performance_log_mirror_enabled,
                 "stdout": settings.performance_log_stdout,
                 "file": settings.performance_log_path,
                 "maxBytes": settings.performance_log_max_bytes,
@@ -5490,9 +5657,13 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "calendarTimezone": settings.log_calendar_timezone,
             "realtimeDetail": settings.realtime_log_detail,
             "liveEnabled": settings.log_live_enabled,
+            "logProtocolVersion": 2,
+            "deliveryMode": "sqlite_first",
+            "replayAvailable": event_store["available"],
             "eventStore": {
                 "enabled": settings.event_store_enabled,
                 "path": settings.event_store_path,
+                **event_store,
             },
         })
 
@@ -5525,6 +5696,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "maxBytes": "request_log_max_bytes", "backupCount": "request_log_backup_count",
             "retentionDays": "request_log_retention_days",
             "performanceEnabled": "performance_logging_enabled",
+            "performanceMirrorEnabled": "performance_log_mirror_enabled",
             "performanceStdout": "performance_log_stdout",
             "performanceMaxBytes": "performance_log_max_bytes",
             "performanceBackupCount": "performance_log_backup_count",
@@ -5573,7 +5745,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         supplied = request.headers.get("x-voicestt-admin-key")
         bearer = authorization[7:] if authorization.startswith("Bearer ") else ""
         supplied = supplied or bearer
-        if configured_key and supplied == configured_key:
+        if configured_key and _admin_key_matches(supplied):
             return {"admin": True, "sessionId": requested_session_id}
         client_host = getattr(getattr(request, "client", None), "host", "")
         if not configured_key and client_host in {
@@ -5620,6 +5792,14 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 ] or ["__not_authorized__"]
             else:
                 channels = sorted(allowed)
+        if not service.events.store_available():
+            return JSONResponse(
+                {
+                    "error": "Der kanonische SQLite-Eventstore ist nicht verfügbar.",
+                    "code": "event_store_unavailable",
+                },
+                status_code=503,
+            )
         try:
             events = service.events.query(
                 channels=channels,
@@ -5635,13 +5815,33 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 after_cursor=int(request.query_params.get("afterCursor") or 0),
                 limit=int(request.query_params.get("limit") or 200),
             )
+            oldest_cursor = service.events.oldest_cursor()
+            latest_cursor = service.events.latest_cursor()
+            retention_cursor = service.events.retention_cursor(
+                channels=channels,
+                session_id=session_id,
+            )
         except (TypeError, ValueError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
+        except Exception:
+            LOGGER.exception("Historische Eventabfrage ist fehlgeschlagen")
+            return JSONResponse(
+                {
+                    "error": "Der kanonische SQLite-Eventstore ist nicht verfügbar.",
+                    "code": "event_store_unavailable",
+                },
+                status_code=503,
+            )
         return JSONResponse({
             "object": "list",
             "data": events,
             "nextCursor": events[-1]["cursor"] if events else None,
-            "latestCursor": service.events.latest_cursor(),
+            "oldestCursor": oldest_cursor,
+            "latestCursor": latest_cursor,
+            "retentionCursor": retention_cursor,
+            "authorizationScope": "admin" if scope["admin"] else "session",
+            "allSessions": bool(scope["admin"] and not session_id),
+            "deliveryMode": "sqlite_first",
         })
 
     @app.get("/api/logs/events")
@@ -5671,9 +5871,20 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         if not settings.log_live_enabled:
             await websocket.send_text(json.dumps({
                 "type": "log.error",
+                "code": "log_live_disabled",
                 "message": "Der Live-Logzugriff ist deaktiviert.",
             }))
             await websocket.close(code=1008)
+            return
+        if not service.events.store_available():
+            await websocket.send_text(json.dumps({
+                "type": "log.error",
+                "code": "event_store_unavailable",
+                "message": (
+                    "Der kanonische SQLite-Eventstore ist nicht verfügbar."
+                ),
+            }))
+            await websocket.close(code=1011)
             return
         subscription_id = None
         try:
@@ -5689,7 +5900,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             configured_key = settings.admin_api_key or os.getenv(
                 "VOICESTT_ADMIN_API_KEY"
             )
-            is_admin = bool(configured_key and token == configured_key)
+            is_admin = bool(configured_key and _admin_key_matches(token))
             access = (
                 None
                 if is_admin
@@ -5698,6 +5909,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             if not is_admin and access is None:
                 await websocket.send_text(json.dumps({
                     "type": "log.error",
+                    "code": "not_authorized",
                     "message": "Logzugriff nicht autorisiert.",
                 }))
                 await websocket.close(code=1008)
@@ -5719,11 +5931,15 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                     if channels
                     else allowed
                 ) or {"__not_authorized__"}
-            after_cursor = max(
-                0,
-                int(request_payload.get("afterCursor") or 0),
-            )
-            latest_cursor = service.events.latest_cursor()
+            after_cursor = int(request_payload.get("afterCursor") or 0)
+            if after_cursor < 0:
+                await websocket.send_text(json.dumps({
+                    "type": "log.error",
+                    "code": "invalid_cursor",
+                    "message": "afterCursor darf nicht negativ sein.",
+                }))
+                await websocket.close(code=1008)
+                return
             live_queue = asyncio.Queue(maxsize=1000)
             subscription_id = service.events.subscribe_async(
                 asyncio.get_running_loop(),
@@ -5731,19 +5947,56 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 channels=channels,
                 session_id=session_id,
             )
+            oldest_cursor = service.events.oldest_cursor()
+            latest_cursor = service.events.latest_cursor()
+            retention_cursor = service.events.retention_cursor(
+                channels=channels,
+                session_id=session_id,
+            )
+            if after_cursor > latest_cursor:
+                await websocket.send_text(json.dumps({
+                    "type": "log.error",
+                    "code": "cursor_ahead",
+                    "message": (
+                        "afterCursor liegt vor dem aktuellen SQLite-Cursor."
+                    ),
+                    "afterCursor": after_cursor,
+                    "latestCursor": latest_cursor,
+                    "serverInstanceId": service.events.server_instance_id,
+                }))
+                await websocket.close(code=1008)
+                return
             await websocket.send_text(json.dumps({
                 "type": "log.hello",
                 "schemaVersion": 1,
+                "logProtocolVersion": 2,
+                "deliveryMode": "sqlite_first",
+                "replayAvailable": True,
                 "serverInstanceId": service.events.server_instance_id,
+                "oldestCursor": oldest_cursor,
                 "latestCursor": latest_cursor,
+                "retentionCursor": retention_cursor,
             }))
+            authorization_scope = "admin" if is_admin else "session"
             await websocket.send_text(json.dumps({
                 "type": "log.subscribed",
                 "channels": sorted(channels),
                 "sessionId": session_id,
                 "afterCursor": after_cursor,
+                "authorizationScope": authorization_scope,
+                "allChannels": bool(is_admin and not channels),
+                "allSessions": bool(is_admin and not session_id),
             }))
             replay_cursor = after_cursor
+            if retention_cursor > replay_cursor:
+                await websocket.send_text(json.dumps({
+                    "type": "log.gap",
+                    "reason": "retention",
+                    "lostFromCursor": replay_cursor + 1,
+                    "lostToCursor": retention_cursor,
+                    "oldestCursor": oldest_cursor,
+                    "latestCursor": latest_cursor,
+                }))
             replay_count = 0
             while replay_cursor < latest_cursor:
                 replay = service.events.query(
@@ -5770,7 +6023,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 "cursor": latest_cursor,
                 "count": replay_count,
             }))
-            last_sent_cursor = latest_cursor
+            scan_cursor = latest_cursor
             receive_task = asyncio.create_task(websocket.receive_text())
             event_task = None
             try:
@@ -5778,7 +6031,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                     event_task = asyncio.create_task(live_queue.get())
                     done, _ = await asyncio.wait(
                         {receive_task, event_task},
-                        timeout=30.0,
+                        timeout=LOG_STREAM_KEEPALIVE_SECONDS,
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                     if not done:
@@ -5788,11 +6041,6 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                             return_exceptions=True,
                         )
                         event_task = None
-                        await websocket.send_text(json.dumps({
-                            "type": "log.keepalive",
-                            "cursor": last_sent_cursor,
-                        }))
-                        continue
                     if receive_task in done:
                         command = json.loads(receive_task.result())
                         if (
@@ -5801,7 +6049,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                         ):
                             await websocket.send_text(json.dumps({
                                 "type": "log.pong",
-                                "cursor": last_sent_cursor,
+                                "cursor": scan_cursor,
                                 "serverTime": time.time(),
                             }))
                         else:
@@ -5812,40 +6060,71 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                         receive_task = asyncio.create_task(
                             websocket.receive_text()
                         )
-                    if event_task not in done:
+                    if event_task is not None and event_task not in done:
                         event_task.cancel()
                         await asyncio.gather(
                             event_task,
                             return_exceptions=True,
                         )
                         event_task = None
-                        continue
-                    event = event_task.result()
-                    event_task = None
-                    if event.get("_logControl") == "gap":
-                        last_sent_cursor = max(
-                            last_sent_cursor,
-                            int(event.get("cursor") or 0),
-                        )
+                    elif event_task is not None:
+                        control = event_task.result()
+                        event_task = None
+                        if control.get("_logControl") == "store_error":
+                            await websocket.send_text(json.dumps({
+                                "type": "log.error",
+                                "code": "event_store_unavailable",
+                                "message": (
+                                    "Der kanonische SQLite-Eventstore ist "
+                                    "nicht verfügbar."
+                                ),
+                            }))
+                            await websocket.close(code=1011)
+                            return
+
+                    committed_cursor = service.events.latest_cursor()
+                    live_retention_cursor = service.events.retention_cursor(
+                        channels=channels,
+                        session_id=session_id,
+                    )
+                    if live_retention_cursor > scan_cursor:
                         await websocket.send_text(json.dumps({
                             "type": "log.gap",
-                            "scope": event.get("scope"),
-                            "sink": event.get("sink"),
-                            "dropped": event["dropped"],
-                            "droppedTotal": event.get("droppedTotal"),
-                            "cursor": event.get("cursor"),
+                            "reason": "retention",
+                            "lostFromCursor": scan_cursor + 1,
+                            "lostToCursor": live_retention_cursor,
+                            "oldestCursor": service.events.oldest_cursor(),
+                            "latestCursor": committed_cursor,
                         }))
-                        continue
-                    if int(event.get("cursor") or 0) <= latest_cursor:
-                        continue
-                    last_sent_cursor = int(
-                        event.get("cursor") or last_sent_cursor
-                    )
-                    await websocket.send_text(json.dumps({
-                        "type": "log.event",
-                        "event": event,
-                        "replay": False,
-                    }))
+                    live_count = 0
+                    query_cursor = scan_cursor
+                    while query_cursor < committed_cursor:
+                        live_events = service.events.query(
+                            channels=channels,
+                            session_id=session_id,
+                            after_cursor=query_cursor,
+                            until_cursor=committed_cursor,
+                            limit=1000,
+                        )
+                        if not live_events:
+                            break
+                        for event in live_events:
+                            await websocket.send_text(json.dumps({
+                                "type": "log.event",
+                                "event": event,
+                                "replay": False,
+                            }))
+                        live_count += len(live_events)
+                        query_cursor = int(live_events[-1]["cursor"])
+                        if len(live_events) < 1000:
+                            break
+                    scan_cursor = committed_cursor
+                    if not done:
+                        await websocket.send_text(json.dumps({
+                            "type": "log.keepalive",
+                            "cursor": scan_cursor,
+                            "eventsSent": live_count,
+                        }))
             finally:
                 for task in (receive_task, event_task):
                     if task is not None and not task.done():
@@ -5858,14 +6137,28 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                     ),
                     return_exceptions=True,
                 )
-        except WebSocketDisconnect:
+        except (WebSocketDisconnect, asyncio.CancelledError):
             pass
         except (json.JSONDecodeError, TypeError, ValueError) as exc:
             await websocket.send_text(json.dumps({
                 "type": "log.error",
+                "code": "invalid_request",
                 "message": str(exc),
             }))
             await websocket.close(code=1008)
+        except Exception:
+            LOGGER.exception("Log-WebSocket ist unerwartet fehlgeschlagen")
+            try:
+                await websocket.send_text(json.dumps({
+                    "type": "log.error",
+                    "code": "event_store_unavailable",
+                    "message": (
+                        "Der kanonische SQLite-Eventstore ist nicht verfügbar."
+                    ),
+                }))
+                await websocket.close(code=1011)
+            except (RuntimeError, WebSocketDisconnect):
+                pass
         finally:
             if subscription_id is not None:
                 service.events.unsubscribe(subscription_id)
@@ -6726,6 +7019,7 @@ YAML_CONFIG_TO_ARG_DEST = {
     "model_warmup": ("no_model_warmup", lambda value: not value),
     "openai_api_enabled": ("disable_openai_api", lambda value: not value),
     "performance_logging_enabled": ("performance_logging", bool),
+    "performance_log_mirror_enabled": ("performance_log_mirror", bool),
     "system_event_logging_enabled": ("system_event_logging", bool),
     "transcription_logging_enabled": ("transcription_logging", bool),
     "realtime_transcription_use_syllable_boundaries": (
@@ -6968,6 +7262,11 @@ def parse_args(argv=None):
         action=argparse.BooleanOptionalAction,
         default=_env_bool("VOICESTT_PERFORMANCE_LOG_STDOUT", True),
     )
+    parser.add_argument(
+        "--performance-log-mirror",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("VOICESTT_PERFORMANCE_LOG_MIRROR", True),
+    )
     parser.add_argument("--performance-log-max-bytes", type=int, default=10 * 1024 * 1024)
     parser.add_argument("--performance-log-backup-count", type=int, default=12)
     parser.add_argument("--performance-log-retention-days", type=int, default=0)
@@ -7168,6 +7467,7 @@ def settings_from_args(args):
         request_log_backup_count=args.request_log_backup_count,
         request_log_retention_days=args.request_log_retention_days,
         performance_logging_enabled=args.performance_logging,
+        performance_log_mirror_enabled=args.performance_log_mirror,
         performance_log_stdout=args.performance_log_stdout,
         performance_log_max_bytes=args.performance_log_max_bytes,
         performance_log_backup_count=args.performance_log_backup_count,

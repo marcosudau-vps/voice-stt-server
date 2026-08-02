@@ -351,6 +351,7 @@ def test_admin_api_requires_key_and_typed_endpoints_persist(tmp_path, monkeypatc
             "enabled": True, "stdout": False, "transcriptMode": "none",
             "retentionDays": 45,
             "performanceEnabled": True,
+            "performanceMirrorEnabled": False,
             "performanceStdout": False,
             "performanceRetentionDays": 14,
             "transcriptionRetentionDays": 90,
@@ -360,6 +361,7 @@ def test_admin_api_requires_key_and_typed_endpoints_persist(tmp_path, monkeypatc
         logging_config = client.get("/api/logging", headers=headers).json()
         assert logging_config["dataRoot"] == str(tmp_path)
         assert logging_config["performance"]["enabled"] is True
+        assert logging_config["performance"]["mirrorEnabled"] is False
         assert Path(logging_config["performance"]["file"]) == tmp_path / "logs" / "performance"
         assert logging_config["transcriptMode"] == "none"
         assert logging_config["transcripts"] is False
@@ -375,6 +377,7 @@ def test_admin_api_requires_key_and_typed_endpoints_persist(tmp_path, monkeypatc
     assert persisted["transcript_log_mode"] == "none"
     assert persisted["request_log_retention_days"] == 45
     assert persisted["performance_logging_enabled"] is True
+    assert persisted["performance_log_mirror_enabled"] is False
     assert "admin_api_key" not in persisted
 
 

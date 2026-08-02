@@ -156,6 +156,8 @@ settings:
   model_idle_unload_enabled: true
   model_idle_timeout_seconds: 1800
   request_logging_enabled: true
+  performance_logging_enabled: false
+  performance_log_mirror_enabled: false
   transcription_engine_options:
     local_files_only: true
 """,
@@ -169,6 +171,8 @@ settings:
         self.assertEqual(settings.realtime_model, "Kroko-DE-Community-64-L-Streaming-001.data")
         self.assertEqual(settings.max_sessions, 8)
         self.assertEqual(settings.model_idle_timeout_seconds, 1800.0)
+        self.assertFalse(settings.performance_logging_enabled)
+        self.assertFalse(settings.performance_log_mirror_enabled)
         self.assertEqual(settings.transcription_engine_options, {"local_files_only": True})
         self.assertEqual(Path(settings.request_log_path), Path("/data/logs/audit"))
         self.assertEqual(

@@ -54,6 +54,7 @@ Nicht jedes Event enthält alle gemeinsamen Felder.
 | `transcription_started` | finale Transkription startet | `segmentId`, optional `segment` |
 | `realtime_transcript` | Spiegel eines Realtime-Meilensteins | `segmentId`, `text`, optional `sequence`, `segment` |
 | `final_transcript` | Spiegel des finalen Text-Meilensteins | `segmentId`, `text`, optional `segment` |
+| `final_transcript_discarded` | leerer finaler Recordertext beendet das Segment ohne Finaltextframe | `segmentId`, `reason: "empty_final"`, optional `segment` |
 
 ## Statuswerte
 

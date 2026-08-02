@@ -65,8 +65,8 @@ recorder/VAD state and feeds work into the shared scheduler.
 The server exposes:
 
 - `GET /`: browser UI.
-- `GET /health`: readiness, active sessions/speakers, startup errors, and
-  scheduler state.
+- `GET /health`: readiness, active sessions/speakers, startup errors,
+  scheduler state, and canonical SQLite event-store state/cursors.
 - `GET /api/config`: public settings, limits, and supported engines.
 - `GET /api/metrics`: counters, queue depth, latency, coalescing, drops, and
   worker utilization.
@@ -74,7 +74,8 @@ The server exposes:
   `/api/logs/transcriptions/{transcriptionId}`: authenticated structured event
   history.
 - `WS /ws/transcribe`: browser audio stream and command channel.
-- `WS /ws/logs`: session- or admin-scoped cursor replay and live events.
+- `WS /ws/logs`: SQLite-first, session- or admin-scoped cursor replay and live
+  events (log protocol version 2).
 
 ## Configuration
 
@@ -146,21 +147,22 @@ Capacity and scheduling flags:
 | `--model-memory-policy` / `--no-model-memory-policy` | Enables/disables the CPU model memory guard. |
 | `--allow-two-medium-models` / `--no-allow-two-medium-models` | Allows two medium-equivalent lanes (default) or restores the one-medium limit. Standard `large-v3-turbo` counts as medium. |
 | `--data-root` | Single root for generated runtime data. Docker uses `/data`; channel directories, audio, SQLite and `config/runtime.json` are derived internally. |
-| `--request-logging` / `--no-request-logging` | Enables/disables the audit/request event channel. |
+| `--request-logging` / `--no-request-logging` | Enables/disables the audit/request calendar JSONL mirror. |
 | `--request-log-stdout` / `--no-request-log-stdout` | Mirrors audit events to stdout. |
 | `--request-log-max-bytes` | Maximum size of one audit daily segment. |
 | `--request-log-backup-count` | Legacy compatibility setting; calendar files are not deleted automatically. |
-| `--performance-logging` / `--no-performance-logging` | Enables/disables the separate performance JSONL channel. |
+| `--performance-logging` / `--no-performance-logging` | Enables/disables performance-event generation at the source. Disabled events do not enter SQLite, replay, live delivery, JSONL, or stdout. |
+| `--performance-log-mirror` / `--no-performance-log-mirror` | Enables/disables the optional performance calendar JSONL/stdout mirror without weakening already generated SQLite/live events. |
 | `--performance-log-stdout` / `--no-performance-log-stdout` | Mirrors performance events to stdout for Dozzle. |
 | `--performance-log-max-bytes` | Maximum size of one performance log file. |
 | `--performance-log-backup-count` | Legacy compatibility setting; calendar files are not deleted automatically. |
 | `--performance-log-retention-days` | Deletes older performance calendar files and store entries; `0` disables deletion. |
-| `--transcription-logging` / `--no-transcription-logging` | Enables/disables the transport-independent transcription event channel. |
+| `--transcription-logging` / `--no-transcription-logging` | Enables/disables the transport-independent transcription calendar JSONL mirror; canonical SQLite/live events remain uniform. |
 | `--transcription-log-stdout` / `--no-transcription-log-stdout` | Mirrors transcription events to stdout. |
 | `--transcription-log-max-bytes` | Maximum size of one transcription daily segment. |
 | `--transcription-log-backup-count` | Legacy compatibility setting. |
 | `--transcription-log-retention-days` | Deletes older transcription calendar files and store entries; `0` disables deletion. |
-| `--system-event-logging` / `--no-system-event-logging` | Enables/disables selected structured server lifecycle events. |
+| `--system-event-logging` / `--no-system-event-logging` | Enables/disables the system calendar JSONL mirror. |
 | `--system-event-log-stdout` / `--no-system-event-log-stdout` | Mirrors system events to stdout. |
 | `--system-event-log-max-bytes` | Maximum size of one system daily segment. |
 | `--system-event-log-backup-count` | Legacy compatibility setting. |
@@ -170,8 +172,8 @@ Capacity and scheduling flags:
 | `--log-calendar-timezone` | Calendar timezone for `YYYY-MM/YYYY-MM-DD.jsonl` paths; default `Europe/Berlin`. |
 | `--realtime-log-detail` | `off`, `summary`, or `events` for realtime cadence measurements. |
 | `--event-store` / `--no-event-store` | Enables/disables the indexed SQLite history. |
-| `--event-log-queue-size` | Bounded queue capacity used by the structured event sinks. |
-| `--log-live` / `--no-log-live` | Enables/disables `/ws/logs`. |
+| `--event-log-queue-size` | Bounded queue capacity for optional JSONL/stdout mirrors and commit/store-state wakeups; SQLite commits are not queued here. |
+| `--log-live` / `--no-log-live` | Enables/disables `/ws/logs`; enabling it requires the startup SQLite event store. |
 | `--save-audio-files` / `--no-save-audio-files` | Enables/disables optional uploaded-audio archiving below the data root. |
 
 Named tuning profiles are available through `--profile`; explicit flags
@@ -234,10 +236,12 @@ Dozzle.
 
 The server also writes transport-independent `transcription` events for HTTP
 requests and WebSocket segments. All structured channels share a versioned
-event envelope, daily calendar files, SQLite history through
+  event envelope, optional daily calendar mirrors, and canonical SQLite
+  history through
 `GET /api/logs/events`, `GET /api/logs/sessions/{sessionId}`, and
-`GET /api/logs/transcriptions/{transcriptionId}`, plus optional live delivery
-through `/ws/logs`. See
+  `GET /api/logs/transcriptions/{transcriptionId}`, plus replayable live
+  delivery through `/ws/logs`. Every normal live event has already committed
+  to SQLite. See
 [structured logging](structured-logging.md) for the complete contract.
 
 An RSS delta is an approximate process-level model footprint. It is closest to
@@ -248,16 +252,41 @@ p50, p95, and p99) over repeated runs. Accuracy comparisons require a reference
 transcript and should report WER/CER in an offline benchmark; they cannot be
 derived safely from production traffic alone.
 
-`GET /api/logging` returns all structured channel, calendar, realtime and live
-delivery settings. Runtime-safe values can be changed without UI coupling
-through `PUT /api/logging`; the response reports applied and rejected fields.
-SQLite store activation and its path remain startup-only.
+`GET /api/logging` returns all structured source, mirror, calendar, realtime
+and live delivery settings plus `logProtocolVersion`, `deliveryMode`, replay
+availability and sanitized store state/cursors. For performance events,
+`performance.enabled` controls generation and `performance.mirrorEnabled`
+controls the optional JSONL/stdout mirror. Runtime-safe values can be changed
+without UI coupling through `PUT /api/logging`; the corresponding request
+fields are `performanceEnabled` and `performanceMirrorEnabled`. The response
+reports applied and rejected fields. SQLite store activation and its path
+remain startup-only.
 
 A normal session receives `hello.logAccess` and can use its token only for its
 own `audit`, `transcription`, and `performance` history. Administrators can
-query across sessions and include `system`. Tokens are sent through
+query or subscribe across all retained sessions and include `system`; omitting
+the session and channel filters explicitly means all sessions/channels. Tokens
+are sent through
 `X-VoiceSTT-Log-Token` or the first `/ws/logs` subscribe message, never in a
-URL.
+URL. Admin-Key comparison is constant-time. The browser Admin drawer supports
+bounded global history pages, channel/time filters, and a distinct global live
+mode without persisting the key.
+
+`log.hello` exposes protocol version 2, `deliveryMode: "sqlite_first"`, the
+server instance, the committed oldest/latest cursor, and a channel-/session-
+specific `retentionCursor`. Replay and live both read SQLite. A deleted event
+relevant to the requested scope produces `log.gap(reason=retention)`;
+a cursor above the high-watermark produces `log.error(code=cursor_ahead)`.
+Store failure closes existing log sockets with `1011`, blocks new log access,
+and leaves `/ws/transcribe` operational. An empty final recorder result emits
+`transcription.discarded(reason=empty_final)` but no empty `final` frame. Each
+result is correlated with the generation and segment captured by its actual
+transcription-start callback; duplicate recorder results without another start
+cannot claim a new segment. Audit, transcription, and system channel
+`*_logging_enabled` switches affect only optional JSONL/stdout mirrors.
+`performance_logging_enabled` is the intentional source gate;
+`performance_log_mirror_enabled` is its independent mirror switch. Every event
+that passes source policy remains canonical in SQLite.
 
 ## Engine Recipes
 
@@ -430,7 +459,8 @@ Server event types include:
 - `hello`: assigns `clientId` and `sessionId`.
 - `ready`: model lanes are initialized.
 - `timeline`: timing events for wake word state, recording start/end,
-  realtime updates, final transcription start, and final transcript delivery.
+  realtime updates, final transcription start, final transcript delivery, and
+  discarded empty final results.
 - `realtime`: interim text for a session-local `segmentId`.
 - `final`: final text for the same session-local `segmentId`.
 - `status`: session/server state.

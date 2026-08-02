@@ -6,10 +6,11 @@ Diese Seite übersetzt das Protokoll in ein belastbares Clientdesign. Sie ist
 nicht serverseitig vorgeschrieben, passt aber zu den tatsächlich möglichen
 Eventfolgen.
 
-## Zwei getrennte Automaten
+## Drei getrennte Automaten
 
-Ein Client sollte Verbindungs-/Transportzustand und Recorder-/Sprachzustand
-getrennt halten. Ein einzelnes `isRecording`-Boolean kann die Serverzustände
+Ein Client sollte Audio-/Sessiontransport, Recorder-/Sprachzustand und den
+zuverlässigen Log-/Eventstream getrennt halten. Ein einzelnes
+`isRecording`-Boolean oder ein gemeinsamer Socketstatus kann die Serverzustände
 nicht korrekt abbilden.
 
 ```mermaid
@@ -29,10 +30,20 @@ flowchart LR
         S4 --> S1
         S1 --> S0
     end
+
+    subgraph Events["Log-/Eventstreamautomat"]
+        L0["disabled / unavailable"] --> L1["connecting"]
+        L1 --> L2["replaying"]
+        L2 --> L3["live"]
+        L3 --> L1
+        L1 --> L0
+    end
 ```
 
 Der Streamautomat ist nur gültig, solange der Transportautomat dieselbe
-`sessionId` besitzt.
+`sessionId` besitzt. Der Logautomat kann unabhängig reconnecten. Im
+Session-Scope hängt sein Token an derselben Session; im Admin-Scope kann er
+auch ohne aktive Audioverbindung serverweit laufen.
 
 ## Empfohlenes State-Schema
 
@@ -54,6 +65,13 @@ interface ClientState {
   sessionMetrics?: SessionMetrics;
   pingStartedAt?: number;
   roundTripMs?: number;
+  logConnection: "unavailable" | "connecting" | "replaying" | "live" | "error";
+  logScope?: "session" | "admin";
+  logServerInstanceId?: string;
+  lastCommittedLogCursor: number;
+  oldestLogCursor?: number;
+  latestLogCursor?: number;
+  retentionGap?: { from: number; to: number };
 }
 
 interface TranscriptSegment {
@@ -104,7 +122,9 @@ function reduce(state: ClientState, event: ServerEvent): ClientState {
       return upsertFinal(state, event);
 
     case "timeline":
-      return appendTimeline(state, event);
+      return event.event === "final_transcript_discarded"
+        ? markSegmentDiscarded(appendTimeline(state, event), event.segmentId)
+        : appendTimeline(state, event);
 
     case "clear":
       return { ...state, segments: new Map(), segmentOrder: [], timeline: [] };
@@ -126,6 +146,11 @@ function reduce(state: ClientState, event: ServerEvent): ClientState {
   }
 }
 ```
+
+`markSegmentDiscarded` darf einen vorherigen Realtime-Text nicht in einen
+finalen Transkripttext umwandeln. Für Textinjektion ist nur ein echtes
+`final`-Frame maßgeblich; das Discard-Event beendet lediglich den offenen
+Segmentzustand ohne Einfügung.
 
 ## Realtime-Upsert
 
@@ -253,6 +278,22 @@ Empfehlung:
 - Mikrofon kann lokal offen bleiben, aber Audio erst nach neuem `start` senden.
 - Keine alten Binärpakete replayen, sofern kein bewusstes Offline-Uploadkonzept
   implementiert wurde.
+
+Der Log-/Eventstream besitzt einen eigenen Reconnectpfad:
+
+- erst subscriben, dann Replay bis `log.replay_completed`, erst danach Zustand
+  `live` setzen;
+- ausschließlich den Cursor eines vollständig verarbeiteten `log.event`
+  persistieren;
+- globale Cursorsprünge bei Filtern nicht als Verlust interpretieren;
+- bei Retentiongap die gemeldete Spanne sichtbar speichern, den serverseitig
+  fortgesetzten Replaystrom aber ohne eigenen Sprung zu `oldestCursor` oder
+  `retentionCursor` weiterverarbeiten;
+- bei `cursor_ahead` `serverInstanceId`/`latestCursor` neu übernehmen;
+- bei Storefehler `1011` mit Backoff reconnecten, ohne Audio oder Transkription
+  neu zu starten;
+- Admin- und Sessioncursor getrennt speichern, weil Scope und Filter
+  unterschiedlich sind.
 
 ## Statusdarstellung
 

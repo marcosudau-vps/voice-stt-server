@@ -479,6 +479,16 @@ class SQLiteEventStore:
             self._connection.execute(
                 f"CREATE INDEX IF NOT EXISTS {name} ON events ({column})"
             )
+        self._connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS retention_watermarks (
+                channel TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                cursor INTEGER NOT NULL,
+                PRIMARY KEY (channel, session_id)
+            )
+            """
+        )
         self._connection.commit()
         self._retention_days = {}
         self._last_prune_day = None
@@ -502,6 +512,26 @@ class SQLiteEventStore:
             cutoff = (now - timedelta(days=days)).isoformat(
                 timespec="milliseconds"
             ).replace("+00:00", "Z")
+            removed_scopes = self._connection.execute(
+                """
+                SELECT channel, COALESCE(session_id, ''), MAX(cursor)
+                FROM events
+                WHERE channel = ? AND timestamp < ?
+                GROUP BY channel, COALESCE(session_id, '')
+                """,
+                (channel, cutoff),
+            ).fetchall()
+            for removed_channel, session_id, cursor in removed_scopes:
+                self._connection.execute(
+                    """
+                    INSERT INTO retention_watermarks (
+                        channel, session_id, cursor
+                    ) VALUES (?, ?, ?)
+                    ON CONFLICT(channel, session_id) DO UPDATE SET
+                        cursor = MAX(cursor, excluded.cursor)
+                    """,
+                    (removed_channel, session_id, int(cursor)),
+                )
             self._connection.execute(
                 "DELETE FROM events WHERE channel = ? AND timestamp < ?",
                 (channel, cutoff),
@@ -512,48 +542,49 @@ class SQLiteEventStore:
     def append(self, event: Dict[str, Any]) -> int:
         with self._lock:
             self._prune_if_due()
-            cursor = event.get("cursor")
-            if cursor is None:
-                cursor = self._cursor_high_watermark_locked() + 1
-                event = dict(event)
-                event["cursor"] = cursor
-            else:
-                cursor = int(cursor)
-            self._connection.execute(
-                """
-                INSERT INTO events (
-                    cursor, event_id, timestamp, channel, event_name, severity,
-                    server_instance_id, transport, client_id, session_id,
-                    request_id, transcription_id, segment_id, payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    cursor,
-                    event["eventId"],
-                    event["timestamp"],
-                    event["channel"],
-                    event["event"],
-                    event["severity"],
-                    event["serverInstanceId"],
-                    event.get("transport"),
-                    event.get("clientId"),
-                    event.get("sessionId"),
-                    event.get("requestId"),
-                    event.get("transcriptionId"),
+            cursor = self._cursor_high_watermark_locked() + 1
+            committed_event = dict(event)
+            committed_event["cursor"] = cursor
+            try:
+                self._connection.execute(
+                    """
+                    INSERT INTO events (
+                        cursor, event_id, timestamp, channel, event_name,
+                        severity, server_instance_id, transport, client_id,
+                        session_id, request_id, transcription_id, segment_id,
+                        payload_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
                     (
-                        str(event["segmentId"])
-                        if event.get("segmentId") is not None
-                        else None
+                        cursor,
+                        committed_event["eventId"],
+                        committed_event["timestamp"],
+                        committed_event["channel"],
+                        committed_event["event"],
+                        committed_event["severity"],
+                        committed_event["serverInstanceId"],
+                        committed_event.get("transport"),
+                        committed_event.get("clientId"),
+                        committed_event.get("sessionId"),
+                        committed_event.get("requestId"),
+                        committed_event.get("transcriptionId"),
+                        (
+                            str(committed_event["segmentId"])
+                            if committed_event.get("segmentId") is not None
+                            else None
+                        ),
+                        json.dumps(
+                            committed_event,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                            default=str,
+                        ),
                     ),
-                    json.dumps(
-                        event,
-                        ensure_ascii=False,
-                        separators=(",", ":"),
-                        default=str,
-                    ),
-                ),
-            )
-            self._connection.commit()
+                )
+                self._connection.commit()
+            except Exception:
+                self._connection.rollback()
+                raise
             return cursor
 
     def _cursor_high_watermark_locked(self) -> int:
@@ -573,6 +604,39 @@ class SQLiteEventStore:
     def latest_cursor(self) -> int:
         with self._lock:
             return self._cursor_high_watermark_locked()
+
+    def oldest_cursor(self) -> int:
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT MIN(cursor) FROM events"
+            ).fetchone()
+            return int(row[0] or 0)
+
+    def retention_cursor(
+        self,
+        *,
+        channels: Optional[Iterable[str]] = None,
+        session_id: Optional[str] = None,
+    ) -> int:
+        clauses = []
+        parameters = []
+        channel_values = [
+            str(value) for value in (channels or []) if str(value)
+        ]
+        if channel_values:
+            clauses.append(
+                f"channel IN ({','.join('?' for _ in channel_values)})"
+            )
+            parameters.extend(channel_values)
+        if session_id not in (None, ""):
+            clauses.append("session_id = ?")
+            parameters.append(str(session_id))
+        sql = "SELECT MAX(cursor) FROM retention_watermarks"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        with self._lock:
+            row = self._connection.execute(sql, parameters).fetchone()
+        return int(row[0] or 0)
 
     def query(
         self,
@@ -637,11 +701,11 @@ class StructuredEventHub:
         self._settings_lock = threading.RLock()
         self._cursor_lock = threading.Lock()
         self._drop_lock = threading.Lock()
+        self._store_state_lock = threading.RLock()
         self._subscribers_lock = threading.RLock()
         self._subscribers: Dict[str, Dict[str, Any]] = {}
         self._dropped_events = 0
         self._drop_counts: Dict[str, int] = {}
-        self._last_internal_failure = {}
         self._closed = False
         self._store = None
         if bool(getattr(settings, "event_store_enabled", False)):
@@ -653,6 +717,9 @@ class StructuredEventHub:
             if store_path:
                 self._store = SQLiteEventStore(Path(store_path))
         self._cursor = self._store.latest_cursor() if self._store is not None else 0
+        self._store_state = "ready" if self._store is not None else "disabled"
+        self._store_last_error_type = None
+        self._store_last_transition_at = utc_timestamp()
         self._channel_config = {}
         self._sinks: Dict[str, CalendarJsonlSink] = {}
         self.configure(settings)
@@ -662,17 +729,14 @@ class StructuredEventHub:
         )
         self._queues = {
             name: BoundedPriorityEventQueue(queue_size)
-            for name in ("store", "file", "stdout", "publish")
+            for name in ("file", "stdout")
         }
-        # Gap notifications must not run subscriber callbacks in emit() and
-        # therefore use their own lightweight dispatcher.
+        # Commit/store notifications are deliberately payload-free. A missed
+        # commit wakeup is harmless because subscribers always rescan SQLite
+        # from their own committed cursor and keepalive performs a periodic
+        # high-watermark check.
         self._control_queue = queue.Queue(maxsize=queue_size)
         self._workers = {
-            "store": threading.Thread(
-                target=self._run_store,
-                name="VoiceSTTEventStoreWriter",
-                daemon=True,
-            ),
             "file": threading.Thread(
                 target=self._run_file,
                 name="VoiceSTTEventFileWriter",
@@ -681,11 +745,6 @@ class StructuredEventHub:
             "stdout": threading.Thread(
                 target=self._run_stdout,
                 name="VoiceSTTEventStdoutWriter",
-                daemon=True,
-            ),
-            "publish": threading.Thread(
-                target=self._run_publish,
-                name="VoiceSTTEventLivePublisher",
                 daemon=True,
             ),
             "control": threading.Thread(
@@ -716,7 +775,7 @@ class StructuredEventHub:
             },
             "performance": {
                 "enabled": bool(
-                    getattr(settings, "performance_logging_enabled", True)
+                    getattr(settings, "performance_log_mirror_enabled", True)
                 ),
                 "stdout": bool(
                     getattr(settings, "performance_log_stdout", True)
@@ -841,6 +900,7 @@ class StructuredEventHub:
             ".failed",
             ".rejected",
             ".cancelled",
+            ".discarded",
         )):
             return 0
         if channel == "performance":
@@ -859,7 +919,10 @@ class StructuredEventHub:
         with self._settings_lock:
             config = self._channel_config.get(channel)
             transcript_mode = self.transcript_mode
-        if not config or not config["enabled"] or self._closed:
+        # Per-channel enabled switches control only the optional JSONL/stdout
+        # mirrors. Once the canonical store is enabled, every generated event
+        # must follow the same SQLite-first contract.
+        if not config or self._closed:
             return None
         event = str(event)
         severity = str(severity)
@@ -888,7 +951,6 @@ class StructuredEventHub:
         payload = {
             "schemaVersion": 1,
             "eventId": uuid.uuid4().hex,
-            "cursor": self._next_cursor(),
             "timestamp": utc_timestamp(),
             "channel": channel,
             "event": event,
@@ -899,18 +961,37 @@ class StructuredEventHub:
         }
         if sanitized_message not in (None, _DROP_FIELD):
             payload["meldung"] = sanitized_message
+
+        if self._store is not None:
+            try:
+                cursor = self._store.append(payload)
+            except Exception as exc:
+                logging.getLogger("voicestt.fastapi").exception(
+                    "Kanonischer SQLite-Eventstore ist fehlgeschlagen"
+                )
+                self._set_store_state("degraded", error=exc)
+                return None
+            payload["cursor"] = cursor
+            with self._cursor_lock:
+                self._cursor = cursor
+            self._set_store_state("ready")
+            self._enqueue_control({
+                "_logControl": "commit",
+                "cursor": cursor,
+            })
+        else:
+            payload["cursor"] = self._next_cursor()
+
         priority = self._priority(channel, event, severity)
         targets = []
-        if self._store is not None:
-            targets.append("store")
         with self._settings_lock:
             if channel in self._sinks:
                 targets.append("file")
-            if self._channel_config.get(channel, {}).get("stdout"):
+            if (
+                self._channel_config.get(channel, {}).get("enabled")
+                and self._channel_config.get(channel, {}).get("stdout")
+            ):
                 targets.append("stdout")
-        with self._subscribers_lock:
-            if self._subscribers:
-                targets.append("publish")
         for target in targets:
             self._enqueue(target, payload, priority)
         return payload["eventId"]
@@ -942,17 +1023,11 @@ class StructuredEventHub:
             finally:
                 event_queue.task_done()
 
-    def _run_store(self):
-        self._run_worker("store", self._write_store)
-
     def _run_file(self):
         self._run_worker("file", self._write_file)
 
     def _run_stdout(self):
         self._run_worker("stdout", self._write_stdout)
-
-    def _run_publish(self):
-        self._run_worker("publish", self._publish)
 
     def _run_control(self):
         while True:
@@ -963,10 +1038,6 @@ class StructuredEventHub:
                 self._publish_control(payload)
             finally:
                 self._control_queue.task_done()
-
-    def _write_store(self, payload):
-        if self._store is not None:
-            self._store.append(payload)
 
     def _write_file(self, payload):
         channel = payload["channel"]
@@ -992,72 +1063,61 @@ class StructuredEventHub:
         with self._drop_lock:
             self._dropped_events += 1
             self._drop_counts[sink] = self._drop_counts.get(sink, 0) + 1
-            dropped_count = self._drop_counts[sink]
+        logging.getLogger("voicestt.fastapi").warning(
+            "Optionaler strukturierter Eventspiegel '%s' hat ein Event %s",
+            sink,
+            "nicht schreiben können" if failed else "verworfen",
+        )
+
+    def _enqueue_control(self, payload, *, critical=False):
         try:
-            self._control_queue.put_nowait({
-                "_logControl": "gap",
-                "scope": "hub",
-                "sink": sink,
-                "dropped": 1,
-                "droppedTotal": dropped_count,
-                "cursor": payload.get("cursor"),
-                "channel": payload.get("channel"),
-                "sessionId": payload.get("sessionId"),
-            })
+            self._control_queue.put_nowait(dict(payload))
+            return True
         except queue.Full:
-            # An older gap notification is already pending; never block the
-            # emitting request merely to enqueue another notification.
+            if not critical:
+                return False
+        try:
+            self._control_queue.get_nowait()
+            self._control_queue.task_done()
+        except queue.Empty:
             pass
-        if (
-            sink in {"store", "file"}
-            and payload.get("event") != "storage.failed"
-        ):
-            now = datetime.now(timezone.utc).timestamp()
-            with self._drop_lock:
-                last = self._last_internal_failure.get(sink, 0.0)
-                should_emit = now - last >= 60.0
-                if should_emit:
-                    self._last_internal_failure[sink] = now
-            if should_emit:
-                self.emit(
-                    "system",
-                    "storage.failed",
-                    severity="error",
-                    message="Strukturierter Logging-Speicher ist ausgefallen",
-                    sink=sink,
-                    failedEventId=payload.get("eventId"),
-                    reason="write_failed" if failed else "queue_overloaded",
+        try:
+            self._control_queue.put_nowait(dict(payload))
+            return True
+        except queue.Full:
+            return False
+
+    def _set_store_state(self, state, *, error=None):
+        error_type = type(error).__name__ if error is not None else None
+        with self._store_state_lock:
+            changed = (
+                state != self._store_state
+                or (
+                    state == "degraded"
+                    and error_type != self._store_last_error_type
                 )
+            )
+            self._store_state = str(state)
+            self._store_last_error_type = error_type
+            if changed:
+                self._store_last_transition_at = utc_timestamp()
+        if not changed:
+            return
+        if state == "degraded":
+            self._enqueue_control({
+                "_logControl": "store_error",
+                "code": "event_store_unavailable",
+            }, critical=True)
+        elif state == "ready":
+            self._enqueue_control({
+                "_logControl": "store_recovered",
+                "cursor": self.latest_cursor(),
+            })
 
     def _publish_control(self, payload):
         with self._subscribers_lock:
             subscribers = list(self._subscribers.values())
         for subscription in subscribers:
-            channels = subscription["channels"]
-            session_id = subscription["sessionId"]
-            channel = payload.get("channel")
-            if channels and channel and channel not in channels:
-                continue
-            if session_id and payload.get("sessionId") != session_id:
-                continue
-            try:
-                subscription["callback"](dict(payload))
-            except Exception:
-                logging.getLogger("voicestt.fastapi").debug(
-                    "Log-Abonnent konnte nicht benachrichtigt werden",
-                    exc_info=True,
-                )
-
-    def _publish(self, payload):
-        with self._subscribers_lock:
-            subscribers = list(self._subscribers.values())
-        for subscription in subscribers:
-            channels = subscription["channels"]
-            session_id = subscription["sessionId"]
-            if channels and payload["channel"] not in channels:
-                continue
-            if session_id and payload.get("sessionId") != session_id:
-                continue
             try:
                 subscription["callback"](dict(payload))
             except Exception:
@@ -1090,39 +1150,19 @@ class StructuredEventHub:
         channels: Optional[Iterable[str]] = None,
         session_id: Optional[str] = None,
     ) -> str:
-        dropped = [0]
-        subscription_holder = {"id": None}
-
         def deliver(payload):
             def put():
-                recovered = 0
                 try:
-                    if dropped[0]:
-                        if target.qsize() > max(0, target.maxsize - 2):
-                            dropped[0] += 1
-                            return
-                        recovered = dropped[0]
-                        target.put_nowait({
-                            "_logControl": "gap",
-                            "scope": "subscriber",
-                            "dropped": recovered,
-                            "cursor": payload.get("cursor"),
-                        })
-                        dropped[0] = 0
                     target.put_nowait(payload)
                 except asyncio.QueueFull:
-                    dropped[0] += 1
-                    return
-                if recovered:
-                    self.emit(
-                        "system",
-                        "log.subscriber.dropped",
-                        severity="warning",
-                        message="Log-Abonnent hat Ereignisse verworfen",
-                        subscriptionId=subscription_holder["id"],
-                        dropped=recovered,
-                        sessionId=session_id,
-                    )
+                    if payload.get("_logControl") != "store_error":
+                        return
+                    try:
+                        target.get_nowait()
+                        target.task_done()
+                        target.put_nowait(payload)
+                    except (asyncio.QueueEmpty, asyncio.QueueFull):
+                        return
 
             loop.call_soon_threadsafe(put)
 
@@ -1131,7 +1171,6 @@ class StructuredEventHub:
             channels=channels,
             session_id=session_id,
         )
-        subscription_holder["id"] = subscription_id
         return subscription_id
 
     def unsubscribe(self, subscription_id: str):
@@ -1141,12 +1180,67 @@ class StructuredEventHub:
     def query(self, **filters):
         if self._store is None:
             return []
-        self._queues["store"].join()
-        return self._store.query(**filters)
+        try:
+            result = self._store.query(**filters)
+        except Exception as exc:
+            self._set_store_state("degraded", error=exc)
+            raise
+        self._set_store_state("ready")
+        return result
 
     def latest_cursor(self) -> int:
+        if self._store is not None:
+            try:
+                cursor = self._store.latest_cursor()
+            except Exception as exc:
+                self._set_store_state("degraded", error=exc)
+                raise
+            return cursor
         with self._cursor_lock:
             return self._cursor
+
+    def oldest_cursor(self) -> int:
+        if self._store is None:
+            return 0
+        try:
+            cursor = self._store.oldest_cursor()
+        except Exception as exc:
+            self._set_store_state("degraded", error=exc)
+            raise
+        return cursor
+
+    def retention_cursor(self, **filters) -> int:
+        if self._store is None:
+            return 0
+        try:
+            cursor = self._store.retention_cursor(**filters)
+        except Exception as exc:
+            self._set_store_state("degraded", error=exc)
+            raise
+        return cursor
+
+    def store_status(self):
+        oldest_cursor = 0
+        latest_cursor = 0
+        if self._store is not None:
+            try:
+                oldest_cursor = self._store.oldest_cursor()
+                latest_cursor = self._store.latest_cursor()
+            except Exception as exc:
+                self._set_store_state("degraded", error=exc)
+        with self._store_state_lock:
+            return {
+                "state": self._store_state,
+                "available": self._store_state == "ready",
+                "lastErrorType": self._store_last_error_type,
+                "lastTransitionAt": self._store_last_transition_at,
+                "oldestCursor": oldest_cursor,
+                "latestCursor": latest_cursor,
+            }
+
+    def store_available(self) -> bool:
+        with self._store_state_lock:
+            return self._store_state == "ready"
 
     def drop_counts(self):
         with self._drop_lock:

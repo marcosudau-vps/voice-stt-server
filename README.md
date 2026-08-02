@@ -157,8 +157,9 @@ audio, logging, and executor injection.
   word state.
 - A FastAPI browser streaming server example with multi-user session isolation,
   shared inference resources, metrics, and health endpoints.
-- Four structured server event channels with calendar JSONL files, indexed
-  history, session-scoped HTTP access, and a separate live log WebSocket.
+- Four SQLite-first structured server event channels with calendar JSONL
+  mirrors, indexed history, session-scoped client access, server-wide Admin
+  history/live access, and a separate replayable log WebSocket.
 
 ## Documentation
 

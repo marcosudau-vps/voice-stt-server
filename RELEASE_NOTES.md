@@ -4,6 +4,15 @@
 
 ### Added
 
+- Added log protocol version 2 with SQLite-first replay/live delivery,
+  committed cursor metadata, channel-/session-aware retention watermarks,
+  retention-gap and cursor-ahead semantics, and explicit event-store
+  availability.
+- Added fully authenticated server-wide Admin history/replay/live access,
+  including bounded history/filter controls in the browser Admin drawer.
+- Added `transcription.discarded(reason=empty_final)` as the terminal event for
+  empty final recorder results without emitting an empty final text frame.
+
 - Added a session-local OpenWakeWord contract on `/ws/transcribe`, including
   tri-state enablement, optional tuning overrides, explicit fallbacks, and
   effective configuration/capabilities in `hello` and `ready`.
@@ -18,13 +27,32 @@
   `transcription`, and `performance` channels, transport-independent
   correlation and centralized redaction.
 - Added calendar-based JSONL files, indexed SQLite history, filtered history
-  endpoints, and a separate session-scoped `/ws/logs` connection with replay
-  and live delivery.
+  endpoints, and a separate authenticated session-/admin-scoped `/ws/logs`
+  connection with replay and live delivery.
 - Added a mandatory documentation archive process for larger change actions,
   including a dated plan, a later plan-versus-implementation review, and a
   separate rationale for material deviations.
 
 ### Changed
+
+- Audit, transcription, and system `*_logging_enabled` switches now control
+  only optional JSONL/stdout mirrors. Performance uses separate source and
+  mirror switches: `performance_logging_enabled` controls generation and
+  `performance_log_mirror_enabled` controls optional mirroring. No mirror
+  switch suppresses an already generated SQLite or `/ws/logs` event.
+- Empty final results now use a transcription-start ticket to claim their
+  generation/segment terminal exactly once, including duplicate-result and
+  disconnect races through the real text worker.
+
+- Structured events are now committed to SQLite before cursor assignment,
+  optional JSONL/stdout mirroring, or `/ws/logs` visibility. Live handlers use
+  payload-free commit wakeups and rescan SQLite, so subscriber queue pressure
+  cannot lose committed events.
+- Store outages now suppress uncommitted normal events, expose degraded health
+  and access metadata, close existing log streams with code `1011`, and reject
+  new log streams until a successful committed event recovers the store.
+- Admin-key comparisons for HTTP and log WebSocket access now use
+  `secrets.compare_digest`.
 
 - Corrected the logging rollout so Docker has one generated-data root
   (`data_root_path: /data`). Audit, performance, transcription, system, audio,
