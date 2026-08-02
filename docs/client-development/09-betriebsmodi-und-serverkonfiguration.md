@@ -261,6 +261,9 @@ Die folgenden Endpunkte benötigen bei konfiguriertem Adminschlüssel
 | `GET /api/wake-word` | Baseline und verfügbaren Katalog lesen | keine |
 | `PUT /api/wake-word` | Baseline aktivieren/deaktivieren und abstimmen | nur neue Sessions |
 | `PATCH /api/config` | generische Laufzeitkonfiguration | gemäß `appliesTo` |
+| `GET /api/logging` | Spiegelkonfiguration, Protokollversion und Eventstorezustand lesen | keine |
+| `PUT /api/logging` | Laufzeitfähige Logging-/Livewerte ändern | gemäß `applied`/`rejected` |
+| `GET /api/logs/events` | serverweite retained Eventhistorie mit Filtern lesen | keine |
 
 `PUT /api/wake-word` akzeptiert für Aktivierung nur OpenWakeWord. `words`
 enthält logische IDs; leer bedeutet Manifest-Standardmodell. Optional kann
@@ -269,8 +272,10 @@ oder `models.json` angeben. Persistiert werden die aufgelösten lokalen
 Klassifikatorpfade.
 
 Sessionlokale Queryparameter ändern die Baseline nicht und benötigen im
-aktuellen Protokoll keinen Admin-Key. Der WebSocket-Endpunkt selbst besitzt
-derzeit keine eingebaute Authentifizierung. Bei externer Erreichbarkeit müssen
+aktuellen Protokoll keinen Admin-Key. Der Audio-WebSocket `/ws/transcribe`
+selbst besitzt derzeit keine eingebaute Authentifizierung. `/ws/logs` ist davon
+getrennt und authentifiziert im ersten Subscribe-Frame entweder einen
+Sessiontoken oder den Admin-Key. Bei externer Erreichbarkeit müssen
 TLS, Zugriffsschutz, Connection-/Rate-Limits und gegebenenfalls Authentisierung
 am Reverse Proxy umgesetzt werden.
 
@@ -282,12 +287,20 @@ Der Desktop-Client sollte drei getrennte Bereiche führen:
    sessionlokale Queryparameter.
 2. **Wake-Word-Profil:** Modell-ID und optionale Tuningwerte aus
    `sessionCapabilities`.
-3. **Serveradministration:** Baseline und andere Adminwerte; getrennt,
-   ausdrücklich global und mit Admin-Key.
+3. **Serveradministration:** Baseline, serverweite retained Historie und
+   globaler Liveeventstream; getrennt, ausdrücklich global und mit Admin-Key.
 
 Der Admin-Key gehört in den Secret Store des Betriebssystems, nicht in
 Konfigurationsdateien, Logs, URLs oder Telemetrie. Für den normalen
 Moduswechsel wird er nicht benötigt.
+
+Für Adminlogs wird der Key bei HTTP als `X-VoiceSTT-Admin-Key` und bei
+`/ws/logs` als `accessToken` in der ersten Nachricht gesendet. `sessionId` und
+Channels dürfen im Adminmodus fehlen; der Server bestätigt dann
+`authorizationScope: "admin"`, `allSessions: true` und `allChannels: true`.
+Der mitgelieferte Browserbereich kann globale Historie begrenzt/seitig laden
+und anschließend ab dem committed High-Watermark live folgen. Er persistiert
+den eingegebenen Key nicht.
 
 Minimaler Verbindungsalgorithmus:
 

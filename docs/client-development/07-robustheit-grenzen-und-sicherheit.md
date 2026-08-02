@@ -122,7 +122,9 @@ Felder senden, die der Server tatsächlich auswertet.
 
 - Admin-Key nie in normale Desktop-/Webclient-Bundles einbetten.
 - Web-Frontendcode ist für Endnutzer einsehbar; dort hat ein Admin-Key keinen
-  sicheren Speicherort.
+  dauerhaften sicheren Speicherort. Die mitgelieferte Adminoberfläche hält
+  einen manuell eingegebenen Key deshalb nur im Passwortfeld der aktuellen
+  Seite und schreibt ihn weder in URL noch Browserstorage.
 - OpenAI- und Admin-Key getrennt halten.
 - YAML-Dateien verbieten Secrets bereits durch den Loader; Secrets gehören in
   die Umgebung/Secret-Verwaltung.
@@ -138,15 +140,15 @@ Netzwerkebene begrenzen.
 
 | Setting | Risiko / Wirkung |
 | --- | --- |
-| `request_logging_enabled` | erzeugt strukturierte Auditdaten |
+| `request_logging_enabled` | aktiviert den Audit-Kalender-/stdout-Spiegel; kanonische Events bleiben SQLite-first |
 | `request_log_transcripts` | Legacy-Schalter für `transcript_log_mode` |
 | `transcript_log_mode` | kann finalen oder vollständigen Text ausschließlich im Transkriptionskanal speichern |
 | `request_log_stdout` | kann Daten in zentrale Containerlogs/Dozzle spiegeln |
 | `save_audio_files` | speichert Audio auf Serverdisk |
-| `performance_logging_enabled` | schreibt Latenz-/Ressourcendaten, laut Implementierung ohne Transkripttext |
-| `transcription_logging_enabled` | schreibt transportübergreifende Transkriptionsereignisse; Text folgt `transcript_log_mode` |
-| `event_store_enabled` | persistiert strukturierte Ereignisse zusätzlich in SQLite für Historienabfragen |
-| `log_live_enabled` | erlaubt einen separaten, authentifizierten Log-WebSocket |
+| `performance_logging_enabled` | aktiviert den Performance-Kalender-/stdout-Spiegel, laut Implementierung ohne Transkripttext |
+| `transcription_logging_enabled` | aktiviert den Transkriptions-Kalender-/stdout-Spiegel; Text folgt `transcript_log_mode` |
+| `event_store_enabled` | aktiviert den kanonischen SQLite-Commit für alle strukturierten Events |
+| `log_live_enabled` | erlaubt den separaten, authentifizierten SQLite-first Log-WebSocket; benötigt den Eventstore |
 
 Im Produktionsprofil sind Requestlogging und Transkriptlogging aktiv,
 Audioarchivierung ist deaktiviert. Ein Clientprodukt sollte Nutzer über die
@@ -159,6 +161,13 @@ Dieser Token darf nur die eigene Session und die Kanäle `audit`,
 `transcription` und `performance` lesen. Der Systemkanal und
 sessionübergreifende Abfragen bleiben dem Adminzugriff vorbehalten. Tokens
 gehören nicht in URLs, damit sie nicht in Proxy- und Accesslogs auftauchen.
+
+Optional langsame oder volle JSONL-/stdout-Queues dürfen Events aus ihrem
+Spiegel verlieren, nicht aber aus SQLite oder `/ws/logs`. Live-Subscriber
+transportieren keine kanonischen Payloads in einer Best-Effort-Queue, sondern
+werden nur aufgeweckt und lesen den committed Bereich aus SQLite nach. Deshalb
+sind gefilterte Cursorsprünge normal; nur `log.gap(reason=retention)` bezeichnet
+eine nicht mehr replaybare Spanne.
 
 ## Audioqualität und Paketierung
 
@@ -183,6 +192,10 @@ gehören nicht in URLs, damit sie nicht in Proxy- und Accesslogs auftauchen.
 4. `status` darf denselben State mehrfach melden.
 5. Final kann ohne vorheriges Realtime eintreffen.
 6. Bei Disconnect gibt es kein letztes garantiertes Status-/Finalevent.
+7. Audio- und Log-WebSocket können unabhängig ausfallen oder reconnecten.
+8. Ein leerer finaler Recordertext erzeugt kein `final`, aber
+   `final_transcript_discarded` und ein committed
+   `transcription.discarded(reason=empty_final)`.
 
 ## Abnahmetest-Checkliste für einen neuen Client
 
@@ -230,6 +243,22 @@ gehören nicht in URLs, damit sie nicht in Proxy- und Accesslogs auftauchen.
 - [ ] Realtime-Coalescing wird nicht als Finalverlust interpretiert.
 - [ ] Modell-Lazy-Reload toleriert hohe erste Latenz.
 - [ ] Unbekannte Eventtypen/Felder brechen den Parser nicht.
+
+### Zuverlässiger Log-/Eventstream
+
+- [ ] `hello.logAccess.available=false` wird ohne Tokenzugriffsversuch
+      behandelt.
+- [ ] Replay wird vollständig bis `log.replay_completed` verarbeitet, bevor
+      Livezustand angezeigt wird.
+- [ ] Der committed Cursor wird erst nach erfolgreicher lokaler Verarbeitung
+      gespeichert.
+- [ ] Retentiongap, Cursor-ahead und Storefehler 1011 werden getrennt
+      behandelt.
+- [ ] Audio läuft bei einem isolierten Store-/Logsocketausfall weiter.
+- [ ] Sessiontoken kann weder `system` noch fremde Sessions lesen.
+- [ ] Adminmodus bestätigt `authorizationScope: admin`, `allSessions` und den
+      erwarteten Channelfilter; Admin-Key erscheint nie in URL, Persistenz oder
+      Telemetrie.
 
 ## Serverseitige Referenztests
 

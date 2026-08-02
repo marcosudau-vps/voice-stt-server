@@ -1,7 +1,7 @@
 # VoiceSTT – Leitfaden für die Client-Entwicklung
 
-> **Status:** aus dem implementierten Code abgeleitet · **Stand:** 1. August 2026
-> **Primäre Live-Schnittstelle:** `WS /ws/transcribe` · **Serverversion:** `2.0.0`
+> **Status:** aus dem implementierten Code abgeleitet · **Stand:** 2. August 2026
+> **Primäre Audio-Schnittstelle:** `WS /ws/transcribe` · **Zuverlässiger Eventstream:** `WS /ws/logs` (SQLite-first, Version 2) · **Serverversion:** `2.0.0`
 
 Diese Dokumentation beschreibt den Server so, wie er im Repository tatsächlich
 implementiert ist. Maßgeblich ist der produktive Einstiegspunkt
@@ -75,7 +75,10 @@ flowchart LR
 7. **Logs verwenden einen getrennten Zugriffskanal.** `hello.logAccess` liefert
    den Sessiontoken; er gehört in `X-VoiceSTT-Log-Token` beziehungsweise die
    erste `/ws/logs`-Subscribe-Nachricht, nie in eine URL. Beim Reconnect wird
-   mit dem letzten verarbeiteten Cursor fortgesetzt.
+   mit dem letzten verarbeiteten committed Cursor fortgesetzt. Replay und Live
+   lesen beide den kanonischen SQLite-Store; die Audioverbindung wird dadurch
+   weder belastet noch administrativ privilegiert. Ein Admin-Key erlaubt auf
+   dem Logkanal ausdrücklich serverweite Historie und Liveevents.
 
 ## Aktuelle versionierte Repository-Baseline
 
@@ -126,7 +129,7 @@ geprüft:
 | `api_fastapi_server/protocol.py` | binäres Audiopaket und Validierung |
 | `VoiceSTT_server/openai_compat.py` | Multipartparameter, Antwort- und Fehlerformate |
 | `VoiceSTT_server/operations.py` | Modellregistrys, Runtime-Persistenz und Logging-Fassaden |
-| `VoiceSTT_server/event_logging.py` | Event-Envelope, Redaction, Queues, Kalenderdateien, SQLite und Live-Fan-out |
+| `VoiceSTT_server/event_logging.py` | Event-Envelope, Redaction, kanonischer SQLite-Commit, optionale Kalender-/stdout-Spiegel und Commit-Wakeups |
 | `api_fastapi_server/static/index.html` | tatsächlich genutzter Browser-Clientablauf |
 | `config.yaml` | zentrale versionierte Laufzeitkonfiguration |
 | `tests/unit/test_fastapi_server_*.py` | Protokoll-, Isolation-, Event- und Integrationsverhalten |

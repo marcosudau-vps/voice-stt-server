@@ -58,7 +58,10 @@ sequenceDiagram
   `clientId`. Beide IDs haben unterschiedliche Lebenszyklen.
 - `hello.logAccess` liefert einen kurzlebigen, auf diese Session begrenzten
   Zugriff auf `/ws/logs` und `/api/logs/events`. Der Token gehört in Header
-  beziehungsweise erste Subscribe-Nachricht, nicht in eine URL.
+  beziehungsweise erste Subscribe-Nachricht, nicht in eine URL. Das Objekt
+  enthält `available`, `logProtocolVersion: 2`,
+  `deliveryMode: "sqlite_first"`, `replayAvailable`, `serverInstanceId` sowie
+  `oldestCursor`/`latestCursor`. Bei `available: false` fehlt der Token.
 - `ready` kann direkt nach `hello` oder später eintreffen.
 - Jede `ready`-Nachricht ist sessionspezifisch und enthält dieselbe
   `sessionConfig` wie `hello`.
@@ -67,6 +70,58 @@ sequenceDiagram
 - Ein Client sollte erst nach `ready` mit `ok: true` den Audiostart freigeben.
 - `models.loaded: false` kann bei absichtlich entladenen Idle-Modellen normal
   sein; die erste Inferenz löst dann einen Lazy-Reload aus.
+
+## Zweite Verbindung: zuverlässiger Eventstream
+
+`/ws/transcribe` bleibt ausschließlich für Audio, Befehle und unmittelbare
+Sessionausgaben zuständig. Der getrennte `/ws/logs`-Socket ist kein bloßer
+Dateilog-Tail, sondern ein zuverlässiger, replaybarer Eventstream aus dem
+kanonischen SQLite-Store:
+
+```text
+strukturierter Serverevent
+  → SQLite-Commit + globaler Cursor
+  → payloadfreies Commit-Wakeup
+  → /ws/logs liest committed Events aus SQLite
+```
+
+Der Client sendet als erste Nachricht:
+
+```json
+{
+  "type": "subscribe",
+  "accessToken": "<session-token-oder-admin-key>",
+  "sessionId": "<nur bei Session-Scope>",
+  "channels": ["audit", "transcription", "performance"],
+  "afterCursor": 18427
+}
+```
+
+Danach folgen `log.hello`, `log.subscribed`, null bis viele
+`log.event(replay=true)`, `log.replay_completed` und anschließend
+`log.event(replay=false)`. `log.subscribed.authorizationScope` unterscheidet
+`session` und `admin`; `allSessions`/`allChannels` machen globale Adminsemantik
+explizit.
+
+Wichtige Cursorregeln:
+
+- Cursor sind global; Lücken in einem gefilterten Stream sind normal.
+- `log.gap(reason=retention)` bedeutet, dass der angeforderte Bereich nicht
+  mehr im Store liegt. Ab `oldestCursor` weiterarbeiten und die Lücke sichtbar
+  dokumentieren.
+- `log.error(code=cursor_ahead)` bedeutet meist Store-/Serverwechsel. Den
+  lokalen Cursor anhand `serverInstanceId` und `latestCursor` neu bewerten.
+- `log.error(code=event_store_unavailable)` plus Close `1011` ist ein
+  vorübergehender Ausfall des zuverlässigen Logpfads. Die Audioverbindung darf
+  unabhängig weiterlaufen.
+- Ein Commit-Wakeup darf zusammenfallen oder ausbleiben; der Server liest
+  selbstständig bis zum committed High-Watermark nach. Der Client muss keine
+  flüchtigen Payloadqueues kompensieren.
+
+Ein normaler Token bleibt auf seine Session und die drei erlaubten Channels
+begrenzt. Der Admin-Key wird nur im ersten Subscribe-Frame eingesetzt, nie in
+der URL. Ohne `sessionId` und ohne Channel-Filter erhält ein authentifizierter
+Admin serverweite Events einschließlich `system`.
 
 ## Sessionlokale Wake-Word-Parameter
 

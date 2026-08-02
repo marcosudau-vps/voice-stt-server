@@ -44,7 +44,7 @@ Der Server trennt **Stream-Zustand** von **teuren Inferenzressourcen**:
 | Public Settings / Runtime-Vertrag | Server | Prozess, teilweise änderbar | In `hello`, `ready` und `/api/config` sichtbar |
 | Limits | Server | Prozess, teilweise änderbar | Alle Sessions konkurrieren unter denselben Obergrenzen |
 | Modell- und Wake-Word-Registry | Server | Prozess | Gemeinsamer Katalog lokaler Modelle |
-| Strukturiertes Event-Logging | Server | Prozess | Vier Channels, SQLite, Kalenderdateien und Live-Fan-out; Sessionevents enthalten ggf. `sessionId` |
+| Strukturiertes Event-Logging | Server | Prozess | Vier Channels, kanonisches SQLite, optionale Kalenderdateien und SQLite-basierter Live-Stream; Sessionevents enthalten ggf. `sessionId` |
 | Persistierte Runtime-Konfiguration | Server | über Neustarts | Kann Startwerte aus YAML/CLI beim App-Aufbau überschreiben |
 | `/api/metrics` | Server | Prozess | Aggregiert alle aktiven Sessions, Queues und Worker |
 
@@ -129,31 +129,31 @@ Die Einteilung ist deshalb Teil des aktuell implementierten Verwaltungsvertrags.
 | `model_idle_unload_enabled` | automatisches Leerlauf-Entladen |
 | `model_memory_policy_enabled` | CPU-Modellgrößenprüfung aktiv |
 | `realtime_degradation_threshold_ms` | Schwelle für degradierte Realtime-Planung |
-| `request_logging_enabled` | Audit-/Request-Logging aktiv |
+| `request_logging_enabled` | Audit-/Request-Kalenderspiegel aktiv; SQLite bleibt kanonisch |
 | `request_log_stdout` | Audit-Events zusätzlich auf stdout |
 | `request_log_transcripts` | Legacy-Schalter für `transcript_log_mode` (`false` = `none`, `true` = `final`) |
 | `transcript_log_mode` | Transkripttext `none`, `final` oder `full`; ausschließlich im Transkriptionskanal |
 | `request_log_max_bytes` | Rotationsgröße der Audit-Datei |
 | `request_log_backup_count` | Legacy-Kompatibilitätswert; löscht keine Kalenderdateien |
 | `request_log_retention_days` | Aufbewahrung des Audit-Kanals in Tagen; `0` deaktiviert Löschung |
-| `performance_logging_enabled` | Performance-Kanal aktiv |
+| `performance_logging_enabled` | Performance-Kalenderspiegel aktiv |
 | `performance_log_stdout` | Performance-Events zusätzlich auf stdout |
 | `performance_log_max_bytes` | Rotationsgröße der Performance-Datei |
 | `performance_log_backup_count` | Legacy-Kompatibilitätswert; löscht keine Kalenderdateien |
 | `performance_log_retention_days` | Aufbewahrung des Performance-Kanals in Tagen; `0` deaktiviert Löschung |
-| `transcription_logging_enabled` | transportübergreifender Transkriptionskanal aktiv |
+| `transcription_logging_enabled` | transportübergreifender Transkriptions-Kalenderspiegel aktiv |
 | `transcription_log_stdout` | Transkriptionsereignisse zusätzlich auf stdout |
 | `transcription_log_max_bytes` | Rotationsgröße einer Transkriptions-Tagesdatei |
 | `transcription_log_backup_count` | Legacy-Kompatibilitätswert; löscht keine Kalenderdateien |
 | `transcription_log_retention_days` | Aufbewahrung des Transkriptionskanals in Tagen; `0` deaktiviert Löschung |
-| `system_event_logging_enabled` | strukturierter Systemkanal aktiv |
+| `system_event_logging_enabled` | strukturierter System-Kalenderspiegel aktiv |
 | `system_event_log_stdout` | Systemereignisse zusätzlich auf stdout |
 | `system_event_log_max_bytes` | Rotationsgröße einer System-Tagesdatei |
 | `system_event_log_backup_count` | Legacy-Kompatibilitätswert; löscht keine Kalenderdateien |
 | `system_event_log_retention_days` | Aufbewahrung des Systemkanals in Tagen; `0` deaktiviert Löschung |
 | `log_calendar_timezone` | Zeitzone für Monats-/Tagesordner |
 | `realtime_log_detail` | Realtime-Messung `off`, `summary` oder `events` |
-| `log_live_enabled` | separaten Live-Log-WebSocket aktivieren |
+| `log_live_enabled` | separaten SQLite-first Log-WebSocket aktivieren; erfordert den beim Start aktivierten Eventstore |
 | `save_audio_files` | Upload-/Anfrageaudio archivieren |
 
 ### `newSessionOnly` – Kopie beim Session-Aufbau

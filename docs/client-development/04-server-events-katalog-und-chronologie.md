@@ -49,6 +49,12 @@ durch Recorderthreads variieren. Ein Client darf seine Transkriptlogik deshalb
 nicht davon abhängig machen, dass jedes Statusereignis exakt einmal oder in
 dieser idealisierten Reihenfolge eintrifft.
 
+Ist das Final-Ergebnis leer, entfallen die beiden Zeilen `final` und
+`timeline(final_transcript)`. Stattdessen folgt genau einmal
+`timeline(final_transcript_discarded, reason=empty_final)`; auf dem getrennten
+SQLite-first Eventstream ist derselbe Abschluss als
+`transcription.discarded(reason=empty_final)` committed.
+
 ## Normaler Ablauf mit Wake Word und Follow-up
 
 ```mermaid
@@ -104,7 +110,7 @@ erreichtem Sessionlimit gibt es kein `hello`, sondern einen Admission-Fehler.
 | `limits` | Object | kompakte Kapazitätsgrenzen |
 | `supportedEngines` | Array | Namen der im Code registrierten Transkriptionsengines |
 | `runtimeSettings` | Object | Listen `activeSessionSafe`, `newSessionOnly`, `startupOnly` |
-| `logAccess` | Object | sessiongebundener Token sowie Pfade für Live- und historische strukturierte Logs |
+| `logAccess` | Object | Verfügbarkeit, sessiongebundener Token (wenn verfügbar), Protokoll-/Cursormetadaten sowie Pfade für Live- und historische strukturierte Logs |
 
 `limits` enthält exakt:
 
@@ -146,11 +152,18 @@ aktualisieren, aber auf `ready` warten.
     "startupOnly": ["model"]
   },
   "logAccess": {
+    "available": true,
     "websocketPath": "/ws/logs",
     "historyPath": "/api/logs/events",
     "accessToken": "…",
     "sessionId": "7cb1…",
-    "expiresAt": "2026-07-31T14:26:41.537Z"
+    "expiresAt": "2026-07-31T14:26:41.537Z",
+    "logProtocolVersion": 2,
+    "deliveryMode": "sqlite_first",
+    "replayAvailable": true,
+    "serverInstanceId": "c25…",
+    "oldestCursor": 1,
+    "latestCursor": 18427
   }
 }
 ```
@@ -159,6 +172,9 @@ Der Log-Token ist nur für Ereignisse dieser Session und die Kanäle `audit`,
 `transcription` und `performance` gültig. Details zu Replay, Cursor und
 Historienabruf stehen unter
 [Structured logging and client log access](../structured-logging.md).
+Bei deaktiviertem Livezugriff oder nicht verfügbarem Eventstore ist
+`available: false` gesetzt, `accessToken` fehlt und `code`/`reason` erklären
+die Ursache.
 
 Die gekürzten Arrays im Beispiel sind nicht vollständig.
 
@@ -331,7 +347,9 @@ einen nicht leeren Text.
 
 **Clientreaktion:** Segment vollständig mit `text` überschreiben und als final
 markieren. Ein `final` kann ohne vorheriges `realtime` eintreffen. Leere finale
-Texte werden im Recorderpfad nicht publiziert.
+Texte werden nicht als `final` publiziert; sie erzeugen stattdessen den
+Timeline-Untertyp `final_transcript_discarded` sowie das persistierte
+strukturierte Event `transcription.discarded(reason=empty_final)`.
 
 Nach `stop` kann ein bereits gepuffertes Segment asynchron noch `final` liefern.
 
@@ -422,6 +440,13 @@ optional `sequence` und `segment`. Für Textanzeige weiterhin das originale
 
 Timeline-Spiegel des `final`-Events mit `segmentId`, `text` und optional
 `segment`.
+
+#### `final_transcript_discarded`
+
+Der Recorder hat für das Segment einen leeren finalen Text geliefert. Enthält
+`segmentId`, `reason: "empty_final"` und optional `segment`. Es folgt kein
+leeres `final`-Textframe; der Client kann den Segmentabschluss dennoch als
+terminal behandeln.
 
 ---
 

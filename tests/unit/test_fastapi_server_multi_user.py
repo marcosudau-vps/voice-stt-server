@@ -354,6 +354,7 @@ def make_service(**overrides):
     overrides.setdefault("transcription_logging_enabled", False)
     overrides.setdefault("system_event_logging_enabled", False)
     overrides.setdefault("event_store_enabled", False)
+    overrides.setdefault("log_live_enabled", False)
     settings = ServerSettings(
         model_warmup=model_warmup,
         realtime_processing_pause=0.0,
@@ -385,6 +386,45 @@ def audio_packet(level=2000, frames=640, sample_rate=16000):
 class FastAPIMultiUserSessionTests(unittest.TestCase):
     def setUp(self):
         FakeRecorder.instances.clear()
+
+    def test_live_log_configuration_requires_sqlite_but_not_jsonl_mirrors(self):
+        with self.assertRaisesRegex(ValueError, "event_store_enabled"):
+            ServerSettings(event_store_enabled=False, log_live_enabled=True)
+        settings = ServerSettings(
+            event_store_enabled=True,
+            transcription_logging_enabled=False,
+            log_live_enabled=True,
+        )
+        self.assertTrue(settings.log_live_enabled)
+
+        service, _ = make_service()
+        result = service.update_settings({"log_live_enabled": True})
+        self.assertNotIn("log_live_enabled", result["applied"])
+        self.assertEqual(
+            result["rejected"]["log_live_enabled"]["reason"],
+            "invalid_dependency",
+        )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            persisted_settings = ServerSettings(
+                model_warmup=False,
+                data_root_path=temp_dir,
+            )
+            runtime_path = Path(persisted_settings.runtime_config_path)
+            runtime_path.parent.mkdir(parents=True, exist_ok=True)
+            runtime_path.write_text(
+                json.dumps({
+                    "event_store_enabled": False,
+                    "log_live_enabled": True,
+                }),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "event_store_enabled"):
+                create_app(
+                    persisted_settings,
+                    scheduler_factory=AutoScheduler,
+                    recorder_factory=FakeRecorder,
+                )
 
     def test_sessions_receive_only_their_own_final_transcripts(self):
         service, manager = make_service()
@@ -450,6 +490,46 @@ class FastAPIMultiUserSessionTests(unittest.TestCase):
 
         self.assertFalse(published)
         self.assertFalse(any(msg.get("text") == "old-final" for msg in manager.messages["first"]))
+
+    def test_empty_final_text_emits_one_discard_terminal_without_final_frame(self):
+        service, manager = make_service()
+        session = service.admit_session("first")
+        emitted = []
+        session._emit_realtime_summary = lambda *args, **kwargs: None
+        session._emit_structured_event = (
+            lambda channel, event, **fields: emitted.append(
+                {"channel": channel, "event": event, **fields}
+            )
+        )
+
+        published = session._publish_discarded_empty_final(session.generation)
+
+        self.assertTrue(published)
+        self.assertEqual(
+            [event["event"] for event in emitted],
+            ["transcription.discarded"],
+        )
+        self.assertEqual(emitted[0]["reason"], "empty_final")
+        self.assertEqual(emitted[0]["segment_id"], 1)
+        self.assertFalse(any(
+            message.get("type") == "final"
+            for message in manager.messages["first"]
+        ))
+        discarded = [
+            message
+            for message in manager.messages["first"]
+            if message.get("type") == "timeline"
+            and message.get("event") == "final_transcript_discarded"
+        ]
+        self.assertEqual(len(discarded), 1)
+        self.assertEqual(discarded[0]["reason"], "empty_final")
+
+        stale_generation = session.generation
+        session.clear()
+        self.assertFalse(
+            session._publish_discarded_empty_final(stale_generation)
+        )
+        self.assertEqual(len(emitted), 1)
 
     def test_active_speaker_limit_rejects_only_new_speaker(self):
         service, manager = make_service(max_active_speakers=1)
@@ -899,6 +979,308 @@ else:
 
 @unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
 class FastAPIMultiUserWebSocketTests(unittest.TestCase):
+    def test_configured_admin_key_grants_global_history_replay_and_live(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = ServerSettings(
+                model_warmup=False,
+                data_root_path=temp_dir,
+                admin_api_key="test-admin-secret",
+                request_log_stdout=False,
+                performance_log_stdout=False,
+            )
+            app = create_app(
+                settings,
+                scheduler_factory=AutoScheduler,
+                recorder_factory=FakeRecorder,
+            )
+
+            with TestClient(app) as client:
+                events = app.state.voicestt_service.events
+                events.emit("audit", "admin.test_a", sessionId="session-a")
+                events.emit(
+                    "transcription",
+                    "admin.test_b",
+                    sessionId="session-b",
+                )
+                events.emit("system", "admin.test_system")
+                events.flush()
+
+                self.assertEqual(
+                    client.get("/api/logs/events").status_code,
+                    401,
+                )
+                self.assertEqual(
+                    client.get(
+                        "/api/logs/events",
+                        headers={"X-VoiceSTT-Admin-Key": "wrong"},
+                    ).status_code,
+                    401,
+                )
+                history = client.get(
+                    "/api/logs/events",
+                    headers={
+                        "X-VoiceSTT-Admin-Key": "test-admin-secret",
+                    },
+                    params={"limit": 1000},
+                )
+                self.assertEqual(history.status_code, 200)
+                history_body = history.json()
+                self.assertEqual(history_body["authorizationScope"], "admin")
+                self.assertTrue(history_body["allSessions"])
+                self.assertEqual(history_body["deliveryMode"], "sqlite_first")
+                names = {event["event"] for event in history_body["data"]}
+                self.assertTrue({
+                    "admin.test_a",
+                    "admin.test_b",
+                    "admin.test_system",
+                }.issubset(names))
+                self.assertNotIn("test-admin-secret", history.text)
+
+                with client.websocket_connect("/ws/logs") as denied:
+                    denied.send_json({
+                        "type": "subscribe",
+                        "accessToken": "wrong",
+                    })
+                    denied_message = denied.receive_json()
+                    self.assertEqual(denied_message["type"], "log.error")
+                    self.assertEqual(denied_message["code"], "not_authorized")
+
+                with client.websocket_connect("/ws/logs") as logs:
+                    logs.send_json({
+                        "type": "subscribe",
+                        "accessToken": "test-admin-secret",
+                        "channels": [],
+                        "afterCursor": 0,
+                    })
+                    hello = logs.receive_json()
+                    self.assertEqual(hello["type"], "log.hello")
+                    self.assertEqual(hello["logProtocolVersion"], 2)
+                    self.assertEqual(hello["deliveryMode"], "sqlite_first")
+                    subscribed = logs.receive_json()
+                    self.assertEqual(subscribed["authorizationScope"], "admin")
+                    self.assertTrue(subscribed["allChannels"])
+                    self.assertTrue(subscribed["allSessions"])
+                    replayed = set()
+                    while True:
+                        message = logs.receive_json()
+                        if message["type"] == "log.event":
+                            replayed.add(message["event"]["event"])
+                        elif message["type"] == "log.replay_completed":
+                            break
+                    self.assertTrue({
+                        "admin.test_a",
+                        "admin.test_b",
+                        "admin.test_system",
+                    }.issubset(replayed))
+
+                    events.emit(
+                        "system",
+                        "admin.test_live",
+                        sessionId="session-c",
+                    )
+                    while True:
+                        message = logs.receive_json()
+                        if (
+                            message["type"] == "log.event"
+                            and message["event"]["event"] == "admin.test_live"
+                        ):
+                            self.assertFalse(message["replay"])
+                            break
+
+                with client.websocket_connect("/ws/logs") as ahead:
+                    ahead.send_json({
+                        "type": "subscribe",
+                        "accessToken": "test-admin-secret",
+                        "afterCursor": events.latest_cursor() + 1,
+                    })
+                    error = ahead.receive_json()
+                    self.assertEqual(error["type"], "log.error")
+                    self.assertEqual(error["code"], "cursor_ahead")
+
+                health = client.get("/health").json()
+                self.assertTrue(health["eventStore"]["available"])
+
+    def test_admin_live_rescans_sqlite_after_coalesced_commit_wakeup(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = ServerSettings(
+                model_warmup=False,
+                data_root_path=temp_dir,
+                admin_api_key="test-admin-secret",
+                request_log_stdout=False,
+                performance_log_stdout=False,
+            )
+            app = create_app(
+                settings,
+                scheduler_factory=AutoScheduler,
+                recorder_factory=FakeRecorder,
+            )
+            with TestClient(app) as client:
+                events = app.state.voicestt_service.events
+                with client.websocket_connect("/ws/logs") as logs:
+                    logs.send_json({
+                        "type": "subscribe",
+                        "accessToken": "test-admin-secret",
+                        "channels": ["system"],
+                        "afterCursor": events.latest_cursor(),
+                    })
+                    self.assertEqual(logs.receive_json()["type"], "log.hello")
+                    self.assertEqual(logs.receive_json()["type"], "log.subscribed")
+                    self.assertEqual(
+                        logs.receive_json()["type"],
+                        "log.replay_completed",
+                    )
+
+                    original_enqueue = events._enqueue_control
+                    with patch.object(
+                        events,
+                        "_enqueue_control",
+                        return_value=False,
+                    ):
+                        for sequence in range(3):
+                            events.emit(
+                                "system",
+                                "coalesced.test",
+                                sequence=sequence,
+                            )
+                    original_enqueue({
+                        "_logControl": "commit",
+                        "cursor": events.latest_cursor(),
+                    })
+
+                    received = []
+                    while len(received) < 3:
+                        message = logs.receive_json()
+                        if (
+                            message["type"] == "log.event"
+                            and message["event"]["event"] == "coalesced.test"
+                        ):
+                            received.append(message["event"])
+                    self.assertEqual(
+                        [event["data"]["sequence"] for event in received],
+                        [0, 1, 2],
+                    )
+                    self.assertEqual(
+                        [event["cursor"] for event in received],
+                        sorted(event["cursor"] for event in received),
+                    )
+
+    def test_store_outage_closes_live_stream_and_recovery_allows_new_stream(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = ServerSettings(
+                model_warmup=False,
+                data_root_path=temp_dir,
+                admin_api_key="test-admin-secret",
+                request_log_stdout=False,
+                performance_log_stdout=False,
+            )
+            app = create_app(
+                settings,
+                scheduler_factory=AutoScheduler,
+                recorder_factory=FakeRecorder,
+            )
+            with TestClient(app) as client:
+                events = app.state.voicestt_service.events
+                original_append = events._store.append
+                with client.websocket_connect("/ws/logs") as logs:
+                    logs.send_json({
+                        "type": "subscribe",
+                        "accessToken": "test-admin-secret",
+                        "afterCursor": events.latest_cursor(),
+                    })
+                    self.assertEqual(logs.receive_json()["type"], "log.hello")
+                    self.assertEqual(logs.receive_json()["type"], "log.subscribed")
+                    self.assertEqual(
+                        logs.receive_json()["type"],
+                        "log.replay_completed",
+                    )
+
+                    events._store.append = lambda event: (_ for _ in ()).throw(
+                        OSError("simulated outage")
+                    )
+                    self.assertIsNone(
+                        events.emit("system", "outage.not_committed")
+                    )
+                    error = logs.receive_json()
+                    self.assertEqual(error["type"], "log.error")
+                    self.assertEqual(error["code"], "event_store_unavailable")
+
+                with client.websocket_connect("/ws/logs") as unavailable:
+                    error = unavailable.receive_json()
+                    self.assertEqual(error["type"], "log.error")
+                    self.assertEqual(error["code"], "event_store_unavailable")
+
+                events._store.append = original_append
+                self.assertIsNotNone(events.emit("system", "outage.recovered"))
+                self.assertTrue(events.store_available())
+                self.assertNotIn(
+                    "outage.not_committed",
+                    {event["event"] for event in events.query(limit=1000)},
+                )
+
+                with client.websocket_connect("/ws/logs") as recovered:
+                    recovered.send_json({
+                        "type": "subscribe",
+                        "accessToken": "test-admin-secret",
+                        "channels": ["system"],
+                        "afterCursor": 0,
+                    })
+                    self.assertEqual(
+                        recovered.receive_json()["type"],
+                        "log.hello",
+                    )
+
+    def test_admin_replay_reports_retention_gap(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            settings = ServerSettings(
+                model_warmup=False,
+                data_root_path=temp_dir,
+                admin_api_key="test-admin-secret",
+                request_log_stdout=False,
+                performance_log_stdout=False,
+            )
+            app = create_app(
+                settings,
+                scheduler_factory=AutoScheduler,
+                recorder_factory=FakeRecorder,
+            )
+            with TestClient(app) as client:
+                events = app.state.voicestt_service.events
+                for sequence in range(3):
+                    events.emit(
+                        "system",
+                        "retention.test",
+                        sequence=sequence,
+                    )
+                retained = [
+                    event
+                    for event in events.query(limit=1000)
+                    if event["event"] == "retention.test"
+                ]
+                first_cursor = retained[0]["cursor"]
+                retained_cursor = retained[2]["cursor"]
+                with events._store._lock:
+                    events._store._connection.execute(
+                        "DELETE FROM events WHERE cursor < ?",
+                        (retained_cursor,),
+                    )
+                    events._store._connection.commit()
+
+                with client.websocket_connect("/ws/logs") as logs:
+                    logs.send_json({
+                        "type": "subscribe",
+                        "accessToken": "test-admin-secret",
+                        "channels": ["system"],
+                        "afterCursor": first_cursor,
+                    })
+                    hello = logs.receive_json()
+                    self.assertEqual(hello["oldestCursor"], retained_cursor)
+                    self.assertEqual(logs.receive_json()["type"], "log.subscribed")
+                    gap = logs.receive_json()
+                    self.assertEqual(gap["type"], "log.gap")
+                    self.assertEqual(gap["reason"], "retention")
+                    self.assertEqual(gap["lostFromCursor"], first_cursor + 1)
+                    self.assertEqual(gap["lostToCursor"], retained_cursor - 1)
+
     def test_session_log_websocket_replays_more_than_one_page(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

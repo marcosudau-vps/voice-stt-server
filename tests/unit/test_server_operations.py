@@ -290,7 +290,34 @@ def test_sqlite_event_store_filters_by_session_and_cursor(tmp_path):
     store.close()
 
 
-def test_event_hub_persists_and_publishes_session_scoped_events(tmp_path):
+def test_sqlite_event_store_assigns_unique_monotonic_cursors_concurrently(tmp_path):
+    store = SQLiteEventStore(tmp_path / "events.sqlite3")
+
+    def append(sequence):
+        return store.append({
+            "schemaVersion": 1,
+            "eventId": f"event-{sequence}",
+            "timestamp": "2026-08-02T12:00:00.000Z",
+            "channel": "system",
+            "event": "concurrency.test",
+            "severity": "info",
+            "serverInstanceId": "server",
+            "data": {"sequence": sequence},
+        })
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        cursors = list(executor.map(append, range(100)))
+
+    assert sorted(cursors) == list(range(1, 101))
+    assert store.oldest_cursor() == 1
+    assert store.latest_cursor() == 100
+    assert [event["cursor"] for event in store.query(limit=1000)] == list(
+        range(1, 101)
+    )
+    store.close()
+
+
+def test_event_hub_commits_before_notifying_and_queries_session_scope(tmp_path):
     settings = LogSettings(
         request_logging_enabled=False,
         performance_logging_enabled=False,
@@ -324,7 +351,10 @@ def test_event_hub_persists_and_publishes_session_scoped_events(tmp_path):
     hub.flush()
 
     history = hub.query(session_id="session-a")
-    assert len(received) == 1
+    assert received == [
+        {"_logControl": "commit", "cursor": 1},
+        {"_logControl": "commit", "cursor": 2},
+    ]
     assert len(history) == 1
     assert history[0]["data"]["text"] == "Hallo"
     hub.unsubscribe(subscription)
@@ -378,7 +408,7 @@ def test_event_hub_redacts_secrets_audio_queries_and_transcripts_centrally(tmp_p
     assert performance["data"]["requestUrl"] == "https://example.test/path"
     assert transcription["data"]["text"] == "final text"
     assert "authorization" not in transcription["data"]
-    assert all("secret-token" not in json.dumps(event) for event in received)
+    assert all("secret-token" not in json.dumps(event) for event in history)
 
     settings.transcript_log_mode = "none"
     hub.configure(settings)
@@ -427,35 +457,35 @@ def test_event_hub_cursor_remains_unique_after_store_write_failure(tmp_path):
         return original_append(event)
 
     hub._store.append = fail_first_append
-    hub.emit("audit", "session.accepted", sessionId="a")
+    failed_event_id = hub.emit("audit", "session.accepted", sessionId="a")
     hub.flush()
-    hub.emit("audit", "session.closed", sessionId="a")
+    assert failed_event_id is None
+    assert hub.store_status()["state"] == "degraded"
+    recovered_event_id = hub.emit("audit", "session.closed", sessionId="a")
     hub.flush()
 
-    event_cursors = [
-        item["cursor"] for item in received if item.get("eventId")
-    ]
     stored_cursors = [item["cursor"] for item in hub.query()]
-    store_gap = next(
-        item
+    assert recovered_event_id is not None
+    assert stored_cursors == [1]
+    assert hub.latest_cursor() == 1
+    assert hub.store_status()["state"] == "ready"
+    assert any(
+        item.get("_logControl") == "store_error"
+        and item.get("code") == "event_store_unavailable"
         for item in received
-        if item.get("_logControl") == "gap" and item.get("sink") == "store"
     )
-    assert event_cursors == sorted(event_cursors)
-    assert len(event_cursors) == len(set(event_cursors))
-    assert stored_cursors == sorted(stored_cursors)
-    assert len(stored_cursors) == len(set(stored_cursors))
-    assert store_gap["cursor"] not in stored_cursors
-    assert hub.latest_cursor() == max(event_cursors)
-    assert any(item.get("event") == "storage.failed" for item in received)
+    assert any(item.get("_logControl") == "store_recovered" for item in received)
+    assert {item.get("event") for item in hub.query()} == {"session.closed"}
     hub.unsubscribe(subscription)
     hub.close()
 
 
-def test_event_hub_overload_never_blocks_emit_and_reports_gap(tmp_path):
+def test_event_hub_optional_mirror_overload_never_loses_committed_events(tmp_path):
     settings = LogSettings(
         request_logging_enabled=False,
         performance_log_path=str(tmp_path / "performance"),
+        event_store_enabled=True,
+        event_store_path=str(tmp_path / "events.sqlite3"),
         event_log_queue_size=1,
     )
     hub = StructuredEventHub(settings)
@@ -492,10 +522,8 @@ def test_event_hub_overload_never_blocks_emit_and_reports_gap(tmp_path):
 
     assert elapsed < 0.25
     assert hub.drop_counts().get("file", 0) > 0
-    assert any(
-        item.get("_logControl") == "gap" and item.get("sink") == "file"
-        for item in received
-    )
+    assert len(hub.query(limit=1000)) == 100
+    assert not any(item.get("_logControl") == "gap" for item in received)
     hub.unsubscribe(subscription)
     hub.close()
 

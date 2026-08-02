@@ -81,7 +81,11 @@ können ohnehin keine beliebigen Authorization-Header setzen.
 24 Stunden innerhalb des aktuellen Serverprozesses gültigen Sessiontoken. Er
 erlaubt ausschließlich die eigene Session und die Channels `audit`,
 `transcription` und `performance`; `system` und fremde Sessions bleiben dem
-Adminzugriff vorbehalten.
+Adminzugriff vorbehalten. `available`, `logProtocolVersion: 2`,
+`deliveryMode: "sqlite_first"`, `replayAvailable`, `serverInstanceId`,
+`oldestCursor` und `latestCursor` beschreiben den zuverlässigen Logpfad. Bei
+nicht verfügbarem Store oder deaktiviertem Livezugriff ist `available: false`
+und es wird kein Sessiontoken ausgegeben.
 
 Für HTTP wird der Token so gesendet:
 
@@ -101,8 +105,18 @@ Für `/ws/logs` gehört er in die erste Nachricht, nicht in die URL:
 }
 ```
 
-Ein Admin kann stattdessen den Admin-Key verwenden und über Sessions und
-Channels hinweg lesen.
+Ein Admin kann stattdessen den Admin-Key verwenden. Bei HTTP gehört er in
+`X-VoiceSTT-Admin-Key` oder Bearer, beim Log-WebSocket ausschließlich als
+`accessToken` in die erste Nachricht. Ohne `sessionId` und Channels ist der
+Scope serverweit und umfasst auch `system`. `log.subscribed` bestätigt dies
+durch `authorizationScope: "admin"`, `allSessions: true` und
+`allChannels: true`. Der Secretvergleich erfolgt konstantzeitlich. Der
+Audio-WebSocket erhält dadurch keine Adminrechte.
+
+Replay und Live lesen beide ausschließlich committed SQLite-Events. Der
+Protokollablauf und die Fehlercodes sind in
+[WebSocket-Protokoll](02-websocket-protokoll.md#zweite-verbindung-zuverlässiger-eventstream)
+und [Strukturiertes Logging](../structured-logging.md) beschrieben.
 
 ## `GET /health`
 
@@ -117,7 +131,15 @@ Kompakte Form von `service.metrics()`:
   "rejectedSessions": 0,
   "scheduler": { "mode": "low-memory-one-model", "queues": {}, "workers": {} },
   "models": { "state": "loaded", "loaded": true, "active": {} },
-  "startupErrors": []
+  "startupErrors": [],
+  "eventStore": {
+    "state": "ready",
+    "available": true,
+    "lastErrorType": null,
+    "lastTransitionAt": "2026-08-02T10:00:00.000Z",
+    "oldestCursor": 1,
+    "latestCursor": 18427
+  }
 }
 ```
 
@@ -131,9 +153,12 @@ Kompakte Form von `service.metrics()`:
 | `scheduler` | Queue-/Worker-Snapshot oder `mode: "unloaded"` |
 | `models` | Lifecycle inkl. Aktivität und Idle-Restzeit |
 | `startupErrors` | serverweite Engine-/Startfehler |
+| `eventStore` | Zustand und committed Cursorgrenzen des kanonischen SQLite-Stores |
 
-Ein Livenessmonitor sollte `ok` prüfen. Ein UI kann zusätzlich `models.loaded`
-anzeigen, sollte „unloaded“ aber nicht automatisch als Ausfall bewerten.
+Ein Livenessmonitor sollte `ok` prüfen. Ist Live-Logging konfiguriert, wird
+`ok` bei degradiertem Eventstore false, während `/ws/transcribe` bewusst
+weiterarbeiten kann. Ein UI kann zusätzlich `models.loaded` anzeigen, sollte
+„unloaded“ aber nicht automatisch als Ausfall bewerten.
 
 ## `GET /api/config`
 
@@ -162,14 +187,48 @@ Secrets sowie `transcription_engine_options` und
 
 Die drei History-Routen akzeptieren `channels`, `events`, `sessionId`,
 `transcriptionId`, `from`, `to`, `afterCursor` und `limit`. `limit` ist auf
-1000 begrenzt. Die Antwort enthält die sortierten Events sowie `nextCursor`
-und `latestCursor`, damit ein Client ohne Duplikate paginieren und anschließend
-zum Live-WebSocket wechseln kann.
+1000 begrenzt. Die Antwort enthält die sortierten Events sowie `nextCursor`,
+`oldestCursor`, `latestCursor`, `authorizationScope`, `allSessions` und
+`deliveryMode`, damit ein Client ohne Duplikate paginieren und anschließend zum
+Live-WebSocket wechseln kann.
 
 Ein Sessiontoken wird serverseitig immer auf seine eigene `sessionId`
 eingeschränkt, auch wenn der Client einen breiteren Filter anfordert. Nicht
 erlaubte Channels liefern keine fremden Daten. Der vollständige Vertrag steht
 unter [Strukturiertes Logging](../structured-logging.md).
+
+Admin-History darf `sessionId` weglassen und damit ältere Events aller noch in
+Retention vorhandenen Sessions abrufen. Der Browser-Adminbereich lädt solche
+Ergebnisse seitenweise mit begrenztem `limit`, optionalen Channel-/Zeitfiltern
+und kann danach ab dem aktuellen `latestCursor` in den globalen Live-Modus
+wechseln.
+
+## `GET/PUT /api/logging`
+
+Neben den Kalender-/stdout-, Retention-, Transcript- und Audioeinstellungen
+liefert `GET /api/logging`:
+
+```json
+{
+  "liveEnabled": true,
+  "logProtocolVersion": 2,
+  "deliveryMode": "sqlite_first",
+  "replayAvailable": true,
+  "eventStore": {
+    "enabled": true,
+    "state": "ready",
+    "available": true,
+    "oldestCursor": 1,
+    "latestCursor": 18427
+  }
+}
+```
+
+`eventStore.enabled` und der abgeleitete Storepfad sind startup-only.
+`liveEnabled` ist laufzeitänderbar, darf aber nur true sein, wenn der Store beim
+Start aktiviert wurde. Die Channel-`enabled`-Schalter steuern ihre optionalen
+Kalenderdateien; sie erzeugen keine unzuverlässige Sonderklasse im
+SQLite-/Livevertrag.
 
 ## `PATCH /api/config`
 

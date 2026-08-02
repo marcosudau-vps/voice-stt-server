@@ -7,15 +7,16 @@ Referenz nicht.
 
 ## Aktueller Funktionsstand
 
-Die zwei zuletzt abgeschlossenen größeren Erweiterungen sind vollständig in
+Die zuletzt abgeschlossenen größeren Erweiterungen sind vollständig in
 die aktuelle Dokumentation eingeordnet:
 
 - [Sitzungslokale Wake-Word-Konfiguration](session-wakeword-erweiterung.md):
   sicherer Sessionvertrag, OpenWakeWord-Modellkatalog, Fallbacks, Isolation und
   Betriebsnachweis.
 - [Strukturiertes Logging](structured-logging.md): vier Channels, gemeinsamer
-  Event-Envelope, kalenderbasierte JSONL-Dateien, SQLite-Historie,
-  sessionbezogener HTTP-Zugriff und `/ws/logs`.
+  Event-Envelope, kanonischer SQLite-first Commit, optionale kalenderbasierte
+  JSONL-Spiegel, sessionbezogener Zugriff und global authentifizierter
+  Admin-History-/Livezugriff über `/ws/logs`.
 
 ## Einstiegspunkte
 
@@ -35,8 +36,8 @@ die aktuelle Dokumentation eingeordnet:
 Der vollständige Vertrag für Browser-, Desktop- und andere API-Clients beginnt
 unter [Cliententwicklung](client-development/README.md). Er beschreibt
 Session- und Server-Scope, WebSocket-Frames, Serverereignisse,
-Authentifizierung, Fehlergrenzen, das Clientzustandsmodell und die
-sessionlokale Wake-Word-Auswahl.
+Authentifizierung, Fehlergrenzen, das getrennte Audio-/Eventstream-
+Zustandsmodell, globale Adminlogs und die sessionlokale Wake-Word-Auswahl.
 
 ## Archiv größerer Änderungen
 
