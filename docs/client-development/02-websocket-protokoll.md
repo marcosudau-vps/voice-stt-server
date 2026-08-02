@@ -61,7 +61,9 @@ sequenceDiagram
   beziehungsweise erste Subscribe-Nachricht, nicht in eine URL. Das Objekt
   enthält `available`, `logProtocolVersion: 2`,
   `deliveryMode: "sqlite_first"`, `replayAvailable`, `serverInstanceId` sowie
-  `oldestCursor`/`latestCursor`. Bei `available: false` fehlt der Token.
+  `oldestCursor`/`latestCursor`. `log.hello` ergänzt für den tatsächlich
+  abonnierten Channel-/Session-Scope den `retentionCursor`. Bei
+  `available: false` fehlt der Token.
 - `ready` kann direkt nach `hello` oder später eintreffen.
 - Jede `ready`-Nachricht ist sessionspezifisch und enthält dieselbe
   `sessionConfig` wie `hello`.
@@ -106,9 +108,12 @@ explizit.
 Wichtige Cursorregeln:
 
 - Cursor sind global; Lücken in einem gefilterten Stream sind normal.
-- `log.gap(reason=retention)` bedeutet, dass der angeforderte Bereich nicht
-  mehr im Store liegt. Ab `oldestCursor` weiterarbeiten und die Lücke sichtbar
-  dokumentieren.
+- `log.gap(reason=retention)` bedeutet, dass nach dem angeforderten Cursor
+  mindestens ein zum Channel-/Session-Scope passendes Event gelöscht wurde.
+  Die verlorene Spanne sichtbar dokumentieren und den unmittelbar folgenden
+  Replaystrom normal weiterverarbeiten. Nicht selbst zu `oldestCursor` oder
+  `retentionCursor` springen: Der Server liefert weiterhin alle noch
+  vorhandenen passenden Events ab dem ursprünglich angeforderten Cursor.
 - `log.error(code=cursor_ahead)` bedeutet meist Store-/Serverwechsel. Den
   lokalen Cursor anhand `serverInstanceId` und `latestCursor` neu bewerten.
 - `log.error(code=event_store_unavailable)` plus Close `1011` ist ein

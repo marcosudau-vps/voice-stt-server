@@ -87,6 +87,11 @@ Adminzugriff vorbehalten. `available`, `logProtocolVersion: 2`,
 nicht verfügbarem Store oder deaktiviertem Livezugriff ist `available: false`
 und es wird kein Sessiontoken ausgegeben.
 
+Nach dem Subscribe enthält `log.hello` zusätzlich `retentionCursor`. Dieser
+Watermark ist auf die effektiven Channels und die effektive Session des
+Abonnements bezogen und kann deshalb oberhalb des globalen `oldestCursor`
+liegen.
+
 Für HTTP wird der Token so gesendet:
 
 ```http
@@ -188,9 +193,9 @@ Secrets sowie `transcription_engine_options` und
 Die drei History-Routen akzeptieren `channels`, `events`, `sessionId`,
 `transcriptionId`, `from`, `to`, `afterCursor` und `limit`. `limit` ist auf
 1000 begrenzt. Die Antwort enthält die sortierten Events sowie `nextCursor`,
-`oldestCursor`, `latestCursor`, `authorizationScope`, `allSessions` und
-`deliveryMode`, damit ein Client ohne Duplikate paginieren und anschließend zum
-Live-WebSocket wechseln kann.
+`oldestCursor`, `latestCursor`, den filterbezogenen `retentionCursor`,
+`authorizationScope`, `allSessions` und `deliveryMode`, damit ein Client ohne
+Duplikate paginieren und anschließend zum Live-WebSocket wechseln kann.
 
 Ein Sessiontoken wird serverseitig immer auf seine eigene `sessionId`
 eingeschränkt, auch wenn der Client einen breiteren Filter anfordert. Nicht
@@ -227,7 +232,8 @@ liefert `GET /api/logging`:
 `eventStore.enabled` und der abgeleitete Storepfad sind startup-only.
 `liveEnabled` ist laufzeitänderbar, darf aber nur true sein, wenn der Store beim
 Start aktiviert wurde. Die Channel-`enabled`-Schalter steuern ihre optionalen
-Kalenderdateien; sie erzeugen keine unzuverlässige Sonderklasse im
+Kalender-/stdout-Spiegel; sie unterdrücken weder SQLite-Events noch Replay oder
+Liveausgabe und erzeugen keine unzuverlässige Sonderklasse im
 SQLite-/Livevertrag.
 
 ## `PATCH /api/config`

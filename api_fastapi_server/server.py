@@ -77,6 +77,7 @@ WARMUP_AUDIO_PATH = (
 )
 SERVER_SAMPLE_RATE = 16000
 INT16_MAX_ABS_VALUE = 32768.0
+LOG_STREAM_KEEPALIVE_SECONDS = 30.0
 
 BASE_TUNING_DEFAULTS = {
     "beam_size": 5,
@@ -463,6 +464,13 @@ class ServerSettings:
             if root is not None
             else None
         )
+        self.realtime_log_detail = str(
+            self.realtime_log_detail or ""
+        ).strip().lower()
+        if self.realtime_log_detail not in {"off", "summary", "events"}:
+            raise ValueError(
+                "realtime_log_detail muss off, summary oder events sein"
+            )
         if self.log_live_enabled and not self.event_store_enabled:
             raise ValueError(
                 "log_live_enabled erfordert event_store_enabled"
@@ -2760,6 +2768,7 @@ class RecorderBackedRealtimeSession:
         while not self.service.stop_event.is_set():
             with self.lock:
                 text_generation = self.generation
+                text_segment_id = self.segment_state.current()
             try:
                 text = self.recorder.text()
             except Exception as exc:
@@ -2791,13 +2800,29 @@ class RecorderBackedRealtimeSession:
                 break
             text = (text or "").strip()
             if not text:
-                self._publish_discarded_empty_final(text_generation)
+                self._publish_discarded_empty_final(
+                    text_generation,
+                    expected_segment_id=text_segment_id,
+                )
                 continue
-            self._publish_final_text(text, text_generation)
+            self._publish_final_text(
+                text,
+                text_generation,
+                expected_segment_id=text_segment_id,
+            )
 
-    def _publish_discarded_empty_final(self, text_generation):
+    def _publish_discarded_empty_final(
+        self,
+        text_generation,
+        expected_segment_id=None,
+    ):
         with self.lock:
             if text_generation != self.generation:
+                return False
+            if (
+                expected_segment_id is not None
+                and expected_segment_id != self.segment_state.current()
+            ):
                 return False
             segment_id = self.segment_state.final()
             streaming = self.streaming
@@ -2829,9 +2854,19 @@ class RecorderBackedRealtimeSession:
         self.publish_status(self._waiting_state_locked(streaming))
         return True
 
-    def _publish_final_text(self, text, text_generation):
+    def _publish_final_text(
+        self,
+        text,
+        text_generation,
+        expected_segment_id=None,
+    ):
         with self.lock:
             if text_generation != self.generation:
+                return False
+            if (
+                expected_segment_id is not None
+                and expected_segment_id != self.segment_state.current()
+            ):
                 return False
             segment_id = self.segment_state.final()
             streaming = self.streaming
@@ -5759,6 +5794,10 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             )
             oldest_cursor = service.events.oldest_cursor()
             latest_cursor = service.events.latest_cursor()
+            retention_cursor = service.events.retention_cursor(
+                channels=channels,
+                session_id=session_id,
+            )
         except (TypeError, ValueError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
         except Exception:
@@ -5776,6 +5815,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "nextCursor": events[-1]["cursor"] if events else None,
             "oldestCursor": oldest_cursor,
             "latestCursor": latest_cursor,
+            "retentionCursor": retention_cursor,
             "authorizationScope": "admin" if scope["admin"] else "session",
             "allSessions": bool(scope["admin"] and not session_id),
             "deliveryMode": "sqlite_first",
@@ -5886,6 +5926,10 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             )
             oldest_cursor = service.events.oldest_cursor()
             latest_cursor = service.events.latest_cursor()
+            retention_cursor = service.events.retention_cursor(
+                channels=channels,
+                session_id=session_id,
+            )
             if after_cursor > latest_cursor:
                 await websocket.send_text(json.dumps({
                     "type": "log.error",
@@ -5908,6 +5952,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 "serverInstanceId": service.events.server_instance_id,
                 "oldestCursor": oldest_cursor,
                 "latestCursor": latest_cursor,
+                "retentionCursor": retention_cursor,
             }))
             authorization_scope = "admin" if is_admin else "session"
             await websocket.send_text(json.dumps({
@@ -5920,20 +5965,15 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 "allSessions": bool(is_admin and not session_id),
             }))
             replay_cursor = after_cursor
-            if (
-                replay_cursor > 0
-                and oldest_cursor > 0
-                and replay_cursor < oldest_cursor - 1
-            ):
+            if retention_cursor > replay_cursor:
                 await websocket.send_text(json.dumps({
                     "type": "log.gap",
                     "reason": "retention",
                     "lostFromCursor": replay_cursor + 1,
-                    "lostToCursor": oldest_cursor - 1,
+                    "lostToCursor": retention_cursor,
                     "oldestCursor": oldest_cursor,
                     "latestCursor": latest_cursor,
                 }))
-                replay_cursor = oldest_cursor - 1
             replay_count = 0
             while replay_cursor < latest_cursor:
                 replay = service.events.query(
@@ -5968,7 +6008,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                     event_task = asyncio.create_task(live_queue.get())
                     done, _ = await asyncio.wait(
                         {receive_task, event_task},
-                        timeout=30.0,
+                        timeout=LOG_STREAM_KEEPALIVE_SECONDS,
                         return_when=asyncio.FIRST_COMPLETED,
                     )
                     if not done:
@@ -6020,6 +6060,19 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                             return
 
                     committed_cursor = service.events.latest_cursor()
+                    live_retention_cursor = service.events.retention_cursor(
+                        channels=channels,
+                        session_id=session_id,
+                    )
+                    if live_retention_cursor > scan_cursor:
+                        await websocket.send_text(json.dumps({
+                            "type": "log.gap",
+                            "reason": "retention",
+                            "lostFromCursor": scan_cursor + 1,
+                            "lostToCursor": live_retention_cursor,
+                            "oldestCursor": service.events.oldest_cursor(),
+                            "latestCursor": committed_cursor,
+                        }))
                     live_count = 0
                     query_cursor = scan_cursor
                     while query_cursor < committed_cursor:

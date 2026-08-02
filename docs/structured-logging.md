@@ -107,6 +107,9 @@ needed so the configured size limit is not silently abandoned. Each channel
 has an independent `*_log_retention_days` setting. The default `0` disables
 automatic deletion. A positive value prunes only dated JSONL files below that
 channel's configured root and applies the same channel policy to SQLite.
+Before deleting SQLite rows, the store persists payload-free retention
+watermarks per channel and session. They allow filtered replay to distinguish
+a deleted relevant event from a normal gap in the global cursor sequence.
 
 Einzelne Kanalpfade sind nicht konfigurierbar. Dadurch können insbesondere im
 Docker-Betrieb keine Kanäle versehentlich außerhalb des `/data`-Mounts landen.
@@ -164,8 +167,8 @@ SQLite runs in WAL mode and indexes timestamp, channel, event name, client,
 session and transcription identifiers. Sanitization, SQLite append, commit and
 cursor assignment happen before optional mirrors or live wakeups. Channel
 enablement settings such as `transcription_logging_enabled` control their
-calendar JSONL mirror; they do not turn a committed event into a less reliable
-live-only class.
+calendar JSONL/stdout mirrors only. They do not suppress event generation,
+SQLite persistence, replay, or live delivery.
 
 History is available at:
 
@@ -191,7 +194,7 @@ client sends its token through `X-VoiceSTT-Log-Token`; it can only read its own
 session and the `audit`, `transcription`, and `performance` channels. An admin
 may omit `sessionId` for a global query, include `system`, and filter by all
 documented fields. Responses include `authorizationScope`, `allSessions`,
-`oldestCursor`, `latestCursor`, `nextCursor`, and
+`oldestCursor`, `latestCursor`, scope-specific `retentionCursor`, `nextCursor`, and
 `deliveryMode: "sqlite_first"`.
 
 ## Live log WebSocket
@@ -237,8 +240,8 @@ than in the URL:
 
 The server responds with:
 
-- `log.hello` with protocol version, delivery mode, server instance and the
-  committed oldest/latest cursor
+- `log.hello` with protocol version, delivery mode, server instance, the
+  committed oldest/latest cursor, and the scope-specific `retentionCursor`
 - `log.subscribed` with `authorizationScope`, effective channels,
   `allChannels`, effective `sessionId`, and `allSessions`
 - zero or more replayed `log.event` messages
@@ -246,7 +249,8 @@ The server responds with:
 - subsequent live `log.event` messages
 - `log.keepalive` during idle periods
 - `log.pong` in response to `{"type":"ping"}`
-- `log.gap(reason=retention)` when the requested cursor precedes retained data
+- `log.gap(reason=retention)` when at least one event relevant to the requested
+  channel/session scope was deleted after the requested cursor
 - `log.error(code=cursor_ahead)` when a cursor is above the committed
   high-watermark
 - `log.error(code=event_store_unavailable)` followed by close code `1011` on
@@ -259,6 +263,11 @@ high-watermark, replays through that watermark, and then repeatedly rescans
 SQLite from its own global scan cursor. Wakeups may be coalesced or missed
 without data loss. Filtered streams may legitimately skip global cursor
 numbers. Only a retention gap represents data no longer present in SQLite.
+Because retention is configured per channel, `oldestCursor` remains the global
+oldest stored cursor and may be lower than the reported lost range. The server
+therefore does not skip directly to `oldestCursor` or `retentionCursor`; it
+continues replay from the requested cursor and still delivers every surviving
+matching event.
 
 An administrator may use the configured admin key as `accessToken` and can
 subscribe across channels and, when omitted, across sessions. Secret

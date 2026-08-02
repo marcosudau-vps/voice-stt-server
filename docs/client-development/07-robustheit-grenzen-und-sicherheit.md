@@ -167,7 +167,10 @@ Spiegel verlieren, nicht aber aus SQLite oder `/ws/logs`. Live-Subscriber
 transportieren keine kanonischen Payloads in einer Best-Effort-Queue, sondern
 werden nur aufgeweckt und lesen den committed Bereich aus SQLite nach. Deshalb
 sind gefilterte Cursorsprünge normal; nur `log.gap(reason=retention)` bezeichnet
-eine nicht mehr replaybare Spanne.
+eine nicht mehr replaybare Spanne. Persistente Retention-Watermarks werden pro
+Channel und Session geführt, sodass die Löschung eines Transkriptionsereignisses
+auch dann erkannt wird, wenn ein älteres Event eines anderen Channels den
+globalen `oldestCursor` unverändert lässt.
 
 ## Audioqualität und Paketierung
 

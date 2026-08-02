@@ -361,6 +361,41 @@ def test_event_hub_commits_before_notifying_and_queries_session_scope(tmp_path):
     hub.close()
 
 
+def test_disabled_channel_mirrors_do_not_disable_canonical_events(
+    tmp_path,
+    capsys,
+):
+    settings = LogSettings(
+        request_logging_enabled=False,
+        request_log_stdout=True,
+        performance_logging_enabled=False,
+        performance_log_stdout=True,
+        transcription_logging_enabled=False,
+        transcription_log_stdout=True,
+        system_event_logging_enabled=False,
+        system_event_log_stdout=True,
+        event_store_enabled=True,
+        event_store_path=str(tmp_path / "events.sqlite3"),
+    )
+    hub = StructuredEventHub(settings)
+
+    for channel in ("audit", "performance", "transcription", "system"):
+        assert hub.emit(channel, f"{channel}.canonical_test") is not None
+    hub.flush()
+
+    stored = hub.query(limit=1000)
+    assert [event["channel"] for event in stored] == [
+        "audit",
+        "performance",
+        "transcription",
+        "system",
+    ]
+    assert hub.latest_cursor() == 4
+    assert hub._sinks == {}
+    assert capsys.readouterr().out == ""
+    hub.close()
+
+
 def test_event_hub_redacts_secrets_audio_queries_and_transcripts_centrally(tmp_path):
     settings = LogSettings(
         request_log_path=str(tmp_path / "audit"),
@@ -528,6 +563,29 @@ def test_event_hub_optional_mirror_overload_never_loses_committed_events(tmp_pat
     hub.close()
 
 
+def test_event_hub_failed_optional_mirror_preserves_committed_event(tmp_path):
+    settings = LogSettings(
+        performance_log_path=str(tmp_path / "performance"),
+        event_store_enabled=True,
+        event_store_path=str(tmp_path / "events.sqlite3"),
+    )
+    hub = StructuredEventHub(settings)
+    hub._sinks["performance"].write = lambda event: (_ for _ in ()).throw(
+        OSError("simulated mirror failure")
+    )
+
+    event_id = hub.emit("performance", "mirror.failure_test")
+    hub.flush()
+
+    assert event_id is not None
+    assert [event["event"] for event in hub.query()] == [
+        "mirror.failure_test"
+    ]
+    assert hub.drop_counts().get("file") == 1
+    assert hub.store_status()["state"] == "ready"
+    hub.close()
+
+
 def test_calendar_and_sqlite_retention_are_opt_in_and_channel_scoped(tmp_path):
     root = tmp_path / "audit"
     old_path = root / "2026-05" / "2026-05-01.jsonl"
@@ -579,6 +637,80 @@ def test_calendar_and_sqlite_retention_are_opt_in_and_channel_scoped(tmp_path):
     ))
     assert [event["eventId"] for event in reopened.query()] == ["new"]
     assert new_cursor > 1
+    assert reopened.retention_cursor(channels={"audit"}) == 1
+    reopened.close()
+
+
+def test_sqlite_retention_watermarks_are_channel_and_session_scoped(tmp_path):
+    store_path = tmp_path / "events.sqlite3"
+    store = SQLiteEventStore(store_path)
+    common = {
+        "schemaVersion": 1,
+        "severity": "info",
+        "serverInstanceId": "server",
+        "data": {},
+    }
+
+    system_cursor = store.append(dict(
+        common,
+        eventId="system-old",
+        event="system.old",
+        channel="system",
+        sessionId="session-a",
+        timestamp="2020-01-01T00:00:00.000Z",
+    ))
+    removed_cursor = store.append(dict(
+        common,
+        eventId="transcription-old",
+        event="transcription.old",
+        channel="transcription",
+        sessionId="session-a",
+        timestamp="2020-01-01T00:00:00.000Z",
+    ))
+    surviving_cursor = store.append(dict(
+        common,
+        eventId="transcription-other-session",
+        event="transcription.other",
+        channel="transcription",
+        sessionId="session-b",
+        timestamp=datetime.now(timezone.utc).isoformat(
+            timespec="milliseconds"
+        ).replace("+00:00", "Z"),
+    ))
+    store.set_retention({"transcription": 30})
+    newest_cursor = store.append(dict(
+        common,
+        eventId="transcription-new",
+        event="transcription.new",
+        channel="transcription",
+        sessionId="session-a",
+        timestamp=datetime.now(timezone.utc).isoformat(
+            timespec="milliseconds"
+        ).replace("+00:00", "Z"),
+    ))
+
+    assert store.oldest_cursor() == system_cursor
+    assert [event["cursor"] for event in store.query(limit=1000)] == [
+        system_cursor,
+        surviving_cursor,
+        newest_cursor,
+    ]
+    assert store.retention_cursor(
+        channels={"transcription"},
+        session_id="session-a",
+    ) == removed_cursor
+    assert store.retention_cursor(
+        channels={"transcription"},
+        session_id="session-b",
+    ) == 0
+    assert store.retention_cursor(channels={"system"}) == 0
+    store.close()
+
+    reopened = SQLiteEventStore(store_path)
+    assert reopened.retention_cursor(
+        channels={"transcription"},
+        session_id="session-a",
+    ) == removed_cursor
     reopened.close()
 
 

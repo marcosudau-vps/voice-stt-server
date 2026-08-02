@@ -269,12 +269,15 @@ bounded global history pages, channel/time filters, and a distinct global live
 mode without persisting the key.
 
 `log.hello` exposes protocol version 2, `deliveryMode: "sqlite_first"`, the
-server instance, and the committed oldest/latest cursor. Replay and live both
-read SQLite. A cursor before retention produces `log.gap(reason=retention)`;
+server instance, the committed oldest/latest cursor, and a channel-/session-
+specific `retentionCursor`. Replay and live both read SQLite. A deleted event
+relevant to the requested scope produces `log.gap(reason=retention)`;
 a cursor above the high-watermark produces `log.error(code=cursor_ahead)`.
 Store failure closes existing log sockets with `1011`, blocks new log access,
 and leaves `/ws/transcribe` operational. An empty final recorder result emits
 `transcription.discarded(reason=empty_final)` but no empty `final` frame.
+The channel `*_logging_enabled` switches affect only optional JSONL/stdout
+mirrors; canonical SQLite events remain enabled.
 
 ## Engine Recipes
 

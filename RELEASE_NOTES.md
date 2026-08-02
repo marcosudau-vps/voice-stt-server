@@ -5,8 +5,9 @@
 ### Added
 
 - Added log protocol version 2 with SQLite-first replay/live delivery,
-  committed cursor metadata, retention-gap and cursor-ahead semantics, and
-  explicit event-store availability.
+  committed cursor metadata, channel-/session-aware retention watermarks,
+  retention-gap and cursor-ahead semantics, and explicit event-store
+  availability.
 - Added fully authenticated server-wide Admin history/replay/live access,
   including bounded history/filter controls in the browser Admin drawer.
 - Added `transcription.discarded(reason=empty_final)` as the terminal event for
@@ -33,6 +34,11 @@
   separate rationale for material deviations.
 
 ### Changed
+
+- Channel `*_logging_enabled` switches now control only optional JSONL/stdout
+  mirrors. They no longer suppress canonical SQLite or `/ws/logs` events.
+- Empty final results now claim their generation/segment terminal exactly once,
+  including duplicate-result and disconnect races.
 
 - Structured events are now committed to SQLite before cursor assignment,
   optional JSONL/stdout mirroring, or `/ws/logs` visibility. Live handlers use

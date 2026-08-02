@@ -286,8 +286,9 @@ Der Log-/Eventstream besitzt einen eigenen Reconnectpfad:
 - ausschließlich den Cursor eines vollständig verarbeiteten `log.event`
   persistieren;
 - globale Cursorsprünge bei Filtern nicht als Verlust interpretieren;
-- bei Retentiongap ab `oldestCursor` fortsetzen und die verlorene Spanne
-  sichtbar speichern;
+- bei Retentiongap die gemeldete Spanne sichtbar speichern, den serverseitig
+  fortgesetzten Replaystrom aber ohne eigenen Sprung zu `oldestCursor` oder
+  `retentionCursor` weiterverarbeiten;
 - bei `cursor_ahead` `serverInstanceId`/`latestCursor` neu übernehmen;
 - bei Storefehler `1011` mit Backoff reconnecten, ohne Audio oder Transkription
   neu zu starten;

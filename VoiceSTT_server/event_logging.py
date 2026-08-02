@@ -479,6 +479,16 @@ class SQLiteEventStore:
             self._connection.execute(
                 f"CREATE INDEX IF NOT EXISTS {name} ON events ({column})"
             )
+        self._connection.execute(
+            """
+            CREATE TABLE IF NOT EXISTS retention_watermarks (
+                channel TEXT NOT NULL,
+                session_id TEXT NOT NULL,
+                cursor INTEGER NOT NULL,
+                PRIMARY KEY (channel, session_id)
+            )
+            """
+        )
         self._connection.commit()
         self._retention_days = {}
         self._last_prune_day = None
@@ -502,6 +512,26 @@ class SQLiteEventStore:
             cutoff = (now - timedelta(days=days)).isoformat(
                 timespec="milliseconds"
             ).replace("+00:00", "Z")
+            removed_scopes = self._connection.execute(
+                """
+                SELECT channel, COALESCE(session_id, ''), MAX(cursor)
+                FROM events
+                WHERE channel = ? AND timestamp < ?
+                GROUP BY channel, COALESCE(session_id, '')
+                """,
+                (channel, cutoff),
+            ).fetchall()
+            for removed_channel, session_id, cursor in removed_scopes:
+                self._connection.execute(
+                    """
+                    INSERT INTO retention_watermarks (
+                        channel, session_id, cursor
+                    ) VALUES (?, ?, ?)
+                    ON CONFLICT(channel, session_id) DO UPDATE SET
+                        cursor = MAX(cursor, excluded.cursor)
+                    """,
+                    (removed_channel, session_id, int(cursor)),
+                )
             self._connection.execute(
                 "DELETE FROM events WHERE channel = ? AND timestamp < ?",
                 (channel, cutoff),
@@ -581,6 +611,32 @@ class SQLiteEventStore:
                 "SELECT MIN(cursor) FROM events"
             ).fetchone()
             return int(row[0] or 0)
+
+    def retention_cursor(
+        self,
+        *,
+        channels: Optional[Iterable[str]] = None,
+        session_id: Optional[str] = None,
+    ) -> int:
+        clauses = []
+        parameters = []
+        channel_values = [
+            str(value) for value in (channels or []) if str(value)
+        ]
+        if channel_values:
+            clauses.append(
+                f"channel IN ({','.join('?' for _ in channel_values)})"
+            )
+            parameters.extend(channel_values)
+        if session_id not in (None, ""):
+            clauses.append("session_id = ?")
+            parameters.append(str(session_id))
+        sql = "SELECT MAX(cursor) FROM retention_watermarks"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        with self._lock:
+            row = self._connection.execute(sql, parameters).fetchone()
+        return int(row[0] or 0)
 
     def query(
         self,
@@ -863,7 +919,10 @@ class StructuredEventHub:
         with self._settings_lock:
             config = self._channel_config.get(channel)
             transcript_mode = self.transcript_mode
-        if not config or not config["enabled"] or self._closed:
+        # Per-channel enabled switches control only the optional JSONL/stdout
+        # mirrors. Once the canonical store is enabled, every generated event
+        # must follow the same SQLite-first contract.
+        if not config or self._closed:
             return None
         event = str(event)
         severity = str(severity)
@@ -928,7 +987,10 @@ class StructuredEventHub:
         with self._settings_lock:
             if channel in self._sinks:
                 targets.append("file")
-            if self._channel_config.get(channel, {}).get("stdout"):
+            if (
+                self._channel_config.get(channel, {}).get("enabled")
+                and self._channel_config.get(channel, {}).get("stdout")
+            ):
                 targets.append("stdout")
         for target in targets:
             self._enqueue(target, payload, priority)
@@ -1142,6 +1204,16 @@ class StructuredEventHub:
             return 0
         try:
             cursor = self._store.oldest_cursor()
+        except Exception as exc:
+            self._set_store_state("degraded", error=exc)
+            raise
+        return cursor
+
+    def retention_cursor(self, **filters) -> int:
+        if self._store is None:
+            return 0
+        try:
+            cursor = self._store.retention_cursor(**filters)
         except Exception as exc:
             self._set_store_state("degraded", error=exc)
             raise

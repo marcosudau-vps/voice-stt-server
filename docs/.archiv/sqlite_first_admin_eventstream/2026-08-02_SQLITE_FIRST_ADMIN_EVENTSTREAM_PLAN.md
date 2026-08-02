@@ -1,6 +1,6 @@
 # Gesamtplanung – SQLite-first Eventstream und vollständiger Admin-Logvertrag
 
-> **Status:** abgeschlossen
+> **Status:** nach externer Prüfung nachgebessert; lokaler Umfang abgeschlossen
 > **Datum:** 2. August 2026
 > **Branch:** `feature/sqlite-first-admin-eventstream`
 > **Ausgangscommit:** `33bde82fbce14e30d95b88f0936a4ce33e6bdf18`
