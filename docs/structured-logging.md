@@ -165,10 +165,15 @@ logs/voicestt-events.sqlite3
 
 SQLite runs in WAL mode and indexes timestamp, channel, event name, client,
 session and transcription identifiers. Sanitization, SQLite append, commit and
-cursor assignment happen before optional mirrors or live wakeups. Channel
-enablement settings such as `transcription_logging_enabled` control their
-calendar JSONL/stdout mirrors only. They do not suppress event generation,
-SQLite persistence, replay, or live delivery.
+cursor assignment happen before optional mirrors or live wakeups. For an event
+that has been generated, no mirror setting can suppress SQLite persistence,
+replay, or live delivery. `request_logging_enabled`,
+`transcription_logging_enabled`, and `system_event_logging_enabled` control
+their calendar JSONL/stdout mirrors. Performance is deliberately split:
+`performance_logging_enabled` is a source gate and prevents performance events
+from being generated, while `performance_log_mirror_enabled` controls only
+their optional calendar JSONL/stdout mirror. `realtime_log_detail` remains the
+source policy for high-volume realtime performance detail.
 
 History is available at:
 
@@ -290,12 +295,14 @@ addresses and access tokens are not part of session events.
 
 ## Configuration
 
-The versioned YAML configuration and `GET /api/logging` expose channel
-enablement, stdout mirroring, derived channel directories, daily segment
-sizes, calendar timezone, realtime detail and live access. `PUT /api/logging`
-can change the runtime-safe behavior settings, but rejects individual file,
-audio, performance, system, and transcription paths. All generated locations
-are derived from the single startup setting `data_root_path`.
+The versioned YAML configuration and `GET /api/logging` expose source and
+mirror enablement, stdout mirroring, derived channel directories, daily
+segment sizes, calendar timezone, realtime detail and live access. In the
+`performance` object, `enabled` is the source gate and `mirrorEnabled` is the
+independent optional mirror switch. `PUT /api/logging` changes them through
+`performanceEnabled` and `performanceMirrorEnabled`. It rejects individual
+file, audio, performance, system, and transcription paths. All generated
+locations are derived from the single startup setting `data_root_path`.
 
 The SQLite path, queue size and store enablement are startup settings. File
 channel settings, timezone, transcript policy and live access can be changed

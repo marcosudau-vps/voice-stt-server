@@ -775,7 +775,7 @@ class StructuredEventHub:
             },
             "performance": {
                 "enabled": bool(
-                    getattr(settings, "performance_logging_enabled", True)
+                    getattr(settings, "performance_log_mirror_enabled", True)
                 ),
                 "stdout": bool(
                     getattr(settings, "performance_log_stdout", True)

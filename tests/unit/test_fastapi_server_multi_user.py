@@ -352,6 +352,7 @@ def make_service(**overrides):
     model_warmup = overrides.pop("model_warmup", False)
     overrides.setdefault("request_logging_enabled", False)
     overrides.setdefault("performance_logging_enabled", False)
+    overrides.setdefault("performance_log_mirror_enabled", False)
     overrides.setdefault("transcription_logging_enabled", False)
     overrides.setdefault("system_event_logging_enabled", False)
     overrides.setdefault("event_store_enabled", False)
@@ -434,6 +435,47 @@ class FastAPIMultiUserSessionTests(unittest.TestCase):
             )
         with self.assertRaisesRegex(ValueError, "off, summary oder events"):
             ServerSettings(realtime_log_detail="verbose")
+
+    def test_performance_source_switch_controls_service_generation_and_runtime(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service, _ = make_service(
+                data_root_path=temp_dir,
+                event_store_enabled=True,
+                performance_logging_enabled=False,
+                performance_log_mirror_enabled=False,
+            )
+
+            self.assertIsNone(service.performance.event(
+                "source.disabled_test",
+                model="small",
+            ))
+            service.events.flush()
+            self.assertEqual(
+                service.events.query(channels={"performance"}),
+                [],
+            )
+
+            result = service.update_settings({
+                "performance_logging_enabled": True,
+            })
+            self.assertTrue(
+                result["applied"]["performance_logging_enabled"]["value"]
+            )
+            self.assertIsNotNone(service.performance.event(
+                "source.enabled_test",
+                model="small",
+            ))
+            service.events.flush()
+            self.assertEqual(
+                [
+                    event["event"]
+                    for event in service.events.query(
+                        channels={"performance"},
+                    )
+                ],
+                ["source.enabled_test"],
+            )
+            service.stop()
 
     def test_sessions_receive_only_their_own_final_transcripts(self):
         service, manager = make_service()
@@ -554,6 +596,50 @@ class FastAPIMultiUserSessionTests(unittest.TestCase):
             session._publish_discarded_empty_final(stale_generation)
         )
         self.assertEqual(len(emitted), 1)
+
+    def test_duplicate_empty_recorder_results_terminalize_started_segment_once(self):
+        service, manager = make_service()
+        session = service.admit_session("first")
+        emitted = []
+        session._emit_realtime_summary = lambda *args, **kwargs: None
+        session._emit_structured_event = (
+            lambda channel, event, **fields: emitted.append(
+                {"channel": channel, "event": event, **fields}
+            )
+        )
+
+        self.assertFalse(session._on_transcription_start(None))
+        session.recorder.final_text.put("")
+        session.recorder.final_text.put("")
+
+        self._wait_for(lambda: len([
+            event
+            for event in emitted
+            if event["event"] == "transcription.discarded"
+        ]) >= 1)
+        time.sleep(0.05)
+
+        discarded = [
+            event
+            for event in emitted
+            if event["event"] == "transcription.discarded"
+        ]
+        timeline_terminals = [
+            message
+            for message in manager.messages["first"]
+            if message.get("type") == "timeline"
+            and message.get("event") == "final_transcript_discarded"
+        ]
+        self.assertEqual(
+            [(event["event"], event["segment_id"]) for event in discarded],
+            [("transcription.discarded", 1)],
+        )
+        self.assertEqual(
+            [(event["event"], event["segmentId"]) for event in timeline_terminals],
+            [("final_transcript_discarded", 1)],
+        )
+        self.assertEqual(session.segment_state.current(), 2)
+        session.close()
 
     def test_empty_final_result_loses_disconnect_race_without_terminal_event(self):
         service, manager = make_service()

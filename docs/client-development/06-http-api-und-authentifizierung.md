@@ -231,10 +231,13 @@ liefert `GET /api/logging`:
 
 `eventStore.enabled` und der abgeleitete Storepfad sind startup-only.
 `liveEnabled` ist laufzeitänderbar, darf aber nur true sein, wenn der Store beim
-Start aktiviert wurde. Die Channel-`enabled`-Schalter steuern ihre optionalen
-Kalender-/stdout-Spiegel; sie unterdrücken weder SQLite-Events noch Replay oder
-Liveausgabe und erzeugen keine unzuverlässige Sonderklasse im
-SQLite-/Livevertrag.
+Start aktiviert wurde. Für Audit, Transkription und System steuern die
+Channel-`enabled`-Schalter ihre optionalen Kalender-/stdout-Spiegel. Im
+`performance`-Objekt ist `enabled` dagegen der Quellschalter und
+`mirrorEnabled` der unabhängige Spiegel-Schalter. `PUT /api/logging` verwendet
+dafür `performanceEnabled` und `performanceMirrorEnabled`. Ein bereits
+erzeugtes Event wird durch keinen Spiegel-Schalter aus SQLite, Replay oder
+Liveausgabe entfernt.
 
 ## `PATCH /api/config`
 

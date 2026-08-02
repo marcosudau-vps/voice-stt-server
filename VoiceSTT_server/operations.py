@@ -314,21 +314,29 @@ class PerformanceLogManager:
     """Compatibility facade for operational performance events."""
 
     def __init__(self, settings, event_hub=None):
+        self._enabled = True
         self._manager = ChannelLogManager(
             settings,
             "performance",
             PERFORMANCE_EVENT_MESSAGES_DE,
             event_hub,
         )
+        self.configure(settings, configure_hub=False)
 
     @property
     def hub(self):
         return self._manager.hub
 
-    def configure(self, settings):
-        self._manager.configure(settings)
+    def configure(self, settings, configure_hub=True):
+        if configure_hub:
+            self._manager.configure(settings)
+        self._enabled = bool(
+            getattr(settings, "performance_logging_enabled", True)
+        )
 
     def event(self, event, **fields):
+        if not self._enabled:
+            return None
         return self._manager.event(event, **fields)
 
     def close(self):

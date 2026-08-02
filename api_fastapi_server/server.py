@@ -152,6 +152,7 @@ ACTIVE_RUNTIME_SETTINGS = {
     "request_logging_enabled",
     "performance_log_backup_count",
     "performance_log_max_bytes",
+    "performance_log_mirror_enabled",
     "performance_log_retention_days",
     "performance_log_stdout",
     "performance_logging_enabled",
@@ -308,6 +309,7 @@ BOOL_SETTINGS = {
     "request_log_stdout",
     "request_log_transcripts",
     "request_logging_enabled",
+    "performance_log_mirror_enabled",
     "performance_log_stdout",
     "performance_logging_enabled",
     "system_event_log_stdout",
@@ -399,6 +401,7 @@ class ServerSettings:
     request_log_backup_count: int = 12
     request_log_retention_days: int = 0
     performance_logging_enabled: bool = True
+    performance_log_mirror_enabled: bool = True
     performance_log_stdout: bool = True
     performance_log_path: str = field(init=False)
     performance_log_max_bytes: int = 10 * 1024 * 1024
@@ -2392,6 +2395,7 @@ class RecorderBackedRealtimeSession:
         self._force_finalize_in_progress = False
         self._wakeword_voice_window = False
         self._wakeword_followup_generation = 0
+        self._pending_text_terminals = collections.deque()
         self._performance_first_text_segments = set()
         self._realtime_event_stats = {}
         self._recorder_wake_word_timeout_before_followup = None
@@ -2766,9 +2770,6 @@ class RecorderBackedRealtimeSession:
 
     def _text_worker(self):
         while not self.service.stop_event.is_set():
-            with self.lock:
-                text_generation = self.generation
-                text_segment_id = self.segment_state.current()
             try:
                 text = self.recorder.text()
             except Exception as exc:
@@ -2798,6 +2799,17 @@ class RecorderBackedRealtimeSession:
 
             if getattr(self.recorder, "is_shut_down", False):
                 break
+            with self.lock:
+                terminal = (
+                    self._pending_text_terminals.popleft()
+                    if self._pending_text_terminals
+                    else None
+                )
+            if terminal is None:
+                continue
+            text_generation, text_segment_id, rejected = terminal
+            if rejected:
+                continue
             text = (text or "").strip()
             if not text:
                 self._publish_discarded_empty_final(
@@ -3315,9 +3327,13 @@ class RecorderBackedRealtimeSession:
         self.publish_status(self._waiting_state_locked())
 
     def _on_transcription_start(self, *_):
-        segment_id = self.segment_state.current()
         with self.lock:
+            generation = self.generation
+            segment_id = self.segment_state.current()
             rejected = self.reject_current_recording
+            self._pending_text_terminals.append(
+                (generation, segment_id, bool(rejected))
+            )
         if not rejected:
             self._emit_structured_event(
                 "transcription",
@@ -4527,6 +4543,7 @@ class VoiceSTTService:
                 "save_audio_files",
                 "performance_log_backup_count",
                 "performance_log_max_bytes",
+                "performance_log_mirror_enabled",
                 "performance_log_retention_days",
                 "performance_log_stdout",
                 "performance_logging_enabled",
@@ -4544,6 +4561,10 @@ class VoiceSTTService:
             if any(name in logging_names for name in applied):
                 self.events.configure(self.settings)
                 self.audit.configure(self.settings, configure_hub=False)
+                self.performance.configure(
+                    self.settings,
+                    configure_hub=False,
+                )
             if "log_level" in applied:
                 apply_process_log_level(self.settings.log_level)
             self.audit.event("config.updated", applied=applied)
@@ -5610,6 +5631,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "retentionDays": settings.request_log_retention_days,
             "performance": {
                 "enabled": settings.performance_logging_enabled,
+                "mirrorEnabled": settings.performance_log_mirror_enabled,
                 "stdout": settings.performance_log_stdout,
                 "file": settings.performance_log_path,
                 "maxBytes": settings.performance_log_max_bytes,
@@ -5674,6 +5696,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "maxBytes": "request_log_max_bytes", "backupCount": "request_log_backup_count",
             "retentionDays": "request_log_retention_days",
             "performanceEnabled": "performance_logging_enabled",
+            "performanceMirrorEnabled": "performance_log_mirror_enabled",
             "performanceStdout": "performance_log_stdout",
             "performanceMaxBytes": "performance_log_max_bytes",
             "performanceBackupCount": "performance_log_backup_count",
@@ -6996,6 +7019,7 @@ YAML_CONFIG_TO_ARG_DEST = {
     "model_warmup": ("no_model_warmup", lambda value: not value),
     "openai_api_enabled": ("disable_openai_api", lambda value: not value),
     "performance_logging_enabled": ("performance_logging", bool),
+    "performance_log_mirror_enabled": ("performance_log_mirror", bool),
     "system_event_logging_enabled": ("system_event_logging", bool),
     "transcription_logging_enabled": ("transcription_logging", bool),
     "realtime_transcription_use_syllable_boundaries": (
@@ -7238,6 +7262,11 @@ def parse_args(argv=None):
         action=argparse.BooleanOptionalAction,
         default=_env_bool("VOICESTT_PERFORMANCE_LOG_STDOUT", True),
     )
+    parser.add_argument(
+        "--performance-log-mirror",
+        action=argparse.BooleanOptionalAction,
+        default=_env_bool("VOICESTT_PERFORMANCE_LOG_MIRROR", True),
+    )
     parser.add_argument("--performance-log-max-bytes", type=int, default=10 * 1024 * 1024)
     parser.add_argument("--performance-log-backup-count", type=int, default=12)
     parser.add_argument("--performance-log-retention-days", type=int, default=0)
@@ -7438,6 +7467,7 @@ def settings_from_args(args):
         request_log_backup_count=args.request_log_backup_count,
         request_log_retention_days=args.request_log_retention_days,
         performance_logging_enabled=args.performance_logging,
+        performance_log_mirror_enabled=args.performance_log_mirror,
         performance_log_stdout=args.performance_log_stdout,
         performance_log_max_bytes=args.performance_log_max_bytes,
         performance_log_backup_count=args.performance_log_backup_count,

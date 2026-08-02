@@ -130,6 +130,7 @@ class LogSettings:
     save_audio_files: bool = True
     audio_log_dir: str = ""
     performance_logging_enabled: bool = True
+    performance_log_mirror_enabled: bool = True
     performance_log_stdout: bool = False
     performance_log_path: str = ""
     performance_log_max_bytes: int = 1024 * 1024
@@ -217,6 +218,24 @@ def test_performance_logger_uses_separate_jsonl_channel(tmp_path):
     assert payload["data"]["queueDelayMs"] == 12.5
     assert payload["data"]["realTimeFactor"] == 0.4
     assert payload["timestamp"].endswith("Z")
+
+
+def test_disabled_performance_source_does_not_generate_canonical_event(tmp_path):
+    settings = LogSettings(
+        save_audio_files=False,
+        performance_logging_enabled=False,
+        performance_log_mirror_enabled=True,
+        performance_log_path=str(tmp_path / "performance"),
+        event_store_enabled=True,
+        event_store_path=str(tmp_path / "events.sqlite3"),
+    )
+    performance = PerformanceLogManager(settings)
+
+    assert performance.event("inference.completed", model="small") is None
+    performance.hub.flush()
+
+    assert performance.hub.query(channels={"performance"}) == []
+    performance.close()
 
 
 def test_calendar_sink_creates_month_directories_and_daily_files(tmp_path):
@@ -368,7 +387,8 @@ def test_disabled_channel_mirrors_do_not_disable_canonical_events(
     settings = LogSettings(
         request_logging_enabled=False,
         request_log_stdout=True,
-        performance_logging_enabled=False,
+        performance_logging_enabled=True,
+        performance_log_mirror_enabled=False,
         performance_log_stdout=True,
         transcription_logging_enabled=False,
         transcription_log_stdout=True,

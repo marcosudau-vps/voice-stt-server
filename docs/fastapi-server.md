@@ -151,7 +151,8 @@ Capacity and scheduling flags:
 | `--request-log-stdout` / `--no-request-log-stdout` | Mirrors audit events to stdout. |
 | `--request-log-max-bytes` | Maximum size of one audit daily segment. |
 | `--request-log-backup-count` | Legacy compatibility setting; calendar files are not deleted automatically. |
-| `--performance-logging` / `--no-performance-logging` | Enables/disables the performance calendar JSONL mirror. |
+| `--performance-logging` / `--no-performance-logging` | Enables/disables performance-event generation at the source. Disabled events do not enter SQLite, replay, live delivery, JSONL, or stdout. |
+| `--performance-log-mirror` / `--no-performance-log-mirror` | Enables/disables the optional performance calendar JSONL/stdout mirror without weakening already generated SQLite/live events. |
 | `--performance-log-stdout` / `--no-performance-log-stdout` | Mirrors performance events to stdout for Dozzle. |
 | `--performance-log-max-bytes` | Maximum size of one performance log file. |
 | `--performance-log-backup-count` | Legacy compatibility setting; calendar files are not deleted automatically. |
@@ -251,12 +252,15 @@ p50, p95, and p99) over repeated runs. Accuracy comparisons require a reference
 transcript and should report WER/CER in an offline benchmark; they cannot be
 derived safely from production traffic alone.
 
-`GET /api/logging` returns all structured mirror, calendar, realtime and live
-delivery settings plus `logProtocolVersion`, `deliveryMode`, replay
-availability and sanitized store state/cursors. Runtime-safe values can be
-changed without UI coupling through `PUT /api/logging`; the response reports
-applied and rejected fields. SQLite store activation and its path remain
-startup-only.
+`GET /api/logging` returns all structured source, mirror, calendar, realtime
+and live delivery settings plus `logProtocolVersion`, `deliveryMode`, replay
+availability and sanitized store state/cursors. For performance events,
+`performance.enabled` controls generation and `performance.mirrorEnabled`
+controls the optional JSONL/stdout mirror. Runtime-safe values can be changed
+without UI coupling through `PUT /api/logging`; the corresponding request
+fields are `performanceEnabled` and `performanceMirrorEnabled`. The response
+reports applied and rejected fields. SQLite store activation and its path
+remain startup-only.
 
 A normal session receives `hello.logAccess` and can use its token only for its
 own `audit`, `transcription`, and `performance` history. Administrators can
@@ -275,9 +279,14 @@ relevant to the requested scope produces `log.gap(reason=retention)`;
 a cursor above the high-watermark produces `log.error(code=cursor_ahead)`.
 Store failure closes existing log sockets with `1011`, blocks new log access,
 and leaves `/ws/transcribe` operational. An empty final recorder result emits
-`transcription.discarded(reason=empty_final)` but no empty `final` frame.
-The channel `*_logging_enabled` switches affect only optional JSONL/stdout
-mirrors; canonical SQLite events remain enabled.
+`transcription.discarded(reason=empty_final)` but no empty `final` frame. Each
+result is correlated with the generation and segment captured by its actual
+transcription-start callback; duplicate recorder results without another start
+cannot claim a new segment. Audit, transcription, and system channel
+`*_logging_enabled` switches affect only optional JSONL/stdout mirrors.
+`performance_logging_enabled` is the intentional source gate;
+`performance_log_mirror_enabled` is its independent mirror switch. Every event
+that passes source policy remains canonical in SQLite.
 
 ## Engine Recipes
 

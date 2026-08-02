@@ -136,7 +136,8 @@ Die Einteilung ist deshalb Teil des aktuell implementierten Verwaltungsvertrags.
 | `request_log_max_bytes` | Rotationsgröße der Audit-Datei |
 | `request_log_backup_count` | Legacy-Kompatibilitätswert; löscht keine Kalenderdateien |
 | `request_log_retention_days` | Aufbewahrung des Audit-Kanals in Tagen; `0` deaktiviert Löschung |
-| `performance_logging_enabled` | Performance-Kalenderspiegel aktiv |
+| `performance_logging_enabled` | Erzeugung von Performanceevents aktiv; `false` bedeutet keine Performanceevents in SQLite/Replay/Live oder Spiegeln |
+| `performance_log_mirror_enabled` | optionaler Performance-Kalender-/stdout-Spiegel aktiv; bereits erzeugte Events bleiben SQLite-first |
 | `performance_log_stdout` | Performance-Events zusätzlich auf stdout |
 | `performance_log_max_bytes` | Rotationsgröße der Performance-Datei |
 | `performance_log_backup_count` | Legacy-Kompatibilitätswert; löscht keine Kalenderdateien |

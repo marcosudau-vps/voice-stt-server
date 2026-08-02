@@ -145,7 +145,8 @@ Netzwerkebene begrenzen.
 | `transcript_log_mode` | kann finalen oder vollständigen Text ausschließlich im Transkriptionskanal speichern |
 | `request_log_stdout` | kann Daten in zentrale Containerlogs/Dozzle spiegeln |
 | `save_audio_files` | speichert Audio auf Serverdisk |
-| `performance_logging_enabled` | aktiviert den Performance-Kalender-/stdout-Spiegel, laut Implementierung ohne Transkripttext |
+| `performance_logging_enabled` | Quellschalter: `false` verhindert die Erzeugung von Performanceevents vollständig |
+| `performance_log_mirror_enabled` | aktiviert nur den optionalen Performance-Kalender-/stdout-Spiegel; SQLite-first bleibt für erzeugte Events verbindlich |
 | `transcription_logging_enabled` | aktiviert den Transkriptions-Kalender-/stdout-Spiegel; Text folgt `transcript_log_mode` |
 | `event_store_enabled` | aktiviert den kanonischen SQLite-Commit für alle strukturierten Events |
 | `log_live_enabled` | erlaubt den separaten, authentifizierten SQLite-first Log-WebSocket; benötigt den Eventstore |
@@ -199,6 +200,9 @@ globalen `oldestCursor` unverändert lässt.
 8. Ein leerer finaler Recordertext erzeugt kein `final`, aber
    `final_transcript_discarded` und ein committed
    `transcription.discarded(reason=empty_final)`.
+9. Mehrfach gelieferte Recorder-Ergebnisse ohne einen weiteren tatsächlichen
+   Transkriptionsstart beanspruchen kein neues Segment und erzeugen kein
+   zweites Terminalereignis.
 
 ## Abnahmetest-Checkliste für einen neuen Client
 

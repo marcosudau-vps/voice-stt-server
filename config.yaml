@@ -93,6 +93,7 @@ settings:
   request_log_backup_count: 12
   request_log_retention_days: 0
   performance_logging_enabled: true
+  performance_log_mirror_enabled: true
   performance_log_stdout: true
   performance_log_max_bytes: 10485760
   performance_log_backup_count: 12

@@ -35,10 +35,14 @@
 
 ### Changed
 
-- Channel `*_logging_enabled` switches now control only optional JSONL/stdout
-  mirrors. They no longer suppress canonical SQLite or `/ws/logs` events.
-- Empty final results now claim their generation/segment terminal exactly once,
-  including duplicate-result and disconnect races.
+- Audit, transcription, and system `*_logging_enabled` switches now control
+  only optional JSONL/stdout mirrors. Performance uses separate source and
+  mirror switches: `performance_logging_enabled` controls generation and
+  `performance_log_mirror_enabled` controls optional mirroring. No mirror
+  switch suppresses an already generated SQLite or `/ws/logs` event.
+- Empty final results now use a transcription-start ticket to claim their
+  generation/segment terminal exactly once, including duplicate-result and
+  disconnect races through the real text worker.
 
 - Structured events are now committed to SQLite before cursor assignment,
   optional JSONL/stdout mirroring, or `/ws/logs` visibility. Live handlers use
