@@ -348,8 +348,7 @@ transcription_engine_options
 realtime_transcription_engine_options
 ```
 
-Der Wechsel ist gesperrt, solange irgendeine WebSocket-Sitzung aktiv ist. Nicht
-nur Streaming, bereits die offene Verbindung zählt.
+Ein Modellwechsel lädt die Modell-Worker neu. Die neuen Modelle gelten für alle neuen Anfragen und WebSocket-Sitzungen; bestehende Client-Verbindungen übernehmen den Modellwechsel nach einem Reconnect.
 
 ### Lifecycle
 

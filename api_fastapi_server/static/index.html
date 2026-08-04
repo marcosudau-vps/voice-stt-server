@@ -785,7 +785,7 @@
   <div id="settingsBackdrop" class="settings-backdrop" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
     <form class="settings-drawer" onsubmit="return false">
       <div class="settings-head">
-        <div><h2 id="settingsTitle">Servereinstellungen</h2><p>Änderungen gelten für neue Sitzungen. Bei einem Modellwechsel trennt sich diese Oberfläche, während die Worker neu geladen werden.</p></div>
+        <div><h2 id="settingsTitle">Servereinstellungen</h2><p>Änderungen werden für jede neue Sitzung aktiv. Bei einem Modellwechsel werden die Server-Worker neu geladen.</p></div>
         <button id="settingsClose" class="secondary" type="button">Schließen</button>
       </div>
       <div class="settings-grid">
@@ -1513,8 +1513,6 @@
         if (modelsChanged) {
           if (state.streaming) stopStream();
           reconnect = state.connected;
-          await closeSocketForModelSwitch();
-          await new Promise(resolve => setTimeout(resolve, 150));
           setSettingsStatus("CPU-Modell-Worker werden neu geladen. Dies kann einige Minuten dauern ...");
           await apiJson("/api/models/active", {
             method: "PUT",
@@ -1527,14 +1525,22 @@
           });
         }
         await loadAdminSettings();
-        setSettingsStatus("Einstellungen erfolgreich übernommen.", "ok");
+        setSettingsStatus(
+          modelsChanged
+            ? "Einstellungen erfolgreich übernommen. Der Modellwechsel gilt für neue Sitzungen (aktive Verbindung wird neu aufgebaut)."
+            : "Einstellungen erfolgreich übernommen.",
+          "ok"
+        );
         addEvent("Servereinstellungen aktualisiert");
       } catch (error) {
         setSettingsStatus("Aktualisierung fehlgeschlagen: " + error.message, "error");
         addEvent("Einstellungsänderung fehlgeschlagen: " + error.message);
       } finally {
         ui.settingsApply.disabled = false;
-        if (reconnect) connectSocket().catch(error => addEvent(error.message));
+        if (reconnect) {
+          await closeSocketForModelSwitch();
+          connectSocket().catch(error => addEvent(error.message));
+        }
       }
     }
 

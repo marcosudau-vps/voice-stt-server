@@ -4643,8 +4643,6 @@ class VoiceSTTService:
         unknown = set(updates) - allowed
         if unknown:
             raise ValueError("Nicht unterstützte Modelleinstellung(en): " + ", ".join(sorted(unknown)))
-        if self.session_count() or self.active_speaker_count():
-            raise RuntimeError("Für einen Modellwechsel dürfen keine WebSocket-Sitzungen aktiv sein.")
 
         candidate = replace(self.settings)
         for name, value in updates.items():

@@ -1006,18 +1006,209 @@ GET /api/models/active
 ```
 
 Modell wechseln:
+```
+
+Manuelles Entladen:
+
+```http
+POST /api/models/unload
+X-VoiceSTT-Admin-Key: ...
+```
+
+Ein normaler Desktop-Client sollte nicht pauschal den Admin-Key enthalten. Wenn später ein „STT jetzt aufwecken“-Knopf ohne Admin-Rechte gewünscht ist, wäre ein eingeschränkter, separat authentifizierter Warmup-Endpunkt sinnvoll.
+
+---
+
+## 13. OpenAI-kompatibler Dateiendpunkt
+
+### Request
+
+```http
+POST /v1/audio/transcriptions
+Authorization: Bearer <VOICESTT_API_KEY>
+Content-Type: multipart/form-data
+```
+
+Pflichtfelder:
+
+```text
+file
+model
+```
+
+Unterstützte Audiodateien:
+
+```text
+flac
+mp3
+mp4
+mpeg
+mpga
+m4a
+ogg
+wav
+webm
+```
+
+Maximale Größe:
+
+```text
+26.214.400 Byte / 25 MiB
+```
+
+Unterstützte Parameter:
+
+```text
+model
+language
+prompt
+response_format
+temperature
+timestamp_granularities
+stream
+include
+threshold
+known_speaker_names
+known_speaker_references
+```
+
+Unterstützte `response_format`-Werte:
+
+```text
+json
+text
+srt
+verbose_json
+vtt
+diarized_json
+```
+
+Zeitstempelgranularitäten:
+
+```text
+segment
+word
+```
+
+Andere Granularitäten als der Standard `segment` erfordern `response_format=verbose_json`.
+
+`include` unterstützt:
+
+```text
+logprobs
+```
+
+### Modellrouting
+
+Standardkompatibilität:
+
+```text
+model=whisper-1
+```
+
+wird auf das geladene Final-Modell geroutet.
+
+Aktuelle Aliasse:
+
+```text
+whisper-1 → final
+fast      → realtime
+```
+
+Da final und realtime momentan dasselbe Kroko-Modell verwenden, führen beide aktuell zur gleichen physischen Modellinstanz.
+
+Falls ein Fremdprogramm zwingend `model=whisper-1` sendet, kann das tatsächlich gewünschte Modell zusätzlich angegeben werden.
+
+Über Header:
+
+```http
+X-VoiceSTT-Model: <Modellname oder Alias>
+```
+
+Oder als Multipart-Feld:
+
+```text
+voicestt_model=<Modellname oder Alias>
+```
+
+Ebenfalls akzeptiert:
+
+```text
+model_override=<Modellname oder Alias>
+```
+
+Eine Überschreibung ist absichtlich nur erlaubt, wenn das offizielle `model`-Feld `whisper-1` enthält.
+
+Antwortheader informieren über das tatsächliche Routing:
+
+```text
+X-Request-ID
+X-VoiceSTT-Requested-Model
+X-VoiceSTT-Resolved-Model
+X-VoiceSTT-Route
+X-VoiceSTT-Override-Model
+X-VoiceSTT-Override-Source
+```
+
+### Normale JSON-Antwort
+
+```json
+{
+  "text": "Dies ist ein deutscher Test.",
+  "usage": {
+    "type": "duration",
+    "seconds": 4
+  }
+}
+```
+
+### SSE mit `stream=true`
+
+Mögliche Delta-Nachricht:
+
+```text
+data: {"type":"transcript.text.delta","delta":"Dies ist"}
+```
+
+Abschluss:
+
+```text
+data: {"type":"transcript.text.done","text":"Dies ist ein deutscher Test.","usage":{"type":"duration","seconds":4}}
+```
+
+Wichtig:
+
+- Deltas sind optional.
+- Kroko kann je nach Transkriptionsweg nur das abschließende `done` liefern.
+- Der Client muss deshalb immer `transcript.text.done` auswerten.
+- Der Server sendet momentan kein zusätzliches `data: [DONE]`.
+- Das Ende wird durch das `done`-Ereignis und anschließend das Ende des HTTP-Streams signalisiert.
+
+### Diarisierung
+
+`diarized_json` wird aus Kompatibilitätsgründen angenommen. Die derzeit geladenen ASR-Modelle besitzen aber kein echtes Diarisierungsmodell. Die Antwort wird daher als Single-Speaker-Kompatibilitätsantwort gekennzeichnet.
+
+Darauf sollte der Desktop-Client keine echte Sprechertrennung aufbauen.
+
+---
+
+## 14. Administrative Modellwechsel
+
+Aktive Modelle:
+
+```text
+GET /api/models/active
+```
+
+Modell wechseln:
 
 ```text
 PUT /api/models/active
 ```
 
-Ein Modellwechsel ist nur möglich, wenn keine WebSocket-Sitzung aktiv ist. Ein dauerhaft verbundener Desktop-Client muss sich deshalb vor einem globalen Modellwechsel trennen.
+Ein Modellwechsel lädt die Modell-Worker neu und wird für neue Sitzungen beziehungsweise nach einem Reconnect aktiv. Laufende WebSocket-Verbindungen werden durch den Modellwechsel nicht blockiert.
 
-Andernfalls antwortet der Server mit HTTP `409`.
-
-Das ist absichtlich so, damit Recorder-Sitzungen und Modellworker nicht während einer laufenden Verbindung gegeneinander ausgetauscht werden.
-
-Wake-Word- und Sprachänderungen gelten für neue Sitzungen beziehungsweise neue Anfragen. Nach solchen Änderungen sollte der Desktop-Client reconnecten.
+Modelländerungen sowie Wake-Word- und Sprachänderungen gelten für neue Sitzungen beziehungsweise neue Anfragen. Clients sollten sich nach einer solchen Änderung neu verbinden.
 
 ---
 
