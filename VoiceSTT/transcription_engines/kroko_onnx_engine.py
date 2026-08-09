@@ -522,7 +522,14 @@ class KrokoOnnxBackend:
         options = self.engine_options
         kwargs = {
             "model_path": str(self.model_path),
-            "key": options.get("key", ""),
+            "key": (
+                options.get("key")
+                or os.getenv("KROKO_API_KEY")
+                or os.getenv("KROKO_ONNX_KEY")
+                or os.getenv("VOICESTT_KROKO_ONNX_KEY")
+                or os.getenv("KROKO_KEY")
+                or ""
+            ),
             "referralcode": options.get("referralcode", ""),
             "num_threads": _int_option(options, "num_threads", 1),
             "provider": _provider_from_config(self.config, options),

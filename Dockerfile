@@ -1,5 +1,7 @@
 FROM python:3.12-slim-bookworm AS kroko-builder
 
+ARG KROKO_VARIANT=free
+
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -14,7 +16,8 @@ COPY VoiceSTT/install_kroko.py /build/voicestt/VoiceSTT/install_kroko.py
 RUN python -m pip install --upgrade pip setuptools wheel && \
     python -m pip install huggingface_hub && \
     python /build/voicestt/VoiceSTT/install_kroko.py \
-      --build --skip-install --work-dir /build/kroko-work
+      --build --skip-install --work-dir /build/kroko-work \
+      --variant "${KROKO_VARIANT}"
 
 
 FROM python:3.12-slim-bookworm AS cpu
