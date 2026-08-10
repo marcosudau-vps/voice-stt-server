@@ -1,0 +1,8 @@
+# Minimales Upgrade: installiert nur das Kroko-Pro-Wheel über das bestehende Free-Image
+FROM selfhost/stt-voice:local
+
+COPY --from=selfhost/stt-voice:kroko-builder-pro \
+     /build/kroko-work/kroko-onnx/release_artifacts/linux/*.whl /tmp/kroko-wheels/
+
+RUN python -m pip install --force-reinstall --no-deps '/tmp/kroko-wheels/'*.whl && \
+    rm -rf /tmp/kroko-wheels
