@@ -11,6 +11,10 @@ path uses Faster Whisper, Kroko ONNX, Silero ONNX, OpenWakeWord and Porcupine.
 Model downloads are disabled in deployment; existing model directories are
 resolved from environment variables or read-only Docker volumes.
 
+The central build and deployment reference is
+[`build/BUILD.md`](build/BUILD.md). Server-specific files for Marcos VPS are
+kept separately under [`build/vps`](build/vps/README.md).
+
 ## Support VoiceSTT
 
 If VoiceSTT saved you time, one GitHub star is a simple way to help make it more stable.
@@ -36,13 +40,16 @@ commercial model options if you need production licensing and higher-end models.
 
 ```bash
 pip install "VoiceSTT[kroko-builder,silero-onnx-cpu]"
-stt-install-kroko --build
+stt-install-kroko --build --variant free
 ```
 
 The `silero-onnx-cpu` extra gives `AudioToTextRecorder` a local VAD backend for
 recorder-based smoke tests and live microphone use.
 
-See the [Kroko-ONNX engine guide](docs/engines/kroko-onnx.md),
+Use `--variant pro` only for licensed Pro models; the key is supplied at
+runtime, not during the build. See the complete
+[build guide](build/BUILD.md#kroko-im-detail),
+[Kroko-ONNX engine guide](docs/engines/kroko-onnx.md),
 [Kroko ASR docs](https://docs.kroko.ai/on-premise/), and
 [kroko-onnx on GitHub](https://github.com/kroko-ai/kroko-onnx).
 
@@ -163,6 +170,10 @@ audio, logging, and executor injection.
 
 ## Documentation
 
+- [Build and deployment](build/BUILD.md): canonical package, Docker and Kroko
+  build paths, validation and rollback.
+- [Marcos VPS deployment](build/vps/README.md): server-only paths,
+  configuration and release automation.
 - [Documentation overview](docs/README.md): authoritative guides, client
   contract, and the archive process for larger changes.
 
@@ -227,8 +238,9 @@ OpenAI-compatible transcription route through one shared model scheduler.
 python .\tools\compose.py up --build -d
 ```
 
-The same command works on the VPS when its configured model directories are
-present. Open `http://localhost:8010`. See
+This is the portable development path. Marcos VPS uses the separate,
+Pro-aware release process under [build/vps](build/vps/README.md). Open
+`http://localhost:8010` for the local setup. See
 [docs/fastapi-server.md](docs/fastapi-server.md)
 for engine recipes, websocket protocol details, health checks, and metrics.
 

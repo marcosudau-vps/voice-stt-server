@@ -89,7 +89,7 @@ def check_kroko_runtime():
             "Recorder-based Kroko smoke tests also need a local VAD backend.\n"
             "Install it with:\n\n"
             '  python -m pip install "VoiceSTT[kroko-builder,silero-onnx-cpu]"\n'
-            "  stt-install-kroko --build\n"
+            "  stt-install-kroko --build --variant free\n"
         )
         raise SystemExit(1)
 
@@ -107,7 +107,7 @@ def check_recorder_vad_runtime():
         "\n"
         "For a fresh Kroko recorder environment, install both extras up front:\n\n"
         '  python -m pip install "VoiceSTT[kroko-builder,silero-onnx-cpu]"\n'
-        "  stt-install-kroko --build\n"
+        "  stt-install-kroko --build --variant free\n"
     )
     raise SystemExit(1)
 

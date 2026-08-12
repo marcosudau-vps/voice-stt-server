@@ -62,6 +62,12 @@ test-model-cache/
 # Distribution / packaging
 .Python
 build/
+!build/
+build/*
+!build/BUILD.md
+!build/vps/
+!build/vps/**
+.build-python/
 develop-eggs/
 dist/
 downloads/

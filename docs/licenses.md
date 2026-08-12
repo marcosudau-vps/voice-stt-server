@@ -1,6 +1,6 @@
 # License Notes
 
-Last researched: 2026-05-21.
+Last researched: 2026-08-12.
 
 VoiceSTT itself is released under the MIT license. Optional transcription,
 VAD, and wake-word engines pull in their own packages, model weights, service
@@ -11,6 +11,9 @@ This page is a practical summary, not legal advice. Before shipping a product,
 redistributing model files, bundling wheels, or offering hosted transcription,
 review the upstream license files and terms for the exact package, model,
 revision, API, and distribution path you use.
+
+The technical Community/Pro build separation and secret handling are
+documented centrally in [`build/BUILD.md`](../build/BUILD.md#community-und-pro).
 
 ## Important Limits
 
@@ -35,7 +38,7 @@ revision, API, and distribution path you use.
 | `whisper_cpp` | [`whisper.cpp`](https://github.com/ggml-org/whisper.cpp) is MIT. VoiceSTT uses the `pywhispercpp` package, so check that package metadata before redistributing wheels. | Uses OpenAI Whisper-family model files; check whether you use original OpenAI files or third-party conversions. | Generally permissive for original Whisper assets, but converted model files should be checked individually. |
 | `openai_whisper` | [`openai-whisper`](https://github.com/openai/whisper/blob/main/LICENSE) is MIT. | OpenAI Whisper assets in the same repository are MIT. | Generally permissive, subject to MIT notice preservation. |
 | `sherpa_onnx_moonshine`, `sherpa_onnx_parakeet` | [`sherpa-onnx`](https://github.com/k2-fsa/sherpa-onnx) is Apache-2.0. ONNX Runtime is MIT. | The model bundle determines the model license. For common upstream families, Useful Sensors Moonshine Streaming is MIT and NVIDIA Parakeet is CC-BY-4.0. | Keep the license and attribution files that ship with the selected sherpa-onnx model bundle. Do not assume every bundle has the same terms. |
-| `kroko_onnx` | [`kroko-onnx`](https://github.com/kroko-ai/kroko-onnx) is Apache-2.0. | Kroko's docs describe Community models as CC-BY-SA and Commercial/OEM models as separately licensed. | CC-BY-SA-style licenses generally require attribution and share-alike. Because Kroko also routes professional/production use to Commercial/OEM models and license keys, verify commercial fit with Kroko before using Community models commercially; free license keys are described as non-commercial. |
+| `kroko_onnx` | [`kroko-onnx`](https://github.com/kroko-ai/kroko-onnx) is Apache-2.0. | Kroko's docs describe Community models as CC-BY-SA and Commercial/OEM models as separately licensed. | Community models require the stated attribution/share-alike duties. Kroko documents a permanent free key for strictly non-commercial Pro use, a temporary trial key, and separate Commercial/OEM licensing for professional production. Pro license validation sends the key, machine fingerprint and usage duration to Kroko's license server. |
 | `parakeet` | NVIDIA NeMo source is Apache-2.0, while NVIDIA notes that some NeMo Framework containers and deployment artifacts have separate NVIDIA product terms. | The default `nvidia/parakeet-tdt-0.6b-v3` model card lists CC-BY-4.0 and says the model is ready for commercial/non-commercial use. | CC-BY-4.0 requires attribution. Review NVIDIA container/product terms if deploying through NIM, Riva, NeMo containers, or other NVIDIA services. |
 | `omnilingual_asr` | Meta's `omnilingual-asr` package and model suite are documented as Apache-2.0. | The Meta Omnilingual ASR code and models are Apache-2.0; Meta documents the accompanying corpus as CC-BY-4.0. | The model license is permissive. If you use or redistribute corpus data, handle the corpus license separately. |
 | `moonshine`, `moonshine_streaming` | Uses Hugging Face Transformers in VoiceSTT; check the installed Transformers version and any model custom code. | The default `UsefulSensors/moonshine-streaming-medium` model card lists MIT. | English Moonshine Streaming weights are permissive. Non-default Moonshine variants may differ, so check the exact model card. |

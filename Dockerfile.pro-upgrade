@@ -1,4 +1,5 @@
-# Minimales Upgrade: installiert nur das Kroko-Pro-Wheel über das bestehende Free-Image
+# Enger Reparaturpfad; Voraussetzungen und Abnahme: build/BUILD.md
+# Installiert nur das Kroko-Pro-Wheel ueber das bestehende Runtime-Image.
 FROM selfhost/stt-voice:local
 
 COPY --from=selfhost/stt-voice:kroko-builder-pro \

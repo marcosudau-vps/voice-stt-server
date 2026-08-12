@@ -27,9 +27,13 @@ Wichtig: `stream=true` am OpenAI-Endpunkt streamt Ergebnisse während der Verarb
 ## 2. Aktueller Produktionsstand
 
 Die folgende Tabelle beschreibt den auf dem VPS geprüften Laufzeitstand vom
-01.08.2026, nicht die davon abweichenden Entwicklungsdefaults in der Root-Datei
+12.08.2026, nicht die davon abweichenden Entwicklungsdefaults in der Root-Datei
 `config.yaml`. Für Clients bleiben `hello`, `ready`, `/health` und
 `GET /api/config` maßgeblich.
+
+Build, Lizenzgrenzen und der konkrete VPS-Release sind unter
+[`build/BUILD.md`](../build/BUILD.md) beziehungsweise
+[`build/vps`](../build/vps/README.md) zentral dokumentiert.
 
 | Eigenschaft | Aktueller Wert |
 | --- | --- |
@@ -37,12 +41,12 @@ Die folgende Tabelle beschreibt den auf dem VPS geprüften Laufzeitstand vom
 | Betriebsmodus | ausschließlich CPU |
 | Compute-Type | `int8` |
 | Finale Engine | `kroko_onnx` |
-| Finales Modell | `Kroko-DE-Community-64-L-Streaming-001.data` |
+| Finales Modell | `Kroko-DE-Pro-16-L-Streaming-001.data` |
 | Realtime-Engine | `kroko_onnx` |
-| Realtime-Modell | dasselbe Kroko-Modell |
+| Realtime-Modell | dasselbe Pro-16-Kroko-Modell |
 | Modellfreigabe | eine gemeinsam genutzte Modellinstanz |
 | Wake-Word-Backend | OpenWakeWord |
-| Wake Word | `hey_jarvis` |
+| Wake Word | `Hey_Bro` aus der persistierten Runtime-Konfiguration; YAML-Baseline `hey_jarvis` |
 | Wake-Word-Sensitivität | `0.5` |
 | Wartezeit nach Wake Word | 7 Sekunden |
 | Follow-up-Fenster | 7 Sekunden |

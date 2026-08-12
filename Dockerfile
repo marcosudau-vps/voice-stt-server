@@ -1,3 +1,4 @@
+# Buildvarianten und Kroko-Lizenzgrenzen: build/BUILD.md
 FROM python:3.12-slim-bookworm AS kroko-builder
 
 ARG KROKO_VARIANT=free

@@ -128,6 +128,10 @@ python -m unittest -v tests.unit.test_kroko_onnx_engine
 python -m unittest -v tests.unit.test_realtime_streaming_transcription
 ```
 
+Build the matching Community or Pro runtime first by following the canonical
+[`build/BUILD.md`](../build/BUILD.md#kroko-builder-cli). The key does not
+change a Free wheel into a Pro runtime.
+
 The fast Kroko tests use fake runtime objects and do not install or import
 Kroko-ONNX. For a real-model Community smoke test, install Kroko-ONNX in the
 active environment and opt in:
@@ -141,9 +145,9 @@ $env:VOICESTT_KROKO_ONNX_NUM_THREADS = "1"
 python -m unittest -v tests.unit.test_kroko_onnx_engine.KrokoOnnxGoldenTranscriptionTests
 ```
 
-`VOICESTT_KROKO_ONNX_KEY`, `KROKO_ONNX_KEY`, or `KROKO_KEY` can be set for
-licensed Pro models. Do not store keys in command history, docs, generated
-reports, or committed files.
+`KROKO_API_KEY`, `VOICESTT_KROKO_ONNX_KEY`, `KROKO_ONNX_KEY`, or `KROKO_KEY`
+can be set for licensed Pro models. Do not store keys in command history,
+docs, generated reports, or committed files.
 
 Run the Omnilingual ASR contract tests:
 

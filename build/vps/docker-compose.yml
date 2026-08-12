@@ -1,0 +1,64 @@
+name: voice
+
+x-default-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "20m"
+    max-file: "5"
+
+services:
+  stt-voice:
+    build:
+      context: /home/marco/selfhost/apps/services/voice/voice-stt-server
+      dockerfile: Dockerfile
+      target: cpu
+      args:
+        KROKO_VARIANT: pro
+    image: selfhost/stt-voice:local
+    container_name: stt-voice
+    init: true
+    restart: unless-stopped
+    env_file:
+      - /home/marco/selfhost/secrets/stt-voice.env
+      - /home/marco/selfhost/secrets/kroko.env
+    environment:
+      VOICESTT_CONFIG: /config/stt-config.yaml
+      VOICESTT_CPU_ONLY: "1"
+      VOICESTT_OFFLINE_MODELS: "1"
+      VOICESTT_FASTER_WHISPER_MODEL_ROOT: /models/ctranslate2
+      VOICESTT_KROKO_MODEL_ROOT: /models/kroko
+      VOICESTT_OPENWAKEWORD_MODEL_ROOT: /models/openwakeword
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      OMP_NUM_THREADS: "4"
+      CT2_USE_EXPERIMENTAL_PACKED_GEMM: "1"
+    command:
+      - python
+      - -m
+      - VoiceSTT_server.server
+      - --config
+      - /config/stt-config.yaml
+    volumes:
+      - /home/marco/selfhost/stacks/services/voice/stt-config.yaml:/config/stt-config.yaml:ro
+      - /home/marco/selfhost_outsourced/models/stt/ctranslate2:/models/ctranslate2:ro
+      - /home/marco/selfhost_outsourced/models/stt/kroko_asr:/models/kroko:ro
+      - /home/marco/selfhost_outsourced/models/openwakeword:/models/openwakeword:ro
+      - /home/marco/selfhost/data/services/voice/stt-voice:/data
+    ports:
+      - "127.0.0.1:2000:8010"
+    networks:
+      - selfhost-ai
+    mem_limit: 6g
+    cpus: 5.0
+    pids_limit: 512
+    logging: *default-logging
+    healthcheck:
+      test: ["CMD", "python", "-c", "import json, urllib.request; result=json.load(urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=5)); assert result.get('ready') and result.get('ok')"]
+      interval: 30s
+      timeout: 10s
+      start_period: 180s
+      retries: 5
+
+networks:
+  selfhost-ai:
+    external: true

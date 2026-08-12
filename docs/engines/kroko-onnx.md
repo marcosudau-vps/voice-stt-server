@@ -5,6 +5,11 @@
 Kroko/Banafo streaming `.data` models. The adapter is lazy-loaded, so normal
 VoiceSTT installs and tests do not require Kroko-ONNX.
 
+Build and licensing procedures are centralized in
+[`build/BUILD.md`](../../build/BUILD.md#kroko-im-detail). This engine page
+describes runtime configuration and tests; if a command here conflicts with
+the central build guide, the build guide is authoritative.
+
 ## Engine Names
 
 - `kroko_onnx`
@@ -21,7 +26,7 @@ helper:
 
 ```bash
 python -m pip install "VoiceSTT[kroko-builder,silero-onnx-cpu]"
-stt-install-kroko --build
+stt-install-kroko --build --variant free
 ```
 
 The `kroko-builder` extra builds and installs Kroko-ONNX. The
@@ -60,7 +65,7 @@ If the default builder cache is not writable, use a project-local work
 directory:
 
 ```powershell
-stt-install-kroko --build --work-dir .\kroko-builder-work
+stt-install-kroko --build --variant free --work-dir .\kroko-builder-work
 ```
 
 If the default builder cache is not writable and `--work-dir` is not set, the
@@ -242,9 +247,9 @@ This script constructs `AudioToTextRecorder`, so it needs both Kroko-ONNX and a
 working recorder VAD backend in the same environment. The install command above
 includes `silero-onnx-cpu` for that reason.
 
-`VOICESTT_KROKO_ONNX_KEY`, `KROKO_ONNX_KEY`, or `KROKO_KEY` may be used for
-licensed Pro-only checks. Keep those values out of committed files, shell logs,
-and generated reports.
+`KROKO_API_KEY`, `KROKO_ONNX_KEY`, `VOICESTT_KROKO_ONNX_KEY`, or `KROKO_KEY`
+may be used for licensed Pro-only checks. Keep those values out of committed
+files, shell logs, and generated reports.
 
 ## Troubleshooting
 
@@ -253,6 +258,12 @@ and generated reports.
 - Missing model errors name the exact `.data` file path VoiceSTT tried.
 - Free Kroko wheels cannot load Pro `.data` models; the native error can look
   like a payload parsing or block-size mismatch.
+- A key alone does not turn a Free wheel into a Pro runtime. Rebuild with
+  `stt-install-kroko --build --variant pro` or Docker
+  `KROKO_VARIANT=pro` as documented in the central build guide.
+- The validated VPS runtime must share one Pro-16 recognizer between final and
+  realtime; see [`build/vps`](../../build/vps/README.md). This is a documented
+  server/runtime constraint, not a general limit of the adapter API.
 - CUDA runs require both CUDA-capable hardware and a Kroko-ONNX build with CUDA
   provider support.
 - On Windows, prefer the helper's `cross-platform-builds` wheel workflow over a

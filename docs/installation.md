@@ -3,6 +3,10 @@
 VoiceSTT uses install extras so each environment can install only the
 transcription engines and wake-word backends it needs.
 
+The canonical package, Docker and Kroko build procedures are maintained in
+[`build/BUILD.md`](../build/BUILD.md). This page focuses on Python install
+extras and supported environments.
+
 Recommended default local Whisper install:
 
 ```bash
@@ -85,7 +89,7 @@ python -m pip install "VoiceSTT[whisper-cpp,openwakeword]"
 
 ```bash
 python -m pip install "VoiceSTT[kroko-builder,silero-onnx-cpu]"
-stt-install-kroko --build
+stt-install-kroko --build --variant free
 ```
 
 The `silero-onnx-cpu` extra is not needed to build Kroko-ONNX itself, but
@@ -107,7 +111,7 @@ verify that Docker Desktop's engine is running. If the default builder cache is
 not writable, use a project-local work directory:
 
 ```powershell
-stt-install-kroko --build --work-dir .\kroko-builder-work
+stt-install-kroko --build --variant free --work-dir .\kroko-builder-work
 ```
 
 If the default builder cache is not writable and `--work-dir` is not set, the
@@ -121,6 +125,9 @@ python -c "from huggingface_hub import hf_hub_download; hf_hub_download(repo_id=
 ```
 
 See [engines/kroko-onnx.md](engines/kroko-onnx.md).
+All builder options, Community/Pro differences, Docker variants and rollback
+requirements are centralized in
+[`build/BUILD.md`](../build/BUILD.md#kroko-builder-cli).
 
 ## VAD Dependencies
 
@@ -213,7 +220,7 @@ Install only the engine stack you plan to use:
 | `granite_speech` | `python -m pip install "VoiceSTT[granite]"` | Downloads Hugging Face model files automatically. |
 | `qwen3_asr` | `python -m pip install -U "VoiceSTT[qwen]"` | Downloads Qwen model files through the Qwen ASR package. |
 | `cohere_transcribe` | `python -m pip install "VoiceSTT[cohere]"` | Downloads Hugging Face model files; gated model access may be required. |
-| `kroko_onnx` | `python -m pip install "VoiceSTT[kroko-builder,silero-onnx-cpu]"`, then `stt-install-kroko --build` | Public Community models can auto-download or be downloaded with `huggingface_hub`; Pro/private models need an existing `.data` path, direct URL, or explicit repo/token options. `silero-onnx-cpu` provides the local VAD backend needed by recorder-based smoke tests and live microphone use. |
+| `kroko_onnx` | `python -m pip install "VoiceSTT[kroko-builder,silero-onnx-cpu]"`, then `stt-install-kroko --build --variant free` or `--variant pro` | Public Community models can auto-download or be downloaded with `huggingface_hub`; Pro/private models need a Pro runtime, a licensed `.data` file and a runtime key. `silero-onnx-cpu` provides the local VAD backend needed by recorder-based smoke tests and live microphone use. |
 
 Per-engine setup lives in [transcription-engines.md](transcription-engines.md)
 and the `docs/engines/` pages.

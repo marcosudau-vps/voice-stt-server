@@ -560,11 +560,15 @@ More test details are in [testing.md](testing.md).
 
 ## Deployment Notes
 
+- Treat [`build/BUILD.md`](../build/BUILD.md) as the canonical image/build
+  reference. The concrete Pro-enabled VPS release is documented separately in
+  [`build/vps`](../build/vps/README.md).
 - Use Linux or WSL2 for CUDA-heavy engines such as Parakeet, Qwen vLLM, and
   larger Transformers models. Omnilingual ASR currently needs Linux/WSL2 with
   Python 3.11.x.
 - Install Kroko-ONNX with `VoiceSTT[kroko-builder,silero-onnx-cpu]` and
-  `stt-install-kroko --build` before selecting `kroko_onnx` for recorder-based
+  `stt-install-kroko --build --variant free` (or the explicitly licensed Pro
+  variant) before selecting `kroko_onnx` for recorder-based
   server use. On Windows, use Python 3.12 x64 and start Docker Desktop first.
 - Keep model caches on persistent storage so restarts do not redownload models.
 - Put the server behind a reverse proxy when exposing it beyond localhost.

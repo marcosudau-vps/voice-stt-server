@@ -3,6 +3,19 @@
 Diese Regeln gelten für Arbeiten im gesamten Repository. Spezifischere
 `AGENTS.md`-Dateien in Unterordnern können sie für ihren Bereich ergänzen.
 
+## Build und Deployment
+
+Die kanonische, allgemeingueltige Buildreferenz ist
+[`build/BUILD.md`](build/BUILD.md). Marcos servergebundene Auspraegung liegt
+ausschliesslich unter [`build/vps`](build/vps/README.md). Buildvarianten,
+Compose- oder VPS-Pfade nicht parallel in weiteren Dokumenten als neue
+Wahrheitsquelle pflegen; dort nur auf diese zentralen Dateien verweisen.
+
+Secrets, Modelle, Wheels, Laufzeitdaten und erzeugte Release-Logs duerfen nicht
+committet werden. Kroko Pro erfordert einen expliziten Pro-Build; ein
+Runtime-Key allein ersetzt `--variant pro` beziehungsweise
+`KROKO_VARIANT=pro` nicht.
+
 ## Größere Änderungsaktionen
 
 Vor jeder größeren Änderung an Architektur, öffentlichen Protokollen oder APIs,

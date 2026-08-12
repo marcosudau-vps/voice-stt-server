@@ -20,6 +20,8 @@ die aktuelle Dokumentation eingeordnet:
 
 ## Einstiegspunkte
 
+- [Zentraler Build und Deployment](../build/BUILD.md)
+- [Marcos VPS-Deployment](../build/vps/README.md)
 - [Quick Start](quick-start.md)
 - [Installation](installation.md)
 - [Konfiguration](configuration.md)

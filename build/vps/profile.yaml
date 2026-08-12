@@ -6,9 +6,9 @@ components:
   - slug: stt
     name: Speech-to-Text
     status: active
-    app_dir: /home/marco/selfhost/apps/services/voice/stt-voice
+    app_dir: /home/marco/selfhost/apps/services/voice/voice-stt-server
     data_dir: /home/marco/selfhost/data/services/voice/stt-voice
-    config_file: /home/marco/selfhost/apps/services/voice/stt-voice/config.yaml
+    config_file: /home/marco/selfhost/stacks/services/voice/stt-config.yaml
   - slug: tts
     name: Text-to-Speech
     status: planned

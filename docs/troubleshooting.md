@@ -1,5 +1,8 @@
 # Troubleshooting
 
+Build-, Docker- und Kroko-Pro-Probleme sind zusaetzlich in der zentralen
+[`build/BUILD.md`](../build/BUILD.md#fehlerdiagnose) erfasst.
+
 This page lists common VoiceSTT setup and runtime issues. Engine-specific
 notes live under [engines/](engines/) and the full install guide lives in
 [installation.md](installation.md).
@@ -42,7 +45,7 @@ that backend's package:
 | `granite_speech`, `moonshine`, `cohere_transcribe` | `transformers`, `torch` |
 | `qwen3_asr` | `qwen-asr` |
 | `omnilingual_asr` | `VoiceSTT[omnilingual]` on Linux/WSL2 with Python 3.11.x, plus a compatible PyTorch stack |
-| `kroko_onnx` | `VoiceSTT[kroko-builder,silero-onnx-cpu]`, then `stt-install-kroko --build` for recorder-based smoke tests and live microphone use |
+| `kroko_onnx` | `VoiceSTT[kroko-builder,silero-onnx-cpu]`, then `stt-install-kroko --build --variant free` or the licensed Pro variant for recorder-based smoke tests and live microphone use |
 
 ## Audio Device Problems
 

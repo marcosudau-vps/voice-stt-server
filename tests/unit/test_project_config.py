@@ -21,6 +21,7 @@ class ProjectConfigTests(TestCase):
         self.assertEqual(payload["version"], 1)
         self.assertIn("settings", payload)
         self.assertIn("deployment", payload)
+        self.assertEqual(payload["deployment"]["kroko_variant"], "free")
         generated_path_keys = {
             "data_root_path",
             "request_log_path",
@@ -38,6 +39,10 @@ class ProjectConfigTests(TestCase):
         self.assertEqual(payload["settings"]["data_root_path"], "/data")
         compose = yaml.safe_load(
             (root / "docker-compose.yml").read_text(encoding="utf-8")
+        )
+        self.assertEqual(
+            compose["services"]["server"]["build"]["args"]["KROKO_VARIANT"],
+            "${VOICESTT_KROKO_VARIANT:-free}",
         )
         data_mount = next(
             mount
@@ -85,6 +90,7 @@ class ProjectConfigTests(TestCase):
                 }
             deployment = {
                 "image": "test-image",
+                "kroko_variant": "pro",
                 "server_port": 9000,
                 "browser_port": 9001,
                 "cpu_threads": 3,
@@ -98,9 +104,30 @@ class ProjectConfigTests(TestCase):
             environment = build_compose_environment(deployment, root)
 
             self.assertEqual(environment["VOICESTT_IMAGE"], "test-image")
+            self.assertEqual(environment["VOICESTT_KROKO_VARIANT"], "pro")
             self.assertEqual(environment["VOICESTT_PORT"], "9000")
             self.assertEqual(environment["VOICESTT_CPU_THREADS"], "3")
             self.assertEqual(
                 environment["VOICESTT_DATA_PATH"],
                 str((root / "runtime-data").resolve()),
             )
+
+    def test_compose_rejects_unknown_kroko_variant(self):
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            candidates = {}
+            for name in ("faster_whisper", "kroko", "openwakeword"):
+                model_path = root / "models" / name
+                model_path.mkdir(parents=True)
+                candidates[name] = {
+                    "path": "auto",
+                    "candidates": [str(model_path)],
+                }
+            deployment = {
+                "kroko_variant": "licensed",
+                "runtime_data": {"path": "./data", "candidates": []},
+                "model_paths": candidates,
+            }
+
+            with self.assertRaisesRegex(ValueError, "free.*pro"):
+                build_compose_environment(deployment, root)

@@ -118,6 +118,8 @@ settings:
 deployment:
   compose_project: voice
   image: voicestt-cpu:local
+  # Portabler Standard. Lizenzierte Deployments muessen pro explizit setzen.
+  kroko_variant: free
   server_port: 8010
   browser_port: 8081
   cpu_threads: 4

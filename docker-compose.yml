@@ -3,6 +3,8 @@ services:
     build:
       context: .
       target: cpu
+      args:
+        KROKO_VARIANT: ${VOICESTT_KROKO_VARIANT:-free}
     image: ${VOICESTT_IMAGE:?Starte Compose über tools/compose.py}
     container_name: voicestt-server
     restart: unless-stopped

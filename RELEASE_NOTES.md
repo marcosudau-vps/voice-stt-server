@@ -4,6 +4,11 @@
 
 ### Added
 
+- Added `build/BUILD.md` as the canonical project-wide reference for Python
+  packaging, Docker builds, Kroko Community/Pro variants, testing, deployment
+  acceptance and rollback.
+- Added a separate `build/vps` area with secret-free snapshots of the active
+  server stack, a Pro-aware release script and reproducible build-area helpers.
 - Added log protocol version 2 with SQLite-first replay/live delivery,
   committed cursor metadata, channel-/session-aware retention watermarks,
   retention-gap and cursor-ahead semantics, and explicit event-store
@@ -35,6 +40,16 @@
 
 ### Changed
 
+- The portable Compose launcher now passes an explicit Kroko build variant
+  from `deployment.kroko_variant`; its project default remains `free`.
+- The VPS release path now defaults to Kroko Pro, verifies the Pro key/model
+  prerequisites without exposing secrets, validates the active Pro-16 model
+  and shared recognizer in `/health`, and restores persisted runtime
+  configuration together with the previous image on rollback.
+- The productive VPS profile uses one shared
+  `Kroko-DE-Pro-16-L-Streaming-001.data` recognizer for final and realtime
+  transcription because two licensed recognizers caused a reproducible native
+  exit 139 with the validated runtime.
 - Audit, transcription, and system `*_logging_enabled` switches now control
   only optional JSONL/stdout mirrors. Performance uses separate source and
   mirror switches: `performance_logging_enabled` controls generation and

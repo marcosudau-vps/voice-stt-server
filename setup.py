@@ -64,7 +64,12 @@ For live Kroko-ONNX usage, install the builder helper and then build Kroko in
 the same Python environment:
 
     pip install "voicestt[kroko-builder,silero-onnx-cpu]"
-    stt-install-kroko --build
+    stt-install-kroko --build --variant free
+
+The complete build reference, including the required distinction between
+Community and licensed Pro builds, is maintained at:
+
+    https://github.com/marcosudau-vps/voice-stt-server/blob/main/build/BUILD.md
 
 The silero-onnx-cpu extra is not needed to build Kroko-ONNX itself, but
 recorder-based Kroko smoke tests and live AudioToTextRecorder use need a local
@@ -83,7 +88,7 @@ that the Docker CLI is installed.
 If the default builder cache is not writable, use a project-local work
 directory:
 
-    stt-install-kroko --build --work-dir .\\kroko-builder-work
+    stt-install-kroko --build --variant free --work-dir .\\kroko-builder-work
 
 The kroko-builder extra includes huggingface_hub. Download a public Community
 model after the builder finishes:
@@ -282,7 +287,7 @@ setuptools.setup(
     description="A fast Voice Activity Detection and Transcription System",
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/KoljaB/RealTimeSTT",
+    url="https://github.com/marcosudau-vps/voice-stt-server",
     packages=setuptools.find_packages(
         include=[
             "VoiceSTT",

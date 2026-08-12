@@ -75,3 +75,4 @@ Begründung im Archiv erhalten.
 | Sitzungslokale Wake-Word-Konfiguration | 25.07.2026 | Abgeschlossen | [session-wakeword](session-wakeword/) |
 | Neues Logging- und Event-System | 31.07.2026 | Abgeschlossen | [neues_logging_event_system](neues_logging_event_system/) |
 | SQLite-first Eventstream und Admin-Logvertrag | 02.08.2026 | Abgeschlossen | [sqlite_first_admin_eventstream](sqlite_first_admin_eventstream/) |
+| Zentrale Build- und VPS-Deploymentdokumentation | 12.08.2026 | Prüfung offen | [build_vps_dokumentation](build_vps_dokumentation/) |

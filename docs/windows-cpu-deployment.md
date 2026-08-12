@@ -179,6 +179,10 @@ library-level recorder backend and is not selectable in this server UI.
 
 ## Docker on Windows
 
+The canonical Docker stage, Kroko variant and packaging explanation is in
+[`build/BUILD.md`](../build/BUILD.md). This section only covers the tested
+Windows host workflow.
+
 The image has one stage named `cpu`, installs PyTorch from the CPU wheel index,
 and declares no host devices or accelerator runtime. Models are read-only bind
 mounts. Start it through the portable configuration launcher:

@@ -116,8 +116,14 @@ def build_compose_environment(
         )
 
     data_path = discover_data_path(deployment, project_root)
+    kroko_variant = str(deployment.get("kroko_variant", "free")).strip().lower()
+    if kroko_variant not in {"free", "pro"}:
+        raise ValueError(
+            "deployment.kroko_variant muss 'free' oder 'pro' sein."
+        )
     environment.update({
         "VOICESTT_IMAGE": str(deployment.get("image", "voicestt-cpu:local")),
+        "VOICESTT_KROKO_VARIANT": kroko_variant,
         "VOICESTT_PORT": str(deployment.get("server_port", 8010)),
         "VOICESTT_BROWSER_PORT": str(deployment.get("browser_port", 8081)),
         "VOICESTT_CPU_THREADS": str(deployment.get("cpu_threads", 4)),
