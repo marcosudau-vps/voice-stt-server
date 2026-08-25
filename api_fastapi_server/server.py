@@ -2942,6 +2942,18 @@ class RecorderBackedRealtimeSession:
         """The activation configuration this session actually resolved to."""
         return self.activation_config.public_dict()
 
+    def _effective_activation_settings(self):
+        """Returns the complete settings view latched by a new activation.
+
+        The controller detaches and freezes this value. Later session-setting
+        changes can therefore affect only a later activation.
+        """
+        return {
+            "activationConfig": self.activation_config_dict(),
+            "sessionConfig": self.session_config_dict(),
+            "sessionSettings": self.public_settings(),
+        }
+
     # -- activation control -------------------------------------------------
 
     TRIGGER_ACTIONS = ("activate", "extend", "finish", "cancel")
@@ -2985,6 +2997,7 @@ class RecorderBackedRealtimeSession:
             return {}
         return {
             "activationId": activation_id,
+            "activationSequence": snapshot.get("activationSequence"),
             "primarySource": snapshot.get("primarySource"),
             "sources": list(snapshot.get("sources") or ()),
         }
@@ -3070,7 +3083,9 @@ class RecorderBackedRealtimeSession:
                 return ack
 
             if action == "activate":
-                decision = self._activation.activate(source)
+                decision = self._activation.activate(
+                    source, self._effective_activation_settings()
+                )
             elif action == "extend":
                 decision = self._activation.extend(source)
             elif action == "finish":
@@ -3113,6 +3128,7 @@ class RecorderBackedRealtimeSession:
         generation = snapshot.get("generation")
         window_open = bool(snapshot.get("windowOpen"))
 
+        input_gate_closed = True
         if window_open:
             open_id = snapshot.get("activationId")
             if open_id:
@@ -3127,17 +3143,49 @@ class RecorderBackedRealtimeSession:
                         exc_info=True,
                     )
         else:
-            closed_id = snapshot.get("closedActivationId")
+            closed_id = (
+                snapshot.get("activationId")
+                or snapshot.get("closedActivationId")
+            )
             try:
-                self.recorder.close_controlled_activation(
+                closed_now = self.recorder.close_controlled_activation(
                     closed_id, generation=generation
                 )
+                if not closed_now and hasattr(
+                    self.recorder, "controlled_activation_state"
+                ):
+                    input_gate_closed = not bool(
+                        self.recorder.controlled_activation_state().get("active")
+                    )
             except Exception:
+                input_gate_closed = False
                 LOGGER.debug(
                     "Controlled Gate konnte für %s nicht geschlossen werden",
                     self.session_id,
                     exc_info=True,
                 )
+
+        # ``closing_input`` is a foreground barrier, not a transcription
+        # phase. The gate closes first; an active recorder segment is then
+        # stopped and handed to the existing final pipeline. Only after those
+        # input-side effects have happened may the controller publish idle.
+        if snapshot.get("phase") == "closing_input":
+            if not input_gate_closed:
+                self._arm_activation_timer_locked(snapshot)
+                return activation_id
+            try:
+                if bool(getattr(self.recorder, "is_recording", False)):
+                    self.recorder.flush_buffered_audio()
+            except Exception:
+                LOGGER.exception(
+                    "Controlled Input konnte für %s nicht geschlossen werden",
+                    self.session_id,
+                )
+                self._arm_activation_timer_locked(snapshot)
+                return activation_id
+            completed = self._activation.input_closed()
+            if completed.accepted:
+                snapshot = completed.snapshot
 
         self._arm_activation_timer_locked(snapshot)
 
@@ -3151,8 +3199,6 @@ class RecorderBackedRealtimeSession:
     def _activation_event_name(action, reason):
         if reason == "activated":
             return "activation_started"
-        if reason == "merged":
-            return "activation_extended"
         if reason == "extended":
             return "activation_extended"
         if reason in {"finished", "cancelled", "timed_out"}:
@@ -3172,6 +3218,10 @@ class RecorderBackedRealtimeSession:
         fields = {
             "activationId": activation_id,
             "generation": snapshot.get("generation"),
+            "activationSequence": (
+                snapshot.get("closedActivationSequence")
+                or snapshot.get("activationSequence")
+            ),
             "primarySource": (
                 snapshot.get("primarySource")
                 or snapshot.get("closedPrimarySource")
@@ -3805,6 +3855,8 @@ class RecorderBackedRealtimeSession:
     def _on_recording_start(self):
         segment = None
         segment_id = None
+        recording_admitted = False
+        stop_unadmitted_recording = False
         with self.lock:
             self._wakeword_followup_generation += 1
             self._clear_recorder_followup_gate_locked()
@@ -3823,19 +3875,58 @@ class RecorderBackedRealtimeSession:
                     },
                 )
             else:
-                self.reject_current_recording = False
-                self.recording_sample_count = 0
-                self._force_finalize_in_progress = False
-                self._wakeword_voice_window = False
-                segment_id = self.segment_state.current()
-                segment = self.timeline.mark_recording_started(segment_id)
+                activation_admitted = True
                 if self._activation is not None:
-                    decision = self._activation.recording_started()
-                    if decision.changed:
-                        # Speech has started, so the "waiting for first speech"
-                        # deadline is over; the controller cleared it and the
-                        # armed timer must be invalidated with it.
-                        self._arm_activation_timer_locked(decision.snapshot)
+                    current_activation = self._activation.snapshot()
+                    recording_activation = None
+                    if hasattr(
+                        self.recorder,
+                        "controlled_recording_activation_state",
+                    ):
+                        recording_activation = (
+                            self.recorder.controlled_recording_activation_state()
+                        )
+                    if (
+                        recording_activation
+                        and recording_activation.get("activationId")
+                        and (
+                            recording_activation.get("activationId")
+                            != current_activation.get("activationId")
+                            or recording_activation.get("generation")
+                            != current_activation.get("generation")
+                        )
+                    ):
+                        activation_admitted = False
+                    else:
+                        decision = self._activation.recording_started()
+                        activation_admitted = decision.accepted
+                        if decision.changed:
+                            # Speech has started, so the initial deadline is
+                            # over; invalidate the timer armed for it.
+                            self._arm_activation_timer_locked(decision.snapshot)
+                if activation_admitted:
+                    recording_admitted = True
+                    self.reject_current_recording = False
+                    self.recording_sample_count = 0
+                    self._force_finalize_in_progress = False
+                    self._wakeword_voice_window = False
+                    segment_id = self.segment_state.current()
+                    segment = self.timeline.mark_recording_started(segment_id)
+                else:
+                    # The gate-close barrier won a race after the recorder had
+                    # observed the old open gate. Do not resurrect a segment
+                    # after the controller has published idle.
+                    self.reject_current_recording = True
+                    stop_unadmitted_recording = True
+                    self.service.deactivate_speaker(self.session_id)
+        if stop_unadmitted_recording:
+            try:
+                self.recorder.flush_buffered_audio()
+            except Exception:
+                LOGGER.exception(
+                    "Nicht zugelassene Aufnahme konnte für %s nicht gestoppt werden",
+                    self.session_id,
+                )
         if segment is not None:
             self._publish_timeline_event(
                 "recording_started",
@@ -3844,7 +3935,9 @@ class RecorderBackedRealtimeSession:
                 segment=segment,
                 preRecordingBuffer=segment.get("preRecordingBuffer"),
             )
-        self.publish_status("recording")
+        self.publish_status(
+            "recording" if recording_admitted else self._waiting_state_locked()
+        )
 
     def _on_recording_stop(self):
         self._trim_recorded_audio_queue()
@@ -4084,7 +4177,9 @@ class RecorderBackedRealtimeSession:
                 # A wake word is a trigger like any other: it goes through the
                 # controller and reaches the recorder only via the gate. It
                 # must never open a recording on its own.
-                decision = self._activation.activate("wake_word")
+                decision = self._activation.activate(
+                    "wake_word", self._effective_activation_settings()
+                )
                 self._apply_activation_decision_locked(
                     "activate", decision, published
                 )

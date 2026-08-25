@@ -1,37 +1,35 @@
-"""Server-authoritative activation state machine.
+"""Server-authoritative foreground activation state machine.
 
-One session owns exactly one controller. It is the single authority that
-decides when an activation window is open, which trigger sources contributed to
-it, and when it ends. The recorder gate, the timeout scheduler and the emitted
-activation events all follow this object; none of them may decide on their own.
+One session owns exactly one controller. The controller serialises trigger
+commands, recorder callbacks and timeout callbacks and exposes the five
+canonical foreground phases. Final transcription work is deliberately not a
+phase of this machine: after input has been closed safely, the foreground is
+idle and may admit the next activation while older work drains in the
+background.
 
-Two counters are deliberately kept apart:
-
-``generation``
-    Increases only when a **new** activation opens. It stays stable for the
-    whole life of one activation and is therefore what belongs into events and
-    into the recorder gate binding.
-
-``version``
-    Increases on **every** state change, including merges and phase changes. It
-    is what a scheduled timeout carries so that any state change invalidates a
-    timer that was armed earlier.
-
-All deadlines use ``time.monotonic``. Wall-clock time must never influence a
-timeout, so that a system clock change cannot end or prolong an activation.
+``activationSequence`` (also exposed as the compatibility field
+``generation``) increases only when a new activation is admitted. ``version``
+increases on every state change and invalidates stale timeout callbacks.
+Deadlines are monotonic.
 """
 
+from copy import deepcopy
 from dataclasses import dataclass
 import threading
 import time
+from types import MappingProxyType
 import uuid
 
 
-INACTIVE = "inactive"
+IDLE = "idle"
 WAITING_FIRST_SPEECH = "waiting_first_speech"
 SEGMENT_ACTIVE = "segment_active"
 FOLLOWUP_WAIT = "followup_wait"
-FINALIZING = "finalizing"
+CLOSING_INPUT = "closing_input"
+
+# Compatibility import for callers that used the old constant name. It is an
+# alias, not a sixth phase value.
+INACTIVE = IDLE
 
 #: Phases in which the recorder gate must be open.
 OPEN_WINDOW_PHASES = frozenset(
@@ -43,6 +41,32 @@ WAKE_WORD_SOURCE = "wake_word"
 ACTIVATION_SOURCES = frozenset({MANUAL_SOURCE, WAKE_WORD_SOURCE})
 
 
+def _freeze(value):
+    """Returns a recursively immutable, detached settings value."""
+    if isinstance(value, dict):
+        return MappingProxyType(
+            {key: _freeze(item) for key, item in value.items()}
+        )
+    if isinstance(value, list):
+        return tuple(_freeze(item) for item in value)
+    if isinstance(value, tuple):
+        return tuple(_freeze(item) for item in value)
+    if isinstance(value, set):
+        return frozenset(_freeze(item) for item in value)
+    return deepcopy(value)
+
+
+def _thaw(value):
+    """Returns a defensive plain-data copy of a frozen settings value."""
+    if isinstance(value, MappingProxyType):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(item) for item in value]
+    if isinstance(value, frozenset):
+        return {_thaw(item) for item in value}
+    return deepcopy(value)
+
+
 @dataclass(frozen=True)
 class ActivationDecision:
     accepted: bool
@@ -52,13 +76,7 @@ class ActivationDecision:
 
 
 class ActivationController:
-    """Serial state machine for server-authoritative activation windows.
-
-    The object synchronises itself. It is reached from the WebSocket coroutine,
-    from recorder callback threads and from the activation timeout thread, so
-    relying on the caller to serialise access would be a race waiting to
-    happen.
-    """
+    """Thread-safe authority for one session's foreground activation."""
 
     def __init__(
         self,
@@ -77,13 +95,11 @@ class ActivationController:
 
         manual_trigger_enabled = bool(manual_trigger_enabled)
         wake_word_trigger_enabled = bool(wake_word_trigger_enabled)
-
         if not manual_trigger_enabled and not wake_word_trigger_enabled:
             raise ValueError("at least one activation trigger must be enabled")
 
         self.manual_trigger_enabled = manual_trigger_enabled
         self.wake_word_trigger_enabled = wake_word_trigger_enabled
-
         self.initial_speech_timeout = self._positive(
             "initial_speech_timeout", initial_speech_timeout
         )
@@ -93,22 +109,20 @@ class ActivationController:
         self.extension_seconds = self._positive(
             "extension_seconds", extension_seconds
         )
-
         self._clock = clock or time.monotonic
         self._id_factory = id_factory or (lambda: uuid.uuid4().hex)
         self._lock = threading.RLock()
 
-        self._generation = 0
+        self._activation_sequence = 0
         self._version = 0
         self._activation_id = None
         self._primary_source = None
-        self._phase = INACTIVE
-        self._sources = []
+        self._effective_settings = _freeze({})
+        self._phase = IDLE
         self._deadline = None
         self._pending_extension = 0.0
         self._segment_count = 0
-
-    # -- construction helpers ------------------------------------------------
+        self._close_reason = None
 
     @staticmethod
     def _positive(name, value):
@@ -116,8 +130,6 @@ class ActivationController:
         if number <= 0:
             raise ValueError(f"{name} must be > 0")
         return number
-
-    # -- read-only views -----------------------------------------------------
 
     @property
     def manual_enabled(self):
@@ -140,62 +152,55 @@ class ActivationController:
         return False
 
     def _snapshot_locked(self):
+        sources = [self._primary_source] if self._primary_source else []
         return {
             "activationId": self._activation_id,
-            "generation": self._generation,
+            "activationSequence": self._activation_sequence,
+            # Gate generation is retained until the v2 wire migration. It is
+            # the same session-increasing activation identity.
+            "generation": self._activation_sequence,
             "version": self._version,
             "primarySource": self._primary_source,
-            "sources": list(self._sources),
+            "sources": sources,
+            "effectiveSettings": _thaw(self._effective_settings),
             "phase": self._phase,
             "state": self._phase,
             "deadline": self._deadline,
             "pendingExtensionSeconds": self._pending_extension,
             "segments": self._segment_count,
             "windowOpen": self._phase in OPEN_WINDOW_PHASES,
-            "active": self._activation_id is not None,
+            "active": self._phase != IDLE,
         }
 
     def snapshot(self):
         with self._lock:
             return self._snapshot_locked()
 
-    # -- transitions ---------------------------------------------------------
-
-    def activate(self, source):
-        """Opens an activation, or merges an additional source into a running one.
-
-        The collision rule of the specification lives here: the *first* trigger
-        owns ``primarySource`` and a second trigger inside the same window must
-        never create a second activation.
-        """
+    def activate(self, source, effective_settings=None):
+        """Admits a new activation only while the foreground is idle."""
         with self._lock:
+            if source not in ACTIVATION_SOURCES:
+                return ActivationDecision(
+                    False, "trigger_disabled", self._snapshot_locked()
+                )
+            if self._phase != IDLE:
+                return ActivationDecision(
+                    False, "activation_locked", self._snapshot_locked()
+                )
             if not self._source_enabled(source):
                 return ActivationDecision(
                     False, "trigger_disabled", self._snapshot_locked()
                 )
 
-            if self._phase in OPEN_WINDOW_PHASES:
-                changed = source not in self._sources
-                if changed:
-                    self._sources.append(source)
-                    self._version += 1
-                return ActivationDecision(
-                    True,
-                    "merged" if changed else "already_active",
-                    self._snapshot_locked(),
-                    changed,
-                )
-
-            # inactive, or finalizing a previous activation: a trigger opens a
-            # genuinely new activation with a new id and a new generation.
             self._activation_id = self._id_factory()
+            self._activation_sequence += 1
             self._primary_source = source
+            self._effective_settings = _freeze(effective_settings or {})
             self._phase = WAITING_FIRST_SPEECH
-            self._sources = [source]
             self._deadline = self._clock() + self.initial_speech_timeout
             self._pending_extension = 0.0
             self._segment_count = 0
-            self._generation += 1
+            self._close_reason = None
             self._version += 1
             return ActivationDecision(
                 True, "activated", self._snapshot_locked(), True
@@ -211,11 +216,7 @@ class ActivationController:
                 return ActivationDecision(
                     False, "not_active", self._snapshot_locked()
                 )
-            if source not in self._sources:
-                self._sources.append(source)
             if self._phase == SEGMENT_ACTIVE:
-                # While speech is being recorded there is no deadline to move;
-                # the extension is banked and applied to the follow-up window.
                 self._pending_extension += self.extension_seconds
             else:
                 now = self._clock()
@@ -246,7 +247,11 @@ class ActivationController:
 
     def recording_ended(self):
         with self._lock:
-            if self._phase not in OPEN_WINDOW_PHASES:
+            if self._phase == CLOSING_INPUT:
+                return ActivationDecision(
+                    True, "input_closing", self._snapshot_locked()
+                )
+            if self._phase != SEGMENT_ACTIVE:
                 return ActivationDecision(
                     False, "not_active", self._snapshot_locked()
                 )
@@ -260,19 +265,12 @@ class ActivationController:
             )
 
     def finish(self, source):
-        with self._lock:
-            if not self._source_enabled(source):
-                return ActivationDecision(
-                    False, "trigger_disabled", self._snapshot_locked()
-                )
-            if self._phase not in OPEN_WINDOW_PHASES:
-                return ActivationDecision(
-                    False, "not_active", self._snapshot_locked()
-                )
-            snapshot = self._close_window_locked("finished")
-            return ActivationDecision(True, "finished", snapshot, True)
+        return self._begin_input_close(source, "finished")
 
     def cancel(self, source):
+        return self._begin_input_close(source, "cancelled")
+
+    def _begin_input_close(self, source, reason):
         with self._lock:
             if not self._source_enabled(source):
                 return ActivationDecision(
@@ -282,17 +280,26 @@ class ActivationController:
                 return ActivationDecision(
                     False, "not_active", self._snapshot_locked()
                 )
-            # A cancel discards the turn, so nothing is left to finalize.
-            snapshot = self._close_window_locked("cancelled", finalize=False)
-            return ActivationDecision(True, "cancelled", snapshot, True)
+            self._phase = CLOSING_INPUT
+            self._deadline = None
+            self._pending_extension = 0.0
+            self._close_reason = reason
+            self._version += 1
+            snapshot = self._snapshot_locked()
+            snapshot["closeReason"] = reason
+            return ActivationDecision(True, reason, snapshot, True)
+
+    def input_closed(self):
+        """Completes the close barrier after gate/recorder input is closed."""
+        with self._lock:
+            if self._phase != CLOSING_INPUT:
+                return ActivationDecision(
+                    False, "not_closing_input", self._snapshot_locked()
+                )
+            snapshot = self._clear_locked(close_reason=self._close_reason)
+            return ActivationDecision(True, "input_closed", snapshot, True)
 
     def expire(self, expected_version):
-        """Fires a scheduled timeout, if it is still the current one.
-
-        The caller passes the ``version`` it armed the timer with. Any state
-        change in between raises the version, so a stale timer is rejected
-        instead of ending an activation it never belonged to.
-        """
         with self._lock:
             if expected_version != self._version:
                 return ActivationDecision(
@@ -306,82 +313,53 @@ class ActivationController:
                 return ActivationDecision(
                     False, "not_due", self._snapshot_locked()
                 )
-            snapshot = self._close_window_locked("timed_out")
+            self._phase = CLOSING_INPUT
+            self._deadline = None
+            self._pending_extension = 0.0
+            self._close_reason = "timed_out"
+            self._version += 1
+            snapshot = self._snapshot_locked()
+            snapshot["closeReason"] = self._close_reason
             return ActivationDecision(True, "timed_out", snapshot, True)
 
-    def finalized(self):
-        """Marks the trailing transcription work of an activation as done."""
-        with self._lock:
-            if self._phase != FINALIZING:
-                return ActivationDecision(
-                    False, "not_finalizing", self._snapshot_locked()
-                )
-            snapshot = self._clear_locked()
-            return ActivationDecision(True, "finalized", snapshot, True)
-
     def reset(self):
-        """Drops any activation, whatever phase it is in.
-
-        Used for stream stop, session close and reconnect: an activation must
-        never survive into a new connection.
-        """
+        """Drops foreground state during stop, close or reconnect."""
         with self._lock:
-            if self._phase == INACTIVE and self._activation_id is None:
+            if self._phase == IDLE:
                 return ActivationDecision(
-                    True, "already_inactive", self._snapshot_locked()
+                    True, "already_idle", self._snapshot_locked()
                 )
             snapshot = self._clear_locked()
             return ActivationDecision(True, "reset", snapshot, True)
 
-    # -- internals -----------------------------------------------------------
-
-    def _close_window_locked(self, reason, finalize=True):
-        """Closes the activation window; the gate must close with it.
-
-        If the activation produced at least one segment, the activation stays
-        alive in ``finalizing`` so that the trailing final transcription can
-        still be correlated to its ``activationId``.
-        """
+    def _clear_locked(self, close_reason=None):
         closed_id = self._activation_id
         closed_primary = self._primary_source
-        closed_sources = list(self._sources)
-        segments = self._segment_count
-
-        self._deadline = None
-        self._pending_extension = 0.0
-
-        if finalize and segments > 0:
-            self._phase = FINALIZING
-            self._version += 1
-            snapshot = self._snapshot_locked()
-        else:
-            snapshot = self._clear_locked()
-
-        snapshot["closedActivationId"] = closed_id
-        snapshot["closedPrimarySource"] = closed_primary
-        snapshot["closedSources"] = closed_sources
-        snapshot["closedSegments"] = segments
-        snapshot["closeReason"] = reason
-        return snapshot
-
-    def _clear_locked(self):
-        closed_id = self._activation_id
-        closed_primary = self._primary_source
-        closed_sources = list(self._sources)
-        segments = self._segment_count
+        closed_settings = _thaw(self._effective_settings)
+        closed_segments = self._segment_count
+        closed_sequence = self._activation_sequence
 
         self._activation_id = None
         self._primary_source = None
-        self._phase = INACTIVE
-        self._sources = []
+        self._effective_settings = _freeze({})
+        self._phase = IDLE
         self._deadline = None
         self._pending_extension = 0.0
         self._segment_count = 0
+        self._close_reason = None
         self._version += 1
 
         snapshot = self._snapshot_locked()
-        snapshot["closedActivationId"] = closed_id
-        snapshot["closedPrimarySource"] = closed_primary
-        snapshot["closedSources"] = closed_sources
-        snapshot["closedSegments"] = segments
+        snapshot.update(
+            {
+                "closedActivationId": closed_id,
+                "closedActivationSequence": closed_sequence,
+                "closedPrimarySource": closed_primary,
+                "closedSources": [closed_primary] if closed_primary else [],
+                "closedEffectiveSettings": closed_settings,
+                "closedSegments": closed_segments,
+            }
+        )
+        if close_reason:
+            snapshot["closeReason"] = close_reason
         return snapshot

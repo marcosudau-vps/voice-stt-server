@@ -1,34 +1,28 @@
-# Einheitliche serverseitige Triggerarchitektur – Baseline
+# Einheitliche serverseitige Triggerarchitektur – Activation-State-Machine
 
-Diese Datei beschreibt den mit AP-SRV-000 reproduzierbar verifizierten
-**Baseline-Ist-Stand** der serverseitigen Triggerarchitektur. Sie ist keine
-Vorwegnahme des eingefrorenen Zielvertrags aus AP-SRV-010 und späteren Paketen.
-Die unten dokumentierten Queryparameter und Nachrichten sind deshalb als
-Bestandsaufnahme des geerbten Feature-Worktrees zu lesen.
+Diese Datei beschreibt den mit AP-SRV-010 implementierten serverautoritativen
+Vordergrund-Lifecycle. Eine Session besitzt genau eine Activation-State-
+Machine. Nach sicherem Schließen des Eingabepfads ist sie wieder `idle`, auch
+wenn Finalarbeit eines älteren Segments noch im Hintergrund läuft.
 
 > Ergänzende Dokumente: [`docs/client-development/`](client-development/README.md)
 > für den Client-Vertrag, [`docs/fastapi-server.md`](fastapi-server.md) für den
 > Serverbetrieb.
 
-## 0. Abgrenzung zum eingefrorenen Zielvertrag
+## 0. Paketgrenze
 
-Die Baseline enthält wiederverwendbare Grundlagen: einen thread-sicheren
-`ActivationController`, ein generationengebundenes Recorder-Gate, korrelierte
-Trigger-Acks, monotone Timer und additive Events. Mehrere heutige Semantiken
-sind jedoch ausdrücklich nur charakterisiert und werden in Folgepaketen
-ersetzt:
+AP-SRV-010 liefert die fünf kanonischen Vordergrundphasen, stabile Activation-
+Identität, eine gelatchte erste Triggerquelle, den eingefrorenen effektiven
+Settings-Snapshot und den sicheren Close-Pfad. Folgende Semantiken bleiben
+bewusst Folgepaketen zugeordnet:
 
 - Wiederholte `extend`-Befehle addieren heute jeweils `extensionSeconds` auf
   die bestehende Deadline; AP-SRV-030 führt die eingefrorene Refresh- und
   Watchdog-Semantik ein.
-- `finalizing` blockiert heute nicht. Ein neuer Trigger eröffnet darin eine
-  neue Activation, und die Sessionintegration ruft `finalized()` nicht auf.
-  AP-SRV-010/-020 ersetzen diese Vordergrundphase durch `idle` plus
-  segmentbezogenes Hintergrund-Draining.
-- Der Controller zählt mehrere serielle Segmente derselben Activation, besitzt
-  aber noch kein Segment-Ledger. Terminalzustände, strikte
-  `segmentSequence`-Publikation und paralleles Final-Draining folgen in
-  AP-SRV-020.
+- Der Controller erlaubt mehrere serielle Segmente derselben Activation,
+  besitzt aber noch kein Segment-Ledger. Terminalzustände, strikte
+  `segmentSequence`-Publikation, definitive segmentbezogene Korrelation und
+  paralleles Final-Draining folgen in AP-SRV-020.
 - Early-Final wird im Recorder bereits während der laufenden Aufnahme
   angestoßen. Die definitive segmentbezogene Publikations- und
   Drain-Semantik ist noch nicht vorhanden und gehört zu AP-SRV-020.
@@ -109,40 +103,42 @@ stateDiagram-v2
 
 ```mermaid
 stateDiagram-v2
-    [*] --> inactive
-    inactive --> waiting_first_speech: activate(manual|wake_word)
+    [*] --> idle
+    idle --> waiting_first_speech: activate(manual|wake_word)
 
-    waiting_first_speech --> waiting_first_speech: activate/extend (merge)
+    waiting_first_speech --> waiting_first_speech: extend
+    waiting_first_speech --> waiting_first_speech: activate / activation_locked
     waiting_first_speech --> segment_active: recording_started
-    waiting_first_speech --> inactive: finish/cancel/expire (kein Segment)
+    waiting_first_speech --> closing_input: finish/cancel/expire
 
-    segment_active --> segment_active: activate/extend (bankt Verlängerung)
+    segment_active --> segment_active: extend (bankt Verlängerung)
+    segment_active --> segment_active: activate / activation_locked
     segment_active --> followup_wait: recording_ended
-    segment_active --> finalizing: finish/expire
-    segment_active --> inactive: cancel
+    segment_active --> closing_input: finish/cancel
 
-    followup_wait --> followup_wait: activate/extend (verlängert Deadline)
+    followup_wait --> followup_wait: extend (verlängert Deadline)
+    followup_wait --> followup_wait: activate / activation_locked
     followup_wait --> segment_active: recording_started
-    followup_wait --> finalizing: finish/expire
-    followup_wait --> inactive: cancel
+    followup_wait --> closing_input: finish/cancel/expire
 
-    finalizing --> inactive: finalized
-    finalizing --> waiting_first_speech: activate (neue Activation)
+    closing_input --> closing_input: activate / activation_locked
+    closing_input --> idle: Gate und Recorder geschlossen
 
-    waiting_first_speech --> inactive: reset
-    segment_active --> inactive: reset
-    followup_wait --> inactive: reset
-    finalizing --> inactive: reset
+    waiting_first_speech --> idle: reset
+    segment_active --> idle: reset
+    followup_wait --> idle: reset
+    closing_input --> idle: reset
 ```
 
 Die drei Phasen `waiting_first_speech`, `segment_active` und `followup_wait`
 bilden zusammen das **offene Aktivierungsfenster**. Genau in diesen Phasen ist
 das Recorder-Gate offen (`windowOpen == true`).
 
-`finalizing` bedeutet: Das Fenster ist geschlossen und das Gate ist zu, aber die
-`activationId` lebt noch, damit die nachlaufende Finaltranskription korreliert
-werden kann. Ein `cancel` verwirft den Turn und geht deshalb **ohne**
-`finalizing` direkt nach `inactive`.
+`closing_input` ist eine kurze Eingabebarriere. Zuerst wird das Recorder-Gate
+geschlossen, eine laufende Aufnahme gestoppt und an den bestehenden Finalpfad
+übergeben; erst danach wird `idle` veröffentlicht. Finaltranskription ist keine
+Vordergrundphase. Eine neue Activation darf deshalb nach `idle` beginnen,
+während ältere Finalarbeit im Hintergrund weiterläuft.
 
 ---
 
@@ -153,20 +149,24 @@ Jede Activation trägt mindestens:
 | Feld | Bedeutung |
 | --- | --- |
 | `activationId` | eindeutige ID der Activation |
-| `generation` | steigt **nur** beim Öffnen einer neuen Activation, bleibt über deren Leben stabil |
+| `activationSequence` | steigt pro Session bei jeder akzeptierten neuen Activation |
+| `generation` | Kompatibilitätsfeld für die Gate-Bindung; entspricht derzeit `activationSequence` |
 | `version` | steigt bei **jeder** Zustandsänderung; bindet geplante Timeouts |
 | `primarySource` | die Quelle des **ersten** Triggers, unveränderlich |
-| `sources` | alle beteiligten Quellen, jede höchstens einmal |
+| `sources` | kompatible Listenform der einen gelatchten `primarySource` |
+| `effectiveSettings` | defensiv kopierter, für diese Activation unveränderlicher Settings-Snapshot |
 | `phase` | siehe Zustandsdiagramm |
 | `deadline` | monotone Deadline (`time.monotonic`), `None` während einer Aufnahme |
 | `segments` | Anzahl der in dieser Activation gestarteten Aufnahmen |
 
 ### Warum zwei Zähler
 
-`generation` gehört in Events und in die Gate-Bindung: sie identifiziert *die
-Activation*. `version` gehört an geplante Timeouts: jede Zustandsänderung erhöht
+`activationSequence` identifiziert die Reihenfolge akzeptierter Activations in
+der Session. `generation` bindet bis zur Wire-v2-Migration das Gate an dieselbe
+Identität. `version` gehört an geplante Timeouts: jede Zustandsänderung erhöht
 sie, sodass ein früher gestellter Timer beim Feuern erkennt, dass er nicht mehr
-zuständig ist (`reason = "stale_timer"`).
+zuständig ist (`reason = "stale_timer"`). Abgelehnte `activate`-Versuche ändern
+keinen dieser Werte.
 
 ### Monotone Zeit
 
@@ -177,21 +177,22 @@ verwendet.
 
 ---
 
-## 4. Kollisionssemantik
+## 4. Lock-Semantik
 
 Der **erste** Trigger eröffnet die Activation und wird deren `primarySource`.
-Ein weiterer Trigger derselben oder der anderen Quelle innerhalb desselben
-Fensters wird in dieselbe Activation gemischt.
+Jeder weitere `activate`-Versuch derselben oder der anderen Quelle in einer
+nicht-idle Phase wird deterministisch mit `activation_locked` abgelehnt.
 
 ```text
 Manual                       Wake Word
   ↓                             ↓
 Activation A42 (primarySource = manual, sources = [manual])
-  ↓  + Wake Word
-Activation A42 (primarySource = manual, sources = [manual, wake_word])
+  ↓  + activate(wake_word)
+Ack: accepted=false, reason=activation_locked, activationId=A42
 ```
 
-Dabei entsteht **nicht**:
+ID, Sequenz, Quelle und effektive Settings von A42 bleiben unverändert. Dabei
+entsteht **nicht**:
 
 - eine zweite Activation,
 - ein zweiter Recorderpfad,
@@ -201,6 +202,9 @@ Dabei entsteht **nicht**:
 - ein paralleler Follow-up-Timer.
 
 In umgekehrter Reihenfolge gilt dasselbe.
+
+Ein expliziter `extend`-Befehl bleibt von `activate` getrennt. Seine endgültige
+Refresh-/Watchdog-Semantik folgt in AP-SRV-030.
 
 `ActivationController` synchronisiert sich selbst über ein `RLock`. Das ist
 notwendig, weil er aus der WebSocket-Coroutine, aus Recorder-Callbackthreads
@@ -249,6 +253,12 @@ Herunterfahrens eintreffender Trigger das Gate nicht wieder öffnet.
 - ein spätes `close(A)` schließt die inzwischen laufende Activation `B` nicht;
 - ein `close(generation=alt)` ohne ID schließt `B` ebenfalls nicht;
 - ein spätes `open(A, replace=True)` mit älterer Generation ersetzt `B` nicht.
+
+Wenn die Gate-Prüfung einen Recording-Start zulässt, latcht der Recorder das
+zugehörige Paar `(activationId, generation)` bis zum Start-Callback. Schließt A
+in diesem kurzen Race-Fenster und B öffnet bereits, wird der verspätete Start
+von A nicht B zugerechnet, sondern sofort gestoppt. Damit sind Gate-Admission
+und Controllerübergang auch über die Callback-Grenze gebunden.
 
 Die VAD-Startbedingung wird ausschließlich im Zweig „es wird gerade **nicht**
 aufgenommen" ausgewertet. Ein zusätzlicher Trigger während einer laufenden
@@ -371,8 +381,7 @@ deren `activationId`.
 | `reason` | `accepted` | Bedeutung |
 | --- | --- | --- |
 | `activated` | true | neue Activation eröffnet |
-| `merged` | true | zusätzliche Quelle in die laufende Activation aufgenommen |
-| `already_active` | true | dieselbe Quelle erneut, keine Änderung |
+| `activation_locked` | false | `activate` traf eine nicht-idle Vordergrundphase; laufende Activation bleibt unverändert |
 | `extended` | true | Fenster verlängert |
 | `finished` | true | Turn kontrolliert beendet |
 | `cancelled` | true | Turn verworfen |
@@ -407,15 +416,17 @@ Eine Sitzung merkt sich die letzten 200 `commandId`-Ergebnisse.
 | ID | Producer | Scope | Lebensdauer | Reconnect |
 | --- | --- | --- | --- | --- |
 | `sessionId` | Server | eine WebSocket-Verbindung | Verbindung | neue ID |
-| `activationId` | Server | eine Activation | bis Finish/Cancel/Timeout/Reset | **wird nie wiederbelebt** |
-| `generation` | Server | eine Activation | stabil über deren Leben | neu |
+| `activationId` | Server | eine Activation | bis zum sicheren Input-Close/Reset | **wird nie wiederbelebt** |
+| `activationSequence` | Server | Session | steigt je akzeptierter Activation | neue Sessionfolge |
+| `generation` | Server | eine Activation | entspricht derzeit `activationSequence` | neu |
 | `segmentId` | Server | eine Aufnahme | Segment | fortlaufend |
 | `commandId` | Client | ein Triggerkommando | Sitzungshistorie (200) | bleibt offen |
 | `eventId` / `cursor` | Server | Eventstream | dauerhaft | fortgesetzt |
 
-Alle Recording- und Transkriptionsereignisse tragen im Controlled-Modus
-zusätzlich `activationId`, `primarySource` und `sources`. Damit lässt sich jedes
-Segment auf den Trigger zurückführen, der es geöffnet hat.
+Activation- und Recording-Ereignisse tragen im Controlled-Modus zusätzlich
+`activationId`, `activationSequence`, `primarySource` und `sources`. Die
+definitive segmentbezogene Korrelation nachlaufender Transkriptionsereignisse
+wird mit dem Ledger in AP-SRV-020 hergestellt.
 
 ---
 
@@ -425,7 +436,7 @@ Neu hinzugekommen:
 
 ```text
 activation.started     eine Activation wurde eröffnet
-activation.extended    Fenster verlängert oder zweite Quelle aufgenommen
+activation.extended    Fenster explizit verlängert
 activation.closed      Activation beendet
 ```
 

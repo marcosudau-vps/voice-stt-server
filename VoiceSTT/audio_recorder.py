@@ -18,6 +18,7 @@ from .core.activation_control import (
     close_controlled_activation_gate,
     configure_activation_policy,
     controlled_activation_snapshot,
+    controlled_recording_activation_snapshot,
     open_controlled_activation_gate,
     shutdown_controlled_activation_gate,
 )
@@ -744,6 +745,10 @@ class AudioToTextRecorder:
     def controlled_activation_state(self):
         """Returns a consistent snapshot of the controlled activation gate."""
         return controlled_activation_snapshot(self)
+
+    def controlled_recording_activation_state(self):
+        """Returns the activation token latched at recording admission."""
+        return controlled_recording_activation_snapshot(self)
 
     def wakeup(self):
         """

@@ -32,6 +32,8 @@ def initialize_activation_control(recorder):
     recorder._controlled_activation_event = threading.Event()
     recorder._controlled_activation_id = None
     recorder._controlled_activation_generation = 0
+    recorder._controlled_recording_activation_id = None
+    recorder._controlled_recording_activation_generation = 0
     recorder._controlled_activation_shutdown = False
 
 
@@ -41,6 +43,10 @@ def _ensure_initialized(recorder):
         recorder._controlled_activation_generation = 0
     if not hasattr(recorder, "_controlled_activation_shutdown"):
         recorder._controlled_activation_shutdown = False
+    if not hasattr(recorder, "_controlled_recording_activation_id"):
+        recorder._controlled_recording_activation_id = None
+    if not hasattr(recorder, "_controlled_recording_activation_generation"):
+        recorder._controlled_recording_activation_generation = 0
 
 
 def configure_activation_policy(recorder, policy):
@@ -55,6 +61,8 @@ def configure_activation_policy(recorder, policy):
         recorder.activation_policy = normalized
         if normalized != CONTROLLED_ACTIVATION_POLICY:
             recorder._controlled_activation_id = None
+            recorder._controlled_recording_activation_id = None
+            recorder._controlled_recording_activation_generation = 0
             recorder._controlled_activation_event.clear()
     return recorder
 
@@ -170,6 +178,16 @@ def controlled_activation_snapshot(recorder):
         }
 
 
+def controlled_recording_activation_snapshot(recorder):
+    """Returns the activation token latched when recording admission won."""
+    with recorder._controlled_activation_lock:
+        _ensure_initialized(recorder)
+        return {
+            "activationId": recorder._controlled_recording_activation_id,
+            "generation": recorder._controlled_recording_activation_generation,
+        }
+
+
 def recording_activation_gate_is_open(
     recorder,
     *,
@@ -183,7 +201,20 @@ def recording_activation_gate_is_open(
     the gate, never around it.
     """
     if recorder.activation_policy == CONTROLLED_ACTIVATION_POLICY:
-        return recorder._controlled_activation_event.is_set()
+        with recorder._controlled_activation_lock:
+            _ensure_initialized(recorder)
+            if not recorder._controlled_activation_event.is_set():
+                return False
+            # Bind the ensuing recorder-start callback to the activation whose
+            # gate admitted it. A close/new-open race can then never attach an
+            # old start to the new foreground activation.
+            recorder._controlled_recording_activation_id = (
+                recorder._controlled_activation_id
+            )
+            recorder._controlled_recording_activation_generation = (
+                recorder._controlled_activation_generation
+            )
+            return True
     if recorder.wakeword_detected:
         return True
     return (

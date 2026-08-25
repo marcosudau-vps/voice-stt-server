@@ -277,7 +277,7 @@ class TriggerSourceMatrixTests(unittest.TestCase):
                 self.assertTrue(ack["accepted"])
                 self.assertEqual(ack["reason"], "activated")
 
-    def test_a_second_source_merges_instead_of_opening_a_new_activation(self):
+    def test_a_second_source_is_locked_to_the_first_activation(self):
         with TestClient(self.app) as client:
             with ControlledSessionHarness(client, BOTH) as session:
                 session.send({"type": "start"})
@@ -294,11 +294,11 @@ class TriggerSourceMatrixTests(unittest.TestCase):
                     "source": "wake_word",
                     "commandId": "w-1",
                 })
-                merged = session.drain("trigger_ack")
+                locked = session.drain("trigger_ack")
 
-                self.assertTrue(merged["accepted"])
-                self.assertEqual(merged["reason"], "merged")
-                self.assertEqual(merged["activationId"], first["activationId"])
+                self.assertFalse(locked["accepted"])
+                self.assertEqual(locked["reason"], "activation_locked")
+                self.assertEqual(locked["activationId"], first["activationId"])
 
 
 if __name__ == "__main__":

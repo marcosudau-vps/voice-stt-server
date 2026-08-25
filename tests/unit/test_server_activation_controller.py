@@ -2,12 +2,13 @@ import itertools
 import threading
 import time
 import unittest
+from unittest import mock
 
 from api_fastapi_server.activation import (
     ActivationController,
-    FINALIZING,
+    CLOSING_INPUT,
     FOLLOWUP_WAIT,
-    INACTIVE,
+    IDLE,
     SEGMENT_ACTIVE,
     WAITING_FIRST_SPEECH,
 )
@@ -24,6 +25,7 @@ class MonotonicFakeClock:
 class ServerActivationControllerTests(unittest.TestCase):
     def setUp(self):
         self.clock = MonotonicFakeClock()
+        self.ids = iter(f"activation-{index}" for index in range(1, 20))
         self.controller = ActivationController(
             manual_trigger_enabled=True,
             wake_word_trigger_enabled=True,
@@ -31,257 +33,482 @@ class ServerActivationControllerTests(unittest.TestCase):
             followup_timeout=3.0,
             extension_seconds=5.0,
             clock=self.clock,
-            id_factory=lambda: "activation-42",
+            id_factory=lambda: next(self.ids),
         )
 
-    # Mandatory Test 1: Manual aktiviert aus inactive
-    def test_01_manual_activates_from_inactive(self):
-        res = self.controller.activate("manual")
-        self.assertTrue(res.accepted)
-        self.assertEqual(res.reason, "activated")
-        self.assertEqual(res.snapshot["primarySource"], "manual")
-        self.assertEqual(res.snapshot["sources"], ["manual"])
-        self.assertEqual(res.snapshot["phase"], WAITING_FIRST_SPEECH)
-        self.assertEqual(res.snapshot["deadline"], 1015.0)
-
-    # Mandatory Test 2: Wake Word aktiviert aus inactive
-    def test_02_wake_word_activates_from_inactive(self):
-        res = self.controller.activate("wake_word")
-        self.assertTrue(res.accepted)
-        self.assertEqual(res.reason, "activated")
-        self.assertEqual(res.snapshot["primarySource"], "wake_word")
-        self.assertEqual(res.snapshot["sources"], ["wake_word"])
-        self.assertEqual(res.snapshot["phase"], WAITING_FIRST_SPEECH)
-
-    # Mandatory Test 3: Manual -> Manual verlängert
-    def test_03_manual_manual_extends(self):
+    def test_canonical_foreground_uses_exactly_five_phase_values(self):
+        observed = {self.controller.snapshot()["phase"]}
         self.controller.activate("manual")
-        res = self.controller.extend("manual")
-        self.assertTrue(res.accepted)
-        self.assertEqual(res.reason, "extended")
-        self.assertEqual(res.snapshot["primarySource"], "manual")
-        self.assertEqual(res.snapshot["sources"], ["manual"])
-        self.assertEqual(res.snapshot["deadline"], 1020.0)
-
-    # Mandatory Test 4: Wake Word -> Wake Word verlängert
-    def test_04_wake_word_wake_word_extends(self):
-        self.controller.activate("wake_word")
-        res = self.controller.extend("wake_word")
-        self.assertTrue(res.accepted)
-        self.assertEqual(res.snapshot["primarySource"], "wake_word")
-        self.assertEqual(res.snapshot["sources"], ["wake_word"])
-        self.assertEqual(res.snapshot["deadline"], 1020.0)
-
-    # Mandatory Test 5: Manual -> Wake Word bleibt gleiche Activation
-    def test_05_manual_then_wake_word_merges(self):
-        act1 = self.controller.activate("manual")
-        act2 = self.controller.activate("wake_word")
-
-        self.assertTrue(act2.accepted)
-        self.assertEqual(act2.reason, "merged")
-        self.assertEqual(act2.snapshot["activationId"], act1.snapshot["activationId"])
-        self.assertEqual(act2.snapshot["primarySource"], "manual")  # primarySource unchanged
-        self.assertEqual(act2.snapshot["sources"], ["manual", "wake_word"])
-
-    # Mandatory Test 6: Wake Word -> Manual bleibt gleiche Activation
-    def test_06_wake_word_then_manual_merges(self):
-        act1 = self.controller.activate("wake_word")
-        act2 = self.controller.activate("manual")
-
-        self.assertTrue(act2.accepted)
-        self.assertEqual(act2.reason, "merged")
-        self.assertEqual(act2.snapshot["activationId"], act1.snapshot["activationId"])
-        self.assertEqual(act2.snapshot["primarySource"], "wake_word")  # primarySource unchanged
-        self.assertEqual(act2.snapshot["sources"], ["wake_word", "manual"])
-
-    # Mandatory Test 7: Nahezu simultane Trigger -> genau eine Activation
-    def test_07_simultaneous_triggers_yield_single_activation(self):
-        res1 = self.controller.activate("manual")
-        res2 = self.controller.activate("wake_word")
-        res3 = self.controller.activate("manual")
-
-        self.assertEqual(res1.snapshot["activationId"], "activation-42")
-        self.assertEqual(res2.snapshot["activationId"], "activation-42")
-        self.assertEqual(res3.snapshot["activationId"], "activation-42")
-
-    # Mandatory Test 8: primarySource bleibt stabil
-    def test_08_primary_source_remains_stable_across_lifecycle(self):
-        self.controller.activate("manual")
-        self.controller.activate("wake_word")
+        observed.add(self.controller.snapshot()["phase"])
         self.controller.recording_started()
-        self.controller.extend("wake_word")
-
-        snap = self.controller.snapshot()
-        self.assertEqual(snap["primarySource"], "manual")
-        self.assertEqual(snap["sources"], ["manual", "wake_word"])
-
-    # Mandatory Test 9: sources enthält beide Trigger maximal einmal
-    def test_09_sources_contains_triggers_without_duplicates(self):
-        self.controller.activate("manual")
-        self.controller.activate("manual")
-        self.controller.extend("manual")
-        self.controller.activate("wake_word")
-        self.controller.extend("wake_word")
-        self.controller.extend("manual")
-
-        self.assertEqual(self.controller.snapshot()["sources"], ["manual", "wake_word"])
-
-    # Mandatory Test 10: Recording Start Transition
-    def test_10_recording_started_transition(self):
-        self.controller.activate("manual")
-        res = self.controller.recording_started()
-        self.assertTrue(res.accepted)
-        self.assertEqual(res.snapshot["phase"], SEGMENT_ACTIVE)
-        self.assertIsNone(res.snapshot["deadline"])
-
-    # Mandatory Test 11: Recording End Transition
-    def test_11_recording_ended_transition(self):
-        self.controller.activate("manual")
-        self.controller.recording_started()
-        res = self.controller.recording_ended()
-        self.assertTrue(res.accepted)
-        self.assertEqual(res.snapshot["phase"], FOLLOWUP_WAIT)
-        self.assertEqual(res.snapshot["deadline"], 1003.0)  # 1000 + 3.0 followup
-
-    # Mandatory Test 12: Erneuter Trigger während Follow-up -> Verlängerung
-    def test_12_trigger_during_followup_extends_deadline(self):
-        self.controller.activate("manual")
-        self.controller.recording_started()
+        observed.add(self.controller.snapshot()["phase"])
         self.controller.recording_ended()
-        self.clock.monotonic_now = 1002.0
+        observed.add(self.controller.snapshot()["phase"])
+        self.controller.finish("manual")
+        observed.add(self.controller.snapshot()["phase"])
+        self.controller.input_closed()
+        observed.add(self.controller.snapshot()["phase"])
 
-        res = self.controller.extend("manual")
-        self.assertTrue(res.accepted)
-        # deadline is max(1002, 1003) + 5.0 = 1008.0
-        self.assertEqual(res.snapshot["deadline"], 1008.0)
+        self.assertEqual(
+            observed,
+            {
+                IDLE,
+                WAITING_FIRST_SPEECH,
+                SEGMENT_ACTIVE,
+                FOLLOWUP_WAIT,
+                CLOSING_INPUT,
+            },
+        )
+        self.assertNotIn("finalizing", observed)
+        self.assertNotIn("inactive", observed)
 
-    def test_baseline_repeated_extensions_accumulate(self):
-        """Characterizes the inherited additive extension semantics.
+    def test_first_trigger_latches_identity_sequence_source_and_settings(self):
+        settings = {
+            "language": "de",
+            "nested": {"models": ["small", "large"]},
+        }
+        opened = self.controller.activate("manual", settings)
 
-        This is deliberately an Ist test, not the later refresh-style target:
-        each call adds ``extension_seconds`` to the current deadline.
-        """
-        opened = self.controller.activate("manual")
-        first = self.controller.extend("manual")
-        second = self.controller.extend("manual")
-
+        self.assertTrue(opened.accepted)
+        self.assertEqual(opened.reason, "activated")
+        self.assertEqual(opened.snapshot["activationId"], "activation-1")
+        self.assertEqual(opened.snapshot["activationSequence"], 1)
+        self.assertEqual(opened.snapshot["generation"], 1)
+        self.assertEqual(opened.snapshot["primarySource"], "manual")
+        self.assertEqual(opened.snapshot["sources"], ["manual"])
+        self.assertEqual(opened.snapshot["effectiveSettings"], settings)
+        self.assertEqual(opened.snapshot["phase"], WAITING_FIRST_SPEECH)
         self.assertEqual(opened.snapshot["deadline"], 1015.0)
-        self.assertEqual(first.snapshot["deadline"], 1020.0)
-        self.assertEqual(second.snapshot["deadline"], 1025.0)
 
-    def test_baseline_multiple_segments_share_one_activation(self):
-        """Pins the current multi-segment controller path without a ledger."""
+    def test_effective_settings_are_deeply_detached_and_snapshot_is_defensive(self):
+        settings = {"language": "de", "nested": {"models": ["small"]}}
+        self.controller.activate("manual", settings)
+        settings["language"] = "en"
+        settings["nested"]["models"].append("large")
+
+        first = self.controller.snapshot()
+        first["effectiveSettings"]["nested"]["models"].append("mutated")
+        second = self.controller.snapshot()
+
+        self.assertEqual(second["effectiveSettings"]["language"], "de")
+        self.assertEqual(
+            second["effectiveSettings"]["nested"]["models"], ["small"]
+        )
+
+    def test_new_activation_is_locked_in_every_non_idle_phase(self):
+        phase_setups = (
+            (WAITING_FIRST_SPEECH, lambda: None),
+            (SEGMENT_ACTIVE, self.controller.recording_started),
+            (
+                FOLLOWUP_WAIT,
+                lambda: (
+                    self.controller.recording_started(),
+                    self.controller.recording_ended(),
+                ),
+            ),
+            (CLOSING_INPUT, lambda: self.controller.finish("manual")),
+        )
+        for expected_phase, prepare in phase_setups:
+            with self.subTest(phase=expected_phase):
+                self.controller.reset()
+                opened = self.controller.activate(
+                    "manual", {"owner": expected_phase}
+                )
+                prepare()
+                before = self.controller.snapshot()
+                rejected = self.controller.activate(
+                    "wake_word", {"owner": "replacement"}
+                )
+
+                self.assertFalse(rejected.accepted)
+                self.assertEqual(rejected.reason, "activation_locked")
+                self.assertFalse(rejected.changed)
+                self.assertEqual(rejected.snapshot, before)
+                self.assertEqual(
+                    rejected.snapshot["activationId"],
+                    opened.snapshot["activationId"],
+                )
+                self.assertEqual(rejected.snapshot["primarySource"], "manual")
+                self.assertEqual(rejected.snapshot["sources"], ["manual"])
+                self.assertEqual(
+                    rejected.snapshot["effectiveSettings"],
+                    {"owner": expected_phase},
+                )
+
+    def _assert_first_trigger_order(self, first_source, second_source):
+        opened = self.controller.activate(
+            first_source, {"latchedFor": first_source}
+        )
+        before = self.controller.snapshot()
+        locked = self.controller.activate(
+            second_source, {"latchedFor": second_source}
+        )
+
+        self.assertFalse(locked.accepted)
+        self.assertEqual(locked.reason, "activation_locked")
+        self.assertEqual(locked.snapshot, before)
+        self.assertEqual(
+            locked.snapshot["activationId"], opened.snapshot["activationId"]
+        )
+        self.assertEqual(locked.snapshot["activationSequence"], 1)
+        self.assertEqual(locked.snapshot["primarySource"], first_source)
+        self.assertEqual(locked.snapshot["sources"], [first_source])
+        self.assertEqual(
+            locked.snapshot["effectiveSettings"],
+            {"latchedFor": first_source},
+        )
+
+    def test_manual_then_wake_word_latches_manual_and_locks_wake_word(self):
+        self._assert_first_trigger_order("manual", "wake_word")
+
+    def test_wake_word_then_manual_latches_wake_word_and_locks_manual(self):
+        self._assert_first_trigger_order("wake_word", "manual")
+
+    def test_sequence_is_stable_and_version_tracks_only_effective_changes(self):
         opened = self.controller.activate("manual")
+        sequence = opened.snapshot["activationSequence"]
+        versions = [opened.snapshot["version"]]
 
-        self.controller.recording_started()
+        locked = self.controller.activate("wake_word")
+        self.assertEqual(locked.snapshot["version"], versions[-1])
+        self.assertEqual(locked.snapshot["activationSequence"], sequence)
+
+        for transition in (
+            lambda: self.controller.extend("manual"),
+            self.controller.recording_started,
+            self.controller.recording_ended,
+            lambda: self.controller.finish("manual"),
+            self.controller.input_closed,
+        ):
+            changed = transition()
+            self.assertTrue(changed.changed)
+            self.assertGreater(changed.snapshot["version"], versions[-1])
+            versions.append(changed.snapshot["version"])
+            self.assertEqual(
+                changed.snapshot["activationSequence"], sequence
+            )
+
+        second = self.controller.activate("wake_word")
+        self.assertEqual(second.snapshot["activationSequence"], sequence + 1)
+
+    def test_recording_transitions_support_multiple_serial_segments(self):
+        opened = self.controller.activate("wake_word")
+        first_start = self.controller.recording_started()
         first_end = self.controller.recording_ended()
-        self.controller.recording_started()
+        second_start = self.controller.recording_started()
         second_end = self.controller.recording_ended()
 
-        self.assertEqual(first_end.snapshot["segments"], 1)
+        self.assertEqual(first_start.snapshot["phase"], SEGMENT_ACTIVE)
+        self.assertEqual(first_end.snapshot["phase"], FOLLOWUP_WAIT)
+        self.assertEqual(second_start.snapshot["segments"], 2)
         self.assertEqual(second_end.snapshot["segments"], 2)
         self.assertEqual(
             second_end.snapshot["activationId"], opened.snapshot["activationId"]
         )
-        self.assertEqual(second_end.snapshot["phase"], FOLLOWUP_WAIT)
+        self.assertEqual(second_end.snapshot["activationSequence"], 1)
+        self.assertEqual(second_end.snapshot["primarySource"], "wake_word")
 
-    # Mandatory Test 13: Timeout -> Abschluss
-    def test_13_timeout_expires_activation(self):
+    def test_duplicate_recording_start_is_idempotent_and_counts_one_segment(self):
+        self.controller.activate("manual")
+        first = self.controller.recording_started()
+        second = self.controller.recording_started()
+
+        self.assertTrue(second.accepted)
+        self.assertEqual(first.reason, "recording_started")
+        self.assertEqual(second.reason, "already_recording")
+        self.assertFalse(second.changed)
+        self.assertEqual(second.snapshot["version"], first.snapshot["version"])
+        self.assertEqual(second.snapshot["phase"], SEGMENT_ACTIVE)
+        self.assertEqual(second.snapshot["segments"], 1)
+
+    def test_recording_end_requires_an_active_segment(self):
         opened = self.controller.activate("manual")
-        version = opened.snapshot["version"]
-        self.clock.monotonic_now = 1016.0
+        ended = self.controller.recording_ended()
+        self.assertFalse(ended.accepted)
+        self.assertEqual(ended.reason, "not_active")
+        self.assertEqual(ended.snapshot, opened.snapshot)
 
-        expired = self.controller.expire(version)
-        self.assertTrue(expired.accepted)
-        self.assertEqual(expired.reason, "timed_out")
-        self.assertFalse(expired.snapshot["active"])
-        self.assertEqual(expired.snapshot["closedPrimarySource"], "manual")
+    def test_finish_has_explicit_close_barrier_then_idle(self):
+        opened = self.controller.activate("manual", {"language": "de"})
+        self.controller.recording_started()
+        closing = self.controller.finish("manual")
 
-    # Mandatory Test 14: Finish
-    def test_14_finish_closes_activation(self):
-        self.controller.activate("manual")
-        res = self.controller.finish("manual")
-        self.assertTrue(res.accepted)
-        self.assertEqual(res.reason, "finished")
-        self.assertFalse(res.snapshot["active"])
+        self.assertTrue(closing.accepted)
+        self.assertEqual(closing.snapshot["phase"], CLOSING_INPUT)
+        self.assertFalse(closing.snapshot["windowOpen"])
+        self.assertEqual(
+            closing.snapshot["activationId"], opened.snapshot["activationId"]
+        )
+        self.assertEqual(closing.snapshot["closeReason"], "finished")
 
-    # Mandatory Test 15: Cancel
-    def test_15_cancel_closes_activation(self):
-        self.controller.activate("manual")
-        res = self.controller.cancel("manual")
-        self.assertTrue(res.accepted)
-        self.assertEqual(res.reason, "cancelled")
-        self.assertFalse(res.snapshot["active"])
+        idle = self.controller.input_closed()
+        self.assertTrue(idle.accepted)
+        self.assertEqual(idle.snapshot["phase"], IDLE)
+        self.assertIsNone(idle.snapshot["activationId"])
+        self.assertEqual(
+            idle.snapshot["closedActivationId"], opened.snapshot["activationId"]
+        )
+        self.assertEqual(idle.snapshot["closedSegments"], 1)
+        self.assertEqual(idle.snapshot["closeReason"], "finished")
 
-    # Mandatory Test 16: Doppelte Finish-/Cancel-Aufrufe
-    def test_16_double_finish_or_cancel_is_idempotent(self):
-        self.controller.activate("manual")
-        res1 = self.controller.finish("manual")
-        res2 = self.controller.finish("manual")
-        self.assertTrue(res1.accepted)
-        self.assertFalse(res2.accepted)
-        self.assertEqual(res2.reason, "not_active")
-
-        self.controller.activate("manual")
-        c1 = self.controller.cancel("manual")
-        c2 = self.controller.cancel("manual")
-        self.assertTrue(c1.accepted)
-        self.assertFalse(c2.accepted)
-
-    # Mandatory Test 17: Alter Timer einer alten Generation
-    def test_17_stale_timer_from_old_generation_ignored(self):
+    def test_finish_without_segment_still_uses_the_close_barrier(self):
         opened = self.controller.activate("manual")
-        old_ver = opened.snapshot["version"]
-        self.controller.extend("manual")  # increments version
+        closing = self.controller.finish("manual")
+        self.assertEqual(closing.snapshot["phase"], CLOSING_INPUT)
+        self.assertEqual(closing.snapshot["activationId"], opened.snapshot["activationId"])
+        idle = self.controller.input_closed()
+        self.assertEqual(idle.snapshot["phase"], IDLE)
+        self.assertEqual(idle.snapshot["closedSegments"], 0)
+        self.assertEqual(idle.snapshot["closeReason"], "finished")
+
+    def test_cancel_uses_the_same_close_barrier_and_preserves_its_reason(self):
+        opened = self.controller.activate("manual")
+        closing = self.controller.cancel("manual")
+        self.assertEqual(closing.snapshot["phase"], CLOSING_INPUT)
+        self.assertEqual(closing.snapshot["activationId"], opened.snapshot["activationId"])
+        idle = self.controller.input_closed()
+        self.assertEqual(idle.snapshot["phase"], IDLE)
+        self.assertEqual(idle.snapshot["closeReason"], "cancelled")
+
+    def test_repeated_finish_and_cancel_do_not_repeat_the_close_transition(self):
+        for first_action in ("finish", "cancel"):
+            with self.subTest(first_action=first_action):
+                self.controller.reset()
+                opened = self.controller.activate("manual")
+                first = getattr(self.controller, first_action)("manual")
+                before = self.controller.snapshot()
+
+                self.assertTrue(first.accepted)
+                self.assertEqual(first.snapshot["phase"], CLOSING_INPUT)
+                for repeated_action in ("finish", "cancel"):
+                    repeated = getattr(
+                        self.controller, repeated_action
+                    )("manual")
+                    self.assertFalse(repeated.accepted)
+                    self.assertEqual(repeated.reason, "not_active")
+                    self.assertFalse(repeated.changed)
+                    self.assertEqual(repeated.snapshot, before)
+                    self.assertEqual(
+                        repeated.snapshot["activationId"],
+                        opened.snapshot["activationId"],
+                    )
+
+    def test_new_activation_after_close_gets_new_id_and_sequence(self):
+        first = self.controller.activate("manual")
+        self.controller.cancel("manual")
+        self.assertEqual(
+            self.controller.activate("wake_word").reason, "activation_locked"
+        )
+        self.controller.input_closed()
+        second = self.controller.activate("wake_word")
+
+        self.assertEqual(second.snapshot["activationSequence"], 2)
+        self.assertGreater(
+            second.snapshot["activationSequence"],
+            first.snapshot["activationSequence"],
+        )
+        self.assertNotEqual(
+            second.snapshot["activationId"], first.snapshot["activationId"]
+        )
+
+    def test_timeout_enters_close_barrier_and_stale_timer_is_rejected(self):
+        opened = self.controller.activate("manual")
+        old_version = opened.snapshot["version"]
+        self.controller.extend("manual")
         self.clock.monotonic_now = 2000.0
-
-        stale = self.controller.expire(old_ver)
+        stale = self.controller.expire(old_version)
         self.assertFalse(stale.accepted)
         self.assertEqual(stale.reason, "stale_timer")
-        self.assertTrue(stale.snapshot["active"])
 
-    # Mandatory Test 18: Systemzeitänderung darf monotone Deadlines nicht stören
-    def test_18_system_clock_jump_does_not_affect_monotonic_deadlines(self):
-        # Even if wallclock changes dramatically, monotonic clock drives expiry
-        opened = self.controller.activate("manual")
-        ver = opened.snapshot["version"]
-        # Monotonic time advances by 10s (deadline is 15s)
-        self.clock.monotonic_now = 1010.0
-        stale = self.controller.expire(ver)
-        self.assertFalse(stale.accepted)
-        self.assertEqual(stale.reason, "not_due")
+        current_version = self.controller.snapshot()["version"]
+        expired = self.controller.expire(current_version)
+        self.assertTrue(expired.accepted)
+        self.assertEqual(expired.reason, "timed_out")
+        self.assertEqual(expired.snapshot["phase"], CLOSING_INPUT)
+        self.assertEqual(expired.snapshot["closeReason"], "timed_out")
 
-        # Monotonic time advances past deadline (1015.0)
-        self.clock.monotonic_now = 1016.0
-        exp = self.controller.expire(ver)
-        self.assertTrue(exp.accepted)
+    def test_expire_without_active_deadline_is_effect_free(self):
+        idle_before = self.controller.snapshot()
+        idle_expire = self.controller.expire(idle_before["version"])
+        self.assertFalse(idle_expire.accepted)
+        self.assertEqual(idle_expire.reason, "not_expirable")
+        self.assertEqual(idle_expire.snapshot, idle_before)
 
-    # Mandatory Test 19: Reset
-    def test_19_reset_clears_activation(self):
         self.controller.activate("manual")
-        res = self.controller.reset()
-        self.assertTrue(res.accepted)
-        self.assertEqual(res.reason, "reset")
-        self.assertFalse(res.snapshot["active"])
+        recording = self.controller.recording_started()
+        segment_expire = self.controller.expire(recording.snapshot["version"])
+        self.assertFalse(segment_expire.accepted)
+        self.assertEqual(segment_expire.reason, "not_expirable")
+        self.assertEqual(segment_expire.snapshot, recording.snapshot)
 
-    # Mandatory Test 20: Reconnect / Session Close Semantik
-    def test_20_session_close_and_reconnect_clears_activation(self):
+    def test_wallclock_jumps_do_not_change_monotonic_deadline_or_expiry(self):
+        with mock.patch(
+            "api_fastapi_server.activation.time.time", return_value=10**12
+        ):
+            opened = self.controller.activate("manual")
+        version = opened.snapshot["version"]
+        self.assertEqual(opened.snapshot["deadline"], 1015.0)
+
+        self.clock.monotonic_now = 1010.0
+        with mock.patch(
+            "api_fastapi_server.activation.time.time", return_value=-10**12
+        ):
+            early = self.controller.expire(version)
+        self.assertFalse(early.accepted)
+        self.assertEqual(early.reason, "not_due")
+        self.assertEqual(early.snapshot["deadline"], 1015.0)
+
+        self.clock.monotonic_now = 1016.0
+        expired = self.controller.expire(version)
+        self.assertTrue(expired.accepted)
+        self.assertEqual(expired.snapshot["phase"], CLOSING_INPUT)
+
+    def test_extension_semantics_remain_out_of_scope_for_ap_srv_010(self):
+        opened = self.controller.activate("manual")
+        first = self.controller.extend("manual")
+        second = self.controller.extend("manual")
+        self.assertEqual(opened.snapshot["deadline"], 1015.0)
+        self.assertEqual(first.snapshot["deadline"], 1020.0)
+        self.assertEqual(second.snapshot["deadline"], 1025.0)
+
+    def test_each_source_can_open_and_extend_its_own_activation(self):
+        for source in ("manual", "wake_word"):
+            with self.subTest(source=source):
+                self.controller.reset()
+                opened = self.controller.activate(source)
+                extended = self.controller.extend(source)
+                self.assertTrue(extended.accepted)
+                self.assertEqual(extended.reason, "extended")
+                self.assertEqual(
+                    extended.snapshot["activationId"],
+                    opened.snapshot["activationId"],
+                )
+                self.assertEqual(extended.snapshot["primarySource"], source)
+                self.assertEqual(extended.snapshot["sources"], [source])
+                self.assertEqual(extended.snapshot["deadline"], 1020.0)
+
+    def test_followup_extensions_keep_the_inherited_additive_baseline(self):
         self.controller.activate("manual")
         self.controller.recording_started()
-        reset_res = self.controller.reset()
-        self.assertTrue(reset_res.accepted)
-        self.assertEqual(self.controller.snapshot()["phase"], INACTIVE)
-        self.assertIsNone(self.controller.snapshot()["activationId"])
+        followup = self.controller.recording_ended()
+        self.clock.monotonic_now = 1002.0
+        first = self.controller.extend("manual")
+        second = self.controller.extend("manual")
 
-    def test_disabled_source_rejected(self):
-        c = ActivationController(
+        self.assertEqual(followup.snapshot["deadline"], 1003.0)
+        self.assertEqual(first.snapshot["deadline"], 1008.0)
+        self.assertEqual(second.snapshot["deadline"], 1013.0)
+        self.assertEqual(second.snapshot["phase"], FOLLOWUP_WAIT)
+
+    def test_each_enabled_source_can_extend_without_changing_first_source(self):
+        self.controller.activate("manual")
+        extended = self.controller.extend("wake_word")
+        self.assertTrue(extended.accepted)
+        self.assertEqual(extended.reason, "extended")
+        self.assertEqual(extended.snapshot["primarySource"], "manual")
+        self.assertEqual(extended.snapshot["sources"], ["manual"])
+
+    def test_disabled_and_unknown_sources_are_rejected_without_mutation(self):
+        controller = ActivationController(
             manual_trigger_enabled=False,
             wake_word_trigger_enabled=True,
             clock=self.clock,
         )
-        self.assertEqual(c.activate("manual").reason, "trigger_disabled")
+        before = controller.snapshot()
+        for source in ("manual", "telepathy", None):
+            result = controller.activate(source)
+            self.assertFalse(result.accepted)
+            self.assertEqual(result.reason, "trigger_disabled")
+            self.assertEqual(result.snapshot, before)
 
-    def test_both_disabled_rejected(self):
+    def test_non_idle_lock_precedes_recognized_source_enablement(self):
+        controller = ActivationController(
+            manual_trigger_enabled=True,
+            wake_word_trigger_enabled=False,
+            clock=self.clock,
+        )
+        opened = controller.activate("manual")
+        locked = controller.activate("wake_word")
+        self.assertFalse(locked.accepted)
+        self.assertEqual(locked.reason, "activation_locked")
+        self.assertEqual(
+            locked.snapshot["activationId"], opened.snapshot["activationId"]
+        )
+
+    def test_unknown_source_is_rejected_by_every_source_command(self):
+        self.controller.activate("manual")
+        before = self.controller.snapshot()
+        for operation in ("extend", "finish", "cancel"):
+            with self.subTest(operation=operation):
+                result = getattr(self.controller, operation)("telepathy")
+                self.assertFalse(result.accepted)
+                self.assertEqual(result.reason, "trigger_disabled")
+                self.assertEqual(result.snapshot, before)
+
+    def test_invalid_transitions_are_refused(self):
+        for call, reason in (
+            (lambda: self.controller.extend("manual"), "not_active"),
+            (self.controller.recording_started, "not_active"),
+            (self.controller.recording_ended, "not_active"),
+            (lambda: self.controller.finish("manual"), "not_active"),
+            (lambda: self.controller.cancel("manual"), "not_active"),
+            (self.controller.input_closed, "not_closing_input"),
+        ):
+            result = call()
+            self.assertFalse(result.accepted)
+            self.assertEqual(result.reason, reason)
+            self.assertEqual(result.snapshot["phase"], IDLE)
+
+    def test_reset_clears_foreground_but_not_session_sequence(self):
+        first = self.controller.activate("manual")
+        reset = self.controller.reset()
+        second = self.controller.activate("wake_word")
+        self.assertEqual(reset.snapshot["phase"], IDLE)
+        self.assertEqual(second.snapshot["activationSequence"], 2)
+        self.assertGreater(
+            second.snapshot["activationSequence"],
+            first.snapshot["activationSequence"],
+        )
+
+    def test_reset_clears_each_non_idle_phase_and_preserves_session_sequence(self):
+        phase_setups = (
+            (WAITING_FIRST_SPEECH, ()),
+            (SEGMENT_ACTIVE, ("recording_started",)),
+            (
+                FOLLOWUP_WAIT,
+                ("recording_started", "recording_ended"),
+            ),
+            (CLOSING_INPUT, ("finish",)),
+        )
+        for expected_phase, transitions in phase_setups:
+            with self.subTest(phase=expected_phase):
+                ids = iter(("first", "second"))
+                controller = ActivationController(
+                    manual_trigger_enabled=True,
+                    wake_word_trigger_enabled=True,
+                    clock=self.clock,
+                    id_factory=lambda: next(ids),
+                )
+                opened = controller.activate("manual")
+                for transition in transitions:
+                    method = getattr(controller, transition)
+                    method("manual") if transition == "finish" else method()
+                self.assertEqual(controller.snapshot()["phase"], expected_phase)
+
+                reset = controller.reset()
+                self.assertTrue(reset.accepted)
+                self.assertEqual(reset.snapshot["phase"], IDLE)
+                self.assertIsNone(reset.snapshot["activationId"])
+                self.assertEqual(
+                    reset.snapshot["closedActivationId"],
+                    opened.snapshot["activationId"],
+                )
+                self.assertEqual(reset.snapshot["activationSequence"], 1)
+
+                reopened = controller.activate("wake_word")
+                self.assertEqual(reopened.snapshot["activationSequence"], 2)
+
+    def test_both_disabled_is_invalid(self):
         with self.assertRaisesRegex(ValueError, "at least one"):
             ActivationController(
                 manual_trigger_enabled=False,
@@ -289,305 +516,98 @@ class ServerActivationControllerTests(unittest.TestCase):
             )
 
 
-class GenerationAndVersionTests(unittest.TestCase):
-    """GATE 2: generation identifies an activation, version invalidates timers."""
-
-    def setUp(self):
-        self.clock = MonotonicFakeClock()
-        self.ids = iter(f"act-{index}" for index in range(1, 50))
-        self.controller = ActivationController(
-            manual_trigger_enabled=True,
-            wake_word_trigger_enabled=True,
-            clock=self.clock,
-            id_factory=lambda: next(self.ids),
-        )
-
-    def test_generation_is_stable_for_one_activation(self):
-        opened = self.controller.activate("manual")
-        generation = opened.snapshot["generation"]
-
-        for step in (
-            lambda: self.controller.activate("wake_word"),
-            lambda: self.controller.extend("manual"),
-            lambda: self.controller.recording_started(),
-            lambda: self.controller.recording_ended(),
-        ):
-            result = step()
-            self.assertEqual(
-                result.snapshot["generation"],
-                generation,
-                "generation must not move inside one activation",
-            )
-
-    def test_version_moves_on_every_state_change(self):
-        seen = []
-        seen.append(self.controller.activate("manual").snapshot["version"])
-        seen.append(self.controller.activate("wake_word").snapshot["version"])
-        seen.append(self.controller.extend("manual").snapshot["version"])
-        seen.append(self.controller.recording_started().snapshot["version"])
-        seen.append(self.controller.recording_ended().snapshot["version"])
-        self.assertEqual(seen, sorted(set(seen)), f"version must increase: {seen}")
-
-    def test_a_new_activation_raises_the_generation(self):
-        first = self.controller.activate("manual")
-        self.controller.cancel("manual")
-        second = self.controller.activate("wake_word")
-        self.assertGreater(
-            second.snapshot["generation"], first.snapshot["generation"]
-        )
-        self.assertNotEqual(
-            second.snapshot["activationId"], first.snapshot["activationId"]
-        )
-
-    def test_a_merge_does_not_raise_the_generation(self):
-        first = self.controller.activate("manual")
-        merged = self.controller.activate("wake_word")
-        self.assertEqual(merged.reason, "merged")
-        self.assertEqual(
-            merged.snapshot["generation"], first.snapshot["generation"]
-        )
-        self.assertEqual(
-            merged.snapshot["activationId"], first.snapshot["activationId"]
-        )
-
-
-class FinalizingPhaseTests(unittest.TestCase):
-    """The lifecycle of the specification ends via ``finalizing``."""
-
-    def setUp(self):
-        self.clock = MonotonicFakeClock()
-        self.controller = ActivationController(
-            manual_trigger_enabled=True,
-            wake_word_trigger_enabled=True,
-            clock=self.clock,
-            id_factory=lambda: "act-final",
-        )
-
-    def test_finish_after_a_segment_enters_finalizing_and_keeps_the_id(self):
-        self.controller.activate("manual")
-        self.controller.recording_started()
-        self.controller.recording_ended()
-        closed = self.controller.finish("manual")
-
-        self.assertTrue(closed.accepted)
-        self.assertEqual(closed.snapshot["phase"], FINALIZING)
-        # The window is shut - the recorder gate must close with it ...
-        self.assertFalse(closed.snapshot["windowOpen"])
-        # ... but the id survives so the trailing final can be correlated.
-        self.assertEqual(closed.snapshot["activationId"], "act-final")
-        self.assertEqual(closed.snapshot["closedActivationId"], "act-final")
-
-        done = self.controller.finalized()
-        self.assertTrue(done.accepted)
-        self.assertEqual(done.snapshot["phase"], INACTIVE)
-        self.assertIsNone(done.snapshot["activationId"])
-
-    def test_finish_without_a_segment_goes_straight_to_inactive(self):
-        self.controller.activate("manual")
-        closed = self.controller.finish("manual")
-        self.assertEqual(closed.snapshot["phase"], INACTIVE)
-        self.assertIsNone(closed.snapshot["activationId"])
-
-    def test_cancel_discards_the_turn_without_finalizing(self):
-        self.controller.activate("manual")
-        self.controller.recording_started()
-        closed = self.controller.cancel("manual")
-        self.assertEqual(closed.snapshot["phase"], INACTIVE)
-        self.assertIsNone(closed.snapshot["activationId"])
-
-    def test_a_trigger_during_finalizing_opens_a_new_activation(self):
-        self.controller.activate("manual")
-        self.controller.recording_started()
-        first = self.controller.finish("manual")
-        self.assertEqual(first.snapshot["phase"], FINALIZING)
-
-        reopened = self.controller.activate("manual")
-        self.assertEqual(reopened.reason, "activated")
-        self.assertGreater(
-            reopened.snapshot["generation"], first.snapshot["generation"]
-        )
-        self.assertEqual(reopened.snapshot["phase"], WAITING_FIRST_SPEECH)
-
-    def test_reset_also_clears_a_finalizing_activation(self):
-        self.controller.activate("manual")
-        self.controller.recording_started()
-        self.controller.finish("manual")
-        cleared = self.controller.reset()
-        self.assertTrue(cleared.accepted)
-        self.assertEqual(cleared.snapshot["phase"], INACTIVE)
-        self.assertIsNone(cleared.snapshot["activationId"])
-
-
-class InvalidTransitionTests(unittest.TestCase):
-    """GATE 2 requires invalid transitions to be tested explicitly."""
-
-    def setUp(self):
-        self.clock = MonotonicFakeClock()
-        self.controller = ActivationController(
-            manual_trigger_enabled=True,
-            wake_word_trigger_enabled=True,
-            clock=self.clock,
-            id_factory=lambda: "act-invalid",
-        )
-
-    def test_operations_on_an_inactive_controller_are_refused(self):
-        for name, call in (
-            ("extend", lambda: self.controller.extend("manual")),
-            ("recording_started", self.controller.recording_started),
-            ("recording_ended", self.controller.recording_ended),
-            ("finish", lambda: self.controller.finish("manual")),
-            ("cancel", lambda: self.controller.cancel("manual")),
-        ):
-            with self.subTest(operation=name):
-                result = call()
-                self.assertFalse(result.accepted)
-                self.assertEqual(result.reason, "not_active")
-                self.assertEqual(result.snapshot["phase"], INACTIVE)
-
-    def test_finalized_outside_finalizing_is_refused(self):
-        self.assertEqual(self.controller.finalized().reason, "not_finalizing")
-        self.controller.activate("manual")
-        self.assertEqual(self.controller.finalized().reason, "not_finalizing")
-
-    def test_unknown_source_is_refused_everywhere(self):
-        self.controller.activate("manual")
-        for name, call in (
-            ("activate", lambda: self.controller.activate("telepathy")),
-            ("extend", lambda: self.controller.extend("telepathy")),
-            ("finish", lambda: self.controller.finish("")),
-            ("cancel", lambda: self.controller.cancel(None)),
-        ):
-            with self.subTest(operation=name):
-                result = call()
-                self.assertFalse(result.accepted)
-                self.assertEqual(result.reason, "trigger_disabled")
-        # The running activation is untouched by all of that.
-        self.assertEqual(self.controller.snapshot()["activationId"], "act-invalid")
-
-    def test_recording_started_twice_does_not_count_a_second_segment(self):
-        self.controller.activate("manual")
-        first = self.controller.recording_started()
-        second = self.controller.recording_started()
-        self.assertEqual(first.reason, "recording_started")
-        self.assertEqual(second.reason, "already_recording")
-        self.assertEqual(second.snapshot["segments"], 1)
-
-    def test_expire_is_refused_when_no_deadline_is_armed(self):
-        self.controller.activate("manual")
-        started = self.controller.recording_started()
-        # While recording there is no deadline; a timeout must not fire.
-        result = self.controller.expire(started.snapshot["version"])
-        self.assertFalse(result.accepted)
-        self.assertEqual(result.reason, "not_expirable")
-
-    def test_expire_on_an_inactive_controller_is_refused(self):
-        result = self.controller.expire(self.controller.snapshot()["version"])
-        self.assertFalse(result.accepted)
-        self.assertEqual(result.reason, "not_expirable")
-
-
 class ConcurrentTriggerTests(unittest.TestCase):
-    """Case 7 with real threads: near-simultaneous triggers yield one activation.
-
-    The state machine is reached from the WebSocket coroutine, from recorder
-    callback threads and from the timeout thread, so it has to serialise
-    itself.
-
-    A plain barrier is not enough to prove that: the critical section of
-    ``activate`` is so short that the threads practically never interleave
-    inside it, and the test then stays green even without a lock. That was
-    verified by mutation - replacing the lock with a no-op did not turn the
-    naive version red.
-
-    These tests therefore widen the window on purpose. ``id_factory`` is called
-    *inside* the critical section, so an injected factory that sleeps holds the
-    section open long enough for every other thread to reach it. Without a lock
-    all threads would pass the "is a window already open?" check and each would
-    open its own activation.
-    """
-
-    REPEATS = 12
+    REPEATS = 16
     HOLD_SECONDS = 0.01
 
-    def _slow_id_factory(self):
+    @staticmethod
+    def _slow_id_factory():
         counter = itertools.count(1)
 
         def factory():
-            # Widen the critical section so a missing lock becomes observable.
-            time.sleep(self.HOLD_SECONDS)
+            time.sleep(ConcurrentTriggerTests.HOLD_SECONDS)
             return f"act-{next(counter)}"
 
         return factory
 
-    def _run_once(self):
-        created = []
-        created_lock = threading.Lock()
-        controller = ActivationController(
-            manual_trigger_enabled=True,
-            wake_word_trigger_enabled=True,
-            id_factory=self._slow_id_factory(),
-        )
-        start = threading.Barrier(8)
-
-        def trigger(source):
-            start.wait()
-            result = controller.activate(source)
-            if result.reason == "activated":
-                with created_lock:
-                    created.append(result.snapshot["activationId"])
-
-        threads = [
-            threading.Thread(target=trigger, args=("manual",))
-            for _ in range(4)
-        ] + [
-            threading.Thread(target=trigger, args=("wake_word",))
-            for _ in range(4)
-        ]
-        for thread in threads:
-            thread.start()
-        for thread in threads:
-            thread.join(timeout=30)
-
-        snapshot = controller.snapshot()
-        self.assertEqual(
-            len(created), 1, f"exactly one activation must open, got {created}"
-        )
-        self.assertEqual(snapshot["generation"], 1)
-        self.assertEqual(sorted(snapshot["sources"]), ["manual", "wake_word"])
-        self.assertIn(snapshot["primarySource"], ("manual", "wake_word"))
-        # sources must never contain a duplicate
-        self.assertEqual(len(snapshot["sources"]), len(set(snapshot["sources"])))
-
-    def test_near_simultaneous_triggers_yield_exactly_one_activation(self):
-        for _ in range(self.REPEATS):
-            self._run_once()
-
-    def test_a_reader_never_observes_a_half_built_activation(self):
-        """A snapshot taken while ``activate`` runs must never be half applied.
-
-        The slow id factory keeps the controller inside ``activate`` for a
-        while; readers hammer ``snapshot()`` throughout. Without the lock a
-        reader can see a phase that no longer matches the activation id.
-        """
+    def test_parallel_sources_admit_exactly_one_latched_activation(self):
         for _ in range(self.REPEATS):
             controller = ActivationController(
                 manual_trigger_enabled=True,
                 wake_word_trigger_enabled=True,
                 id_factory=self._slow_id_factory(),
             )
-            torn = []
+            start = threading.Barrier(8)
+            results = []
+            result_lock = threading.Lock()
+
+            def trigger(index, source):
+                start.wait(timeout=10)
+                result = controller.activate(
+                    source, {"request": index, "source": source}
+                )
+                with result_lock:
+                    results.append((index, source, result))
+
+            threads = [
+                threading.Thread(
+                    target=trigger,
+                    args=(index, "manual" if index % 2 == 0 else "wake_word"),
+                )
+                for index in range(8)
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=30)
+
+            accepted = [item for item in results if item[2].accepted]
+            rejected = [item for item in results if not item[2].accepted]
+            self.assertEqual(len(accepted), 1)
+            self.assertEqual(len(rejected), 7)
+            self.assertTrue(
+                all(item[2].reason == "activation_locked" for item in rejected)
+            )
+            winner_index, winner_source, _ = accepted[0]
+            snapshot = controller.snapshot()
+            self.assertEqual(snapshot["activationSequence"], 1)
+            self.assertEqual(snapshot["primarySource"], winner_source)
+            self.assertEqual(snapshot["sources"], [winner_source])
+            self.assertEqual(
+                snapshot["effectiveSettings"],
+                {"request": winner_index, "source": winner_source},
+            )
+
+    def test_parallel_snapshot_readers_never_observe_half_built_state(self):
+        for _ in range(self.REPEATS):
+            controller = ActivationController(
+                manual_trigger_enabled=True,
+                wake_word_trigger_enabled=True,
+                id_factory=self._slow_id_factory(),
+            )
+            inconsistent = []
             stop = threading.Event()
 
             def reader():
                 while not stop.is_set():
-                    state = controller.snapshot()
-                    open_window = state["windowOpen"]
-                    has_id = state["activationId"] is not None
-                    has_primary = state["primarySource"] is not None
-                    if open_window and not (has_id and has_primary):
-                        torn.append(state)
-                    if state["phase"] == INACTIVE and state["sources"]:
-                        torn.append(state)
+                    snapshot = controller.snapshot()
+                    phase = snapshot["phase"]
+                    if phase == IDLE:
+                        if any(
+                            (
+                                snapshot["activationId"],
+                                snapshot["primarySource"],
+                                snapshot["sources"],
+                                snapshot["windowOpen"],
+                            )
+                        ):
+                            inconsistent.append(snapshot)
+                    elif not (
+                        snapshot["activationId"]
+                        and snapshot["primarySource"]
+                        and snapshot["sources"]
+                    ):
+                        inconsistent.append(snapshot)
 
             readers = [threading.Thread(target=reader) for _ in range(3)]
             for thread in readers:
@@ -596,13 +616,54 @@ class ConcurrentTriggerTests(unittest.TestCase):
                 controller.activate("manual")
                 controller.recording_started()
                 controller.recording_ended()
-                controller.cancel("manual")
+                controller.finish("manual")
+                controller.input_closed()
                 controller.activate("wake_word")
             finally:
                 stop.set()
                 for thread in readers:
                     thread.join(timeout=10)
-            self.assertEqual(torn, [], f"observed an inconsistent snapshot: {torn[:2]}")
+
+            self.assertEqual(
+                inconsistent,
+                [],
+                f"observed inconsistent snapshots: {inconsistent[:2]}",
+            )
+
+    def test_real_close_activate_race_never_admits_inside_close_barrier(self):
+        for _ in range(self.REPEATS):
+            controller = ActivationController(
+                manual_trigger_enabled=True,
+                wake_word_trigger_enabled=True,
+                id_factory=self._slow_id_factory(),
+            )
+            first = controller.activate("manual")
+            controller.recording_started()
+            closing_ready = threading.Event()
+            release_close = threading.Event()
+
+            def close_input():
+                closing = controller.finish("manual")
+                self.assertEqual(closing.snapshot["phase"], CLOSING_INPUT)
+                closing_ready.set()
+                release_close.wait(timeout=10)
+                controller.input_closed()
+
+            thread = threading.Thread(target=close_input)
+            thread.start()
+            self.assertTrue(closing_ready.wait(timeout=10))
+            blocked = controller.activate("wake_word")
+            self.assertFalse(blocked.accepted)
+            self.assertEqual(blocked.reason, "activation_locked")
+            self.assertEqual(
+                blocked.snapshot["activationId"], first.snapshot["activationId"]
+            )
+            release_close.set()
+            thread.join(timeout=10)
+
+            admitted = controller.activate("wake_word")
+            self.assertTrue(admitted.accepted)
+            self.assertEqual(admitted.snapshot["activationSequence"], 2)
 
 
 if __name__ == "__main__":

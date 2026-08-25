@@ -7,7 +7,8 @@ and then drive the **real public methods** of that class:
 
 ``set_activation_policy`` / ``open_controlled_activation`` /
 ``close_controlled_activation`` / ``abort_controlled_activation`` /
-``controlled_activation_state`` / ``abort`` / ``shutdown``
+``controlled_activation_state`` / ``controlled_recording_activation_state`` /
+``abort`` / ``shutdown``
 
 The VAD start decision is taken with the very function that
 ``VoiceSTT/core/recording.py::run_recording_worker`` calls, so a regression in
@@ -69,6 +70,28 @@ class ControlledGateAuthorityTests(unittest.TestCase):
         recorder.set_activation_policy("controlled")
         self.assertTrue(recorder.open_controlled_activation("A1", generation=1))
         self.assertTrue(gate_open(recorder))
+        self.assertEqual(
+            recorder.controlled_recording_activation_state(),
+            {"activationId": "A1", "generation": 1},
+        )
+
+    def test_recording_admission_token_survives_close_until_next_gate_win(self):
+        recorder = make_recorder()
+        recorder.set_activation_policy("controlled")
+        recorder.open_controlled_activation("A1", generation=1)
+        self.assertTrue(gate_open(recorder))
+        recorder.close_controlled_activation("A1", generation=1)
+        recorder.open_controlled_activation("A2", generation=2)
+
+        self.assertEqual(
+            recorder.controlled_recording_activation_state(),
+            {"activationId": "A1", "generation": 1},
+        )
+        self.assertTrue(gate_open(recorder))
+        self.assertEqual(
+            recorder.controlled_recording_activation_state(),
+            {"activationId": "A2", "generation": 2},
+        )
 
     def test_03_legacy_policy_behaviour_is_unchanged(self):
         # Legacy without wake words: VAD may start when armed.

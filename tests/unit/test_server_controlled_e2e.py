@@ -45,6 +45,7 @@ from VoiceSTT.core.activation_control import (
     close_controlled_activation_gate,
     configure_activation_policy,
     controlled_activation_snapshot,
+    controlled_recording_activation_snapshot,
     initialize_activation_control,
     open_controlled_activation_gate,
     recording_activation_gate_is_open,
@@ -56,7 +57,7 @@ try:
 except Exception:  # pragma: no cover - optional dependency
     TestClient = None
 
-from tests.unit.test_fastapi_server_multi_user import AutoScheduler
+from tests.unit.test_fastapi_server_multi_user import AutoScheduler, ManualScheduler
 
 
 SAMPLE_RATE = 16000
@@ -133,6 +134,9 @@ class GateAwareRecorder:
 
     def controlled_activation_state(self):
         return controlled_activation_snapshot(self)
+
+    def controlled_recording_activation_state(self):
+        return controlled_recording_activation_snapshot(self)
 
     # -- audio ---------------------------------------------------------------
 
@@ -235,6 +239,16 @@ class CountingScheduler(AutoScheduler):
                     continue
                 found.append(job)
         return found
+
+
+class BlockingScheduler(ManualScheduler):
+    """Keeps final work pending until an overlap test releases it."""
+
+    instances = []
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        BlockingScheduler.instances.append(self)
 
 
 def build_app(scheduler_factory=AutoScheduler):
@@ -536,6 +550,269 @@ class ControlledActivationEndToEndTests(unittest.TestCase):
                 session.settle()
                 self.assertEqual(recorder.recording_starts, 0)
 
+    def test_session_latches_effective_settings_for_the_current_activation(self):
+        with TestClient(self.app) as client:
+            with ControlledSessionHarness(
+                client, "manualTriggerEnabled=true&wakeWordTriggerEnabled=false"
+            ) as session:
+                session.send({"type": "start"})
+                server_session = session.server_session(self.app)
+                original_language = server_session.settings.language
+                session.send({
+                    "type": "trigger",
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "settings-1",
+                })
+                self.assertTrue(session.drain("trigger_ack")["accepted"])
+                before = server_session.activation_snapshot()
+
+                server_session.settings.language = "fr"
+                after = server_session.activation_snapshot()
+
+                self.assertEqual(
+                    before["effectiveSettings"]["sessionSettings"]["language"],
+                    original_language,
+                )
+                self.assertEqual(
+                    after["effectiveSettings"]["sessionSettings"]["language"],
+                    original_language,
+                )
+
+    def test_finish_closes_gate_and_recorder_before_published_idle(self):
+        with TestClient(self.app) as client:
+            with ControlledSessionHarness(
+                client, "manualTriggerEnabled=true&wakeWordTriggerEnabled=false"
+            ) as session:
+                session.send({"type": "start"})
+                server_session = session.server_session(self.app)
+                recorder = session.recorder()
+                observed_at_idle = []
+                original_input_closed = server_session._activation.input_closed
+
+                def observe_input_closed():
+                    observed_at_idle.append({
+                        "gateOpen": recorder.controlled_activation_state()["active"],
+                        "recording": recorder.is_recording,
+                    })
+                    return original_input_closed()
+
+                server_session._activation.input_closed = observe_input_closed
+                session.send({
+                    "type": "trigger",
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "close-activate",
+                })
+                first = session.drain("trigger_ack")
+                session.socket.send_bytes(speech_packet())
+                session.timeline("recording_started")
+                session.send({
+                    "type": "trigger",
+                    "action": "finish",
+                    "source": "manual",
+                    "commandId": "close-finish",
+                })
+                closed = session.drain("trigger_ack")
+
+                self.assertTrue(closed["accepted"])
+                self.assertEqual(closed["reason"], "finished")
+                self.assertEqual(
+                    observed_at_idle, [{"gateOpen": False, "recording": False}]
+                )
+                self.assertEqual(
+                    server_session.activation_snapshot()["phase"], "idle"
+                )
+                self.assertEqual(closed["activationId"], first["activationId"])
+
+                session.send({
+                    "type": "trigger",
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "close-next",
+                })
+                second = session.drain("trigger_ack")
+                self.assertTrue(second["accepted"])
+                self.assertNotEqual(
+                    second["activationId"], first["activationId"]
+                )
+                self.assertEqual(
+                    server_session.activation_snapshot()["activationSequence"], 2
+                )
+
+    def test_late_recorder_start_cannot_resurrect_input_after_idle(self):
+        with TestClient(self.app) as client:
+            with ControlledSessionHarness(
+                client, "manualTriggerEnabled=true&wakeWordTriggerEnabled=false"
+            ) as session:
+                session.send({"type": "start"})
+                session.send({
+                    "type": "trigger",
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "late-start-open",
+                })
+                session.drain("trigger_ack")
+                session.send({
+                    "type": "trigger",
+                    "action": "finish",
+                    "source": "manual",
+                    "commandId": "late-start-close",
+                })
+                session.drain("trigger_ack")
+                recorder = session.recorder()
+                server_session = session.server_session(self.app)
+
+                # Deterministically models the recorder having observed the
+                # old gate just before close and delivering its callback late.
+                recorder.is_recording = True
+                recorder.on_recording_start()
+                session.settle()
+
+                self.assertFalse(recorder.is_recording)
+                self.assertEqual(server_session.activation_snapshot()["phase"], "idle")
+                self.assertEqual(session.timeline_events("recording_started"), [])
+
+    def test_old_gate_admission_cannot_attach_to_a_new_activation(self):
+        with TestClient(self.app) as client:
+            with ControlledSessionHarness(
+                client, "manualTriggerEnabled=true&wakeWordTriggerEnabled=false"
+            ) as session:
+                session.send({"type": "start"})
+                session.send({
+                    "type": "trigger",
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "stale-admission-a",
+                })
+                first = session.drain("trigger_ack")
+                recorder = session.recorder()
+                self.assertTrue(
+                    recording_activation_gate_is_open(
+                        recorder, wake_word_activation_delay_passed=True
+                    )
+                )
+                session.send({
+                    "type": "trigger",
+                    "action": "finish",
+                    "source": "manual",
+                    "commandId": "stale-admission-close",
+                })
+                session.drain("trigger_ack")
+                session.send({
+                    "type": "trigger",
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "stale-admission-b",
+                })
+                second = session.drain("trigger_ack")
+
+                recorder.is_recording = True
+                recorder.on_recording_start()
+                session.settle()
+
+                snapshot = session.server_session(self.app).activation_snapshot()
+                self.assertNotEqual(first["activationId"], second["activationId"])
+                self.assertEqual(snapshot["activationId"], second["activationId"])
+                self.assertEqual(snapshot["phase"], "waiting_first_speech")
+                self.assertFalse(recorder.is_recording)
+                self.assertEqual(session.timeline_events("recording_started"), [])
+
+    def test_two_serial_segments_keep_one_activation_identity(self):
+        with TestClient(self.app) as client:
+            with ControlledSessionHarness(
+                client, "manualTriggerEnabled=true&wakeWordTriggerEnabled=false"
+            ) as session:
+                session.send({"type": "start"})
+                session.send({
+                    "type": "trigger",
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "segments-1",
+                })
+                activation_id = session.drain("trigger_ack")["activationId"]
+
+                session.socket.send_bytes(speech_packet())
+                first = session.timeline("recording_started")
+                session.recorder().flush_buffered_audio()
+                session.timeline("recording_ended")
+                session.drain("final")
+                session.socket.send_bytes(speech_packet())
+                second = session.timeline("recording_started")
+                session.recorder().flush_buffered_audio()
+                session.timeline("recording_ended")
+
+                snapshot = session.server_session(self.app).activation_snapshot()
+                self.assertEqual(first["activationId"], activation_id)
+                self.assertEqual(second["activationId"], activation_id)
+                self.assertEqual(first["activationSequence"], 1)
+                self.assertEqual(second["activationSequence"], 1)
+                self.assertNotEqual(first["segmentId"], second["segmentId"])
+                self.assertEqual(snapshot["segments"], 2)
+
+
+@unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
+class BackgroundDrainOverlapTests(unittest.TestCase):
+    """Old final work must not remain a foreground admission lock."""
+
+    def setUp(self):
+        GateAwareRecorder.instances = []
+        BlockingScheduler.instances = []
+        self.app = build_app(scheduler_factory=BlockingScheduler)
+
+    def test_pending_old_final_does_not_block_the_next_activation(self):
+        with TestClient(self.app) as client:
+            with ControlledSessionHarness(
+                client, "manualTriggerEnabled=true&wakeWordTriggerEnabled=false"
+            ) as session:
+                session.send({"type": "start"})
+                session.send({
+                    "type": "trigger",
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "overlap-first",
+                })
+                first = session.drain("trigger_ack")
+                session.socket.send_bytes(speech_packet())
+                session.timeline("recording_started")
+                session.send({
+                    "type": "trigger",
+                    "action": "finish",
+                    "source": "manual",
+                    "commandId": "overlap-finish",
+                })
+                self.assertTrue(session.drain("trigger_ack")["accepted"])
+
+                deadline = time.monotonic() + 10
+                while (
+                    not BlockingScheduler.instances
+                    or not BlockingScheduler.instances[0].jobs
+                ):
+                    if time.monotonic() >= deadline:
+                        self.fail("the old final job was not submitted")
+                    time.sleep(0.01)
+                scheduler = BlockingScheduler.instances[0]
+                old_job = scheduler.jobs[0]
+
+                session.send({
+                    "type": "trigger",
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "overlap-second",
+                })
+                second = session.drain("trigger_ack")
+
+                self.assertTrue(second["accepted"])
+                self.assertEqual(second["reason"], "activated")
+                self.assertNotEqual(
+                    second["activationId"], first["activationId"]
+                )
+                snapshot = session.server_session(self.app).activation_snapshot()
+                self.assertEqual(snapshot["phase"], "waiting_first_speech")
+                self.assertEqual(snapshot["activationSequence"], 2)
+
+                scheduler.complete(old_job, text="old-final")
+
 
 @unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
 class SingleFollowUpAuthorityTests(unittest.TestCase):
@@ -608,7 +885,7 @@ class SingleFollowUpAuthorityTests(unittest.TestCase):
 
 @unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
 class TriggerCollisionEndToEndTests(unittest.TestCase):
-    """GATE 4: for every collision, exactly one activation and one segment."""
+    """A later activate is locked without opening another input path."""
 
     def setUp(self):
         GateAwareRecorder.instances = []
@@ -659,11 +936,15 @@ class TriggerCollisionEndToEndTests(unittest.TestCase):
                 )
                 self.assertEqual(len(starts), 1, "exactly one recording_started")
                 self.assertEqual(started["primarySource"], first)
-                self.assertEqual(
-                    sorted(started["sources"]), sorted({first, second})
-                )
-                for ack in acks:
-                    self.assertTrue(ack["accepted"])
+                self.assertEqual(started["sources"], [first])
+                if first == "manual":
+                    self.assertTrue(acks[0]["accepted"])
+                    if second == "manual":
+                        self.assertFalse(acks[1]["accepted"])
+                        self.assertEqual(acks[1]["reason"], "activation_locked")
+                else:
+                    self.assertFalse(acks[0]["accepted"])
+                    self.assertEqual(acks[0]["reason"], "activation_locked")
                 return session
 
     def test_manual_then_wake_word_stays_one_activation(self):
@@ -685,7 +966,11 @@ class TriggerCollisionEndToEndTests(unittest.TestCase):
                         "commandId": f"repeat-{index}",
                     })
                     ack = session.drain("trigger_ack")
-                    self.assertTrue(ack["accepted"])
+                    if index == 0:
+                        self.assertTrue(ack["accepted"])
+                    else:
+                        self.assertFalse(ack["accepted"])
+                        self.assertEqual(ack["reason"], "activation_locked")
                     ids.add(ack["activationId"])
                 self.assertEqual(len(ids), 1, ids)
 
@@ -696,7 +981,7 @@ class TriggerCollisionEndToEndTests(unittest.TestCase):
 
 @unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
 class CollisionMatrixEndToEndTests(unittest.TestCase):
-    """GATE 4 – the full collision matrix, one separate E2E case each.
+    """Full locked-activation matrix, one separate E2E case each.
 
     For every case the four invariants of the specification are counted, not
     inferred:
@@ -770,7 +1055,7 @@ class CollisionMatrixEndToEndTests(unittest.TestCase):
             "finalText": final.get("text"),
         }
 
-    def _assert_invariants(self, evidence, first, second):
+    def _assert_invariants(self, evidence, first):
         self.assertEqual(
             len(evidence["activationId"]), 1,
             f"Activations must be 1, got {evidence['activationId']}",
@@ -791,9 +1076,7 @@ class CollisionMatrixEndToEndTests(unittest.TestCase):
         self.assertEqual(evidence["recordingStarts"], 1)
         self.assertEqual(evidence["recorderRecordingStarts"], 1)
         self.assertEqual(evidence["primarySource"], first)
-        self.assertEqual(
-            sorted(evidence["sources"] or []), sorted({first, second})
-        )
+        self.assertEqual(evidence["sources"], [first])
 
     def _report(self, name, evidence):
         print(f"\n[GATE4 collision] {name}: {json.dumps(evidence, sort_keys=True)}")
@@ -809,7 +1092,7 @@ class CollisionMatrixEndToEndTests(unittest.TestCase):
                 started, final = self._run_turn(session)
                 evidence = self._evidence(session, started, final)
                 self._report("manual -> wake_word", evidence)
-                self._assert_invariants(evidence, "manual", "wake_word")
+                self._assert_invariants(evidence, "manual")
 
     def test_case_2_wake_word_then_manual(self):
         with TestClient(self.app) as client:
@@ -818,15 +1101,15 @@ class CollisionMatrixEndToEndTests(unittest.TestCase):
                 self._fire(session, "wake_word", None)
                 session.timeline("wakeword_detected")
                 ack = self._fire(session, "manual", "c2-manual")
-                self.assertTrue(ack["accepted"])
+                self.assertFalse(ack["accepted"])
                 self.assertEqual(
-                    ack["reason"], "merged",
-                    "the manual trigger must merge into the running activation",
+                    ack["reason"], "activation_locked",
+                    "the running activation must remain owned by the wake word",
                 )
                 started, final = self._run_turn(session)
                 evidence = self._evidence(session, started, final)
                 self._report("wake_word -> manual", evidence)
-                self._assert_invariants(evidence, "wake_word", "manual")
+                self._assert_invariants(evidence, "wake_word")
 
     def test_case_3_near_simultaneous(self):
         """Both sources reach the server at the same time, for real.
@@ -878,15 +1161,16 @@ class CollisionMatrixEndToEndTests(unittest.TestCase):
                     ack = session.drain("trigger_ack")
                     thread.join(timeout=10)
                     self.assertEqual(errors, [])
-                    self.assertTrue(ack["accepted"])
+                    self.assertIn(ack["accepted"], (True, False))
+                    if not ack["accepted"]:
+                        self.assertEqual(ack["reason"], "activation_locked")
 
                     started, final = self._run_turn(session)
                     evidence = self._evidence(session, started, final)
                     self._report("near simultaneous", evidence)
 
-                    # Either source may win the race, so primarySource is not
-                    # pinned here - but there must be exactly one activation
-                    # and both sources must be recorded in it.
+                    # Either source may win the race, but only that first
+                    # source is latched and the losing activate is locked.
                     self.assertEqual(
                         len(evidence["activationId"]), 1,
                         f"Activations must be 1, got {evidence['activationId']}",
@@ -903,9 +1187,8 @@ class CollisionMatrixEndToEndTests(unittest.TestCase):
                         evidence["primarySource"], ("manual", "wake_word")
                     )
                     self.assertEqual(
-                        sorted(evidence["sources"] or []),
-                        ["manual", "wake_word"],
-                        "both sources must be recorded in the one activation",
+                        evidence["sources"],
+                        [evidence["primarySource"]],
                     )
 
 
