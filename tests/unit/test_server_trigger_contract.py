@@ -60,17 +60,26 @@ class TriggerAckContractTests(unittest.TestCase):
                 self.assertTrue(ack["activationId"])
 
     def test_all_four_actions_are_answered(self):
+        """AP-SRV-030 replaces the accepted ``extend`` of the AP-SRV-010 baseline.
+
+        The former version pressed ``extend`` in ``waiting_first_speech`` and
+        expected ``extended``. The frozen phase matrix answers ``refresh``
+        there with ``invalid_phase`` (PHASE-03), so the positive refresh case
+        moved to :class:`CommandPhaseMatrixTests`.
+        """
         with TestClient(self.app) as client:
             with self._streaming_session(client) as session:
                 first = self._trigger(
                     session, action="activate", source="manual", commandId="a-1"
                 )
-                extended = self._trigger(
-                    session, action="extend", source="manual", commandId="a-2"
+                refreshed = self._trigger(
+                    session, action="refresh", source="manual", commandId="a-2"
                 )
-                self.assertTrue(extended["accepted"])
-                self.assertEqual(extended["reason"], "extended")
-                self.assertEqual(extended["activationId"], first["activationId"])
+                self.assertFalse(refreshed["accepted"])
+                self.assertEqual(refreshed["reason"], "invalid_phase")
+                self.assertEqual(
+                    refreshed["activationId"], first["activationId"]
+                )
 
                 finished = self._trigger(
                     session, action="finish", source="manual", commandId="a-3"

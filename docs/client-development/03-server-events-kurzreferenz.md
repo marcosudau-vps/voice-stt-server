@@ -49,9 +49,11 @@ Nicht jedes Event enthält alle gemeinsamen Felder.
 | --- | --- | --- |
 | `wakeword_wait_started` | Wake-Word-Erkennung beginnt/ist aktiv | `wakeWord` |
 | `wakeword_wait_ended` | Wake-Word-Wartephase endet | `wakeWord` |
-| `activation_started` | eine Activation wurde eröffnet | `activationId`, `generation`, `primarySource`, `sources`, `phase` |
-| `activation_extended` | Fenster verlängert oder zweite Quelle aufgenommen | wie oben |
-| `activation_closed` | Activation beendet | wie oben, zusätzlich `reason` |
+| `activation_started` | eine Activation wurde eröffnet | `activationId`, `generation`, `primarySource`, `sources`, `phase`, `timerRevision` |
+| `activation_refreshed` | Follow-up- oder Watchdog-Deadline neu gesetzt | wie oben |
+| `activation_closed` | Eingabepfad der Activation ist geschlossen; genau einmal je Activation | wie oben, zusätzlich `reason`, `cause` und `causedByCommandId` |
+| `activation_drained` | Hintergrundledger der Activation ist terminal | `activationId`, `activationSequence`, `state`, `reason`, `acceptedSegmentCount`, `terminalSegmentCount` |
+| `watchdog_warning` | Vorwarnung vor dem Daueraufnahme-Ablauf | `activationId`, `activationSequence`, `segmentId`, `segmentSequence`, `phase`, `timerRevision`, `remainingSeconds` |
 | `wakeword_detected` | Weckwort erkannt; Sprache wird erwartet | `wakeWord` |
 | `wakeword_timeout` | Nach erkanntem Weckwort kam nicht rechtzeitig Sprache | `wakeWord` |
 | `wakeword_followup_started` | Folgeäußerung ohne erneutes Weckwort möglich | `durationSeconds` |

@@ -7,9 +7,13 @@ from unittest import mock
 from api_fastapi_server.activation import (
     ActivationController,
     CLOSING_INPUT,
+    CLOSING_RECOVERY_DEADLINE,
+    FOLLOWUP_DEADLINE,
     FOLLOWUP_WAIT,
     IDLE,
+    INITIAL_SPEECH_DEADLINE,
     SEGMENT_ACTIVE,
+    SEGMENT_WATCHDOG_DEADLINE,
     WAITING_FIRST_SPEECH,
 )
 
@@ -22,19 +26,30 @@ class MonotonicFakeClock:
         return self.monotonic_now
 
 
+def build_controller(clock, ids=None, **overrides):
+    """One controller with the frozen contract defaults, in seconds."""
+    options = {
+        "manual_trigger_enabled": True,
+        "wake_word_trigger_enabled": True,
+        "initial_speech_timeout": 15.0,
+        "followup_timeout": 3.0,
+        "segment_watchdog_initial": 600.0,
+        "segment_watchdog_refresh": 180.0,
+        "segment_watchdog_warning": 30.0,
+        "closing_recovery_timeout": 5.0,
+        "clock": clock,
+    }
+    options.update(overrides)
+    if ids is not None:
+        options["id_factory"] = lambda: next(ids)
+    return ActivationController(**options)
+
+
 class ServerActivationControllerTests(unittest.TestCase):
     def setUp(self):
         self.clock = MonotonicFakeClock()
         self.ids = iter(f"activation-{index}" for index in range(1, 20))
-        self.controller = ActivationController(
-            manual_trigger_enabled=True,
-            wake_word_trigger_enabled=True,
-            initial_speech_timeout=15.0,
-            followup_timeout=3.0,
-            extension_seconds=5.0,
-            clock=self.clock,
-            id_factory=lambda: next(self.ids),
-        )
+        self.controller = build_controller(self.clock, self.ids)
 
     def test_canonical_foreground_uses_exactly_five_phase_values(self):
         observed = {self.controller.snapshot()["phase"]}
@@ -174,9 +189,9 @@ class ServerActivationControllerTests(unittest.TestCase):
         self.assertEqual(locked.snapshot["activationSequence"], sequence)
 
         for transition in (
-            lambda: self.controller.extend("manual"),
             self.controller.recording_started,
             self.controller.recording_ended,
+            lambda: self.controller.refresh("manual"),
             lambda: self.controller.finish("manual"),
             self.controller.input_closed,
         ):
@@ -271,6 +286,13 @@ class ServerActivationControllerTests(unittest.TestCase):
         self.assertEqual(idle.snapshot["closeReason"], "cancelled")
 
     def test_repeated_finish_and_cancel_do_not_repeat_the_close_transition(self):
+        """AP-SRV-030 replaces the former ``not_active`` answer.
+
+        The contract phase matrix answers ``finish``/``cancel`` in
+        ``closing_input`` with an idempotent state answer, not with a
+        rejection. What must not change is the effect: no second transition,
+        no second close reason and no second timer.
+        """
         for first_action in ("finish", "cancel"):
             with self.subTest(first_action=first_action):
                 self.controller.reset()
@@ -284,10 +306,20 @@ class ServerActivationControllerTests(unittest.TestCase):
                     repeated = getattr(
                         self.controller, repeated_action
                     )("manual")
-                    self.assertFalse(repeated.accepted)
-                    self.assertEqual(repeated.reason, "not_active")
+                    self.assertTrue(repeated.accepted)
+                    self.assertEqual(repeated.reason, "no_change")
                     self.assertFalse(repeated.changed)
-                    self.assertEqual(repeated.snapshot, before)
+                    self.assertEqual(
+                        repeated.snapshot["phase"], CLOSING_INPUT
+                    )
+                    self.assertEqual(
+                        repeated.snapshot["closeReason"],
+                        first.snapshot["closeReason"],
+                    )
+                    self.assertEqual(
+                        repeated.snapshot["timerRevision"],
+                        before["timerRevision"],
+                    )
                     self.assertEqual(
                         repeated.snapshot["activationId"],
                         opened.snapshot["activationId"],
@@ -311,102 +343,446 @@ class ServerActivationControllerTests(unittest.TestCase):
             second.snapshot["activationId"], first.snapshot["activationId"]
         )
 
-    def test_timeout_enters_close_barrier_and_stale_timer_is_rejected(self):
+    def test_initial_speech_timeout_enters_close_barrier(self):
         opened = self.controller.activate("manual")
-        old_version = opened.snapshot["version"]
-        self.controller.extend("manual")
-        self.clock.monotonic_now = 2000.0
-        stale = self.controller.expire(old_version)
-        self.assertFalse(stale.accepted)
-        self.assertEqual(stale.reason, "stale_timer")
+        self.assertEqual(
+            opened.snapshot["deadlineKind"], INITIAL_SPEECH_DEADLINE
+        )
+        token = opened.snapshot["timerToken"]
 
-        current_version = self.controller.snapshot()["version"]
-        expired = self.controller.expire(current_version)
+        self.clock.monotonic_now = 2000.0
+        expired = self.controller.tick(token)
         self.assertTrue(expired.accepted)
         self.assertEqual(expired.reason, "timed_out")
         self.assertEqual(expired.snapshot["phase"], CLOSING_INPUT)
         self.assertEqual(expired.snapshot["closeReason"], "timed_out")
+        self.assertEqual(
+            expired.snapshot["closeCause"], "initial_speech_timeout"
+        )
 
-    def test_expire_without_active_deadline_is_effect_free(self):
-        idle_before = self.controller.snapshot()
-        idle_expire = self.controller.expire(idle_before["version"])
-        self.assertFalse(idle_expire.accepted)
-        self.assertEqual(idle_expire.reason, "not_expirable")
-        self.assertEqual(idle_expire.snapshot, idle_before)
+    def test_a_timer_of_a_superseded_deadline_is_inert(self):
+        opened = self.controller.activate("manual")
+        stale_token = opened.snapshot["timerToken"]
+        # Speech starts, so the initial-speech deadline is replaced by the
+        # segment watchdog and the old callback is no longer responsible.
+        self.controller.recording_started()
 
+        self.clock.monotonic_now = 2000.0
+        stale = self.controller.tick(stale_token)
+        self.assertFalse(stale.accepted)
+        self.assertEqual(stale.reason, "stale_timer")
+        self.assertEqual(stale.snapshot["phase"], SEGMENT_ACTIVE)
+
+    def test_only_the_timer_revision_has_to_differ_for_a_callback_to_be_inert(self):
+        """The same activation, the same phase, only a newer deadline."""
         self.controller.activate("manual")
-        recording = self.controller.recording_started()
-        segment_expire = self.controller.expire(recording.snapshot["version"])
-        self.assertFalse(segment_expire.accepted)
-        self.assertEqual(segment_expire.reason, "not_expirable")
-        self.assertEqual(segment_expire.snapshot, recording.snapshot)
+        self.controller.recording_started()
+        followup = self.controller.recording_ended()
+        stale_token = followup.snapshot["timerToken"]
+
+        self.clock.monotonic_now = 1001.0
+        refreshed = self.controller.refresh("manual")
+        fresh_token = refreshed.snapshot["timerToken"]
+        self.assertEqual(stale_token.activation_id, fresh_token.activation_id)
+        self.assertEqual(stale_token.phase, fresh_token.phase)
+        self.assertEqual(stale_token.kind, fresh_token.kind)
+        self.assertNotEqual(
+            stale_token.timer_revision, fresh_token.timer_revision
+        )
+
+        self.clock.monotonic_now = 1003.5
+        stale = self.controller.tick(stale_token)
+        self.assertFalse(stale.accepted)
+        self.assertEqual(stale.reason, "stale_timer")
+        self.assertEqual(stale.snapshot["phase"], FOLLOWUP_WAIT)
+        self.assertEqual(stale.snapshot["deadline"], 1004.0)
+
+    def test_tick_without_an_armed_deadline_is_effect_free(self):
+        idle_before = self.controller.snapshot()
+        idle_tick = self.controller.tick(idle_before["timerToken"])
+        self.assertFalse(idle_tick.accepted)
+        self.assertEqual(idle_tick.reason, "not_expirable")
+        self.assertEqual(idle_tick.snapshot, idle_before)
+
+        self.assertFalse(self.controller.tick(None).accepted)
+        self.assertEqual(self.controller.tick("nonsense").reason, "stale_timer")
 
     def test_wallclock_jumps_do_not_change_monotonic_deadline_or_expiry(self):
         with mock.patch(
             "api_fastapi_server.activation.time.time", return_value=10**12
         ):
             opened = self.controller.activate("manual")
-        version = opened.snapshot["version"]
+        token = opened.snapshot["timerToken"]
         self.assertEqual(opened.snapshot["deadline"], 1015.0)
 
         self.clock.monotonic_now = 1010.0
         with mock.patch(
             "api_fastapi_server.activation.time.time", return_value=-10**12
         ):
-            early = self.controller.expire(version)
+            early = self.controller.tick(token)
         self.assertFalse(early.accepted)
         self.assertEqual(early.reason, "not_due")
         self.assertEqual(early.snapshot["deadline"], 1015.0)
 
         self.clock.monotonic_now = 1016.0
-        expired = self.controller.expire(version)
+        expired = self.controller.tick(token)
         self.assertTrue(expired.accepted)
         self.assertEqual(expired.snapshot["phase"], CLOSING_INPUT)
 
-    def test_extension_semantics_remain_out_of_scope_for_ap_srv_010(self):
-        opened = self.controller.activate("manual")
-        first = self.controller.extend("manual")
-        second = self.controller.extend("manual")
-        self.assertEqual(opened.snapshot["deadline"], 1015.0)
-        self.assertEqual(first.snapshot["deadline"], 1020.0)
-        self.assertEqual(second.snapshot["deadline"], 1025.0)
+    # -- AP-SRV-030: the contract refresh replaces the additive extend -------
+    #
+    # The AP-SRV-010 baseline banked ``extensionSeconds`` on every ``extend``
+    # (FIND-010, HK-04). Those expectations are gone; the tests below hold the
+    # frozen semantics instead.
 
-    def test_each_source_can_open_and_extend_its_own_activation(self):
+    def test_the_additive_extend_semantics_is_gone_from_the_controller(self):
+        """FIND-010/HK-04: no ``extensionSeconds``, no banked time, no credit."""
+        self.assertFalse(hasattr(self.controller, "extend"))
+        self.assertFalse(hasattr(self.controller, "extension_seconds"))
+        self.assertFalse(hasattr(self.controller, "_pending_extension"))
+        self.assertNotIn("pendingExtensionSeconds", self.controller.snapshot())
+        with self.assertRaises(TypeError):
+            ActivationController(
+                manual_trigger_enabled=True,
+                wake_word_trigger_enabled=True,
+                extension_seconds=5.0,
+                clock=self.clock,
+            )
+
+    def test_refresh_is_invalid_while_waiting_for_the_first_speech(self):
+        """PHASE-03: the initial-speech window is not refreshable."""
+        opened = self.controller.activate("manual")
+        before = self.controller.snapshot()
         for source in ("manual", "wake_word"):
             with self.subTest(source=source):
-                self.controller.reset()
-                opened = self.controller.activate(source)
-                extended = self.controller.extend(source)
-                self.assertTrue(extended.accepted)
-                self.assertEqual(extended.reason, "extended")
+                rejected = self.controller.refresh(source)
+                self.assertFalse(rejected.accepted)
+                self.assertEqual(rejected.reason, "invalid_phase")
+                self.assertFalse(rejected.changed)
+                self.assertEqual(rejected.snapshot, before)
                 self.assertEqual(
-                    extended.snapshot["activationId"],
-                    opened.snapshot["activationId"],
+                    rejected.snapshot["deadline"], opened.snapshot["deadline"]
                 )
-                self.assertEqual(extended.snapshot["primarySource"], source)
-                self.assertEqual(extended.snapshot["sources"], [source])
-                self.assertEqual(extended.snapshot["deadline"], 1020.0)
 
-    def test_followup_extensions_keep_the_inherited_additive_baseline(self):
+    def test_followup_refresh_restarts_the_window_and_never_accumulates(self):
+        """TIME-02/TIME-03: three refreshes are three restarts, not three credits."""
         self.controller.activate("manual")
         self.controller.recording_started()
         followup = self.controller.recording_ended()
-        self.clock.monotonic_now = 1002.0
-        first = self.controller.extend("manual")
-        second = self.controller.extend("manual")
-
         self.assertEqual(followup.snapshot["deadline"], 1003.0)
-        self.assertEqual(first.snapshot["deadline"], 1008.0)
-        self.assertEqual(second.snapshot["deadline"], 1013.0)
-        self.assertEqual(second.snapshot["phase"], FOLLOWUP_WAIT)
+        self.assertEqual(followup.snapshot["deadlineKind"], FOLLOWUP_DEADLINE)
 
-    def test_each_enabled_source_can_extend_without_changing_first_source(self):
+        self.clock.monotonic_now = 1002.0
+        first = self.controller.refresh("manual")
+        second = self.controller.refresh("manual")
+        third = self.controller.refresh("manual")
+
+        for result in (first, second, third):
+            self.assertTrue(result.accepted)
+            self.assertEqual(result.reason, "refreshed")
+            self.assertEqual(result.snapshot["phase"], FOLLOWUP_WAIT)
+            # now + followupTimeout, no matter how often it is pressed.
+            self.assertEqual(result.snapshot["deadline"], 1005.0)
+
+        self.clock.monotonic_now = 1004.0
+        fourth = self.controller.refresh("manual")
+        self.assertEqual(fourth.snapshot["deadline"], 1007.0)
+
+    def test_every_effective_refresh_raises_the_timer_revision(self):
+        """TIME-07: an effective timer change is never silent."""
         self.controller.activate("manual")
-        extended = self.controller.extend("wake_word")
-        self.assertTrue(extended.accepted)
-        self.assertEqual(extended.reason, "extended")
-        self.assertEqual(extended.snapshot["primarySource"], "manual")
-        self.assertEqual(extended.snapshot["sources"], ["manual"])
+        self.controller.recording_started()
+        followup = self.controller.recording_ended()
+        revisions = [followup.snapshot["timerRevision"]]
+        for offset in (1.0, 2.0, 3.0):
+            self.clock.monotonic_now = 1000.0 + offset
+            refreshed = self.controller.refresh("manual")
+            self.assertGreater(
+                refreshed.snapshot["timerRevision"], revisions[-1]
+            )
+            revisions.append(refreshed.snapshot["timerRevision"])
+
+    def test_each_source_can_refresh_the_same_followup_window(self):
+        for source in ("manual", "wake_word"):
+            with self.subTest(source=source):
+                self.controller.reset()
+                self.clock.monotonic_now = 1000.0
+                opened = self.controller.activate(source)
+                self.controller.recording_started()
+                self.controller.recording_ended()
+                self.clock.monotonic_now = 1001.0
+                refreshed = self.controller.refresh(source)
+                self.assertTrue(refreshed.accepted)
+                self.assertEqual(refreshed.reason, "refreshed")
+                self.assertEqual(
+                    refreshed.snapshot["activationId"],
+                    opened.snapshot["activationId"],
+                )
+                self.assertEqual(refreshed.snapshot["primarySource"], source)
+                self.assertEqual(refreshed.snapshot["sources"], [source])
+                self.assertEqual(refreshed.snapshot["deadline"], 1004.0)
+
+    def test_a_second_source_refreshes_without_changing_the_latched_source(self):
+        self.controller.activate("manual")
+        self.controller.recording_started()
+        self.controller.recording_ended()
+        refreshed = self.controller.refresh("wake_word")
+        self.assertTrue(refreshed.accepted)
+        self.assertEqual(refreshed.reason, "refreshed")
+        self.assertEqual(refreshed.snapshot["primarySource"], "manual")
+        self.assertEqual(refreshed.snapshot["sources"], ["manual"])
+
+    def test_refresh_in_closing_input_has_no_effect(self):
+        self.controller.activate("manual")
+        self.controller.finish("manual")
+        before = self.controller.snapshot()
+        rejected = self.controller.refresh("manual")
+        self.assertFalse(rejected.accepted)
+        self.assertEqual(rejected.reason, "closing_input")
+        self.assertFalse(rejected.changed)
+        self.assertEqual(rejected.snapshot, before)
+
+    # -- AP-SRV-030: segment watchdog ---------------------------------------
+
+    def test_segment_start_arms_the_ten_minute_watchdog(self):
+        """TIME-04: 600 s by default, warning 30 s before the deadline."""
+        self.controller.activate("manual")
+        started = self.controller.recording_started()
+        self.assertEqual(
+            started.snapshot["deadlineKind"], SEGMENT_WATCHDOG_DEADLINE
+        )
+        self.assertEqual(started.snapshot["deadline"], 1600.0)
+        self.assertEqual(started.snapshot["warningDeadline"], 1570.0)
+
+    def test_an_early_watchdog_refresh_never_shortens_the_remaining_time(self):
+        """TIME-05: ``max(currentDeadline, now + 180 s)``."""
+        self.controller.activate("manual")
+        started = self.controller.recording_started()
+
+        self.clock.monotonic_now = 1060.0
+        early = self.controller.refresh("manual")
+        self.assertTrue(early.accepted)
+        self.assertEqual(early.reason, "refreshed")
+        self.assertFalse(
+            early.changed, "an early refresh must not churn the timer"
+        )
+        self.assertEqual(early.snapshot["deadline"], 1600.0)
+        self.assertEqual(
+            early.snapshot["timerRevision"], started.snapshot["timerRevision"]
+        )
+
+    def test_a_late_watchdog_refresh_secures_at_least_three_minutes(self):
+        self.controller.activate("manual")
+        self.controller.recording_started()
+
+        self.clock.monotonic_now = 1500.0
+        late = self.controller.refresh("manual")
+        self.assertTrue(late.changed)
+        self.assertEqual(late.snapshot["deadline"], 1680.0)
+        self.assertEqual(late.snapshot["warningDeadline"], 1650.0)
+
+    def test_repeated_watchdog_refreshes_do_not_accumulate(self):
+        self.controller.activate("manual")
+        self.controller.recording_started()
+        self.clock.monotonic_now = 1500.0
+        for _ in range(3):
+            refreshed = self.controller.refresh("manual")
+            self.assertEqual(refreshed.snapshot["deadline"], 1680.0)
+
+    def test_vad_activity_does_not_reset_the_watchdog(self):
+        """TIME-06: continued speech is not an interaction."""
+        self.controller.activate("manual")
+        started = self.controller.recording_started()
+        for offset in (10.0, 120.0, 400.0):
+            self.clock.monotonic_now = 1000.0 + offset
+            repeated = self.controller.recording_started()
+            self.assertTrue(repeated.accepted)
+            self.assertEqual(repeated.reason, "already_recording")
+            self.assertFalse(repeated.changed)
+            self.assertEqual(repeated.snapshot["deadline"], 1600.0)
+            self.assertEqual(
+                repeated.snapshot["timerRevision"],
+                started.snapshot["timerRevision"],
+            )
+
+    def test_the_watchdog_warns_once_and_then_expires_without_followup(self):
+        """TIME-08: the audio is processed, the whole activation closes."""
+        self.controller.activate("manual")
+        started = self.controller.recording_started()
+        token = started.snapshot["timerToken"]
+
+        self.clock.monotonic_now = 1569.0
+        self.assertEqual(self.controller.tick(token).reason, "not_due")
+
+        self.clock.monotonic_now = 1570.0
+        warning = self.controller.tick(token)
+        self.assertTrue(warning.accepted)
+        self.assertEqual(warning.reason, "watchdog_warning")
+        self.assertEqual(warning.snapshot["phase"], SEGMENT_ACTIVE)
+        self.assertTrue(warning.snapshot["warningFired"])
+        # The warning moves no deadline, so the same token stays responsible.
+        self.assertEqual(warning.snapshot["timerToken"], token)
+
+        self.clock.monotonic_now = 1580.0
+        self.assertEqual(self.controller.tick(token).reason, "not_due")
+
+        self.clock.monotonic_now = 1600.0
+        expired = self.controller.tick(token)
+        self.assertTrue(expired.accepted)
+        self.assertEqual(expired.reason, "segment_watchdog_timeout")
+        self.assertEqual(expired.snapshot["phase"], CLOSING_INPUT)
+        self.assertNotEqual(expired.snapshot["phase"], FOLLOWUP_WAIT)
+        self.assertEqual(
+            expired.snapshot["closeCause"], "segment_watchdog_timeout"
+        )
+
+    def test_a_watchdog_timer_of_an_ended_segment_is_inert(self):
+        self.controller.activate("manual")
+        first = self.controller.recording_started()
+        stale_token = first.snapshot["timerToken"]
+        self.controller.recording_ended()
+        self.controller.recording_started()
+
+        self.clock.monotonic_now = 5000.0
+        stale = self.controller.tick(stale_token)
+        self.assertFalse(stale.accepted)
+        self.assertEqual(stale.reason, "stale_timer")
+        self.assertEqual(stale.snapshot["phase"], SEGMENT_ACTIVE)
+
+    # -- AP-SRV-030: closing recovery ---------------------------------------
+
+    def test_closing_input_arms_a_recovery_deadline(self):
+        self.controller.activate("manual")
+        closing = self.controller.finish("manual")
+        self.assertEqual(
+            closing.snapshot["deadlineKind"], CLOSING_RECOVERY_DEADLINE
+        )
+        self.assertEqual(closing.snapshot["deadline"], 1005.0)
+
+    def test_closing_recovery_reaches_idle_and_keeps_the_close_reason(self):
+        """PHASE-05: ``closing_input`` must never hang."""
+        self.controller.activate("manual")
+        closing = self.controller.finish("manual")
+        token = closing.snapshot["timerToken"]
+
+        self.clock.monotonic_now = 1005.0
+        recovered = self.controller.tick(token)
+        self.assertTrue(recovered.accepted)
+        self.assertEqual(recovered.reason, "closing_recovered")
+        self.assertEqual(recovered.snapshot["phase"], IDLE)
+        self.assertTrue(recovered.snapshot["recovered"])
+        self.assertEqual(recovered.snapshot["closeReason"], "finished")
+        self.assertEqual(
+            recovered.snapshot["closeCause"], "closing_recovery_timeout"
+        )
+        self.assertIsNone(recovered.snapshot["deadline"])
+        # The foreground is free again.
+        self.assertTrue(self.controller.activate("manual").accepted)
+
+    def test_a_recovery_timer_cannot_touch_a_newer_activation(self):
+        self.controller.activate("manual")
+        closing = self.controller.finish("manual")
+        stale_token = closing.snapshot["timerToken"]
+        self.controller.input_closed()
+        second = self.controller.activate("wake_word")
+
+        self.clock.monotonic_now = 9000.0
+        stale = self.controller.tick(stale_token)
+        self.assertFalse(stale.accepted)
+        self.assertEqual(stale.reason, "stale_timer")
+        self.assertEqual(
+            self.controller.snapshot()["activationId"],
+            second.snapshot["activationId"],
+        )
+        self.assertEqual(
+            self.controller.snapshot()["phase"], WAITING_FIRST_SPEECH
+        )
+
+    # -- AP-SRV-030: observed activation id ---------------------------------
+
+    def test_a_control_command_with_a_stale_activation_id_has_no_effect(self):
+        """CMD-02/CMD-07: an old id never acts on the newer activation."""
+        first = self.controller.activate("manual")
+        stale_id = first.snapshot["activationId"]
+        self.controller.finish("manual")
+        self.controller.input_closed()
+        second = self.controller.activate("wake_word")
+        self.controller.recording_started()
+        self.controller.recording_ended()
+        before = self.controller.snapshot()
+
+        for action in ("refresh", "finish", "cancel"):
+            with self.subTest(action=action):
+                result = getattr(self.controller, action)(
+                    "manual", activation_id=stale_id
+                )
+                self.assertFalse(result.accepted)
+                self.assertEqual(result.reason, "stale_activation")
+                self.assertFalse(result.changed)
+                self.assertEqual(result.snapshot, before)
+                self.assertEqual(
+                    result.snapshot["activationId"],
+                    second.snapshot["activationId"],
+                )
+
+    def test_the_observed_activation_id_admits_the_current_activation(self):
+        opened = self.controller.activate("manual")
+        activation_id = opened.snapshot["activationId"]
+        self.controller.recording_started()
+        self.controller.recording_ended()
+
+        refreshed = self.controller.refresh(
+            "manual", activation_id=activation_id
+        )
+        self.assertTrue(refreshed.accepted)
+        finished = self.controller.finish("manual", activation_id=activation_id)
+        self.assertTrue(finished.accepted)
+        self.assertEqual(finished.reason, "finished")
+
+    def test_activate_must_not_address_an_existing_activation(self):
+        rejected = self.controller.activate("manual", activation_id="a-1")
+        self.assertFalse(rejected.accepted)
+        self.assertEqual(rejected.reason, "invalid_payload")
+        self.assertEqual(self.controller.snapshot()["phase"], IDLE)
+
+    # -- AP-SRV-030: generic audio availability ------------------------------
+
+    def test_audio_loss_cancels_the_open_activation_in_every_phase(self):
+        """DEVICE-03: cancel the activation, keep the session."""
+        phase_setups = (
+            (WAITING_FIRST_SPEECH, ()),
+            (SEGMENT_ACTIVE, ("recording_started",)),
+            (FOLLOWUP_WAIT, ("recording_started", "recording_ended")),
+        )
+        for expected_phase, transitions in phase_setups:
+            with self.subTest(phase=expected_phase):
+                self.controller.reset()
+                self.controller.activate("manual")
+                for transition in transitions:
+                    getattr(self.controller, transition)()
+                self.assertEqual(
+                    self.controller.snapshot()["phase"], expected_phase
+                )
+
+                lost = self.controller.audio_unavailable()
+                self.assertTrue(lost.accepted)
+                self.assertTrue(lost.changed)
+                self.assertEqual(lost.snapshot["phase"], CLOSING_INPUT)
+                self.assertEqual(lost.snapshot["closeReason"], "cancelled")
+                self.assertEqual(
+                    lost.snapshot["closeCause"], "audio_unavailable"
+                )
+
+    def test_audio_loss_is_idempotent_and_needs_an_open_activation(self):
+        self.assertEqual(
+            self.controller.audio_unavailable().reason, "not_active"
+        )
+        self.controller.activate("manual")
+        self.controller.audio_unavailable()
+        repeated = self.controller.audio_unavailable()
+        self.assertTrue(repeated.accepted)
+        self.assertEqual(repeated.reason, "no_change")
+        self.assertFalse(repeated.changed)
 
     def test_disabled_and_unknown_sources_are_rejected_without_mutation(self):
         controller = ActivationController(
@@ -438,7 +814,7 @@ class ServerActivationControllerTests(unittest.TestCase):
     def test_unknown_source_is_rejected_by_every_source_command(self):
         self.controller.activate("manual")
         before = self.controller.snapshot()
-        for operation in ("extend", "finish", "cancel"):
+        for operation in ("refresh", "finish", "cancel"):
             with self.subTest(operation=operation):
                 result = getattr(self.controller, operation)("telepathy")
                 self.assertFalse(result.accepted)
@@ -447,7 +823,7 @@ class ServerActivationControllerTests(unittest.TestCase):
 
     def test_invalid_transitions_are_refused(self):
         for call, reason in (
-            (lambda: self.controller.extend("manual"), "not_active"),
+            (lambda: self.controller.refresh("manual"), "not_active"),
             (self.controller.recording_started, "not_active"),
             (self.controller.recording_ended, "not_active"),
             (lambda: self.controller.finish("manual"), "not_active"),

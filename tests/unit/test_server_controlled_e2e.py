@@ -251,7 +251,7 @@ class BlockingScheduler(ManualScheduler):
         BlockingScheduler.instances.append(self)
 
 
-def build_app(scheduler_factory=AutoScheduler):
+def build_app(scheduler_factory=AutoScheduler, recorder_factory=None):
     settings = ServerSettings(
         model_warmup=False,
         request_logging_enabled=False,
@@ -269,7 +269,7 @@ def build_app(scheduler_factory=AutoScheduler):
     return create_app(
         settings,
         scheduler_factory=scheduler_factory,
-        recorder_factory=GateAwareRecorder,
+        recorder_factory=recorder_factory or GateAwareRecorder,
     )
 
 
@@ -1317,39 +1317,66 @@ class ActivationTimeoutEndToEndTests(unittest.TestCase):
                 session.settle()
                 self.assertEqual(recorder.recording_starts, 0)
 
-    def test_a_timeout_does_not_end_an_activation_that_was_extended(self):
+    def test_a_stale_timer_does_not_end_a_refreshed_followup(self):
+        """AP-SRV-030 replaces the additive-extension version of this test.
+
+        The former version extended the *initial-speech* window with
+        ``extensionSeconds``. Refreshing that window is ``invalid_phase`` now
+        (PHASE-03), and refreshing accumulates nothing (TIME-03). What still
+        has to hold is the timer property the old test protected: a deadline
+        that a refresh replaced must not end the activation when it fires.
+        """
         with TestClient(self.app) as client:
             with ControlledSessionHarness(
                 client,
                 "manualTriggerEnabled=true&wakeWordTriggerEnabled=false"
-                "&initialSpeechTimeout=0.4&extensionSeconds=5",
+                "&initialSpeechTimeout=30&followupTimeout=0.6",
             ) as session:
                 session.send({"type": "start"})
                 session.send({
                     "type": "trigger",
                     "action": "activate",
                     "source": "manual",
-                    "commandId": "ext-1",
+                    "commandId": "ref-1",
                 })
                 first = session.drain("trigger_ack")
-                session.send({
-                    "type": "trigger",
-                    "action": "extend",
-                    "source": "manual",
-                    "commandId": "ext-2",
-                })
-                extended = session.drain("trigger_ack")
-                self.assertTrue(extended["accepted"])
-                self.assertEqual(extended["activationId"], first["activationId"])
 
-                # Wait past the *original* deadline. The stale timer must not
-                # end the extended activation.
-                time.sleep(1.0)
+                # Speak once so that the follow-up window opens.
+                session.socket.send_bytes(speech_packet())
+                session.timeline("recording_started")
                 recorder = session.recorder()
+                recorder.flush_buffered_audio()
+                session.timeline("recording_ended")
+
+                deadline = time.monotonic() + 1.8
+                refreshes = 0
+                while time.monotonic() < deadline:
+                    refreshes += 1
+                    session.send({
+                        "type": "trigger",
+                        "action": "refresh",
+                        "source": "manual",
+                        "commandId": f"ref-loop-{refreshes}",
+                        "activationId": first["activationId"],
+                    })
+                    ack = session.drain("trigger_ack")
+                    self.assertTrue(ack["accepted"], ack)
+                    self.assertEqual(ack["reason"], "refreshed")
+                    self.assertEqual(
+                        ack["activationId"], first["activationId"]
+                    )
+                    time.sleep(0.3)
+
+                self.assertGreater(refreshes, 2)
                 self.assertTrue(
                     recorder.controlled_activation_state()["active"],
-                    "the extension must survive the original deadline",
+                    "a refreshed follow-up must survive its replaced deadline",
                 )
+
+                # And once refreshing stops, the follow-up really does expire.
+                closed = session.timeline("activation_closed", timeout=20.0)
+                self.assertEqual(closed["reason"], "timed_out")
+                self.assertEqual(closed["cause"], "followup_timeout")
 
 
 @unittest.skipIf(TestClient is None, "FastAPI test client is not installed")

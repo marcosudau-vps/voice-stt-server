@@ -1,4 +1,4 @@
-"""Server-authoritative foreground activation state machine.
+"""Server-authoritative foreground activation state machine and timer policy.
 
 One session owns exactly one controller. The controller serialises trigger
 commands, recorder callbacks and timeout callbacks and exposes the five
@@ -7,10 +7,39 @@ phase of this machine: after input has been closed safely, the foreground is
 idle and may admit the next activation while older work drains in the
 background.
 
+Identity and revisions
+----------------------
+
 ``activationSequence`` (also exposed as the compatibility field
 ``generation``) increases only when a new activation is admitted. ``version``
-increases on every state change and invalidates stale timeout callbacks.
-Deadlines are monotonic.
+increases on every state change. ``timerRevision`` increases only when an
+*effective* timer change happens, and together with the activation identity,
+the phase and the segment token it forms the :class:`TimerToken` that a
+scheduled callback has to present. A callback whose token no longer matches is
+inert - it can neither end a newer activation nor resurrect an older one.
+
+Deadlines are monotonic. Wall-clock jumps therefore cannot expire or extend a
+phase; wall-clock time is used for logs and public timestamps only.
+
+Timer contract (AP-SRV-030)
+---------------------------
+
+======================  ====================================================
+Deadline kind           Rule
+======================  ====================================================
+``initial_speech``      ``now + initial_speech_timeout`` on admission.
+                        ``refresh`` is ``invalid_phase`` here.
+``followup``            ``now + followup_timeout`` after a regular segment
+                        end and again on every ``refresh``. Never cumulative.
+``segment_watchdog``    ``now + segment_watchdog_initial`` when a segment
+                        starts; ``refresh`` sets
+                        ``max(current_deadline, now + watchdog_refresh)``.
+                        A warning becomes due ``segment_watchdog_warning``
+                        before the deadline. VAD does not reset it.
+``closing_recovery``    ``now + closing_recovery_timeout`` when
+                        ``closing_input`` is entered, so the foreground can
+                        never hang there.
+======================  ====================================================
 """
 
 from copy import deepcopy
@@ -40,6 +69,22 @@ MANUAL_SOURCE = "manual"
 WAKE_WORD_SOURCE = "wake_word"
 ACTIVATION_SOURCES = frozenset({MANUAL_SOURCE, WAKE_WORD_SOURCE})
 
+#: The four canonical deadline kinds of the frozen timer contract.
+INITIAL_SPEECH_DEADLINE = "initial_speech"
+FOLLOWUP_DEADLINE = "followup"
+SEGMENT_WATCHDOG_DEADLINE = "segment_watchdog"
+CLOSING_RECOVERY_DEADLINE = "closing_recovery"
+
+#: Contract defaults in seconds. The millisecond values of the contract are
+#: the same numbers; the settings control plane (AP-SRV-050) owns the public
+#: schema, ranges and apply policies.
+DEFAULT_INITIAL_SPEECH_TIMEOUT = 15.0
+DEFAULT_FOLLOWUP_TIMEOUT = 3.0
+DEFAULT_SEGMENT_WATCHDOG_INITIAL = 600.0
+DEFAULT_SEGMENT_WATCHDOG_REFRESH = 180.0
+DEFAULT_SEGMENT_WATCHDOG_WARNING = 30.0
+DEFAULT_CLOSING_RECOVERY_TIMEOUT = 5.0
+
 
 def _freeze(value):
     """Returns a recursively immutable, detached settings value."""
@@ -68,6 +113,25 @@ def _thaw(value):
 
 
 @dataclass(frozen=True)
+class TimerToken:
+    """The complete identity a scheduled callback has to present.
+
+    Checking ``timerRevision`` alone would not be enough: the counter restarts
+    its meaning with every activation, so an old callback of activation *A*
+    could coincidentally match a revision of activation *B*. The token
+    therefore also carries the activation identity, the phase it was armed for
+    and - for the segment watchdog - the segment token.
+    """
+
+    activation_id: str
+    activation_sequence: int
+    timer_revision: int
+    phase: str
+    kind: str
+    segment_token: int
+
+
+@dataclass(frozen=True)
 class ActivationDecision:
     accepted: bool
     reason: str
@@ -83,9 +147,12 @@ class ActivationController:
         *,
         manual_trigger_enabled=None,
         wake_word_trigger_enabled=None,
-        initial_speech_timeout=15.0,
-        followup_timeout=3.0,
-        extension_seconds=5.0,
+        initial_speech_timeout=DEFAULT_INITIAL_SPEECH_TIMEOUT,
+        followup_timeout=DEFAULT_FOLLOWUP_TIMEOUT,
+        segment_watchdog_initial=DEFAULT_SEGMENT_WATCHDOG_INITIAL,
+        segment_watchdog_refresh=DEFAULT_SEGMENT_WATCHDOG_REFRESH,
+        segment_watchdog_warning=DEFAULT_SEGMENT_WATCHDOG_WARNING,
+        closing_recovery_timeout=DEFAULT_CLOSING_RECOVERY_TIMEOUT,
         clock=None,
         id_factory=None,
     ):
@@ -106,8 +173,17 @@ class ActivationController:
         self.followup_timeout = self._positive(
             "followup_timeout", followup_timeout
         )
-        self.extension_seconds = self._positive(
-            "extension_seconds", extension_seconds
+        self.segment_watchdog_initial = self._positive(
+            "segment_watchdog_initial", segment_watchdog_initial
+        )
+        self.segment_watchdog_refresh = self._positive(
+            "segment_watchdog_refresh", segment_watchdog_refresh
+        )
+        self.segment_watchdog_warning = self._positive(
+            "segment_watchdog_warning", segment_watchdog_warning
+        )
+        self.closing_recovery_timeout = self._positive(
+            "closing_recovery_timeout", closing_recovery_timeout
         )
         self._clock = clock or time.monotonic
         self._id_factory = id_factory or (lambda: uuid.uuid4().hex)
@@ -115,14 +191,19 @@ class ActivationController:
 
         self._activation_sequence = 0
         self._version = 0
+        self._timer_revision = 0
+        self._segment_token = 0
         self._activation_id = None
         self._primary_source = None
         self._effective_settings = _freeze({})
         self._phase = IDLE
         self._deadline = None
-        self._pending_extension = 0.0
+        self._deadline_kind = None
+        self._warning_deadline = None
+        self._warning_fired = False
         self._segment_count = 0
         self._close_reason = None
+        self._close_cause = None
 
     @staticmethod
     def _positive(name, value):
@@ -151,6 +232,55 @@ class ActivationController:
             return self.wake_word_trigger_enabled
         return False
 
+    # -- timer ownership -----------------------------------------------------
+
+    def _clear_timer_locked(self):
+        """Drops the armed deadline. Every drop is an effective timer change."""
+        if self._deadline is None and self._deadline_kind is None:
+            return
+        self._deadline = None
+        self._deadline_kind = None
+        self._warning_deadline = None
+        self._warning_fired = False
+        self._timer_revision += 1
+
+    def _set_timer_locked(self, kind, deadline, *, warning_after=None):
+        """Arms one deadline and raises ``timerRevision``.
+
+        Only the controller creates and invalidates deadlines, and every path
+        goes through this one place. A scheduled callback can therefore never
+        keep a revision that some other code path forgot to raise.
+        """
+        self._deadline = float(deadline)
+        self._deadline_kind = kind
+        if warning_after is None:
+            self._warning_deadline = None
+        else:
+            # A warning window wider than the remaining time makes the warning
+            # due immediately instead of silently dropping it.
+            self._warning_deadline = max(
+                self._clock(), float(deadline) - float(warning_after)
+            )
+        self._warning_fired = False
+        self._timer_revision += 1
+
+    def _timer_token_locked(self):
+        return TimerToken(
+            activation_id=self._activation_id,
+            activation_sequence=self._activation_sequence,
+            timer_revision=self._timer_revision,
+            phase=self._phase,
+            kind=self._deadline_kind,
+            segment_token=self._segment_token,
+        )
+
+    def _token_is_current_locked(self, token):
+        if not isinstance(token, TimerToken):
+            return False
+        return token == self._timer_token_locked()
+
+    # -- snapshots -----------------------------------------------------------
+
     def _snapshot_locked(self):
         sources = [self._primary_source] if self._primary_source else []
         return {
@@ -160,23 +290,48 @@ class ActivationController:
             # the same session-increasing activation identity.
             "generation": self._activation_sequence,
             "version": self._version,
+            "timerRevision": self._timer_revision,
+            "segmentToken": self._segment_token,
             "primarySource": self._primary_source,
             "sources": sources,
             "effectiveSettings": _thaw(self._effective_settings),
             "phase": self._phase,
             "state": self._phase,
             "deadline": self._deadline,
-            "pendingExtensionSeconds": self._pending_extension,
+            "deadlineKind": self._deadline_kind,
+            "warningDeadline": (
+                None if self._warning_fired else self._warning_deadline
+            ),
+            "warningFired": self._warning_fired,
             "segments": self._segment_count,
             "windowOpen": self._phase in OPEN_WINDOW_PHASES,
             "active": self._phase != IDLE,
+            "timerToken": self._timer_token_locked(),
         }
 
     def snapshot(self):
         with self._lock:
             return self._snapshot_locked()
 
-    def activate(self, source, effective_settings=None):
+    def timer_token(self):
+        with self._lock:
+            return self._timer_token_locked()
+
+    # -- command surface -----------------------------------------------------
+
+    def _activation_mismatch_locked(self, activation_id):
+        """``stale_activation`` guard for the observed activation id.
+
+        ``None`` means "the caller observed no id" and stays allowed, so that
+        server-internal transitions and the not-yet-migrated v1 wire keep
+        working. A *wrong* id is always refused, which is what keeps a command
+        aimed at activation *A* from acting on the newer activation *B*.
+        """
+        if activation_id is None:
+            return False
+        return str(activation_id) != str(self._activation_id)
+
+    def activate(self, source, effective_settings=None, *, activation_id=None):
         """Admits a new activation only while the foreground is idle."""
         with self._lock:
             if source not in ACTIVATION_SOURCES:
@@ -191,40 +346,87 @@ class ActivationController:
                 return ActivationDecision(
                     False, "trigger_disabled", self._snapshot_locked()
                 )
+            if activation_id is not None:
+                # ``activate`` never addresses an existing activation.
+                return ActivationDecision(
+                    False, "invalid_payload", self._snapshot_locked()
+                )
 
             self._activation_id = self._id_factory()
             self._activation_sequence += 1
             self._primary_source = source
             self._effective_settings = _freeze(effective_settings or {})
             self._phase = WAITING_FIRST_SPEECH
-            self._deadline = self._clock() + self.initial_speech_timeout
-            self._pending_extension = 0.0
             self._segment_count = 0
             self._close_reason = None
+            self._close_cause = None
+            self._set_timer_locked(
+                INITIAL_SPEECH_DEADLINE,
+                self._clock() + self.initial_speech_timeout,
+            )
             self._version += 1
             return ActivationDecision(
                 True, "activated", self._snapshot_locked(), True
             )
 
-    def extend(self, source):
+    def refresh(self, source, *, activation_id=None):
+        """The contract ``refresh``: never cumulative, never a time credit.
+
+        * ``waiting_first_speech`` - ``invalid_phase``; the initial-speech
+          window is not refreshable.
+        * ``segment_active`` - watchdog refresh to
+          ``max(current_deadline, now + watchdog_refresh)``, so an early
+          refresh cannot shorten a longer remaining deadline.
+        * ``followup_wait`` - the deadline becomes ``now + followup_timeout``.
+          Three refreshes mean three times "start again from now", not three
+          times extra time.
+        * ``closing_input`` - ``closing_input``, no effect.
+        * ``idle`` - ``not_active``.
+        """
         with self._lock:
             if not self._source_enabled(source):
                 return ActivationDecision(
                     False, "trigger_disabled", self._snapshot_locked()
                 )
-            if self._phase not in OPEN_WINDOW_PHASES:
+            if self._phase == IDLE:
                 return ActivationDecision(
                     False, "not_active", self._snapshot_locked()
                 )
+            if self._activation_mismatch_locked(activation_id):
+                return ActivationDecision(
+                    False, "stale_activation", self._snapshot_locked()
+                )
+            if self._phase == WAITING_FIRST_SPEECH:
+                return ActivationDecision(
+                    False, "invalid_phase", self._snapshot_locked()
+                )
+            if self._phase == CLOSING_INPUT:
+                return ActivationDecision(
+                    False, "closing_input", self._snapshot_locked()
+                )
+
+            now = self._clock()
             if self._phase == SEGMENT_ACTIVE:
-                self._pending_extension += self.extension_seconds
+                current = self._deadline if self._deadline is not None else now
+                target = max(current, now + self.segment_watchdog_refresh)
+                if target <= current:
+                    # An early refresh must not shorten a longer remaining
+                    # deadline, and a no-op must not churn the armed timer.
+                    return ActivationDecision(
+                        True, "refreshed", self._snapshot_locked(), False
+                    )
+                self._set_timer_locked(
+                    SEGMENT_WATCHDOG_DEADLINE,
+                    target,
+                    warning_after=self.segment_watchdog_warning,
+                )
             else:
-                now = self._clock()
-                base = self._deadline if self._deadline is not None else now
-                self._deadline = max(now, base) + self.extension_seconds
+                self._set_timer_locked(
+                    FOLLOWUP_DEADLINE, now + self.followup_timeout
+                )
             self._version += 1
             return ActivationDecision(
-                True, "extended", self._snapshot_locked(), True
+                True, "refreshed", self._snapshot_locked(), True
             )
 
     def recording_started(self):
@@ -234,12 +436,19 @@ class ActivationController:
                     False, "not_active", self._snapshot_locked()
                 )
             if self._phase == SEGMENT_ACTIVE:
+                # Continued voice activity inside the same segment. The
+                # watchdog is explicitly *not* reset by VAD (TIME-06).
                 return ActivationDecision(
                     True, "already_recording", self._snapshot_locked()
                 )
             self._phase = SEGMENT_ACTIVE
-            self._deadline = None
             self._segment_count += 1
+            self._segment_token += 1
+            self._set_timer_locked(
+                SEGMENT_WATCHDOG_DEADLINE,
+                self._clock() + self.segment_watchdog_initial,
+                warning_after=self.segment_watchdog_warning,
+            )
             self._version += 1
             return ActivationDecision(
                 True, "recording_started", self._snapshot_locked(), True
@@ -255,39 +464,88 @@ class ActivationController:
                 return ActivationDecision(
                     False, "not_active", self._snapshot_locked()
                 )
-            timeout = self.followup_timeout + self._pending_extension
-            self._pending_extension = 0.0
             self._phase = FOLLOWUP_WAIT
-            self._deadline = self._clock() + timeout
+            self._set_timer_locked(
+                FOLLOWUP_DEADLINE, self._clock() + self.followup_timeout
+            )
             self._version += 1
             return ActivationDecision(
                 True, "followup_started", self._snapshot_locked(), True
             )
 
-    def finish(self, source):
-        return self._begin_input_close(source, "finished")
+    def finish(self, source, *, activation_id=None):
+        return self._begin_input_close(
+            source, "finished", "finish", activation_id=activation_id
+        )
 
-    def cancel(self, source):
-        return self._begin_input_close(source, "cancelled")
+    def cancel(self, source, *, activation_id=None, cause="cancel"):
+        return self._begin_input_close(
+            source, "cancelled", cause, activation_id=activation_id
+        )
 
-    def _begin_input_close(self, source, reason):
+    def _begin_input_close(self, source, reason, cause, *, activation_id=None):
         with self._lock:
             if not self._source_enabled(source):
                 return ActivationDecision(
                     False, "trigger_disabled", self._snapshot_locked()
                 )
-            if self._phase not in OPEN_WINDOW_PHASES:
+            if self._phase == IDLE:
                 return ActivationDecision(
                     False, "not_active", self._snapshot_locked()
                 )
-            self._phase = CLOSING_INPUT
-            self._deadline = None
-            self._pending_extension = 0.0
-            self._close_reason = reason
-            self._version += 1
-            snapshot = self._snapshot_locked()
-            snapshot["closeReason"] = reason
-            return ActivationDecision(True, reason, snapshot, True)
+            if self._activation_mismatch_locked(activation_id):
+                return ActivationDecision(
+                    False, "stale_activation", self._snapshot_locked()
+                )
+            if self._phase == CLOSING_INPUT:
+                # Idempotent state answer: the input close is already running,
+                # so the requested effect is in place. There is no second
+                # transition, no second lifecycle event and no second ledger
+                # operation.
+                return ActivationDecision(
+                    True, "no_change", self._closing_snapshot_locked(), False
+                )
+            return self._enter_close_barrier_locked(reason, cause)
+
+    def _closing_snapshot_locked(self):
+        snapshot = self._snapshot_locked()
+        if self._close_reason:
+            snapshot["closeReason"] = self._close_reason
+            snapshot["closeCause"] = self._close_cause or self._close_reason
+        return snapshot
+
+    def _enter_close_barrier_locked(self, reason, cause):
+        self._phase = CLOSING_INPUT
+        self._close_reason = reason
+        self._close_cause = cause
+        self._set_timer_locked(
+            CLOSING_RECOVERY_DEADLINE,
+            self._clock() + self.closing_recovery_timeout,
+        )
+        self._version += 1
+        snapshot = self._snapshot_locked()
+        snapshot["closeReason"] = reason
+        snapshot["closeCause"] = cause
+        return ActivationDecision(True, reason, snapshot, True)
+
+    def audio_unavailable(self):
+        """A generic loss of the input device cancels the open activation.
+
+        The session itself and the background ledger survive; only the open
+        foreground window is cancelled (DEVICE-03).
+        """
+        with self._lock:
+            if self._phase == IDLE:
+                return ActivationDecision(
+                    False, "not_active", self._snapshot_locked()
+                )
+            if self._phase == CLOSING_INPUT:
+                return ActivationDecision(
+                    True, "no_change", self._closing_snapshot_locked(), False
+                )
+            return self._enter_close_barrier_locked(
+                "cancelled", "audio_unavailable"
+            )
 
     def input_closed(self):
         """Completes the close barrier after gate/recorder input is closed."""
@@ -296,31 +554,76 @@ class ActivationController:
                 return ActivationDecision(
                     False, "not_closing_input", self._snapshot_locked()
                 )
-            snapshot = self._clear_locked(close_reason=self._close_reason)
+            snapshot = self._clear_locked(
+                close_reason=self._close_reason,
+                close_cause=self._close_cause,
+            )
             return ActivationDecision(True, "input_closed", snapshot, True)
 
-    def expire(self, expected_version):
+    # -- timer callbacks -----------------------------------------------------
+
+    def tick(self, token):
+        """The single entry point for every scheduled activation timer.
+
+        A callback presents the token it was armed with. Anything that is not
+        the current token - an older activation, an older revision, a phase
+        that has moved on or a segment that has ended - is inert.
+        """
         with self._lock:
-            if expected_version != self._version:
+            if not self._token_is_current_locked(token):
                 return ActivationDecision(
                     False, "stale_timer", self._snapshot_locked()
                 )
-            if self._phase not in OPEN_WINDOW_PHASES or self._deadline is None:
+            if self._deadline is None:
                 return ActivationDecision(
                     False, "not_expirable", self._snapshot_locked()
                 )
-            if self._clock() < self._deadline:
+
+            now = self._clock()
+            if (
+                self._warning_deadline is not None
+                and not self._warning_fired
+                and now >= self._warning_deadline
+                and now < self._deadline
+            ):
+                # The warning moves no deadline, so it deliberately does not
+                # raise ``timerRevision``: the same token stays valid for the
+                # expiry that follows it.
+                self._warning_fired = True
+                self._version += 1
+                return ActivationDecision(
+                    True, "watchdog_warning", self._snapshot_locked(), True
+                )
+
+            if now < self._deadline:
                 return ActivationDecision(
                     False, "not_due", self._snapshot_locked()
                 )
-            self._phase = CLOSING_INPUT
-            self._deadline = None
-            self._pending_extension = 0.0
-            self._close_reason = "timed_out"
-            self._version += 1
-            snapshot = self._snapshot_locked()
-            snapshot["closeReason"] = self._close_reason
-            return ActivationDecision(True, "timed_out", snapshot, True)
+
+            kind = self._deadline_kind
+            if kind == CLOSING_RECOVERY_DEADLINE:
+                return self._recover_closing_locked()
+            if kind == SEGMENT_WATCHDOG_DEADLINE:
+                # Recorded audio is processed regularly, the whole activation
+                # is closed and no follow-up window is opened (TIME-08).
+                return self._enter_close_barrier_locked(
+                    "segment_watchdog_timeout", "segment_watchdog_timeout"
+                )
+            cause = (
+                "initial_speech_timeout"
+                if kind == INITIAL_SPEECH_DEADLINE
+                else "followup_timeout"
+            )
+            return self._enter_close_barrier_locked("timed_out", cause)
+
+    def _recover_closing_locked(self):
+        """``closing_input`` must never hang, not even on a gate/recorder fault."""
+        snapshot = self._clear_locked(
+            close_reason=self._close_reason or "closing_recovery_timeout",
+            close_cause="closing_recovery_timeout",
+        )
+        snapshot["recovered"] = True
+        return ActivationDecision(True, "closing_recovered", snapshot, True)
 
     def reset(self):
         """Drops foreground state during stop, close or reconnect."""
@@ -332,7 +635,7 @@ class ActivationController:
             snapshot = self._clear_locked()
             return ActivationDecision(True, "reset", snapshot, True)
 
-    def _clear_locked(self, close_reason=None):
+    def _clear_locked(self, close_reason=None, close_cause=None):
         closed_id = self._activation_id
         closed_primary = self._primary_source
         closed_settings = _thaw(self._effective_settings)
@@ -343,10 +646,10 @@ class ActivationController:
         self._primary_source = None
         self._effective_settings = _freeze({})
         self._phase = IDLE
-        self._deadline = None
-        self._pending_extension = 0.0
+        self._clear_timer_locked()
         self._segment_count = 0
         self._close_reason = None
+        self._close_cause = None
         self._version += 1
 
         snapshot = self._snapshot_locked()
@@ -362,4 +665,5 @@ class ActivationController:
         )
         if close_reason:
             snapshot["closeReason"] = close_reason
+            snapshot["closeCause"] = close_cause or close_reason
         return snapshot
