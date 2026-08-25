@@ -13,6 +13,14 @@ from typing import Callable, Iterable, List, Optional, Union
 # Internal imports.
 from .core.initialization import initialize_recorder
 from .core.recorder_config import build_recorder_init_args
+from .core.activation_control import (
+    abort_controlled_activation_gate,
+    close_controlled_activation_gate,
+    configure_activation_policy,
+    controlled_activation_snapshot,
+    open_controlled_activation_gate,
+    shutdown_controlled_activation_gate,
+)
 from .core.lifecycle import (
     abort_recording,
     listen_for_voice_activity,
@@ -698,6 +706,45 @@ class AudioToTextRecorder:
 
     # Public lifecycle/control API.
 
+    def set_activation_policy(self, policy):
+        """Selects legacy VAD or controlled trigger activation."""
+        return configure_activation_policy(self, policy)
+
+    def open_controlled_activation(
+        self,
+        activation_id,
+        replace=False,
+        generation=None,
+    ):
+        """Opens the shared controlled gate for one activation ID.
+
+        ``generation`` binds the gate to the activation generation of the
+        server-side controller so that a late open from an already superseded
+        activation cannot replace a newer one.
+        """
+        return open_controlled_activation_gate(
+            self,
+            activation_id,
+            replace=replace,
+            generation=generation,
+        )
+
+    def close_controlled_activation(self, activation_id=None, generation=None):
+        """Closes the shared controlled gate if its ID and generation match."""
+        return close_controlled_activation_gate(
+            self,
+            activation_id,
+            generation=generation,
+        )
+
+    def abort_controlled_activation(self):
+        """Closes the gate unconditionally and leaves a deterministic state."""
+        return abort_controlled_activation_gate(self)
+
+    def controlled_activation_state(self):
+        """Returns a consistent snapshot of the controlled activation gate."""
+        return controlled_activation_snapshot(self)
+
     def wakeup(self):
         """
         Wakes the recorder as if a wake word was detected.
@@ -708,6 +755,10 @@ class AudioToTextRecorder:
         """
         Interrupts the current recording or transcription flow.
         """
+        # The controlled gate is recorder state, so aborting the recorder must
+        # leave it closed; otherwise VAD could immediately start a new segment
+        # for an activation that is no longer running.
+        abort_controlled_activation_gate(self)
         return abort_recording(self)
 
     def set_microphone(self, microphone_on=True):
@@ -745,6 +796,9 @@ class AudioToTextRecorder:
         """
         Safely shuts down recorder workers and releases runtime resources.
         """
+        # Close the controlled gate permanently before the workers go away, so
+        # that a trigger arriving during teardown cannot re-open it.
+        shutdown_controlled_activation_gate(self)
         return shutdown_recorder(self)
 
     def format_number(self, num):

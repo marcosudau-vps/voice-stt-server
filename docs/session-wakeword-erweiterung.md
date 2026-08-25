@@ -5,8 +5,8 @@
 Diese Dokumentation beschreibt die mit dem Branch
 `codex/session-wakeword-config` eingeführte Erweiterung des
 VoiceSTT-Multi-User-Servers. Die Erweiterung ist in `main` integriert und
-ermöglicht jedem WebSocket-Client, beim Verbindungsaufbau einen eigenen
-Wake-Word-Modus anzufordern.
+ermöglicht jedem WebSocket-Client, beim Verbindungsaufbau ein eigenes
+Wake-Word-Profil anzufordern.
 
 Der Implementierungsstand ist vollständig:
 
@@ -48,7 +48,8 @@ unterschiedlichen Clients aber zu einem grundsätzlichen Problem:
 
 Eine globale Umschaltung über `PUT /api/wake-word` kann diese Anforderungen
 nicht sicher erfüllen. Sie ist weiterhin für die Baseline neuer Sessions
-zuständig, aber nicht mehr der einzige mögliche Betriebsmodus.
+zuständig, bestimmt aber nicht mehr allein, ob eine einzelne Sitzung mit Wake
+Word arbeitet.
 
 ## Zielbild
 

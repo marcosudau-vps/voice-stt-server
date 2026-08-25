@@ -105,8 +105,9 @@ erreichtem Sessionlimit gibt es kein `hello`, sondern einen Admission-Fehler.
 | `clientId` | String | stabile Clientkennung; vom Client übermittelt oder serverseitig erzeugt |
 | `sessionId` | String | zufällige hexadezimale UUID ohne Bindestriche |
 | `settings` | Object | öffentliche effektive Sessioneinstellungen; Engine-Options, Secrets und lokale Modellpfade entfernt |
-| `sessionConfig` | Object | angeforderter und effektiver Wake-Word-Modus einschließlich Fallbacks/Warnungen |
-| `sessionCapabilities` | Object | Contractversion, OpenWakeWord-Katalog und unterstützte Queryparameter |
+| `sessionConfig` | Object | angefordertes und effektives Wake-Word-Profil einschließlich Fallbacks/Warnungen |
+| `activationConfig` | Object | effektive Triggerkonfiguration: `mode` (`legacy`/`controlled`), `manualTriggerEnabled`, `wakeWordTriggerEnabled`, `wakeWordProfileEnabled`, Zeitwerte |
+| `sessionCapabilities` | Object | Contractversion, OpenWakeWord-Katalog, unterstützte Queryparameter und der Block `activationTriggers` |
 | `limits` | Object | kompakte Kapazitätsgrenzen |
 | `supportedEngines` | Array | Namen der im Code registrierten Transkriptionsengines |
 | `runtimeSettings` | Object | Listen `activeSessionSafe`, `newSessionOnly`, `startupOnly` |
@@ -233,7 +234,7 @@ Timeout.
 | `staleRealtimeDiscarded` | Integer | wegen Alter/Generation verworfene Realtime-Jobs |
 | `activeSessions` | Integer | serverweite aktive WebSocket-Sessions |
 | `activeSpeakers` | Integer | serverweit gleichzeitig aktive Aufnahmen |
-| `wakeWordEnabled` | Boolean | Wake-Word-Modus dieser Session |
+| `wakeWordEnabled` | Boolean | Wake-Word-Profil dieser Session |
 | `wakeWord` | Object | `enabled`, `backend`, `wakeWords`, optionaler Wake-State |
 
 **Clientreaktion:** Letzten Status „last event wins“ speichern. Wiederholungen

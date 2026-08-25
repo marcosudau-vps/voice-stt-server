@@ -3,8 +3,8 @@
 [← WebSocket-Protokoll](02-websocket-protokoll.md) · [Ausführlicher Katalog & Chronologie →](04-server-events-katalog-und-chronologie.md)
 
 Alle Servernachrichten sind JSON-Objekte in WebSocket-Textframes. `type` ist der
-primäre Diskriminator. Der produktive Server kann die folgenden **elf** Typen an
-einen Client senden.
+primäre Diskriminator. Der produktive Server kann die folgenden **zwölf** Typen
+an einen Client senden.
 
 ## Eventübersicht
 
@@ -16,6 +16,7 @@ einen Client senden.
 | `timeline` | Session | fachlicher Stream-Meilenstein | `event`, Zeit, optional `segmentId`, `segment` und eventspezifische Felder | Historie/Diagnose aktualisieren; nicht als Transkriptquelle verwenden |
 | `realtime` | Session | neues Zwischenergebnis | `segmentId`, `text`, reiche Stabilisierungsfelder, Zeit, optional `segment` | Segment vorläufig vollständig ersetzen |
 | `final` | Session | finale Transkription abgeschlossen | `segmentId`, `text`, Zeit, optional `segment` | Segment finalisieren |
+| `trigger_ack` | Session | Antwort auf jedes `trigger`-Kommando | `commandId`, `accepted`, `reason`, `activationId`, `sessionId` | Pending-Kommando auflösen; erst bei `accepted: true` fachliches Feedback |
 | `clear` | Session | Antwort auf Clientbefehl `clear` | `nextSegmentId` | lokale Segmente und Timeline leeren |
 | `pong` | Session | Antwort auf `ping` | `serverTime` | lokalen Roundtrip abschließen |
 | `metrics` | Session | Antwort auf Befehl `metrics` | `metrics` | Diagnose-/Telemetrieansicht aktualisieren |
@@ -36,6 +37,9 @@ Nicht jedes Event enthält alle gemeinsamen Felder.
 | `segment` | Object | Timeline-Snapshot des Segments |
 | `message` | String | menschenlesbare deutsche Warn-/Fehlerbeschreibung |
 | `where` | String | Fehlerursprungsbereich |
+| `activationId` | String | Activation, zu der ein Recording-/Transkriptionsevent gehört (nur im Controlled-Modus) |
+| `primarySource` | String | Quelle des **ersten** Triggers dieser Activation |
+| `sources` | Array | alle beteiligten Triggerquellen, jede höchstens einmal |
 
 ## Timeline-Untertypen
 
@@ -45,6 +49,9 @@ Nicht jedes Event enthält alle gemeinsamen Felder.
 | --- | --- | --- |
 | `wakeword_wait_started` | Wake-Word-Erkennung beginnt/ist aktiv | `wakeWord` |
 | `wakeword_wait_ended` | Wake-Word-Wartephase endet | `wakeWord` |
+| `activation_started` | eine Activation wurde eröffnet | `activationId`, `generation`, `primarySource`, `sources`, `phase` |
+| `activation_extended` | Fenster verlängert oder zweite Quelle aufgenommen | wie oben |
+| `activation_closed` | Activation beendet | wie oben, zusätzlich `reason` |
 | `wakeword_detected` | Weckwort erkannt; Sprache wird erwartet | `wakeWord` |
 | `wakeword_timeout` | Nach erkanntem Weckwort kam nicht rechtzeitig Sprache | `wakeWord` |
 | `wakeword_followup_started` | Folgeäußerung ohne erneutes Weckwort möglich | `durationSeconds` |

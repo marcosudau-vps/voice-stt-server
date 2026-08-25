@@ -1,91 +1,126 @@
-# Betriebsmodi und sessionlokale Wake-Word-Konfiguration
+# Triggerquellen und sessionlokale Wake-Word-Konfiguration
 
 [← Protokollabgrenzung](08-protokollabgrenzung.md) · [Zur Übersicht](README.md)
 
+> **Diese Datei hieß früher „Betriebsmodi und sessionlokale
+> Wake-Word-Konfiguration".** Der Begriff *Betriebsmodus* hat keine aktive
+> fachliche Bedeutung mehr: es gibt keinen Hotkey-Modus und keinen
+> Wake-Word-Modus, sondern **eine** Session mit **zwei unabhängig
+> aktivierbaren Triggerquellen**. Der Abschnitt
+> [Legacy-Verhalten](#legacy-verhalten) beschreibt, was für alte Clients
+> weiterhin gilt.
+>
+> Die vollständige Architektur steht in
+> [`docs/einheitliche-triggerarchitektur.md`](../einheitliche-triggerarchitektur.md).
+
 ## Zweck und aktueller Stand
 
-Der Server unterstützt zwei typische Desktop-Betriebsarten über denselben
-WebSocket-Endpunkt:
+Eine Clientverbindung besitzt:
 
-- einen durch Hotkey oder UI gesteuerten Aufnahmemodus ohne Wake Word;
-- eine länger laufende Verbindung, in der OpenWakeWord serverseitig auf ein
-  Wake Word wartet.
+- genau **eine** Session,
+- genau **einen** kontinuierlichen Audiostream,
+- genau **eine** serverseitige Aktivierungszustandsmaschine,
+- genau **eine** Recorder-/VAD-/Transkriptionspipeline,
+- und **zwei unabhängig aktivierbare Triggerquellen**: `manual` und
+  `wake_word`.
 
-Der gewünschte Wake-Word-Modus kann beim Aufbau von `WS /ws/transcribe`
-sessionlokal ausgewählt werden. Diese Auswahl verändert weder die globale
-Serverkonfiguration noch andere bestehende oder später aufgebaute Sessions.
-Die Admin-API bleibt für die serverweite Baseline zuständig.
+Beide Quellen öffnen dieselbe Art von Activation und teilen sich danach
+denselben Aufnahme-, Timer- und Transkriptionspfad.
 
-Version 1 des sessionlokalen Contracts unterstützt ausschließlich
+Version 1 des sessionlokalen Wake-Word-Contracts unterstützt ausschließlich
 OpenWakeWord. Clients übergeben logische Modell-IDs, niemals Serverpfade.
-Porcupine ist weder auswählbarer Session-Backend noch Teil des veröffentlichten
-Wake-Word-Katalogs.
 
 ## Lebenszyklen
 
-Eine WebSocket-Verbindung entspricht genau einer Session. `start` und `stop`
-öffnen oder schließen nur eine Streamingphase innerhalb dieser Session.
+`start` und `stop` sind **ausschließlich Streambefehle**. Ein Trigger wird
+niemals auf sie abgebildet.
 
 ```mermaid
 flowchart TD
     A["WebSocket-Session<br/>connect → hello → ready → disconnect"]
-    B["Streamingphase<br/>start → Audiopakete → stop"]
-    C["Sprachsegment<br/>Wake Word/VAD → recording → final"]
+    B["Audiostream<br/>start → kontinuierliche Audiopakete → stop"]
+    C["Activation<br/>trigger/Wake Word → recording → final"]
     A --> B
     B --> C
-    C -->|"weitere Äußerung"| C
+    C -->|"weitere Activation im selben Stream"| C
 ```
+
+Der Stream wird **einmal** gestartet und läuft weiter, während mehrere
+Activations nacheinander stattfinden. Ein `finish` beendet die Activation,
+nicht den Stream.
 
 Sessioneinstellungen werden vor dem Erzeugen des Recorders aus einem atomaren
-Snapshot der Serverkonfiguration aufgelöst. Sie bleiben anschließend für die
-gesamte Verbindung unverändert. Ein Moduswechsel benötigt daher einen
-Reconnect; `start` oder `stop` lösen keine neue Konfigurationsauflösung aus.
+Snapshot der Serverkonfiguration aufgelöst und bleiben für die gesamte
+Verbindung unverändert. Eine Änderung der Triggerkonfiguration benötigt daher
+einen Reconnect; `start` oder `stop` lösen keine neue Konfigurationsauflösung
+aus.
 
-## Die zwei empfohlenen Betriebsmodi
+## Die drei gültigen Triggerkombinationen
 
-| Merkmal | Hotkey-Modus | Wake-Word-Modus |
+| `manualTriggerEnabled` | `wakeWordTriggerEnabled` | Bedeutung |
 | --- | --- | --- |
-| Sessionparameter | `wakeWordEnabled=false` | `wakeWordEnabled=true` |
-| WebSocket | vorzugsweise dauerhaft offen | dauerhaft offen |
-| Mikrofon | nur während der Hotkeyphase | kontinuierlich |
-| `start` | bei Aktivierung | einmal beim Aktivieren des Modus |
-| `stop` | bei Ende der Hotkeyphase | nur beim Pausieren/Beenden |
-| Trigger | Desktop-Client | OpenWakeWord, danach VAD |
-| typischer Serverstatus | `idle` / `listening` | `wakeword_wait` |
+| `true` | `false` | nur der Hotkey öffnet eine Activation |
+| `false` | `true` | nur das Wake Word öffnet eine Activation |
+| `true` | `true` | beide Quellen öffnen **dieselbe** Activation |
+| `false` | `false` | **ungültig**, wird bei der Admission abgelehnt |
 
-### Hotkey-Modus
+In allen drei gültigen Kombinationen gilt dasselbe Streamverhalten: der Client
+sendet nach `ready` einmal `start` und danach **kontinuierlich** Audio. Der
+Server entscheidet über das Activation Gate, ob daraus eine Aufnahme wird.
 
-Empfohlener Verbindungsaufbau:
-
-```text
-wss://SERVER/ws/transcribe?wakeWordEnabled=false
-```
-
-Nach `hello` und einem erfolgreichen `ready` sendet der Client bei
-Hotkeyaktivierung zuerst `{"type":"start"}` und erst danach PCM-Pakete. Beim
-Loslassen stoppt er die Audioquelle, sendet das letzte vollständige Paket und
-anschließend `{"type":"stop"}`. Nachlaufende `final`-Events müssen weiterhin
-angenommen werden.
-
-### Wake-Word-Modus
-
-Mit dem serverweiten Standardmodell:
+### Manualtrigger
 
 ```text
-wss://SERVER/ws/transcribe?wakeWordEnabled=true
+wss://SERVER/ws/transcribe?manualTriggerEnabled=true&wakeWordTriggerEnabled=false
 ```
 
-Mit explizitem logischen Modell:
+Der Hotkeydruck ist zunächst nur eine lokale Absicht. Der Client sendet ein
+`trigger`-Kommando und darf erst nach einem `trigger_ack` mit
+`accepted: true` fachliches Feedback auslösen. Details in
+[WebSocket-Protokoll](02-websocket-protokoll.md#triggerkommandos).
+
+### Wake-Word-Trigger
 
 ```text
-wss://SERVER/ws/transcribe?wakeWordEnabled=true&wakeWords=hey_jarvis
+wss://SERVER/ws/transcribe?manualTriggerEnabled=false&wakeWordTriggerEnabled=true&wakeWordEnabled=true
 ```
 
-Der Client sendet nach `ready` einmal `start` und anschließend kontinuierlich
-Audio. Der Server übernimmt Wake-Word-Gate, VAD, Timeout und Follow-up. `stop`
-ist für Pause oder Modusende vorgesehen, nicht für jedes Sprachsegment.
+`wakeWordTriggerEnabled` erlaubt einem erkannten Wake Word, eine Activation zu
+öffnen. Ob überhaupt erkannt wird, regelt weiterhin das Wake-Word-Profil über
+`wakeWordEnabled` und die zugehörigen Tuningparameter. Ist das Wake Word die
+**einzige** Triggerquelle und kein Profil aktiv, lehnt der Server die Session
+mit `activation_wake_word_unavailable` ab, statt taub zu laufen.
+
+### Beide Quellen
+
+```text
+wss://SERVER/ws/transcribe?manualTriggerEnabled=true&wakeWordTriggerEnabled=true&wakeWordEnabled=true
+```
+
+Der erste Trigger eröffnet die Activation und wird deren `primarySource`; ein
+zweiter Trigger derselben Activation wird nur in `sources` ergänzt. Es entsteht
+keine zweite Activation, kein zweites Segment und kein zweites Final.
+
+## Legacy-Verhalten
+
+Eine Session, die **weder** `manualTriggerEnabled` **noch**
+`wakeWordTriggerEnabled` sendet, verhält sich **exakt wie bisher**:
+
+- `activationConfig.mode` ist `legacy`,
+- es wird kein `ActivationController` angelegt,
+- das Recorder-Gate bleibt in der `legacy`-Policy,
+- der bisherige Wake-Word-Follow-up läuft unverändert,
+- ein `trigger`-Kommando würde mit `controlled_activation_disabled` abgelehnt.
+
+Das ist der Pfad, auf dem alte Desktop- und Browserclients weiterlaufen. Er
+ist bewusst erhalten und wird nicht entfernt.
+
+Die frühere Gegenüberstellung „Hotkey-Modus gegen Wake-Word-Modus" beschreibt
+genau dieses Legacy-Verhalten und ist deshalb **kein** aktueller
+Architekturzustand mehr.
 
 ## Session-Create-Contract
+
 
 Alle Werte werden als Queryparameter am WebSocket-Upgrade übergeben. Der
 Contract ist versioniert und wird in `hello.sessionCapabilities` sowie
@@ -310,10 +345,10 @@ Minimaler Verbindungsalgorithmus:
 4. `fallbacks`, `warnings` und `ignoredFields` auswerten.
 5. Effektiven Modus und Modell-IDs gegen die Benutzerwahl prüfen.
 6. `ready.ok === true` abwarten.
-7. Im Hotkeymodus ereignisgesteuert, im Wake-Word-Modus einmalig `start`
-   senden.
-8. Bei Modusänderung alte Session sauber stoppen und eine neue Verbindung
-   aufbauen.
+7. Einmal `start` senden und danach kontinuierlich Audio streamen; der
+   Server entscheidet über das Activation Gate, wann aufgenommen wird.
+8. Bei geänderter Triggerkonfiguration die alte Session sauber stoppen und
+   eine neue Verbindung aufbauen.
 
 ## Fehler- und Reconnect-Regeln
 
@@ -332,8 +367,8 @@ exakt der angeforderten Konfiguration entspricht.
 
 ## Abnahmecheckliste
 
-- Hotkey- und Wake-Word-Session können gleichzeitig mit unterschiedlichen
-  effektiven Profilen laufen.
+- Sessions mit unterschiedlichen Triggerkombinationen können gleichzeitig mit
+  unterschiedlichen effektiven Profilen laufen.
 - Das Öffnen oder Schließen einer Session verändert `GET /api/wake-word`
   nicht.
 - `false` deaktiviert Wake Word auch bei aktivierter Serverbaseline.
@@ -345,7 +380,8 @@ exakt der angeforderten Konfiguration entspricht.
 - `hello` und `ready` melden identische Sessionkonfiguration.
 - keine Modellpfade erscheinen im öffentlichen WebSocket-Handshake.
 - parallele Adminänderungen erzeugen keinen gemischten Settings-Snapshot.
-- Reconnect und Moduswechsel hinterlassen keine alte aktive Session.
+- Reconnect und Konfigurationswechsel hinterlassen keine alte aktive Session
+  und beleben keine alte Activation wieder.
 
 ## Zusammenfassung
 

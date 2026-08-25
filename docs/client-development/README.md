@@ -25,7 +25,7 @@ Client bewusst tolerant sein sollte.
 | [HTTP-API & Authentifizierung](06-http-api-und-authentifizierung.md) | Health, Konfiguration, Metriken, Log-Historie, Admin-API und OpenAI-kompatible Datei-Transkription | Administration, Logs und Datei-Uploads |
 | [Robustheit, Grenzen & Sicherheit](07-robustheit-grenzen-und-sicherheit.md) | Fehlerklassen, Überlast, Timeouts, Datenschutz und Abnahmetests | Produktionsreife Clients |
 | [Abgrenzung der Serverprotokolle](08-protokollabgrenzung.md) | Klare Unterscheidung des produktiven Single-WebSocket-Protokolls von der separaten Zwei-Port-Implementierung | Auswahl des richtigen Einstiegspunkts |
-| [Betriebsmodi & sessionlokale Wake-Word-Konfiguration](09-betriebsmodi-und-serverkonfiguration.md) | Hotkey- und Wake-Word-Betrieb, Session-Create-Contract, `models.json`, Fallbacks, Admin-Baseline und UI-Konzept | Desktop-Client, Aufnahmeautomation und Administration |
+| [Triggerquellen & sessionlokale Wake-Word-Konfiguration](09-betriebsmodi-und-serverkonfiguration.md) | Manual- und Wake-Word-Trigger, gültige Kombinationen, Legacy-Verhalten, Session-Create-Contract, `models.json`, Fallbacks, Admin-Baseline und UI-Konzept | Desktop-Client, Aufnahmeautomation und Administration |
 
 ## Architektur in einem Bild
 
@@ -69,9 +69,12 @@ flowchart LR
    die bisherige Zwischenanzeige. Erst `final` ist das abgeschlossene Ergebnis.
 5. **Eine neue WebSocket-Verbindung ist eine neue Session.** Nach Reconnect gibt
    es eine neue `sessionId`; alte Segmente und Befehle werden nicht fortgesetzt.
-6. **Der Wake-Word-Modus wird beim Verbindungsaufbau festgelegt.**
-   `hello.sessionConfig` ist die verbindliche Bestätigung der effektiven
-   sessionlokalen Konfiguration.
+6. **Die Triggerquellen werden beim Verbindungsaufbau festgelegt.** Es gibt
+   keinen Hotkey- und keinen Wake-Word-Modus mehr, sondern zwei unabhängig
+   aktivierbare Quellen (`manualTriggerEnabled`, `wakeWordTriggerEnabled`).
+   `hello.activationConfig` und `hello.sessionConfig` sind die verbindliche
+   Bestätigung der effektiven sessionlokalen Konfiguration. Eine Session ohne
+   diese Parameter bleibt im **Legacy-Modus** und verhält sich wie bisher.
 7. **Logs verwenden einen getrennten Zugriffskanal.** `hello.logAccess` liefert
    den Sessiontoken; er gehört in `X-VoiceSTT-Log-Token` beziehungsweise die
    erste `/ws/logs`-Subscribe-Nachricht, nie in eine URL. Beim Reconnect wird

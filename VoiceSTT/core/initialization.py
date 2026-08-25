@@ -25,6 +25,7 @@ from .silero_vad import create_silero_vad_model
 from .safepipe import SafePipe
 from .wakeword import OPENWAKEWORD_BACKENDS, setup_wakeword_detection
 from .audio_input_worker import run_audio_data_worker
+from .activation_control import initialize_activation_control
 from .runtime import read_stdout_pipe, start_recorder_worker
 from .transcription import run_transcription_worker
 from .voice_activity import warmup_voice_activity_detectors
@@ -89,6 +90,7 @@ def _assign_initial_attributes(recorder, init_args, normalize_wakeword_backend):
     Copies constructor settings onto the recorder instance.
     """
 
+    initialize_activation_control(recorder)
     recorder.language = init_args["language"]
     recorder.compute_type = init_args["compute_type"]
     recorder.input_device_index = init_args["input_device_index"]

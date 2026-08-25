@@ -641,8 +641,10 @@ Wake Word: hey_jarvis
 Sensitivität: 0.5
 ```
 
-Nach `start` muss der Client im Wake-Word-Modus kontinuierlich Mikrofon-Audio
-übertragen.
+Nach `start` überträgt der Client kontinuierlich Mikrofon-Audio. Das gilt bei
+aktivem Wake Word und ebenso in der einheitlichen Triggerarchitektur, in der
+der Server über das Activation Gate entscheidet, wann daraus eine Aufnahme
+wird (siehe [Einheitliche serverseitige Triggerarchitektur](einheitliche-triggerarchitektur.md)).
 
 Typischer Ablauf:
 

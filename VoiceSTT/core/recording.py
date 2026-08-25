@@ -10,6 +10,8 @@ import time
 
 import numpy as np
 
+from .activation_control import recording_activation_gate_is_open
+
 from .transcription import submit_transcription_request
 from .state import run_callback, set_recorder_state
 from .voice_activity import (
@@ -206,10 +208,12 @@ def run_recording_worker(recorder):
 
                 if self.use_extended_logging:
                     logger.debug('Debug: Checking voice activity conditions')
-                if ((not self.use_wake_words
-                    or not wake_word_activation_delay_passed)
-                        and self.start_recording_on_voice_activity) \
-                        or self.wakeword_detected:
+                if recording_activation_gate_is_open(
+                    self,
+                    wake_word_activation_delay_passed=(
+                        wake_word_activation_delay_passed
+                    ),
+                ):
 
                     if self.use_extended_logging:
                         logger.debug('Debug: Checking if voice is active')

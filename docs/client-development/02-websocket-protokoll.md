@@ -128,9 +128,178 @@ begrenzt. Der Admin-Key wird nur im ersten Subscribe-Frame eingesetzt, nie in
 der URL. Ohne `sessionId` und ohne Channel-Filter erhält ein authentifizierter
 Admin serverweite Events einschließlich `system`.
 
+## Sessionlokale Triggerparameter
+
+Die Triggerquellen werden beim Upgrade festgelegt:
+
+```text
+/ws/transcribe?manualTriggerEnabled=true&wakeWordTriggerEnabled=false
+/ws/transcribe?manualTriggerEnabled=false&wakeWordTriggerEnabled=true&wakeWordEnabled=true
+/ws/transcribe?manualTriggerEnabled=true&wakeWordTriggerEnabled=true&wakeWordEnabled=true
+```
+
+| Parameter | Typ | Default | Bedeutung |
+| --- | --- | --- | --- |
+| `manualTriggerEnabled` | Bool | – | Manualtrigger darf eine Activation öffnen |
+| `wakeWordTriggerEnabled` | Bool | – | Wake Word darf eine Activation öffnen |
+| `initialSpeechTimeout` | Zahl 0.1–3600 | `15` | Wartezeit auf die erste Sprache |
+| `followupTimeout` | Zahl 0.1–3600 | `3` | Nachfragefenster nach einem Segment |
+| `extensionSeconds` | Zahl 0.1–3600 | `5` | Verlängerung je `extend` |
+
+Wahrheitswerte: `true/1/yes/on` und `false/0/no/off`. Ein nicht
+interpretierbarer Wert wird **abgelehnt**, nicht als `false` gedeutet.
+
+Wird **keiner** der beiden Flags gesendet, bleibt die Session im
+**Legacy-Modus** und verhält sich exakt wie bisher. Wird mindestens einer
+gesendet, ist die Session `controlled`, und der weggelassene Wert gilt als
+`false`.
+
+Ablehnungen bei der Admission (jeweils `type: error`, `where: session_config`,
+Close `1008`):
+
+| Code | Anlass |
+| --- | --- |
+| `activation_trigger_required` | beide Triggerflags `false` |
+| `activation_wake_word_unavailable` | Wake Word ist einzige Quelle, aber kein Wake-Word-Profil aktiv |
+| `invalid_activation_flag` | Flag ist kein Wahrheitswert |
+| `invalid_activation_timing` | Zeitwert keine Zahl oder außerhalb des Bereichs |
+
+Die tatsächlich wirksame Auflösung steht in `hello.activationConfig` und
+`ready.activationConfig`:
+
+```json
+{
+  "version": 1,
+  "mode": "controlled",
+  "manualTriggerEnabled": true,
+  "wakeWordTriggerEnabled": false,
+  "wakeWordProfileEnabled": false,
+  "initialSpeechTimeout": 15.0,
+  "followupTimeout": 3.0,
+  "extensionSeconds": 5.0
+}
+```
+
+## Capability-Vertrag
+
+Ein Client **muss** vor dem Senden eines Triggerkommandos prüfen, ob der Server
+den Vertrag anbietet. Die Capability steht in `hello.sessionCapabilities` und
+`ready.sessionCapabilities`:
+
+```json
+"activationTriggers": {
+  "supported": true,
+  "version": 1,
+  "sources": ["manual", "wake_word"],
+  "actions": ["activate", "extend", "finish", "cancel"],
+  "commandType": "trigger",
+  "ackType": "trigger_ack",
+  "commandIdRequired": true,
+  "commandIdIdempotent": true,
+  "commandHistory": 200,
+  "activationEvents": ["activation.started", "activation.extended",
+                       "activation.closed"]
+}
+```
+
+Fehlt der Block oder ist `supported` nicht `true`, verhält sich der Client wie
+gegen einen Legacyserver: nur `start`/`stop`, keine Triggerkommandos.
+
+## Triggerkommandos
+
+```json
+{ "type": "trigger", "action": "activate", "source": "manual",
+  "commandId": "6f1c..." }
+```
+
+`action` ist eines von `activate`, `extend`, `finish`, `cancel`.
+`source` ist `manual` oder `wake_word`. `commandId` ist ein nicht leerer String
+und wird vom Client erzeugt.
+
+Jeder Befehl erhält **genau eine** Antwort — auch jede Ablehnung:
+
+```json
+{ "type": "trigger_ack", "commandId": "6f1c...", "accepted": true,
+  "reason": "activated", "activationId": "a42...", "sessionId": "s..." }
+```
+
+Läuft bereits eine Activation, trägt auch eine Ablehnung deren `activationId`.
+
+| `reason` | `accepted` | Bedeutung |
+| --- | --- | --- |
+| `activated` | true | neue Activation eröffnet |
+| `merged` | true | zusätzliche Quelle in die laufende Activation aufgenommen |
+| `already_active` | true | dieselbe Quelle erneut, keine Änderung |
+| `extended` | true | Fenster verlängert |
+| `finished` | true | Turn kontrolliert beendet |
+| `cancelled` | true | Turn verworfen |
+| `not_active` | false | keine Activation offen |
+| `trigger_disabled` | false | diese Quelle ist für die Session nicht aktiviert |
+| `invalid_payload` | false | Befehl ist kein Objekt |
+| `missing_command_id` | false | `commandId` fehlt oder ist leer |
+| `invalid_command_id` | false | `commandId` ist kein String |
+| `invalid_action` | false | `action` unbekannt oder falscher Typ |
+| `invalid_source` | false | `source` unbekannt oder falscher Typ |
+| `command_id_conflict` | false | bekannte `commandId` mit abweichendem Payload |
+| `controlled_activation_disabled` | false | Session läuft im Legacy-Modus |
+| `stream_not_started` | false | Trigger vor `start` oder nach `stop` |
+| `session_closed` | false | Session ist bereits geschlossen |
+
+### Idempotenz
+
+Eine Session merkt sich die letzten 200 `commandId`-Ergebnisse.
+
+- gleiche `commandId`, gleicher Payload: **exakt dasselbe Ack**, keine zweite
+  Wirkung — kein neuer Timer, kein neues Event, kein zweites Segment;
+- gleiche `commandId`, anderer Payload: `command_id_conflict`, die laufende
+  Activation bleibt unberührt.
+
+### Verbindliche Clientregel
+
+```text
+Hotkey gedrückt
+→ commandId erzeugen
+→ pending
+→ trigger senden
+→ trigger_ack abwarten
+→ erst dann fachliches Feedback
+```
+
+Ein Tastendruck allein ist eine lokale Absicht. Vor dem Ack darf **kein**
+Accepted-Feedback ausgelöst werden. Ein wiederholtes Ack, ein Ack für ein
+unbekanntes Kommando und ein Ack aus einer älteren Verbindungsgeneration
+müssen verworfen werden, damit kein zweiter Feedbackimpuls entsteht.
+
+### Kollisionsverhalten
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server-Session
+    participant A as ActivationController
+    participant G as Controlled Gate
+
+    C->>S: trigger activate (manual)
+    S->>A: activate("manual")
+    A-->>S: activated, primarySource=manual
+    S->>G: open(activationId, generation)
+    S-->>C: trigger_ack accepted
+
+    Note over S: kurz darauf erkennt der Server ein Wake Word
+    S->>A: activate("wake_word")
+    A-->>S: merged, sources=[manual, wake_word]
+    Note over G: dieselbe Activation, kein zweites Öffnen
+```
+
+Aus `Manual → Wake Word`, `Wake Word → Manual` und aus nahezu gleichzeitigen
+Triggern entsteht jeweils **genau eine** Activation, **ein** Segment, **ein**
+Final und **eine** Schedulerbelegung. `primarySource` bleibt die Quelle des
+ersten Triggers.
+
 ## Sessionlokale Wake-Word-Parameter
 
-Der gewünschte Wake-Word-Modus wird beim Upgrade festgelegt:
+
+Das Wake-Word-Profil dieser Session wird beim Upgrade festgelegt:
 
 ```text
 /ws/transcribe?wakeWordEnabled=false
@@ -142,7 +311,7 @@ Unterstützte Queryparameter sind `wakeWordEnabled`, `wakeWordBackend`,
 `wakeWordTimeout`, `wakeWordBufferDuration` und
 `wakeWordFollowupWindow`. Die vollständigen Regeln, Fallbacks und
 Clientabläufe stehen unter
-[Betriebsmodi und sessionlokale Wake-Word-Konfiguration](09-betriebsmodi-und-serverkonfiguration.md).
+[Triggerquellen und sessionlokale Wake-Word-Konfiguration](09-betriebsmodi-und-serverkonfiguration.md).
 
 Der Server bestätigt nicht nur die Anfrage, sondern die tatsächlich wirksame
 Konfiguration in `hello.sessionConfig` und `ready.sessionConfig`. Interne
@@ -159,9 +328,11 @@ Jeder Textframe muss als JSON-Objekt dekodierbar sein.
 | Clear | `{"type":"clear"}` | erhöht Generation, bricht Sessionjobs ab, abortiert Recorder und leert Segment-Timeline | `clear`, danach `status` |
 | Ping | `{"type":"ping"}` | misst Anwendungs-Roundtrip | `pong` |
 | Metrics | `{"type":"metrics"}` | fordert Session-Snapshot an | `metrics` |
+| Trigger | `{"type":"trigger","action":…,"source":…,"commandId":…}` | steuert die Activation; nur wenn die Capability `activationTriggers` gemeldet ist | genau ein `trigger_ack` |
 
 Für `start` und `stop` gibt es kein separates Ack mit Request-ID. Der neue
-Zustand wird über `status` beobachtet. Unbekannte Befehle erzeugen `error` mit
+Zustand wird über `status` beobachtet. `trigger` ist der einzige Befehl mit
+einer eigenen korrelierten Antwort. Unbekannte Befehle erzeugen `error` mit
 `where: "command"`.
 
 ### Reihenfolge beim Start

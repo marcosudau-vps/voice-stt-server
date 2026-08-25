@@ -11,6 +11,7 @@ import numpy as np
 
 try:
     from VoiceSTT.audio_recorder import AudioToTextRecorder
+    from VoiceSTT.core.recording import run_recording_worker
     from VoiceSTT.core.recording_buffers import get_next_recorded_audio
     from VoiceSTT.core.voice_activity import (
         check_voice_activity,
@@ -19,6 +20,7 @@ try:
     )
 except Exception as exc:  # pragma: no cover - optional runtime deps may be absent
     AudioToTextRecorder = None
+    run_recording_worker = None
     get_next_recorded_audio = None
     check_voice_activity = None
     is_silero_speech = None
@@ -146,6 +148,69 @@ class SlowFinalTranscriptionAudioGapReproTests(unittest.TestCase):
             retained_audio,
             simulated_samples[:len(retained_audio)],
         )
+
+    def test_early_final_is_submitted_while_recording_is_still_active(self):
+        """Characterizes the inherited recorder early-final path.
+
+        The request starts after the configured silence threshold but before
+        the recording is stopped at ``post_speech_silence_duration``. Later
+        APs may change publication/ledger semantics; this test only pins the
+        current scheduling boundary.
+        """
+        frame = np.ones(512, dtype=np.int16).tobytes()
+        recorder = mock.Mock()
+        recorder.use_extended_logging = False
+        recorder.is_running = True
+        recorder.audio_queue = queue.Queue()
+        recorder.audio_queue.put(frame)
+        recorder.last_words_buffer = []
+        recorder.on_recorded_chunk = None
+        recorder.handle_buffer_overflow = False
+        recorder.allowed_latency_limit = 100
+        recorder.is_recording = True
+        recorder.stop_recording_on_voice_deactivity = True
+        recorder.silero_deactivity_detection = False
+        recorder.speech_end_silence_candidate_start = 0
+        recorder.speech_end_silence_start = 99.0
+        recorder.recording_start_time = 90.0
+        recorder.min_length_of_recording = 0.0
+        recorder.deactivity_silence_confirmation_duration = 0.0
+        recorder.awaiting_speech_end = True
+        recorder.on_turn_detection_start = None
+        recorder.on_turn_detection_stop = None
+        recorder.early_transcription_on_silence = 0.2
+        recorder.frames = [frame]
+        recorder.language = "en"
+        recorder.allowed_to_early_transcribe = True
+        recorder.post_speech_silence_duration = 5.0
+        recorder.on_vad_stop = None
+        recorder.continuous_listening = True
+        recorder.silero_check_time = 100.0
+        recorder.wake_word_detect_time = 0
+        recorder.interrupt_stop_event = threading.Event()
+
+        submissions = []
+
+        def capture_submission(recorder_arg, audio, language, early):
+            submissions.append((recorder_arg.is_recording, audio, language, early))
+            recorder_arg.is_running = False
+
+        with mock.patch("VoiceSTT.core.recording.time.time", return_value=100.0), \
+                mock.patch("VoiceSTT.core.recording.is_webrtc_speech", return_value=False), \
+                mock.patch("VoiceSTT.core.recording.append_to_pre_recording_buffer"), \
+                mock.patch(
+                    "VoiceSTT.core.recording.submit_transcription_request",
+                    side_effect=capture_submission,
+                ):
+            run_recording_worker(recorder)
+
+        self.assertEqual(len(submissions), 1)
+        recording_active, audio, language, early = submissions[0]
+        self.assertTrue(recording_active)
+        self.assertEqual(language, "en")
+        self.assertTrue(early)
+        self.assertGreater(audio.size, 0)
+        self.assertFalse(recorder.allowed_to_early_transcribe)
 
     def test_wait_audio_consumes_queued_recording(self):
         samples, sample_rate = read_wav_samples(REFERENCE_AUDIO)

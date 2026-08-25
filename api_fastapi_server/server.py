@@ -32,6 +32,7 @@ from VoiceSTT_server.event_logging import (
     resolve_calendar_timezone,
     resolve_log_level,
 )
+from api_fastapi_server.activation import ActivationController
 from VoiceSTT_server.operations import (
     AuditLogManager,
     LocalModelRegistry,
@@ -903,6 +904,188 @@ def public_session_settings(settings):
     data = settings.public_dict()
     data.pop("openwakeword_model_paths", None)
     return data
+
+
+SESSION_ACTIVATION_QUERY_FIELDS = (
+    "manualTriggerEnabled",
+    "wakeWordTriggerEnabled",
+    "initialSpeechTimeout",
+    "followupTimeout",
+    "extensionSeconds",
+)
+
+#: How many ``commandId`` results a session remembers for idempotency. Bounded
+#: on purpose: a session must not accumulate unbounded state, and a client that
+#: replays a command this old has long since reconnected.
+TRIGGER_COMMAND_HISTORY = 200
+
+ACTIVATION_SOURCES_PUBLIC = ("manual", "wake_word")
+ACTIVATION_ACTIONS_PUBLIC = ("activate", "extend", "finish", "cancel")
+
+
+@dataclass(frozen=True)
+class SessionActivationRequest:
+    manual_enabled: Optional[bool] = None
+    wake_word_enabled: Optional[bool] = None
+    initial_speech_timeout: float = 15.0
+    followup_timeout: float = 3.0
+    extension_seconds: float = 5.0
+
+
+@dataclass(frozen=True)
+class ResolvedSessionActivationConfig:
+    mode: str
+    manual_enabled: bool
+    wake_word_enabled: bool
+    initial_speech_timeout: float
+    followup_timeout: float
+    extension_seconds: float
+    wake_word_profile_enabled: bool = False
+
+    def public_dict(self):
+        return {
+            "version": 1,
+            "mode": self.mode,
+            "manualTriggerEnabled": self.manual_enabled,
+            "wakeWordTriggerEnabled": self.wake_word_enabled,
+            # Whether wake-word *detection* is actually running for this
+            # session. A client that enables the wake-word trigger without an
+            # active profile can see here that no detections will arrive.
+            "wakeWordProfileEnabled": self.wake_word_profile_enabled,
+            "initialSpeechTimeout": self.initial_speech_timeout,
+            "followupTimeout": self.followup_timeout,
+            "extensionSeconds": self.extension_seconds,
+        }
+
+
+SESSION_ACTIVATION_TIMING_FIELDS = {
+    "initialSpeechTimeout": ("initial_speech_timeout", 15.0, 0.1, 3600.0),
+    "followupTimeout": ("followup_timeout", 3.0, 0.1, 3600.0),
+    "extensionSeconds": ("extension_seconds", 5.0, 0.1, 3600.0),
+}
+
+_ACTIVATION_TRUE_VALUES = {"true", "1", "yes", "on"}
+_ACTIVATION_FALSE_VALUES = {"false", "0", "no", "off"}
+
+
+def _parse_activation_flag(query_params, name):
+    """Reads one trigger flag. An unparsable value is an error, not a ``False``.
+
+    Silently treating ``manualTriggerEnabled=maybe`` as "disabled" could turn a
+    valid request into the forbidden ``false/false`` combination without the
+    client ever learning why, so the session is rejected instead.
+    """
+    raw = query_params.get(name)
+    if raw is None:
+        return None
+    normalized = str(raw).strip().lower()
+    if normalized == "":
+        return None
+    if normalized in _ACTIVATION_TRUE_VALUES:
+        return True
+    if normalized in _ACTIVATION_FALSE_VALUES:
+        return False
+    raise SessionConfigurationError(
+        "invalid_activation_flag",
+        f"{name} muss ein Wahrheitswert sein.",
+        field=name,
+        value=str(raw),
+    )
+
+
+def parse_session_activation_query(query_params):
+    manual_enabled = _parse_activation_flag(query_params, "manualTriggerEnabled")
+    wake_word_enabled = _parse_activation_flag(
+        query_params, "wakeWordTriggerEnabled"
+    )
+
+    timings = {}
+    for query_name, (
+        field_name,
+        default,
+        minimum,
+        maximum,
+    ) in SESSION_ACTIVATION_TIMING_FIELDS.items():
+        raw = query_params.get(query_name)
+        if raw is None or str(raw).strip() == "":
+            timings[field_name] = default
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            raise SessionConfigurationError(
+                "invalid_activation_timing",
+                f"{query_name} muss eine Zahl sein.",
+                field=query_name,
+                value=str(raw),
+            )
+        if not math.isfinite(value) or not minimum <= value <= maximum:
+            raise SessionConfigurationError(
+                "invalid_activation_timing",
+                f"{query_name} liegt außerhalb des zulässigen Bereichs "
+                f"({minimum}–{maximum}).",
+                field=query_name,
+                value=str(raw),
+            )
+        timings[field_name] = value
+
+    return SessionActivationRequest(
+        manual_enabled=manual_enabled,
+        wake_word_enabled=wake_word_enabled,
+        **timings,
+    )
+
+
+def resolve_session_activation_config(request, effective_wake_word_enabled):
+    """Turns the requested trigger flags into the configuration of one session.
+
+    A session that sends neither flag keeps the legacy behaviour, so existing
+    clients are unaffected. As soon as one flag is present the session is
+    controlled and the omitted flag counts as ``false`` - an explicit opt-in,
+    never an implicit one.
+    """
+    if request.manual_enabled is None and request.wake_word_enabled is None:
+        return ResolvedSessionActivationConfig(
+            mode="legacy",
+            manual_enabled=False,
+            wake_word_enabled=effective_wake_word_enabled,
+            wake_word_profile_enabled=effective_wake_word_enabled,
+            initial_speech_timeout=request.initial_speech_timeout,
+            followup_timeout=request.followup_timeout,
+            extension_seconds=request.extension_seconds,
+        )
+
+    man_enabled = bool(request.manual_enabled)
+    ww_enabled = bool(request.wake_word_enabled)
+
+    if not man_enabled and not ww_enabled:
+        raise SessionConfigurationError(
+            "activation_trigger_required",
+            "Im kontrollierten Modus muss mindestens manualTriggerEnabled oder "
+            "wakeWordTriggerEnabled aktiviert sein.",
+        )
+
+    # `wakeWordTriggerEnabled` says a detected wake word may open an
+    # activation; whether detections happen at all is the separate wake-word
+    # profile contract. If the wake word is the *only* trigger and the profile
+    # is not active, the session could never activate anything, so it is
+    # rejected here rather than silently going deaf.
+    if not man_enabled and ww_enabled and not effective_wake_word_enabled:
+        raise SessionConfigurationError(
+            "activation_wake_word_unavailable",
+            "wakeWordTriggerEnabled ist die einzige Triggerquelle, aber für "
+            "diese Sitzung ist kein Wake-Word-Profil aktiv.",
+        )
+
+    return ResolvedSessionActivationConfig(
+        mode="controlled",
+        manual_enabled=man_enabled,
+        wake_word_enabled=ww_enabled,
+        wake_word_profile_enabled=bool(effective_wake_word_enabled),
+        initial_speech_timeout=request.initial_speech_timeout,
+        followup_timeout=request.followup_timeout,
+        extension_seconds=request.extension_seconds,
+    )
 
 
 def runtime_settings_contract():
@@ -2358,6 +2541,7 @@ class RecorderBackedRealtimeSession:
         client_id=None,
         settings=None,
         session_config=None,
+        activation_config=None,
     ):
         self.service = service
         self.settings = settings or replace(service.settings)
@@ -2367,6 +2551,14 @@ class RecorderBackedRealtimeSession:
             effective_backend=str(self.settings.wakeword_backend or ""),
             effective_wake_words=_split_wake_word_ids(self.settings.wake_words),
             source="server",
+        )
+        self.activation_config = activation_config or ResolvedSessionActivationConfig(
+            mode="legacy",
+            manual_enabled=False,
+            wake_word_enabled=self.settings.wake_word_enabled(),
+            initial_speech_timeout=15.0,
+            followup_timeout=3.0,
+            extension_seconds=5.0,
         )
         self.session_id = session_id
         self.client_id = normalized_client_id(client_id)
@@ -2401,10 +2593,22 @@ class RecorderBackedRealtimeSession:
         self._recorder_wake_word_timeout_before_followup = None
         self._recorder_start_recording_before_followup = None
         self._recorder_stop_recording_before_followup = None
+        self._activation = None
+        self._activation_timer_generation = 0
+        self._trigger_command_results = collections.OrderedDict()
         self.queue_delay = {"realtime": RunningStats(), "final": RunningStats()}
         self.inference_duration = {"realtime": RunningStats(), "final": RunningStats()}
         self.total_latency = {"realtime": RunningStats(), "final": RunningStats()}
         self.recorder = self._create_recorder()
+        if self.activation_config.mode == "controlled":
+            self.recorder.set_activation_policy("controlled")
+            self._activation = ActivationController(
+                manual_trigger_enabled=self.activation_config.manual_enabled,
+                wake_word_trigger_enabled=self.activation_config.wake_word_enabled,
+                initial_speech_timeout=self.activation_config.initial_speech_timeout,
+                followup_timeout=self.activation_config.followup_timeout,
+                extension_seconds=self.activation_config.extension_seconds,
+            )
         self.text_thread = threading.Thread(
             target=self._text_worker,
             name=f"VoiceSTTSessionText-{session_id}",
@@ -2527,6 +2731,8 @@ class RecorderBackedRealtimeSession:
         with self.lock:
             self.streaming = False
             self.status = "idle"
+            # An activation cannot outlive the audio stream it belongs to.
+            closed = self._reset_activation_locked("stream_stopped")
         try:
             self.recorder.flush_buffered_audio()
             self._trim_recorded_audio_queue()
@@ -2534,6 +2740,8 @@ class RecorderBackedRealtimeSession:
             LOGGER.debug("Gepuffertes Audio für %s konnte nicht geleert werden", self.session_id, exc_info=True)
         finally:
             self.service.deactivate_speaker(self.session_id)
+        if closed is not None:
+            self._publish_timeline_event(closed[0], **closed[1])
         self.publish_status("idle")
 
     def close(self):
@@ -2550,6 +2758,8 @@ class RecorderBackedRealtimeSession:
             self._wakeword_voice_window = False
             self._wakeword_followup_generation += 1
             self._clear_recorder_followup_gate_locked()
+            # A reconnect must never revive an activation of the old session.
+            self._reset_activation_locked("session_closed")
         if should_cancel:
             self._emit_cancelled_transcription(
                 cancelled_generation,
@@ -2581,7 +2791,13 @@ class RecorderBackedRealtimeSession:
             self._wakeword_voice_window = False
             self._wakeword_followup_generation += 1
             self._clear_recorder_followup_gate_locked()
+            # `clear` discards the current turn, so the activation goes with it.
+            cleared_activation = self._reset_activation_locked("client_clear")
             self.status = self._waiting_state_locked()
+        if cleared_activation is not None:
+            self._publish_timeline_event(
+                cleared_activation[0], **cleared_activation[1]
+            )
         if should_cancel:
             self._emit_cancelled_transcription(
                 cancelled_generation,
@@ -2721,6 +2937,335 @@ class RecorderBackedRealtimeSession:
                 source="server",
             )
         return session_config.public_dict()
+
+    def activation_config_dict(self):
+        """The activation configuration this session actually resolved to."""
+        return self.activation_config.public_dict()
+
+    # -- activation control -------------------------------------------------
+
+    TRIGGER_ACTIONS = ("activate", "extend", "finish", "cancel")
+    TRIGGER_SOURCES = ("manual", "wake_word")
+
+    def _trigger_ack(self, command_id, accepted, reason, activation_id=None):
+        return {
+            "type": "trigger_ack",
+            "commandId": command_id,
+            "accepted": bool(accepted),
+            "reason": reason,
+            "activationId": activation_id,
+            "sessionId": self.session_id,
+        }
+
+    def _current_activation_id(self):
+        """The running activation id, used to correlate rejections as well."""
+        activation = self._activation
+        if activation is None:
+            return None
+        return activation.snapshot().get("activationId")
+
+    def activation_snapshot(self):
+        activation = self._activation
+        if activation is None:
+            return None
+        return activation.snapshot()
+
+    def _activation_correlation(self):
+        """Fields every recording/transcription event carries in controlled mode.
+
+        Safe to call without ``self.lock``: the controller synchronises itself
+        and returns an immutable copy.
+        """
+        activation = getattr(self, "_activation", None)
+        if activation is None:
+            return {}
+        snapshot = activation.snapshot()
+        activation_id = snapshot.get("activationId")
+        if not activation_id:
+            return {}
+        return {
+            "activationId": activation_id,
+            "primarySource": snapshot.get("primarySource"),
+            "sources": list(snapshot.get("sources") or ()),
+        }
+
+    def handle_trigger_command(self, data):
+        """Processes one ``trigger`` command and returns its ``trigger_ack``.
+
+        Every syntactically valid command gets exactly one deterministic
+        answer, and every answer carries the ``commandId`` so that the client
+        can correlate it - rejections included.
+        """
+        if not isinstance(data, dict):
+            return self._trigger_ack("", False, "invalid_payload")
+
+        raw_command_id = data.get("commandId")
+        if raw_command_id is not None and not isinstance(raw_command_id, str):
+            return self._trigger_ack("", False, "invalid_command_id")
+        command_id = str(raw_command_id or "").strip()
+        if not command_id:
+            return self._trigger_ack("", False, "missing_command_id")
+
+        raw_action = data.get("action")
+        raw_source = data.get("source")
+        if raw_action is not None and not isinstance(raw_action, str):
+            return self._trigger_ack(command_id, False, "invalid_action")
+        if raw_source is not None and not isinstance(raw_source, str):
+            return self._trigger_ack(command_id, False, "invalid_source")
+
+        action = str(raw_action or "").strip().lower()
+        source = str(raw_source or "").strip().lower()
+
+        if action not in self.TRIGGER_ACTIONS:
+            return self._trigger_ack(command_id, False, "invalid_action")
+        if source not in self.TRIGGER_SOURCES:
+            return self._trigger_ack(command_id, False, "invalid_source")
+
+        published = []
+        with self.lock:
+            # Idempotency: the same commandId must never take effect twice.
+            cached = self._trigger_command_results.get(command_id)
+            if cached is not None:
+                cached_data, cached_ack = cached
+                same = (
+                    cached_data.get("action") == action
+                    and cached_data.get("source") == source
+                )
+                if same:
+                    return cached_ack
+                return self._trigger_ack(
+                    command_id,
+                    False,
+                    "command_id_conflict",
+                    self._current_activation_id(),
+                )
+
+            if self._activation is None:
+                ack = self._trigger_ack(
+                    command_id, False, "controlled_activation_disabled"
+                )
+                self._cache_trigger_command_result(command_id, data, ack)
+                return ack
+
+            # Stream lifecycle: triggers are only meaningful while the session
+            # is streaming audio. Before start, after stop and after close the
+            # command is rejected - but still acknowledged and correlated.
+            if self.status == "closed":
+                ack = self._trigger_ack(
+                    command_id,
+                    False,
+                    "session_closed",
+                    self._current_activation_id(),
+                )
+                self._cache_trigger_command_result(command_id, data, ack)
+                return ack
+            if not self.streaming:
+                ack = self._trigger_ack(
+                    command_id,
+                    False,
+                    "stream_not_started",
+                    self._current_activation_id(),
+                )
+                self._cache_trigger_command_result(command_id, data, ack)
+                return ack
+
+            if action == "activate":
+                decision = self._activation.activate(source)
+            elif action == "extend":
+                decision = self._activation.extend(source)
+            elif action == "finish":
+                decision = self._activation.finish(source)
+            else:
+                decision = self._activation.cancel(source)
+
+            activation_id = self._apply_activation_decision_locked(
+                action, decision, published
+            )
+            ack = self._trigger_ack(
+                command_id, decision.accepted, decision.reason, activation_id
+            )
+            self._cache_trigger_command_result(command_id, data, ack)
+
+        for event, fields in published:
+            self._publish_timeline_event(event, **fields)
+        return ack
+
+    def _cache_trigger_command_result(self, command_id, data, ack):
+        self._trigger_command_results[command_id] = (data, ack)
+        if len(self._trigger_command_results) > TRIGGER_COMMAND_HISTORY:
+            self._trigger_command_results.popitem(last=False)
+
+    def _apply_activation_decision_locked(self, action, decision, published):
+        """Turns a controller decision into gate, timer and event side effects.
+
+        Must be called with ``self.lock`` held. Events are collected into
+        ``published`` and emitted by the caller **after** the lock is released,
+        so that publishing can never deadlock against a recorder callback.
+        """
+        snapshot = decision.snapshot
+        activation_id = (
+            snapshot.get("activationId") or snapshot.get("closedActivationId")
+        )
+
+        if not decision.accepted:
+            return activation_id
+
+        generation = snapshot.get("generation")
+        window_open = bool(snapshot.get("windowOpen"))
+
+        if window_open:
+            open_id = snapshot.get("activationId")
+            if open_id:
+                try:
+                    self.recorder.open_controlled_activation(
+                        open_id, replace=True, generation=generation
+                    )
+                except Exception:
+                    LOGGER.debug(
+                        "Controlled Gate konnte für %s nicht geöffnet werden",
+                        self.session_id,
+                        exc_info=True,
+                    )
+        else:
+            closed_id = snapshot.get("closedActivationId")
+            try:
+                self.recorder.close_controlled_activation(
+                    closed_id, generation=generation
+                )
+            except Exception:
+                LOGGER.debug(
+                    "Controlled Gate konnte für %s nicht geschlossen werden",
+                    self.session_id,
+                    exc_info=True,
+                )
+
+        self._arm_activation_timer_locked(snapshot)
+
+        if decision.changed:
+            event = self._activation_event_name(action, decision.reason)
+            if event is not None:
+                published.append((event, self._activation_event_fields(snapshot)))
+        return activation_id
+
+    @staticmethod
+    def _activation_event_name(action, reason):
+        if reason == "activated":
+            return "activation_started"
+        if reason == "merged":
+            return "activation_extended"
+        if reason == "extended":
+            return "activation_extended"
+        if reason in {"finished", "cancelled", "timed_out"}:
+            return "activation_closed"
+        if reason == "recording_started":
+            return None
+        if reason == "followup_started":
+            return None
+        return None
+
+    @staticmethod
+    def _activation_event_fields(snapshot):
+        activation_id = (
+            snapshot.get("activationId") or snapshot.get("closedActivationId")
+        )
+        sources = snapshot.get("sources") or snapshot.get("closedSources") or ()
+        fields = {
+            "activationId": activation_id,
+            "generation": snapshot.get("generation"),
+            "primarySource": (
+                snapshot.get("primarySource")
+                or snapshot.get("closedPrimarySource")
+            ),
+            "sources": list(sources),
+            "phase": snapshot.get("phase"),
+        }
+        if snapshot.get("closeReason"):
+            fields["reason"] = snapshot["closeReason"]
+        return fields
+
+    def _arm_activation_timer_locked(self, snapshot):
+        """Schedules the activation timeout, bound to the controller version.
+
+        Any later state change raises the version, so a timer that fires late
+        is rejected by ``ActivationController.expire`` instead of ending an
+        activation it no longer belongs to.
+        """
+        deadline = snapshot.get("deadline")
+        if deadline is None or not snapshot.get("windowOpen"):
+            self._activation_timer_generation += 1
+            return
+
+        version = snapshot.get("version")
+        self._activation_timer_generation += 1
+        timer_generation = self._activation_timer_generation
+        delay = max(0.0, float(deadline) - time.monotonic())
+        thread = threading.Thread(
+            target=self._activation_timeout_worker,
+            args=(timer_generation, version, delay),
+            name=f"VoiceSTTActivationTimeout-{self.session_id}",
+            daemon=True,
+        )
+        thread.start()
+
+    def _activation_timeout_worker(self, timer_generation, version, delay):
+        remaining = delay
+        while True:
+            if self.service.stop_event.wait(timeout=remaining):
+                return
+            published = []
+            with self.lock:
+                if timer_generation != self._activation_timer_generation:
+                    # A newer timer took over; this one has nothing to do.
+                    return
+                activation = self._activation
+                if activation is None:
+                    return
+                decision = activation.expire(version)
+                if not decision.accepted:
+                    if decision.reason != "not_due":
+                        return
+                    # `Event.wait` may return marginally early - on Windows the
+                    # timer granularity is around 15 ms. Treating that as "the
+                    # timeout did not happen" would drop the deadline forever,
+                    # because this is a one-shot timer. So wait out the rest.
+                    deadline = decision.snapshot.get("deadline")
+                    if deadline is None:
+                        return
+                    remaining = max(0.001, float(deadline) - time.monotonic())
+                    continue
+                self._apply_activation_decision_locked(
+                    "expire", decision, published
+                )
+                waiting_state = self._waiting_state_locked()
+            for event, fields in published:
+                self._publish_timeline_event(event, **fields)
+            self.publish_status(waiting_state)
+            return
+
+    def _reset_activation_locked(self, reason):
+        """Drops any activation and closes the gate. Used by stop/close/clear.
+
+        A reconnect must never revive an activation, and a stopped stream must
+        never leave the recorder gate open.
+        """
+        activation = self._activation
+        self._activation_timer_generation += 1
+        if activation is None:
+            return None
+        decision = activation.reset()
+        try:
+            self.recorder.abort_controlled_activation()
+        except Exception:
+            LOGGER.debug(
+                "Controlled Gate konnte für %s nicht zurückgesetzt werden",
+                self.session_id,
+                exc_info=True,
+            )
+        if not decision.changed:
+            return None
+        fields = self._activation_event_fields(decision.snapshot)
+        fields["reason"] = reason
+        return ("activation_closed", fields)
 
     def public_settings(self):
         return public_session_settings(self.settings)
@@ -3284,6 +3829,13 @@ class RecorderBackedRealtimeSession:
                 self._wakeword_voice_window = False
                 segment_id = self.segment_state.current()
                 segment = self.timeline.mark_recording_started(segment_id)
+                if self._activation is not None:
+                    decision = self._activation.recording_started()
+                    if decision.changed:
+                        # Speech has started, so the "waiting for first speech"
+                        # deadline is over; the controller cleared it and the
+                        # armed timer must be invalidated with it.
+                        self._arm_activation_timer_locked(decision.snapshot)
         if segment is not None:
             self._publish_timeline_event(
                 "recording_started",
@@ -3313,6 +3865,11 @@ class RecorderBackedRealtimeSession:
             self.recording_sample_count = 0
             self._force_finalize_in_progress = False
             self._wakeword_voice_window = False
+            if self._activation is not None:
+                decision = self._activation.recording_ended()
+                if decision.changed:
+                    # The follow-up window is now the authoritative deadline.
+                    self._arm_activation_timer_locked(decision.snapshot)
         self.service.deactivate_speaker(self.session_id)
         if segment is not None:
             self._publish_timeline_event(
@@ -3323,7 +3880,12 @@ class RecorderBackedRealtimeSession:
                 durationSeconds=segment.get("durationSeconds"),
                 reason=segment.get("endReason"),
             )
-        self._start_wakeword_followup_window()
+        if self._activation is None:
+            # The legacy wake-word follow-up owns a second timer and writes
+            # recorder state directly. In the controlled mode the
+            # ActivationController is the only follow-up authority, so this
+            # path must stay switched off there.
+            self._start_wakeword_followup_window()
         self.publish_status(self._waiting_state_locked())
 
     def _on_transcription_start(self, *_):
@@ -3514,14 +4076,25 @@ class RecorderBackedRealtimeSession:
         )
 
     def _on_wakeword_detected(self):
+        published = []
         with self.lock:
             self._wakeword_voice_window = True
             self._wakeword_followup_generation += 1
+            if self._activation is not None:
+                # A wake word is a trigger like any other: it goes through the
+                # controller and reaches the recorder only via the gate. It
+                # must never open a recording on its own.
+                decision = self._activation.activate("wake_word")
+                self._apply_activation_decision_locked(
+                    "activate", decision, published
+                )
         event = self.timeline.mark_wakeword_detected()
         self._publish_timeline_event(
             "wakeword_detected",
             wakeWord=event.get("wakeWord"),
         )
+        for name, fields in published:
+            self._publish_timeline_event(name, **fields)
         self.publish_status("wakeword_detected")
 
     def _on_wakeword_timeout(self):
@@ -3613,11 +4186,20 @@ class RecorderBackedRealtimeSession:
             payload["segmentId"] = segment_id
         if segment is not None:
             payload["segment"] = segment
+        # Recording and transcription events carry the activation they belong
+        # to, so a client can correlate a segment back to the trigger that
+        # opened it. Explicit fields on the call win over the correlation.
+        for key, value in self._activation_correlation().items():
+            payload.setdefault(key, value)
+            fields.setdefault(key, value)
         for key, value in fields.items():
             if value is not None:
                 payload[key] = value
         self.service.manager.publish_session(self.session_id, payload)
         structured_events = {
+            "activation_started": "activation.started",
+            "activation_extended": "activation.extended",
+            "activation_closed": "activation.closed",
             "recording_started": "transcription.recording_started",
             "recording_ended": "transcription.recording_ended",
             "transcription_started": "transcription.started",
@@ -4008,6 +4590,7 @@ class VoiceSTTService:
         session_id,
         wake_word_request=None,
         client_id=None,
+        activation_request=None,
     ):
         self.touch_model_activity("websocket_connection")
         wake_word_request = wake_word_request or SessionWakeWordRequest()
@@ -4017,6 +4600,13 @@ class VoiceSTTService:
             base_settings,
             wake_word_request,
             self.wakeword_registry,
+        )
+        # The activation configuration has to be resolved against the wake word
+        # profile that was actually granted for this session, so it is done
+        # here and not at the WebSocket entry point.
+        activation_config = resolve_session_activation_config(
+            activation_request or SessionActivationRequest(),
+            session_settings.wake_word_enabled(),
         )
         if not self.sessions.reserve(session_id):
             return None
@@ -4028,6 +4618,7 @@ class VoiceSTTService:
                 client_id=client_id,
                 settings=session_settings,
                 session_config=session_config,
+                activation_config=activation_config,
             )
             if not self.sessions.add(session):
                 session.close()
@@ -4378,6 +4969,27 @@ class VoiceSTTService:
                     *SESSION_WAKE_WORD_QUERY_FIELDS,
                 ],
             },
+            # Announced only because the whole contract behind it works: the
+            # `trigger` command is processed, every command is answered with a
+            # correlated `trigger_ack`, `commandId` is idempotent, and an
+            # accepted activation actually drives the recorder gate.
+            "activationTriggers": {
+                "supported": True,
+                "version": 1,
+                "sources": list(ACTIVATION_SOURCES_PUBLIC),
+                "actions": list(ACTIVATION_ACTIONS_PUBLIC),
+                "commandType": "trigger",
+                "ackType": "trigger_ack",
+                "commandIdRequired": True,
+                "commandIdIdempotent": True,
+                "commandHistory": TRIGGER_COMMAND_HISTORY,
+                "queryParameters": list(SESSION_ACTIVATION_QUERY_FIELDS),
+                "activationEvents": [
+                    "activation.started",
+                    "activation.extended",
+                    "activation.closed",
+                ],
+            },
         }
 
     def create_log_access(self, session_id):
@@ -4447,6 +5059,7 @@ class VoiceSTTService:
             "sessionId": session.session_id,
             "settings": session.public_settings(),
             "sessionConfig": session.session_config_dict(),
+            "activationConfig": session.activation_config_dict(),
             "sessionCapabilities": self.session_capabilities(),
             "limits": self.limits_dict(),
             "runtimeSettings": self.runtime_settings_contract(),
@@ -6812,6 +7425,9 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             wake_word_request = parse_session_wake_word_query(
                 websocket.query_params
             )
+            activation_request = parse_session_activation_query(
+                websocket.query_params
+            )
         except SessionConfigurationError as exc:
             await websocket.accept()
             await websocket.send_text(json.dumps(exc.payload()))
@@ -6831,6 +7447,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 session_id,
                 wake_word_request=wake_word_request,
                 client_id=client_id,
+                activation_request=activation_request,
             )
         except SessionConfigurationError as exc:
             await websocket.accept()
@@ -6894,6 +7511,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "sessionId": session_id,
             "settings": session.public_settings(),
             "sessionConfig": session.session_config_dict(),
+            "activationConfig": session.activation_config_dict(),
             "sessionCapabilities": service.session_capabilities(),
             "limits": service.limits_dict(),
             "supportedEngines": get_supported_transcription_engines(),
@@ -6978,6 +7596,9 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                             "sessionId": session_id,
                             "metrics": session.snapshot(),
                         }))
+                    elif command == "trigger":
+                        ack = session.handle_trigger_command(data)
+                        await websocket.send_text(json.dumps(ack))
                     else:
                         await websocket.send_text(json.dumps({
                             "type": "error",

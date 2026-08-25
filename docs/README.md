@@ -10,6 +10,10 @@ Referenz nicht.
 Die zuletzt abgeschlossenen größeren Erweiterungen sind vollständig in
 die aktuelle Dokumentation eingeordnet:
 
+- [Einheitliche serverseitige Triggerarchitektur](einheitliche-triggerarchitektur.md):
+  eine Session mit einem kontinuierlichen Stream, serverautoritativer
+  `ActivationController`, Recorder-Gate, `trigger`/`trigger_ack`-Vertrag,
+  Kollisionssemantik von Manual und Wake Word, Legacykompatibilität.
 - [Sitzungslokale Wake-Word-Konfiguration](session-wakeword-erweiterung.md):
   sicherer Sessionvertrag, OpenWakeWord-Modellkatalog, Fallbacks, Isolation und
   Betriebsnachweis.
