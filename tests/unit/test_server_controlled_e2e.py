@@ -741,6 +741,7 @@ class ControlledActivationEndToEndTests(unittest.TestCase):
                 second = session.timeline("recording_started")
                 session.recorder().flush_buffered_audio()
                 session.timeline("recording_ended")
+                second_final = session.drain("final")
 
                 snapshot = session.server_session(self.app).activation_snapshot()
                 self.assertEqual(first["activationId"], activation_id)
@@ -749,6 +750,28 @@ class ControlledActivationEndToEndTests(unittest.TestCase):
                 self.assertEqual(second["activationSequence"], 1)
                 self.assertNotEqual(first["segmentId"], second["segmentId"])
                 self.assertEqual(snapshot["segments"], 2)
+                finals = [
+                    message for message in session.messages
+                    if message.get("type") == "final"
+                ]
+                self.assertEqual(
+                    [message["segmentSequence"] for message in finals],
+                    [1, 2],
+                )
+                self.assertEqual(
+                    {message["activationId"] for message in finals},
+                    {activation_id},
+                )
+                self.assertEqual(second_final["segmentSequence"], 2)
+                jobs = [
+                    job for job in self.app.state.voicestt_service.scheduler.jobs
+                    if job.kind == "final"
+                    and job.session_id == session.hello["sessionId"]
+                ]
+                self.assertEqual(
+                    [job.segment_context.segment_sequence for job in jobs],
+                    [1, 2],
+                )
 
 
 @unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
@@ -812,6 +835,66 @@ class BackgroundDrainOverlapTests(unittest.TestCase):
                 self.assertEqual(snapshot["activationSequence"], 2)
 
                 scheduler.complete(old_job, text="old-final")
+                final = session.drain("final")
+                self.assertEqual(final["text"], "old-final")
+                self.assertEqual(final["activationId"], first["activationId"])
+                self.assertEqual(final["activationSequence"], 1)
+                self.assertEqual(final["segmentSequence"], 1)
+                self.assertEqual(
+                    session.server_session(self.app).activation_snapshot()[
+                        "activationId"
+                    ],
+                    second["activationId"],
+                )
+
+    def test_cancel_suppresses_an_unpublished_final_and_drains_the_ledger(self):
+        with TestClient(self.app) as client:
+            with ControlledSessionHarness(
+                client, "manualTriggerEnabled=true&wakeWordTriggerEnabled=false"
+            ) as session:
+                session.send({"type": "start"})
+                session.send({
+                    "type": "trigger",
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "cancel-open",
+                })
+                activation = session.drain("trigger_ack")
+                session.socket.send_bytes(speech_packet())
+                session.timeline("recording_started")
+                session.send({
+                    "type": "trigger",
+                    "action": "cancel",
+                    "source": "manual",
+                    "commandId": "cancel-close",
+                })
+                self.assertTrue(session.drain("trigger_ack")["accepted"])
+
+                deadline = time.monotonic() + 10
+                while (
+                    not BlockingScheduler.instances
+                    or not BlockingScheduler.instances[0].jobs
+                ):
+                    if time.monotonic() >= deadline:
+                        self.fail("the cancelled final job was not submitted")
+                    time.sleep(0.01)
+                job = BlockingScheduler.instances[0].jobs[0]
+                BlockingScheduler.instances[0].complete(job, text="must-not-publish")
+                session.settle()
+
+                self.assertFalse(any(
+                    message.get("type") == "final"
+                    and message.get("text") == "must-not-publish"
+                    for message in session.messages
+                ))
+                cancelled = session.timeline_events("final_transcript_cancelled")
+                self.assertEqual(len(cancelled), 1)
+                self.assertEqual(cancelled[0]["activationId"], activation["activationId"])
+                drained = session.timeline_events("activation_drained")
+                self.assertEqual(len(drained), 1)
+                self.assertEqual(drained[0]["state"], "cancelled")
+                ledger = session.server_session(self.app).snapshot()["segmentLedger"]
+                self.assertEqual(ledger["pendingSegmentCount"], 0)
 
 
 @unittest.skipIf(TestClient is None, "FastAPI test client is not installed")

@@ -188,12 +188,18 @@ def wait_for_recorded_audio(recorder):
             frames = queued_recording["frames"]
             backdate_stop_seconds = queued_recording["backdate_stop_seconds"]
             backdate_resume_seconds = queued_recording["backdate_resume_seconds"]
+            recorder._current_transcription_context = queued_recording.get(
+                "segment_context"
+            )
         else:
             frames = recorder.frames
             if len(frames) == 0:
                 frames = recorder.last_frames
             backdate_stop_seconds = recorder.backdate_stop_seconds
             backdate_resume_seconds = recorder.backdate_resume_seconds
+            recorder._current_transcription_context = getattr(
+                recorder, "_active_recording_context", None
+            )
 
         frames_to_read = set_audio_from_frames(
             recorder,

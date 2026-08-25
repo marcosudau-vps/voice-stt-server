@@ -15,6 +15,7 @@ from starlette.websockets import WebSocketDisconnect
 from api_fastapi_server.protocol import decode_audio_packet, encode_audio_packet
 from api_fastapi_server.server import (
     create_app,
+    InferenceJob,
     InferenceResult,
     QueueSubmitResult,
     RecorderBackedRealtimeSession,
@@ -562,7 +563,7 @@ class FastAPIMultiUserSessionTests(unittest.TestCase):
         self.assertTrue(published)
         self.assertEqual(
             [event["event"] for event in emitted],
-            ["transcription.discarded"],
+            ["transcription.discarded", "activation.drained"],
         )
         self.assertEqual(emitted[0]["reason"], "empty_final")
         self.assertEqual(emitted[0]["segment_id"], 1)
@@ -583,7 +584,7 @@ class FastAPIMultiUserSessionTests(unittest.TestCase):
             session.generation,
             expected_segment_id=segment_id,
         ))
-        self.assertEqual(len(emitted), 1)
+        self.assertEqual(len(emitted), 2)
         self.assertEqual(len([
             message
             for message in manager.messages["first"]
@@ -595,7 +596,225 @@ class FastAPIMultiUserSessionTests(unittest.TestCase):
         self.assertFalse(
             session._publish_discarded_empty_final(stale_generation)
         )
-        self.assertEqual(len(emitted), 1)
+        self.assertEqual(len(emitted), 2)
+
+    def test_session_publishes_cross_activation_finals_by_segment_sequence(self):
+        service, manager = make_service()
+        session = service.admit_session("ordered")
+        ledger = session.segment_ledger
+        ledger.open_activation("activation-1", 1, {"language": "en"})
+        first = ledger.accept_segment("activation-1", 11)
+        ledger.close_activation("activation-1", "finished")
+        ledger.open_activation("activation-2", 2, {"language": "de"})
+        second = ledger.accept_segment("activation-2", 12)
+        ledger.close_activation("activation-2", "finished")
+
+        self.assertTrue(session._publish_final_text("second", context=second))
+        self.assertEqual(
+            [item for item in manager.messages["ordered"] if item.get("type") == "final"],
+            [],
+        )
+        self.assertTrue(session._publish_final_text("first", context=first))
+
+        finals = [
+            item for item in manager.messages["ordered"]
+            if item.get("type") == "final"
+        ]
+        self.assertEqual([item["text"] for item in finals], ["first", "second"])
+        self.assertEqual([item["segmentSequence"] for item in finals], [1, 2])
+        self.assertEqual(
+            [item["activationId"] for item in finals],
+            ["activation-1", "activation-2"],
+        )
+        self.assertEqual(session.segment_ledger.snapshot()["pendingSegmentCount"], 0)
+
+    def test_parallel_ledger_updates_dispatch_finals_and_terminals_in_order(self):
+        service, manager = make_service()
+        session = service.admit_session("parallel-order")
+        ledger = session.segment_ledger
+        ledger.open_activation("activation-1", 1)
+        first = ledger.accept_segment("activation-1", 1)
+        ledger.close_activation("activation-1", "finished")
+        ledger.open_activation("activation-2", 2)
+        second = ledger.accept_segment("activation-2", 2)
+        ledger.close_activation("activation-2", "finished")
+
+        first_apply_entered = threading.Event()
+        release_first_apply = threading.Event()
+        second_started = threading.Event()
+        original_apply = session._apply_ledger_update
+        apply_calls = 0
+        apply_lock = threading.Lock()
+
+        def block_first_apply(update):
+            nonlocal apply_calls
+            with apply_lock:
+                apply_calls += 1
+                call_number = apply_calls
+            if call_number == 1:
+                first_apply_entered.set()
+                self.assertTrue(release_first_apply.wait(timeout=5.0))
+            original_apply(update)
+
+        session._apply_ledger_update = block_first_apply
+        outcomes = []
+
+        def publish(context, text):
+            if context is second:
+                second_started.set()
+            outcomes.append(session._publish_final_text(text, context=context))
+
+        first_thread = threading.Thread(target=publish, args=(first, "first"))
+        second_thread = threading.Thread(target=publish, args=(second, "second"))
+        first_thread.start()
+        self.assertTrue(first_apply_entered.wait(timeout=5.0))
+        second_thread.start()
+        self.assertTrue(second_started.wait(timeout=5.0))
+
+        try:
+            # At the old boundary thread 2 could now publish before thread 1.
+            # The dispatch lock keeps both its ledger mutation and output pending.
+            time.sleep(0.05)
+            self.assertEqual(manager.messages["parallel-order"], [])
+        finally:
+            release_first_apply.set()
+            first_thread.join(timeout=5.0)
+            second_thread.join(timeout=5.0)
+
+        self.assertFalse(first_thread.is_alive())
+        self.assertFalse(second_thread.is_alive())
+        self.assertEqual(outcomes, [True, True])
+        messages = manager.messages["parallel-order"]
+        finals = [item for item in messages if item.get("type") == "final"]
+        self.assertEqual([item["text"] for item in finals], ["first", "second"])
+        self.assertEqual(
+            [item["segmentSequence"] for item in finals],
+            [1, 2],
+        )
+        observable = [
+            (item.get("type"), item.get("event"), item.get("segmentSequence"))
+            for item in messages
+            if item.get("type") == "final"
+            or item.get("event") == "activation_drained"
+        ]
+        self.assertEqual(
+            observable,
+            [
+                ("final", None, 1),
+                ("timeline", "activation_drained", None),
+                ("final", None, 2),
+                ("timeline", "activation_drained", None),
+            ],
+        )
+
+    def test_recorded_audio_queue_trim_terminalizes_its_exact_context(self):
+        service, manager = make_service(max_final_queue_depth_per_session=0)
+        session = service.admit_session("trimmed")
+        ledger = session.segment_ledger
+        ledger.open_activation("activation", 1)
+        context = ledger.accept_segment("activation", 4)
+        ledger.close_activation("activation", "finished")
+        session.recorder.recorded_audio_queue.put({
+            "frames": [b"audio"],
+            "segment_context": context,
+        })
+
+        self.assertEqual(session._trim_recorded_audio_queue(), 1)
+
+        snapshot = ledger.snapshot()
+        self.assertEqual(snapshot["pendingSegmentCount"], 0)
+        self.assertEqual(snapshot["terminalSegmentCount"], 1)
+        terminals = [
+            item for item in manager.messages["trimmed"]
+            if item.get("event") == "final_transcript_discarded"
+        ]
+        self.assertEqual(len(terminals), 1)
+        self.assertEqual(terminals[0]["requestId"], context.request_id)
+
+    def test_scheduler_reject_and_duplicate_drop_terminalize_once(self):
+        service, manager = make_service()
+        session = service.admit_session("rejected")
+        ledger = session.segment_ledger
+        ledger.open_activation("activation", 1)
+        context = ledger.accept_segment("activation", 3)
+        ledger.close_activation("activation", "finished")
+        job = InferenceJob(
+            request_id=context.request_id,
+            session_id="rejected",
+            kind="final",
+            audio=np.ones(4, dtype=np.float32),
+            language="en",
+            use_prompt=True,
+            segment_id=context.segment_id,
+            sequence=0,
+            generation=0,
+            created_at=time.monotonic(),
+            segment_context=context,
+        )
+
+        session.on_submit_result(job, QueueSubmitResult(False, "final queue full"))
+        session.on_job_dropped(job, "cancelled")
+
+        failed = [
+            item for item in manager.messages["rejected"]
+            if item.get("event") == "final_transcript_failed"
+        ]
+        cancelled = [
+            item for item in manager.messages["rejected"]
+            if item.get("event") == "final_transcript_cancelled"
+        ]
+        self.assertEqual(len(failed), 1)
+        self.assertEqual(cancelled, [])
+        self.assertEqual(ledger.snapshot()["pendingSegmentCount"], 0)
+
+    def test_worker_exception_terminalizes_the_submitted_segment_once(self):
+        service, manager = make_service()
+        session = service.admit_session("worker-error")
+        session.start_streaming()
+        session.ingest_audio_packet(audio_packet())
+        session.recorder.flush_buffered_audio()
+        self._wait_for(
+            lambda: any(job.kind == "final" for job in service.scheduler.jobs)
+        )
+        job = next(job for job in service.scheduler.jobs if job.kind == "final")
+
+        service.scheduler.complete(job, text="", error="engine exploded")
+        self._wait_for(lambda: any(
+            item.get("event") == "final_transcript_failed"
+            for item in manager.messages["worker-error"]
+        ))
+
+        failed = [
+            item for item in manager.messages["worker-error"]
+            if item.get("event") == "final_transcript_failed"
+        ]
+        self.assertEqual(len(failed), 1)
+        self.assertEqual(failed[0]["requestId"], job.request_id)
+        self.assertEqual(session.segment_ledger.snapshot()["pendingSegmentCount"], 0)
+
+    def test_session_close_cancels_every_pending_segment_without_leaks(self):
+        service, manager = make_service()
+        session = service.admit_session("closing")
+        ledger = session.segment_ledger
+        ledger.open_activation("first", 1)
+        first = ledger.accept_segment("first", 1)
+        ledger.close_activation("first", "finished")
+        ledger.open_activation("second", 2)
+        second = ledger.accept_segment("second", 2)
+
+        session.close()
+
+        cancelled = [
+            item for item in manager.messages["closing"]
+            if item.get("event") == "final_transcript_cancelled"
+        ]
+        self.assertEqual(
+            {item["requestId"] for item in cancelled},
+            {first.request_id, second.request_id},
+        )
+        snapshot = ledger.snapshot()
+        self.assertEqual(snapshot["pendingSegmentCount"], 0)
+        self.assertEqual(snapshot["pendingActivationCount"], 0)
 
     def test_duplicate_empty_recorder_results_terminalize_started_segment_once(self):
         service, manager = make_service()

@@ -74,6 +74,7 @@ def queue_recorded_audio(
     """
     Queues a completed recording for final transcription.
     """
+    recorder._last_recording_was_queued = False
     if not frames:
         return
 
@@ -81,7 +82,14 @@ def queue_recorded_audio(
         "frames": copy.deepcopy(frames),
         "backdate_stop_seconds": backdate_stop_seconds,
         "backdate_resume_seconds": backdate_resume_seconds,
+        # The server may attach an immutable final-job context when recording
+        # starts.  Keeping it beside the audio prevents a later foreground
+        # activation from stealing an older queued segment's identity.
+        "segment_context": copy.deepcopy(
+            getattr(recorder, "_active_recording_context", None)
+        ),
     })
+    recorder._last_recording_was_queued = True
 
 
 def get_next_recorded_audio(recorder):

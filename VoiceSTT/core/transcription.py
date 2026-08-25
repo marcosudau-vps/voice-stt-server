@@ -173,11 +173,20 @@ def run_transcription_worker(*args, **kwargs):
     worker.run()
 
 
-def call_transcription_executor(executor, audio, language, use_prompt):
+def call_transcription_executor(
+        executor, audio, language, use_prompt, segment_context=None):
     """
     Calls object-style or function-style transcription executors.
     """
     if hasattr(executor, "transcribe"):
+        if segment_context is not None and hasattr(
+                executor, "transcribe_with_context"):
+            return executor.transcribe_with_context(
+                audio,
+                language=language if language else None,
+                use_prompt=use_prompt,
+                segment_context=segment_context,
+            )
         return executor.transcribe(
             audio,
             language=language if language else None,
@@ -196,6 +205,10 @@ def submit_transcription_request(recorder, audio, language, use_prompt):
     """
     if recorder._uses_external_transcription_executor:
         audio_copy = copy.deepcopy(audio)
+        segment_context = copy.deepcopy(
+            getattr(recorder, "_current_transcription_context", None)
+            or getattr(recorder, "_active_recording_context", None)
+        )
 
         def _run_external_transcription():
             """
@@ -208,6 +221,7 @@ def submit_transcription_request(recorder, audio, language, use_prompt):
                     audio_copy,
                     language,
                     use_prompt,
+                    segment_context,
                 )
                 recorder._external_transcription_results.put(("success", result))
             except Exception as exc:

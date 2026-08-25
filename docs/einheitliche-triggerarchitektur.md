@@ -1,9 +1,10 @@
-# Einheitliche serverseitige Triggerarchitektur – Activation-State-Machine
+# Einheitliche serverseitige Triggerarchitektur – Activation und Segmentledger
 
-Diese Datei beschreibt den mit AP-SRV-010 implementierten serverautoritativen
-Vordergrund-Lifecycle. Eine Session besitzt genau eine Activation-State-
-Machine. Nach sicherem Schließen des Eingabepfads ist sie wieder `idle`, auch
-wenn Finalarbeit eines älteren Segments noch im Hintergrund läuft.
+Diese Datei beschreibt den mit AP-SRV-010 und AP-SRV-020 implementierten
+serverautoritativen Vordergrund-Lifecycle und Hintergrund-Drain. Eine Session
+besitzt genau eine Activation-State-Machine und ein threadsicheres
+Segmentledger. Nach sicherem Schließen des Eingabepfads ist der Vordergrund
+wieder `idle`, auch wenn Finalarbeit älterer Segmente im Hintergrund läuft.
 
 > Ergänzende Dokumente: [`docs/client-development/`](client-development/README.md)
 > für den Client-Vertrag, [`docs/fastapi-server.md`](fastapi-server.md) für den
@@ -11,21 +12,19 @@ wenn Finalarbeit eines älteren Segments noch im Hintergrund läuft.
 
 ## 0. Paketgrenze
 
-AP-SRV-010 liefert die fünf kanonischen Vordergrundphasen, stabile Activation-
-Identität, eine gelatchte erste Triggerquelle, den eingefrorenen effektiven
-Settings-Snapshot und den sicheren Close-Pfad. Folgende Semantiken bleiben
-bewusst Folgepaketen zugeordnet:
+AP-SRV-010 liefert die fünf kanonischen Vordergrundphasen; AP-SRV-020 ergänzt
+immutable Finaljobkontexte, Segmentterminale und sessionweit geordnete
+Nutzresultate. Folgende Semantiken bleiben bewusst Folgepaketen zugeordnet:
 
 - Wiederholte `extend`-Befehle addieren heute jeweils `extensionSeconds` auf
   die bestehende Deadline; AP-SRV-030 führt die eingefrorene Refresh- und
   Watchdog-Semantik ein.
-- Der Controller erlaubt mehrere serielle Segmente derselben Activation,
-  besitzt aber noch kein Segment-Ledger. Terminalzustände, strikte
-  `segmentSequence`-Publikation, definitive segmentbezogene Korrelation und
-  paralleles Final-Draining folgen in AP-SRV-020.
-- Early-Final wird im Recorder bereits während der laufenden Aufnahme
-  angestoßen. Die definitive segmentbezogene Publikations- und
-  Drain-Semantik ist noch nicht vorhanden und gehört zu AP-SRV-020.
+- Der Controller erlaubt mehrere serielle Segmente derselben Activation. Das
+  Segmentledger korreliert Audio, Schedulerjob und Ergebnis unabhängig vom
+  aktuellen Vordergrund und veröffentlicht Nutzresultate strikt nach
+  `segmentSequence`.
+- Early-Final darf während der Aufnahme anlaufen. Sein Job übernimmt denselben
+  unveränderlichen Segmentkontext wie der spätere Recorderabschluss.
 - Die öffentlichen Activation-Nachrichten und Snapshots sind geerbte
   Baselineformen; der eingefrorene Wire-Vertrag wird erst mit AP-SRV-040
   hergestellt.
@@ -72,12 +71,15 @@ flowchart LR
     REC --> VAD["VAD"]
     VAD --> SEG["Segment"]
     SEG --> RT["Realtime"]
-    SEG --> FINAL["Final"]
+    SEG --> LEDGER["SegmentLedger"]
+    LEDGER --> FINAL["Final Scheduler"]
+    FINAL --> DRAIN["Ordered Drain"]
 
     AC --> EVT["kanonische Events"]
     REC --> EVT
     RT --> EVT
     FINAL --> EVT
+    DRAIN --> EVT
 ```
 
 ---
@@ -139,6 +141,27 @@ geschlossen, eine laufende Aufnahme gestoppt und an den bestehenden Finalpfad
 übergeben; erst danach wird `idle` veröffentlicht. Finaltranskription ist keine
 Vordergrundphase. Eine neue Activation darf deshalb nach `idle` beginnen,
 während ältere Finalarbeit im Hintergrund weiterläuft.
+
+### Hintergrund-Lifecycle
+
+Bei Aufnahmebeginn registriert das Ledger genau einen unveränderlichen
+`SegmentContext`. Er enthält `sessionId`, `activationId`,
+`activationSequence`, `segmentId`, die sessionsweit streng steigende
+`segmentSequence`, den eingefrorenen Activation-Settings-Snapshot und die
+`requestId` des Finaljobs. Der Kontext wird zusammen mit dem aufgenommenen
+Audio durch Recorder, Scheduler und Worker getragen; der aktuelle
+Foreground-Zeiger wird zur Ergebniskorrelation nicht mehr verwendet.
+
+Jedes angenommene Segment endet genau einmal als `completed`, `discarded`,
+`cancelled` oder `failed`. Leeres Audio, Empty-Final, Queue-Trim,
+Scheduler-Ablehnung/-Drop, Workerfehler, Cancel und Session-Close erzeugen
+damit explizite Ledgerterminale. Ein nicht publizierbares Terminal schließt
+eine Sequenzlücke, sodass ein bereits fertiges späteres Nutzresultat freikommt.
+
+Eine Activation erhält genau ein Hintergrundterminal, sobald ihr Input
+geschlossen ist und alle angenommenen Segmente terminal und aus dem
+sessionweiten Reorder-Buffer ausgetragen sind. Dieses Hintergrundterminal ist
+vom früheren Vordergrundereignis `activation.closed` getrennt.
 
 ---
 
@@ -420,13 +443,16 @@ Eine Sitzung merkt sich die letzten 200 `commandId`-Ergebnisse.
 | `activationSequence` | Server | Session | steigt je akzeptierter Activation | neue Sessionfolge |
 | `generation` | Server | eine Activation | entspricht derzeit `activationSequence` | neu |
 | `segmentId` | Server | eine Aufnahme | Segment | fortlaufend |
+| `segmentSequence` | Server | Session | steigt je angenommenem Segment streng | neue Sessionfolge |
+| `requestId` | Server | ein Finaljob | bis Segmentterminal | neu |
 | `commandId` | Client | ein Triggerkommando | Sitzungshistorie (200) | bleibt offen |
 | `eventId` / `cursor` | Server | Eventstream | dauerhaft | fortgesetzt |
 
 Activation- und Recording-Ereignisse tragen im Controlled-Modus zusätzlich
-`activationId`, `activationSequence`, `primarySource` und `sources`. Die
-definitive segmentbezogene Korrelation nachlaufender Transkriptionsereignisse
-wird mit dem Ledger in AP-SRV-020 hergestellt.
+`activationId`, `activationSequence`, `primarySource` und `sources`.
+Nachlaufende Final- und Terminalereignisse verwenden den gespeicherten
+Segmentkontext und tragen additiv `activationId`, `activationSequence`,
+`segmentSequence` und `requestId`.
 
 ---
 
@@ -438,14 +464,21 @@ Neu hinzugekommen:
 activation.started     eine Activation wurde eröffnet
 activation.extended    Fenster explizit verlängert
 activation.closed      Activation beendet
+activation.drained     Hintergrundledger der Activation terminal
 ```
 
 `activation.closed` trägt ein `reason` aus `finished`, `cancelled`,
 `timed_out`, `stream_stopped`, `session_closed` oder `client_clear`.
 
 Als Timeline-Nachricht heißen die Events `activation_started`,
-`activation_extended` und `activation_closed`; im strukturierten Eventstream
-`activation.*`.
+`activation_extended`, `activation_closed` und additiv
+`activation_drained`; im strukturierten Eventstream `activation.*`.
+
+Nicht publizierbare Segmentterminale heißen intern/timelinebasiert
+`final_transcript_discarded`, `final_transcript_cancelled` und
+`final_transcript_failed`. `activation_drained` und diese Zusatzfelder sind
+Observability des AP-SRV-020; das endgültige öffentliche Wire-v2 bleibt
+AP-SRV-040 vorbehalten.
 
 Bestehende Eventnamen wurden **nicht** verändert. Das bestehende
 Wakeword-Event bleibt erhalten.

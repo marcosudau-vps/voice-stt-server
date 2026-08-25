@@ -33,6 +33,11 @@ from VoiceSTT_server.event_logging import (
     resolve_log_level,
 )
 from api_fastapi_server.activation import ActivationController
+from api_fastapi_server.segment_ledger import (
+    LedgerUpdate,
+    SegmentContext,
+    SegmentLedger,
+)
 from VoiceSTT_server.operations import (
     AuditLogManager,
     LocalModelRegistry,
@@ -1462,6 +1467,7 @@ class InferenceJob:
     sample_rate: int = SERVER_SAMPLE_RATE
     request_options: Optional[Dict[str, Any]] = None
     client_id: Optional[str] = None
+    segment_context: Optional[SegmentContext] = None
 
 
 @dataclass(frozen=True)
@@ -1483,6 +1489,7 @@ class InferenceResult:
     details: Optional[Dict[str, Any]] = None
     audio_duration_seconds: float = 0.0
     client_id: Optional[str] = None
+    segment_context: Optional[SegmentContext] = None
 
 
 @dataclass(frozen=True)
@@ -1888,6 +1895,7 @@ class SharedEngineWorker:
                         else 0.0
                     ),
                     client_id=job.client_id,
+                    segment_context=job.segment_context,
                 )
             )
 
@@ -2055,12 +2063,31 @@ class SchedulerTranscriptionExecutor:
         self.kind = kind
 
     def transcribe(self, audio, language=None, use_prompt=True):
+        return self.transcribe_with_context(
+            audio,
+            language=language,
+            use_prompt=use_prompt,
+            segment_context=None,
+        )
+
+    def transcribe_with_context(
+        self,
+        audio,
+        language=None,
+        use_prompt=True,
+        segment_context=None,
+    ):
+        if segment_context is None and self.kind == "final":
+            session = self.service.sessions.get(self.session_id)
+            if session is not None:
+                segment_context = session.current_transcription_context()
         return self.service.transcribe_for_recorder(
             self.session_id,
             self.kind,
             audio,
             language,
             use_prompt,
+            segment_context=segment_context,
         )
 
 
@@ -2587,7 +2614,15 @@ class RecorderBackedRealtimeSession:
         self._force_finalize_in_progress = False
         self._wakeword_voice_window = False
         self._wakeword_followup_generation = 0
-        self._pending_text_terminals = collections.deque()
+        self.segment_ledger = SegmentLedger(self.session_id)
+        # Owns the complete mutation -> observable dispatch boundary. The
+        # ledger lock orders state, while this session lock keeps a later
+        # worker from publishing its already-created update first.
+        self._ledger_dispatch_lock = threading.RLock()
+        self._active_recording_context = None
+        self._active_text_context = None
+        self._last_final_context = None
+        self._legacy_activation_sequence = 0
         self._performance_first_text_segments = set()
         self._realtime_event_stats = {}
         self._recorder_wake_word_timeout_before_followup = None
@@ -2742,6 +2777,12 @@ class RecorderBackedRealtimeSession:
             self.service.deactivate_speaker(self.session_id)
         if closed is not None:
             self._publish_timeline_event(closed[0], **closed[1])
+            self._close_ledger_activation(
+                closed[1].get("activationId"),
+                "stream_stopped",
+                requested_terminal="cancelled",
+                cancel_pending=True,
+            )
         self.publish_status("idle")
 
     def close(self):
@@ -2759,8 +2800,18 @@ class RecorderBackedRealtimeSession:
             self._wakeword_followup_generation += 1
             self._clear_recorder_followup_gate_locked()
             # A reconnect must never revive an activation of the old session.
-            self._reset_activation_locked("session_closed")
-        if should_cancel:
+            closed_activation = self._reset_activation_locked("session_closed")
+        if closed_activation is not None:
+            self._publish_timeline_event(
+                closed_activation[0], **closed_activation[1]
+            )
+        had_pending_ledger_segment = (
+            self.segment_ledger.snapshot()["pendingSegmentCount"] > 0
+        )
+        self._dispatch_ledger_operation(
+            self.segment_ledger.cancel_all, "session_closed"
+        )
+        if should_cancel and not had_pending_ledger_segment:
             self._emit_cancelled_transcription(
                 cancelled_generation,
                 cancelled_segment,
@@ -2794,11 +2845,24 @@ class RecorderBackedRealtimeSession:
             # `clear` discards the current turn, so the activation goes with it.
             cleared_activation = self._reset_activation_locked("client_clear")
             self.status = self._waiting_state_locked()
+        had_pending_ledger_segment = (
+            self.segment_ledger.snapshot()["pendingSegmentCount"] > 0
+        )
         if cleared_activation is not None:
             self._publish_timeline_event(
                 cleared_activation[0], **cleared_activation[1]
             )
-        if should_cancel:
+            self._close_ledger_activation(
+                cleared_activation[1].get("activationId"),
+                "client_clear",
+                requested_terminal="cancelled",
+                cancel_pending=True,
+            )
+        else:
+            self._dispatch_ledger_operation(
+                self.segment_ledger.cancel_all, "client_clear"
+            )
+        if should_cancel and not had_pending_ledger_segment:
             self._emit_cancelled_transcription(
                 cancelled_generation,
                 cancelled_segment,
@@ -2867,6 +2931,14 @@ class RecorderBackedRealtimeSession:
             self.stale_realtime_discarded += 1
         elif reason == "cancelled":
             self.cancelled_jobs += 1
+        if job.kind == "final" and job.segment_context is not None:
+            terminal = "cancelled" if reason == "cancelled" else "failed"
+            self._dispatch_ledger_operation(
+                self.segment_ledger.resolve_terminal,
+                job.segment_context,
+                terminal,
+                f"scheduler_{reason}",
+            )
         self.service.fail_pending_recorder_transcription(
             job.request_id,
             f"{job.kind}-Transkription wurde verworfen: {reason}",
@@ -2886,6 +2958,13 @@ class RecorderBackedRealtimeSession:
             self.realtime_rejected += 1
         else:
             self.final_rejected += 1
+            if job.segment_context is not None:
+                self._dispatch_ledger_operation(
+                    self.segment_ledger.resolve_terminal,
+                    job.segment_context,
+                    "failed",
+                    f"scheduler_rejected: {result.reason}",
+                )
         self.service.fail_pending_recorder_transcription(job.request_id, result.reason)
 
     def record_executor_result(self, result: InferenceResult):
@@ -3101,8 +3180,7 @@ class RecorderBackedRealtimeSession:
             )
             self._cache_trigger_command_result(command_id, data, ack)
 
-        for event, fields in published:
-            self._publish_timeline_event(event, **fields)
+        self._publish_collected_events(published)
         return ack
 
     def _cache_trigger_command_result(self, command_id, data, ack):
@@ -3124,6 +3202,9 @@ class RecorderBackedRealtimeSession:
 
         if not decision.accepted:
             return activation_id
+
+        if decision.reason == "activated":
+            self._open_ledger_activation(snapshot)
 
         generation = snapshot.get("generation")
         window_open = bool(snapshot.get("windowOpen"))
@@ -3186,6 +3267,26 @@ class RecorderBackedRealtimeSession:
             completed = self._activation.input_closed()
             if completed.accepted:
                 snapshot = completed.snapshot
+                close_reason = snapshot.get("closeReason") or decision.reason
+                cancelled = close_reason in {
+                    "cancelled",
+                    "client_cancel",
+                    "session_closed",
+                    "stream_stopped",
+                }
+                published.append((
+                    "__ledger_operation__",
+                    {
+                        "operation": self.segment_ledger.close_activation,
+                        "args": (activation_id, close_reason),
+                        "kwargs": {
+                            "requested_terminal": (
+                                "cancelled" if cancelled else None
+                            ),
+                            "cancel_pending": cancelled,
+                        },
+                    },
+                ))
 
         self._arm_activation_timer_locked(snapshot)
 
@@ -3287,8 +3388,7 @@ class RecorderBackedRealtimeSession:
                     "expire", decision, published
                 )
                 waiting_state = self._waiting_state_locked()
-            for event, fields in published:
-                self._publish_timeline_event(event, **fields)
+            self._publish_collected_events(published)
             self.publish_status(waiting_state)
             return
 
@@ -3316,6 +3416,120 @@ class RecorderBackedRealtimeSession:
         fields = self._activation_event_fields(decision.snapshot)
         fields["reason"] = reason
         return ("activation_closed", fields)
+
+    def _open_ledger_activation(self, snapshot):
+        activation_id = snapshot.get("activationId")
+        if not activation_id:
+            return False
+        return self.segment_ledger.open_activation(
+            activation_id,
+            snapshot.get("activationSequence") or snapshot.get("generation") or 0,
+            snapshot.get("effectiveSettings") or {},
+        )
+
+    def _close_ledger_activation(
+        self,
+        activation_id,
+        reason,
+        *,
+        requested_terminal=None,
+        cancel_pending=False,
+    ):
+        if not activation_id:
+            return False
+        update = self._dispatch_ledger_operation(
+            self.segment_ledger.close_activation,
+            activation_id,
+            reason,
+            requested_terminal=requested_terminal,
+            cancel_pending=cancel_pending,
+        )
+        return update.changed
+
+    def _dispatch_ledger_operation(self, operation, *args, **kwargs):
+        """Serializes ledger mutation together with all observable output.
+
+        Callers must not hold ``self.lock``. Publication may inspect the
+        foreground snapshot, so the one permitted lock order is dispatch lock
+        then (briefly) session lock. Ledger callbacks never re-enter the
+        dispatch boundary, and manager/event dispatch is synchronous and
+        bounded, so no waiter can remain parked after an operation completes.
+        """
+        with self._ledger_dispatch_lock:
+            update = operation(*args, **kwargs)
+            self._apply_ledger_update(update)
+            return update
+
+    def _apply_ledger_update(self, update: LedgerUpdate):
+        for resolution in update.resolutions:
+            self._publish_noncompleted_segment_terminal(resolution)
+        for publication in update.publications:
+            self._publish_ordered_final(publication.context, publication.text)
+        for terminal in update.activation_terminals:
+            self._publish_timeline_event(
+                "activation_drained",
+                activationId=terminal.activation_id,
+                activationSequence=terminal.activation_sequence,
+                state=terminal.state,
+                reason=terminal.reason,
+                acceptedSegmentCount=terminal.accepted_segment_count,
+                terminalSegmentCount=terminal.terminal_segment_count,
+            )
+
+    def _publish_collected_events(self, published):
+        for event, fields in published:
+            if event == "__ledger_operation__":
+                self._dispatch_ledger_operation(
+                    fields["operation"],
+                    *fields.get("args", ()),
+                    **fields.get("kwargs", {}),
+                )
+            else:
+                self._publish_timeline_event(event, **fields)
+
+    def _publish_noncompleted_segment_terminal(self, resolution):
+        context = resolution.context
+        timestamp = time.time()
+        segment = self._timeline_snapshot(context.segment_id)
+        event = {
+            "discarded": "final_transcript_discarded",
+            "cancelled": "final_transcript_cancelled",
+            "failed": "final_transcript_failed",
+        }[resolution.state]
+        self._publish_timeline_event(
+            event,
+            timestamp=timestamp,
+            segment_id=context.segment_id,
+            segment=segment,
+            reason=resolution.reason,
+            activationId=context.activation_id,
+            activationSequence=context.activation_sequence,
+            segmentSequence=context.segment_sequence,
+            requestId=context.request_id,
+        )
+        self._emit_realtime_summary(context.segment_id, timestamp, segment)
+        self._emit_structured_event(
+            "transcription",
+            f"transcription.{resolution.state}",
+            segment_id=context.segment_id,
+            severity=("error" if resolution.state == "failed" else "warning"),
+            reason=resolution.reason,
+            requestId=context.request_id,
+            activationId=context.activation_id,
+            activationSequence=context.activation_sequence,
+            segmentSequence=context.segment_sequence,
+            language=self.settings.language,
+            engine=self.settings.transcription_engine,
+            model=self.settings.model,
+        )
+
+    def current_transcription_context(self):
+        with self.lock:
+            return (
+                getattr(self.recorder, "_current_transcription_context", None)
+                or self._active_text_context
+                or self._last_final_context
+            )
 
     def public_settings(self):
         return public_session_settings(self.settings)
@@ -3349,6 +3563,7 @@ class RecorderBackedRealtimeSession:
             "finalRejected": self.final_rejected,
             "forcedFinalizations": self.forced_finalizations,
             "droppedRecordedSegments": self.dropped_recorded_segments,
+            "segmentLedger": self.segment_ledger.snapshot(),
             "queueDelay": {
                 "realtime": self.queue_delay["realtime"].snapshot_ms(),
                 "final": self.queue_delay["final"].snapshot_ms(),
@@ -3371,15 +3586,30 @@ class RecorderBackedRealtimeSession:
                 if getattr(self.recorder, "is_shut_down", False):
                     break
                 LOGGER.exception("Textschleife des Sitzungs-Recorders fehlgeschlagen")
-                segment_id = self.segment_state.current()
-                self._emit_structured_event(
-                    "transcription",
-                    "transcription.failed",
-                    segment_id=segment_id,
-                    severity="error",
-                    error=str(exc),
-                    where="recorder",
+                with self.lock:
+                    context = self._active_text_context
+                    self._active_text_context = None
+                segment_id = (
+                    context.segment_id
+                    if context is not None
+                    else self.segment_state.current()
                 )
+                if context is not None:
+                    self._dispatch_ledger_operation(
+                        self.segment_ledger.resolve_terminal,
+                        context,
+                        "failed",
+                        str(exc),
+                    )
+                if context is None:
+                    self._emit_structured_event(
+                        "transcription",
+                        "transcription.failed",
+                        segment_id=segment_id,
+                        severity="error",
+                        error=str(exc),
+                        where="recorder",
+                    )
                 self.service.manager.publish_session(
                     self.session_id,
                     {
@@ -3395,89 +3625,110 @@ class RecorderBackedRealtimeSession:
             if getattr(self.recorder, "is_shut_down", False):
                 break
             with self.lock:
-                terminal = (
-                    self._pending_text_terminals.popleft()
-                    if self._pending_text_terminals
-                    else None
-                )
-            if terminal is None:
-                continue
-            text_generation, text_segment_id, rejected = terminal
-            if rejected:
+                context = self._active_text_context
+                self._active_text_context = None
+            if context is None:
                 continue
             text = (text or "").strip()
             if not text:
                 self._publish_discarded_empty_final(
-                    text_generation,
-                    expected_segment_id=text_segment_id,
+                    context=context,
                 )
                 continue
             self._publish_final_text(
                 text,
-                text_generation,
-                expected_segment_id=text_segment_id,
+                context=context,
             )
+
+    def _compat_final_context(self, text_generation, expected_segment_id=None):
+        with self._ledger_dispatch_lock:
+            with self.lock:
+                if text_generation != self.generation:
+                    return None
+                context = self._last_final_context
+                if context is not None and (
+                    expected_segment_id is None
+                    or context.segment_id == expected_segment_id
+                ):
+                    return context
+                segment_id = (
+                    self.segment_state.current()
+                    if expected_segment_id is None
+                    else expected_segment_id
+                )
+                if segment_id != self.segment_state.current():
+                    return None
+                self._legacy_activation_sequence += 1
+                activation_id = (
+                    f"legacy-{self.session_id}-"
+                    f"{self._legacy_activation_sequence}"
+                )
+                self.segment_ledger.open_activation(
+                    activation_id,
+                    self._legacy_activation_sequence,
+                    self._effective_activation_settings(),
+                )
+                context = self.segment_ledger.accept_segment(
+                    activation_id, segment_id
+                )
+                self.segment_state.final()
+                # The segment is still pending, so close cannot produce an
+                # observable update here. Holding the dispatch lock still
+                # keeps this compatibility mutation ordered with terminals.
+                self.segment_ledger.close_activation(
+                    activation_id, "compat_final"
+                )
+                self._last_final_context = context
+                return context
 
     def _publish_discarded_empty_final(
         self,
-        text_generation,
+        text_generation=None,
         expected_segment_id=None,
+        context=None,
     ):
-        with self.lock:
-            if text_generation != self.generation:
-                return False
-            if (
-                expected_segment_id is not None
-                and expected_segment_id != self.segment_state.current()
-            ):
-                return False
-            segment_id = self.segment_state.final()
-            streaming = self.streaming
-            segment = self._timeline_snapshot(segment_id)
-        timestamp = time.time()
-        self._publish_timeline_event(
-            "final_transcript_discarded",
-            timestamp=timestamp,
-            segment_id=segment_id,
-            segment=segment,
-            reason="empty_final",
+        if context is None:
+            context = self._compat_final_context(
+                text_generation, expected_segment_id
+            )
+        if context is None:
+            return False
+        update = self._dispatch_ledger_operation(
+            self.segment_ledger.resolve_terminal,
+            context,
+            "discarded",
+            "empty_final",
         )
-        self._emit_realtime_summary(segment_id, timestamp, segment)
-        self._emit_structured_event(
-            "transcription",
-            "transcription.discarded",
-            segment_id=segment_id,
-            severity="warning",
-            reason="empty_final",
-            language=self.settings.language,
-            engine=self.settings.transcription_engine,
-            model=self.settings.model,
-            audioDurationMs=(
-                round(float(segment.get("durationSeconds")) * 1000.0, 3)
-                if segment and segment.get("durationSeconds") is not None
-                else None
-            ),
-        )
-        self.publish_status(self._waiting_state_locked(streaming))
-        return True
+        if update.changed:
+            with self.lock:
+                foreground = self.status
+            if foreground not in {"recording", "closed"}:
+                self.publish_status(self._waiting_state_locked())
+        return update.changed
 
     def _publish_final_text(
         self,
         text,
-        text_generation,
+        text_generation=None,
         expected_segment_id=None,
+        context=None,
     ):
-        with self.lock:
-            if text_generation != self.generation:
-                return False
-            if (
-                expected_segment_id is not None
-                and expected_segment_id != self.segment_state.current()
-            ):
-                return False
-            segment_id = self.segment_state.final()
-            streaming = self.streaming
-            segment = self._timeline_snapshot(segment_id)
+        if context is None:
+            context = self._compat_final_context(
+                text_generation, expected_segment_id
+            )
+        if context is None:
+            return False
+        update = self._dispatch_ledger_operation(
+            self.segment_ledger.resolve_completed,
+            context,
+            text,
+        )
+        return update.changed
+
+    def _publish_ordered_final(self, context, text):
+        segment_id = context.segment_id
+        segment = self._timeline_snapshot(segment_id)
         timestamp = time.time()
         payload = {
             "type": "final",
@@ -3486,6 +3737,10 @@ class RecorderBackedRealtimeSession:
             "text": text,
             "timestamp": timestamp,
             "timestampIso": timestamp_iso(timestamp),
+            "requestId": context.request_id,
+            "activationId": context.activation_id,
+            "activationSequence": context.activation_sequence,
+            "segmentSequence": context.segment_sequence,
         }
         if segment is not None:
             payload["segment"] = segment
@@ -3500,6 +3755,10 @@ class RecorderBackedRealtimeSession:
             segment_id=segment_id,
             segment=segment,
             text=text,
+            requestId=context.request_id,
+            activationId=context.activation_id,
+            activationSequence=context.activation_sequence,
+            segmentSequence=context.segment_sequence,
         )
         started_at = segment.get("recordingStartedAt") if segment else None
         ended_at = segment.get("recordingEndedAt") if segment else None
@@ -3532,6 +3791,10 @@ class RecorderBackedRealtimeSession:
             "transcription.completed",
             segment_id=segment_id,
             text=text,
+            requestId=context.request_id,
+            activationId=context.activation_id,
+            activationSequence=context.activation_sequence,
+            segmentSequence=context.segment_sequence,
             language=self.settings.language,
             engine=self.settings.transcription_engine,
             model=self.settings.model,
@@ -3541,7 +3804,10 @@ class RecorderBackedRealtimeSession:
                 else None
             ),
         )
-        self.publish_status(self._waiting_state_locked(streaming))
+        with self.lock:
+            foreground = self.status
+        if foreground not in {"recording", "closed"}:
+            self.publish_status(self._waiting_state_locked())
         return True
 
     def _on_realtime_text(self, text):
@@ -3858,6 +4124,8 @@ class RecorderBackedRealtimeSession:
         recording_admitted = False
         stop_unadmitted_recording = False
         with self.lock:
+            self._active_recording_context = None
+            self.recorder._active_recording_context = None
             self._wakeword_followup_generation += 1
             self._clear_recorder_followup_gate_locked()
             if not self.service.try_activate_speaker(self.session_id):
@@ -3911,12 +4179,46 @@ class RecorderBackedRealtimeSession:
                     self._force_finalize_in_progress = False
                     self._wakeword_voice_window = False
                     segment_id = self.segment_state.current()
+                    if self._activation is not None:
+                        activation_snapshot = self._activation.snapshot()
+                        activation_id = activation_snapshot.get("activationId")
+                    else:
+                        self._legacy_activation_sequence += 1
+                        activation_id = (
+                            f"legacy-{self.session_id}-"
+                            f"{self._legacy_activation_sequence}"
+                        )
+                        activation_snapshot = {
+                            "activationId": activation_id,
+                            "activationSequence": self._legacy_activation_sequence,
+                            "effectiveSettings": self._effective_activation_settings(),
+                        }
+                        self._open_ledger_activation(activation_snapshot)
+                    try:
+                        context = self.segment_ledger.accept_segment(
+                            activation_id, segment_id
+                        )
+                    except (KeyError, RuntimeError):
+                        LOGGER.exception(
+                            "Segment %s konnte nicht im Ledger registriert werden",
+                            segment_id,
+                        )
+                        recording_admitted = False
+                        self.reject_current_recording = True
+                        stop_unadmitted_recording = True
+                        self.service.deactivate_speaker(self.session_id)
+                    else:
+                        self._active_recording_context = context
+                        self._last_final_context = context
+                        self.recorder._active_recording_context = context
                     segment = self.timeline.mark_recording_started(segment_id)
                 else:
                     # The gate-close barrier won a race after the recorder had
                     # observed the old open gate. Do not resurrect a segment
                     # after the controller has published idle.
                     self.reject_current_recording = True
+                    self._active_recording_context = None
+                    self.recorder._active_recording_context = None
                     stop_unadmitted_recording = True
                     self.service.deactivate_speaker(self.session_id)
         if stop_unadmitted_recording:
@@ -3943,8 +4245,15 @@ class RecorderBackedRealtimeSession:
         self._trim_recorded_audio_queue()
         segment = None
         segment_id = None
+        legacy_activation_id = None
+        empty_recording_context = None
         with self.lock:
-            segment_id = self.segment_state.current()
+            context = self._active_recording_context
+            segment_id = (
+                context.segment_id
+                if context is not None
+                else self.segment_state.current()
+            )
             duration_seconds = (
                 self.recording_sample_count / float(SERVER_SAMPLE_RATE)
                 if self.recording_sample_count
@@ -3958,11 +4267,27 @@ class RecorderBackedRealtimeSession:
             self.recording_sample_count = 0
             self._force_finalize_in_progress = False
             self._wakeword_voice_window = False
+            if context is not None:
+                self.segment_state.final()
+                self._last_final_context = context
+                # Real recorder queues carry this context with their audio.
+                # Recorder fakes and direct executor users get the same stable
+                # identity through the current-transcription fallback.
+                self.recorder._current_transcription_context = context
+                self._active_recording_context = None
+                self.recorder._active_recording_context = None
+                if getattr(
+                    self.recorder, "_last_recording_was_queued", None
+                ) is False:
+                    empty_recording_context = context
+                self.recorder._last_recording_was_queued = None
             if self._activation is not None:
                 decision = self._activation.recording_ended()
                 if decision.changed:
                     # The follow-up window is now the authoritative deadline.
                     self._arm_activation_timer_locked(decision.snapshot)
+            elif context is not None:
+                legacy_activation_id = context.activation_id
         self.service.deactivate_speaker(self.session_id)
         if segment is not None:
             self._publish_timeline_event(
@@ -3973,6 +4298,18 @@ class RecorderBackedRealtimeSession:
                 durationSeconds=segment.get("durationSeconds"),
                 reason=segment.get("endReason"),
             )
+        if empty_recording_context is not None:
+            self._dispatch_ledger_operation(
+                self.segment_ledger.resolve_terminal,
+                empty_recording_context,
+                "discarded",
+                "empty_recording",
+            )
+        if legacy_activation_id is not None:
+            self._close_ledger_activation(
+                legacy_activation_id,
+                "recording_stop",
+            )
         if self._activation is None:
             # The legacy wake-word follow-up owns a second timer and writes
             # recorder state directly. In the controlled mode the
@@ -3982,25 +4319,45 @@ class RecorderBackedRealtimeSession:
         self.publish_status(self._waiting_state_locked())
 
     def _on_transcription_start(self, *_):
-        with self.lock:
-            generation = self.generation
-            segment_id = self.segment_state.current()
-            rejected = self.reject_current_recording
-            self._pending_text_terminals.append(
-                (generation, segment_id, bool(rejected))
-            )
+        with self._ledger_dispatch_lock:
+            with self.lock:
+                rejected = self.reject_current_recording
+                context = getattr(
+                    self.recorder, "_current_transcription_context", None
+                )
+                if context is None and not rejected:
+                    context = self._compat_final_context(
+                        self.generation,
+                        self.segment_state.current(),
+                    )
+                self.recorder._current_transcription_context = context
+                self._active_text_context = context
+                segment_id = (
+                    context.segment_id
+                    if context is not None
+                    else self.segment_state.current()
+                )
         if not rejected:
             self._emit_structured_event(
                 "transcription",
                 "transcription.accepted",
                 segment_id=segment_id,
+                requestId=(context.request_id if context is not None else None),
+                activationId=(context.activation_id if context is not None else None),
+                activationSequence=(
+                    context.activation_sequence if context is not None else None
+                ),
+                segmentSequence=(
+                    context.segment_sequence if context is not None else None
+                ),
             )
         self._publish_timeline_event(
             "transcription_started",
             segment_id=segment_id,
             segment=self._timeline_snapshot(segment_id),
         )
-        self.publish_status("transcribing")
+        if self._activation is None:
+            self.publish_status("transcribing")
         return bool(rejected)
 
     def _waiting_state_locked(self, streaming=None):
@@ -4188,8 +4545,7 @@ class RecorderBackedRealtimeSession:
             "wakeword_detected",
             wakeWord=event.get("wakeWord"),
         )
-        for name, fields in published:
-            self._publish_timeline_event(name, **fields)
+        self._publish_collected_events(published)
         self.publish_status("wakeword_detected")
 
     def _on_wakeword_timeout(self):
@@ -4295,6 +4651,7 @@ class RecorderBackedRealtimeSession:
             "activation_started": "activation.started",
             "activation_extended": "activation.extended",
             "activation_closed": "activation.closed",
+            "activation_drained": "activation.drained",
             "recording_started": "transcription.recording_started",
             "recording_ended": "transcription.recording_ended",
             "transcription_started": "transcription.started",
@@ -4424,8 +4781,20 @@ class RecorderBackedRealtimeSession:
             try:
                 if queue_obj.qsize() <= max_pending:
                     break
-                queue_obj.get_nowait()
+                queued = queue_obj.get_nowait()
                 dropped += 1
+                context = (
+                    queued.get("segment_context")
+                    if isinstance(queued, dict)
+                    else None
+                )
+                if context is not None:
+                    self._dispatch_ledger_operation(
+                        self.segment_ledger.resolve_terminal,
+                        context,
+                        "discarded",
+                        "recorded_audio_queue_trimmed",
+                    )
             except Exception:
                 break
 
@@ -5463,7 +5832,15 @@ class VoiceSTTService:
         self.persist_settings()
         return {"changed": changed, "active": self.active_models(), "reloaded": True}
 
-    def transcribe_for_recorder(self, session_id, kind, audio, language, use_prompt):
+    def transcribe_for_recorder(
+        self,
+        session_id,
+        kind,
+        audio,
+        language,
+        use_prompt,
+        segment_context=None,
+    ):
         from VoiceSTT.transcription_engines import TranscriptionResult
 
         session = self.sessions.get(session_id)
@@ -5471,13 +5848,18 @@ class VoiceSTTService:
             return TranscriptionResult(text="")
 
         generation = getattr(session, "generation", 0)
-        request_id = uuid.uuid4().hex
+        request_id = (
+            segment_context.request_id
+            if kind == "final" and segment_context is not None
+            else uuid.uuid4().hex
+        )
         holder = {
             "event": threading.Event(),
             "result": None,
             "error": None,
             "sessionId": session_id,
             "generation": generation,
+            "segmentContext": segment_context,
         }
         with self._pending_recorder_lock:
             self._pending_recorder_results[request_id] = holder
@@ -5489,7 +5871,11 @@ class VoiceSTTService:
             audio=audio,
             language=language,
             use_prompt=use_prompt,
-            segment_id=session.segment_state.current(),
+            segment_id=(
+                segment_context.segment_id
+                if segment_context is not None
+                else session.segment_state.current()
+            ),
             sequence=0,
             generation=generation,
             created_at=time.monotonic(),
@@ -5499,6 +5885,7 @@ class VoiceSTTService:
                 else None
             ),
             client_id=getattr(session, "client_id", None),
+            segment_context=segment_context,
         )
 
         submit_result = self.submit_inference_job(job)
@@ -5522,12 +5909,26 @@ class VoiceSTTService:
             return TranscriptionResult(text="")
 
         if holder["error"]:
+            if kind == "final" and segment_context is not None:
+                current_session._dispatch_ledger_operation(
+                    current_session.segment_ledger.resolve_terminal,
+                    segment_context,
+                    "failed",
+                    str(holder["error"]),
+                )
             raise RuntimeError(holder["error"])
 
         result = holder["result"]
         if result is None:
             return TranscriptionResult(text="")
         if result.error:
+            if kind == "final" and segment_context is not None:
+                current_session._dispatch_ledger_operation(
+                    current_session.segment_ledger.resolve_terminal,
+                    segment_context,
+                    "failed",
+                    str(result.error),
+                )
             raise RuntimeError(result.error)
 
         current_session.record_executor_result(result)
