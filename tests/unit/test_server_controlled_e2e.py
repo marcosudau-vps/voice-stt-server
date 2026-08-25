@@ -157,7 +157,14 @@ class GateAwareRecorder:
             self.on_recording_start()
 
     def simulate_wake_word(self):
-        """What the wake-word engine does: report a detection, nothing more."""
+        """What the wake-word engine does: report a detection, nothing more.
+
+        Mirrors the real recorder callback order: the detection window starts
+        (arming the lifecycle epoch) before the actual detect callback fires.
+        Only a start within the current lifecycle makes the detect effective.
+        """
+        if self.on_wakeword_detection_start:
+            self.on_wakeword_detection_start()
         self.wakeword_detected = True
         self.wake_word_detect_time = time.time()
         if self.on_wakeword_detected:
@@ -201,7 +208,13 @@ class GateAwareRecorder:
         return self.flush_buffered_audio()
 
     def abort(self):
+        # A real recorder abort stops any active recording and releases the
+        # latched activation token; the fake mirrors that so a recovery can
+        # really leave the input side safe (C2/T16).
         abort_controlled_activation_gate(self)
+        self.is_recording = False
+        self._active_recording_context = None
+        self._current_transcription_context = None
         self.final_text.put("")
 
     def shutdown(self):
@@ -517,6 +530,7 @@ class ControlledActivationEndToEndTests(unittest.TestCase):
             ) as session:
                 session.send({"type": "start"})
                 recorder = session.recorder()
+                session.settle()
 
                 recorder.simulate_wake_word()
                 detected = session.timeline("wakeword_detected")
@@ -590,12 +604,15 @@ class ControlledActivationEndToEndTests(unittest.TestCase):
                 observed_at_idle = []
                 original_input_closed = server_session._activation.input_closed
 
-                def observe_input_closed():
+                def observe_input_closed(activation_id=None, activation_sequence=None):
                     observed_at_idle.append({
                         "gateOpen": recorder.controlled_activation_state()["active"],
                         "recording": recorder.is_recording,
                     })
-                    return original_input_closed()
+                    return original_input_closed(
+                        activation_id=activation_id,
+                        activation_sequence=activation_sequence,
+                    )
 
                 server_session._activation.input_closed = observe_input_closed
                 session.send({
@@ -612,6 +629,7 @@ class ControlledActivationEndToEndTests(unittest.TestCase):
                     "action": "finish",
                     "source": "manual",
                     "commandId": "close-finish",
+                    "activationId": first["activationId"],
                 })
                 closed = session.drain("trigger_ack")
 
@@ -652,12 +670,13 @@ class ControlledActivationEndToEndTests(unittest.TestCase):
                     "source": "manual",
                     "commandId": "late-start-open",
                 })
-                session.drain("trigger_ack")
+                late_first = session.drain("trigger_ack")
                 session.send({
                     "type": "trigger",
                     "action": "finish",
                     "source": "manual",
                     "commandId": "late-start-close",
+                    "activationId": late_first["activationId"],
                 })
                 session.drain("trigger_ack")
                 recorder = session.recorder()
@@ -697,6 +716,7 @@ class ControlledActivationEndToEndTests(unittest.TestCase):
                     "action": "finish",
                     "source": "manual",
                     "commandId": "stale-admission-close",
+                    "activationId": first["activationId"],
                 })
                 session.drain("trigger_ack")
                 session.send({
@@ -803,6 +823,7 @@ class BackgroundDrainOverlapTests(unittest.TestCase):
                     "action": "finish",
                     "source": "manual",
                     "commandId": "overlap-finish",
+                    "activationId": first["activationId"],
                 })
                 self.assertTrue(session.drain("trigger_ack")["accepted"])
 
@@ -867,6 +888,7 @@ class BackgroundDrainOverlapTests(unittest.TestCase):
                     "action": "cancel",
                     "source": "manual",
                     "commandId": "cancel-close",
+                    "activationId": activation["activationId"],
                 })
                 self.assertTrue(session.drain("trigger_ack")["accepted"])
 
@@ -980,6 +1002,7 @@ class TriggerCollisionEndToEndTests(unittest.TestCase):
         with TestClient(self.app) as client:
             with ControlledSessionHarness(client, self.QUERY) as session:
                 session.send({"type": "start"})
+                session.settle()
                 recorder = session.recorder()
 
                 acks = []
@@ -1170,6 +1193,7 @@ class CollisionMatrixEndToEndTests(unittest.TestCase):
         with TestClient(self.app) as client:
             with ControlledSessionHarness(client, self.QUERY) as session:
                 session.send({"type": "start"})
+                session.settle()
                 self._fire(session, "manual", "c1-manual")
                 self._fire(session, "wake_word", None)
                 started, final = self._run_turn(session)
@@ -1181,6 +1205,7 @@ class CollisionMatrixEndToEndTests(unittest.TestCase):
         with TestClient(self.app) as client:
             with ControlledSessionHarness(client, self.QUERY) as session:
                 session.send({"type": "start"})
+                session.settle()
                 self._fire(session, "wake_word", None)
                 session.timeline("wakeword_detected")
                 ack = self._fire(session, "manual", "c2-manual")
@@ -1400,12 +1425,13 @@ class ActivationLifecycleEndToEndTests(unittest.TestCase):
     def test_finish_closes_the_gate(self):
         with TestClient(self.app) as client:
             with ControlledSessionHarness(client, self.QUERY) as session:
-                self._activate(session)
+                activated = self._activate(session)
                 session.send({
                     "type": "trigger",
                     "action": "finish",
                     "source": "manual",
                     "commandId": "fin-1",
+                    "activationId": activated["activationId"],
                 })
                 ack = session.drain("trigger_ack")
                 self.assertTrue(ack["accepted"])
@@ -1417,12 +1443,13 @@ class ActivationLifecycleEndToEndTests(unittest.TestCase):
     def test_cancel_closes_the_gate(self):
         with TestClient(self.app) as client:
             with ControlledSessionHarness(client, self.QUERY) as session:
-                self._activate(session)
+                activated = self._activate(session)
                 session.send({
                     "type": "trigger",
                     "action": "cancel",
                     "source": "manual",
                     "commandId": "can-1",
+                    "activationId": activated["activationId"],
                 })
                 ack = session.drain("trigger_ack")
                 self.assertTrue(ack["accepted"])
@@ -1471,6 +1498,231 @@ class ActivationLifecycleEndToEndTests(unittest.TestCase):
 
                 ack = self._activate(second, "recon-2")
                 self.assertNotEqual(ack["activationId"], old_activation)
+
+
+# -- AP-SRV-030 C2: lifecycle epoch and callback admission (F9, T11-T15) -------
+
+
+@unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
+class LifecycleEpochEndToEndTests(unittest.TestCase):
+    """T11-T14: late wakes and recorder callbacks are lifecycle-bound."""
+
+    QUERY = "manualTriggerEnabled=true&wakeWordTriggerEnabled=true"
+
+    def setUp(self):
+        GateAwareRecorder.instances = []
+        self.app = build_app()
+
+    def test_late_wake_callback_after_stop_cannot_reopen_activation(self):
+        """T11: a wake detection arriving after ``stop`` is inert."""
+        with TestClient(self.app) as client:
+            with ControlledSessionHarness(client, self.QUERY) as session:
+                session.send({"type": "start"})
+                session.settle()
+                server = session.server_session(self.app)
+                recorder = session.recorder()
+                # Arm a valid detection epoch.
+                server._on_wakeword_detection_start()
+                session.settle()
+                self.assertEqual(
+                    server._wake_detection_epoch, server._lifecycle_epoch
+                )
+
+                session.send({"type": "stop"})
+                session.settle()
+
+                recorder.simulate_wake_word()
+                session.settle()
+
+                self.assertFalse(server.streaming)
+                snapshot = server.activation_snapshot()
+                self.assertEqual(snapshot["phase"], "idle")
+                self.assertEqual(
+                    session.timeline_events("activation_started"), []
+                )
+                self.assertEqual(
+                    session.timeline_events("wakeword_detected"), []
+                )
+                self.assertFalse(
+                    recorder.controlled_activation_state()["active"]
+                )
+
+    def test_late_wake_callback_after_close_is_inert(self):
+        """T12: after ``close`` a stray wake callback has no effect."""
+        with TestClient(self.app) as client:
+            with ControlledSessionHarness(client, self.QUERY) as session:
+                session.send({"type": "start"})
+                server = session.server_session(self.app)
+                recorder = session.recorder()
+                server._on_wakeword_detection_start()
+                session.settle()
+
+                recorder.simulate_wake_word()
+                session.settle()
+                self.assertTrue(
+                    recorder.controlled_activation_state()["active"]
+                )
+
+                session.socket.send_text(json.dumps({"type": "stop"}))
+                session.settle()
+                # close the session object directly -> status closed
+                server.close()
+                session.settle()
+
+                recorder.is_recording = False
+                recorder.simulate_wake_word()
+                session.settle()
+
+                agg = session.server_session(self.app)
+                self.assertEqual(agg.status, "closed")
+                started = session.timeline_events("activation_started")
+                self.assertLessEqual(len(started), 1)
+                self.assertEqual(
+                    recorder.controlled_activation_state()["active"], False
+                )
+
+    def test_stale_wake_from_previous_stream_after_restart(self):
+        """T13: detection epoch from stream 1 cannot fire in stream 2."""
+        with TestClient(self.app) as client:
+            with ControlledSessionHarness(client, self.QUERY) as session:
+                session.send({"type": "start"})
+                session.settle()
+                server = session.server_session(self.app)
+                recorder = session.recorder()
+                epoch_1 = server._lifecycle_epoch
+                server._on_wakeword_detection_start()
+                session.settle()
+                self.assertEqual(
+                    server._wake_detection_epoch, epoch_1
+                )
+
+                session.send({"type": "stop"})
+                session.settle()
+
+                session.send({"type": "start"})
+                session.settle()
+                epoch_2 = server._lifecycle_epoch
+                self.assertGreater(epoch_2, epoch_1)
+
+                # A stale detect callback from stream 1 without a new detection
+                # start must be inert: it calls the production callback
+                # directly, exactly like a late recorder thread would.
+                server._on_wakeword_detected()
+                session.settle()
+                self.assertEqual(
+                    session.timeline_events("activation_started"), []
+                )
+                self.assertFalse(
+                    recorder.controlled_activation_state()["active"]
+                )
+
+                # A fresh detection start for stream 2 re-arms it.
+                server._on_wakeword_detection_start()
+                session.settle()
+                self.assertEqual(
+                    server._wake_detection_epoch, epoch_2
+                )
+                recorder.simulate_wake_word()
+                detected = session.timeline("wakeword_detected")
+                self.assertTrue(detected.get("activationId"))
+                self.assertTrue(
+                    recorder.controlled_activation_state()["active"]
+                )
+
+    def test_recorder_backed_session_pins_lifecycle_callbacks_to_synchronous_dispatch(self):
+        """T14: the real recorder receives start_callback_in_new_thread=False."""
+        captured = {}
+
+        class CapturingRecorder(GateAwareRecorder):
+            def __init__(self, **kwargs):
+                captured["kwargs"] = kwargs
+                super().__init__(**kwargs)
+
+        app = build_app(recorder_factory=CapturingRecorder)
+        with TestClient(app) as client:
+            with ControlledSessionHarness(
+                client, "manualTriggerEnabled=true&wakeWordTriggerEnabled=false"
+            ) as session:
+                session.send({"type": "start"})
+                session.settle()
+                kwargs = captured["kwargs"]
+                self.assertIsNotNone(kwargs)
+                self.assertIn("start_callback_in_new_thread", kwargs)
+                self.assertFalse(kwargs["start_callback_in_new_thread"])
+
+
+class ControlledRecordingAdmissionTests(unittest.TestCase):
+    """T15: late recording starts cannot attach to newer/cancelled scores."""
+
+    QUERY = "manualTriggerEnabled=true&wakeWordTriggerEnabled=false"
+
+    def setUp(self):
+        GateAwareRecorder.instances = []
+        self.app = build_app()
+
+    def _activate(self, session, command_id="open-1"):
+        session.send({"type": "start"})
+        session.send({
+            "type": "trigger",
+            "action": "activate",
+            "source": "manual",
+            "commandId": command_id,
+        })
+        return session.drain("trigger_ack")
+
+    def test_late_recording_start_cannot_attach_to_a_newer_activation(self):
+        """T15: a stale recorder start cannot create a segment after cancel.
+
+        The controlled recording identity of activation A is established and
+        the activation is then cancelled back to ``idle``. A late
+        ``on_recording_start`` delivering A's old identity must not accept a
+        segment, create a ledger record or keep a speaker active (F9/T15).
+        """
+        with TestClient(self.app) as client:
+            with ControlledSessionHarness(client, self.QUERY) as session:
+                first = self._activate(session, "late-a")
+                session.socket.send_bytes(speech_packet())
+                session.timeline("recording_started")
+                recorder = session.recorder()
+                server = session.server_session(self.app)
+                first_context = server._active_recording_context
+                self.assertIsNotNone(first_context)
+
+                recorder.flush_buffered_audio()
+                session.timeline("recording_ended")
+                session.drain("final")
+
+                session.send({
+                    "type": "trigger",
+                    "action": "cancel",
+                    "source": "manual",
+                    "commandId": "late-cancel-a",
+                    "activationId": first["activationId"],
+                })
+                self.assertTrue(session.drain("trigger_ack")["accepted"])
+                session.settle()
+                ledger_before = server.snapshot()["segmentLedger"]
+                self.assertEqual(server.activation_snapshot()["phase"], "idle")
+
+                # Stale recorder start carrying A's old identity.
+                recorder._active_recording_context = first_context
+                recorder.is_recording = True
+                recorder.on_recording_start()
+                session.settle()
+
+                snapshot = server.activation_snapshot()
+                self.assertEqual(snapshot["phase"], "idle")
+                self.assertIsNone(snapshot["activationId"])
+                ledger_after = server.snapshot()["segmentLedger"]
+                self.assertEqual(
+                    ledger_after["acceptedSegmentCount"],
+                    ledger_before["acceptedSegmentCount"],
+                    "no segment may be accepted from the stale identity",
+                )
+                self.assertFalse(recorder.is_recording)
+                self.assertEqual(
+                    len(session.timeline_events("recording_started")), 1
+                )
 
 
 if __name__ == "__main__":

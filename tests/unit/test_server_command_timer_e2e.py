@@ -20,7 +20,11 @@ import threading
 import time
 import unittest
 
+from api_fastapi_server.segment_ledger import SegmentLedger
+from api_fastapi_server.server import ServerSettings, create_app as _create_app
+from tests.unit.test_fastapi_server_multi_user import AutoScheduler as _AutoScheduler
 from tests.unit.test_server_controlled_e2e import (
+    BlockingScheduler,
     ControlledSessionHarness,
     GateAwareRecorder,
     TestClient,
@@ -176,8 +180,15 @@ class CommandPhaseMatrixTests(ControlledCommandTestCase):
                                 "source": "manual",
                                 "commandId": f"{phase}-{action}",
                             }
-                            if action != "activate" and opened is not None:
-                                payload["activationId"] = opened["activationId"]
+                            if action != "activate":
+                                # Controls carry the observed activation id;
+                                # in idle no activation exists, so any id is
+                                # stale and the answer is ``not_active``.
+                                payload["activationId"] = (
+                                    opened["activationId"]
+                                    if opened is not None
+                                    else "no-such-activation"
+                                )
                             ack = self._trigger(session, **payload)
 
                             self.assertEqual(ack["accepted"], accepted, ack)
@@ -387,7 +398,6 @@ class CommandReplayEndToEndTests(ControlledCommandTestCase):
 
                 for changed in (
                     {"action": "cancel", "source": "manual"},
-                    {"action": "refresh", "source": "wake_word"},
                     {"action": "refresh", "source": "manual",
                      "activationId": "someone-else"},
                 ):
@@ -420,6 +430,34 @@ class CommandReplayEndToEndTests(ControlledCommandTestCase):
                     first,
                 )
 
+    def test_a_control_source_change_is_no_semantic_conflict(self):
+        """F6: for controls the ignored legacy source field is not semantic.
+
+        The C1 behaviour treated ``source`` changes of a control as a payload
+        conflict; per the frozen contract source is not semantic for controls,
+        so a pure source change stays a replay.
+        """
+        with TestClient(self.app) as client:
+            with ControlledSessionHarness(client, self.QUERY) as session:
+                opened = self._drive_to(session, "followup_wait")
+                first = self._trigger(
+                    session,
+                    action="refresh",
+                    source="manual",
+                    commandId="source-neutral-1",
+                    activationId=opened["activationId"],
+                )
+                self.assertTrue(first["accepted"])
+
+                replay = self._trigger(
+                    session,
+                    action="refresh",
+                    source="wake_word",
+                    commandId="source-neutral-1",
+                    activationId=opened["activationId"],
+                )
+                self.assertEqual(replay, first)
+
     def test_the_replay_cache_holds_for_the_whole_session(self):
         with TestClient(self.app) as client:
             with ControlledSessionHarness(client, self.QUERY) as session:
@@ -450,7 +488,13 @@ class CommandReplayEndToEndTests(ControlledCommandTestCase):
                     first,
                 )
 
-    def test_a_malformed_command_never_occupies_its_command_id(self):
+    def test_rejected_command_with_valid_id_is_replayed_and_conflicts_on_reuse(self):
+        """T4/F3: a usable commandId stays occupied even when fachlich rejected.
+
+        The C1 behaviour "a malformed command never occupies its command id"
+        was fachlich wrong: an invalid action must be replay/idempotent and a
+        later valid reuse of the same id must be a conflict.
+        """
         with TestClient(self.app) as client:
             with ControlledSessionHarness(client, self.QUERY) as session:
                 session.send({"type": "start"})
@@ -459,11 +503,31 @@ class CommandReplayEndToEndTests(ControlledCommandTestCase):
                 )
                 self.assertEqual(broken["reason"], "invalid_action")
 
-                accepted = self._trigger(
+                repeat = self._trigger(
+                    session, action="teleport", source="manual", commandId="m-1"
+                )
+                self.assertEqual(repeat, broken)
+
+                conflict = self._trigger(
                     session, action="activate", source="manual", commandId="m-1"
                 )
+                self.assertFalse(conflict["accepted"])
+                self.assertEqual(conflict["reason"], "command_id_conflict")
+
+    def test_a_keyless_rejection_does_not_occupy_the_cache(self):
+        with TestClient(self.app) as client:
+            with ControlledSessionHarness(client, self.QUERY) as session:
+                session.send({"type": "start"})
+                keyless = self._trigger(
+                    session, action="teleport", source="manual"
+                )
+                self.assertEqual(keyless["reason"], "missing_command_id")
+
+                accepted = self._trigger(
+                    session, action="activate", source="manual",
+                    commandId="fresh-1",
+                )
                 self.assertTrue(accepted["accepted"])
-                self.assertEqual(accepted["reason"], "activated")
 
 
 @unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
@@ -1045,6 +1109,1104 @@ class LedgerRegressionEndToEndTests(ControlledCommandTestCase):
                 self.assertEqual(len(drained), 1)
                 self.assertEqual(drained[0]["acceptedSegmentCount"], 2)
                 self.assertEqual(drained[0]["terminalSegmentCount"], 2)
+
+
+# -- AP-SRV-030 C2 regression tests -----------------------------------------
+#
+# These tests pin the C2 root findings on the real production wiring: the real
+# websocket session, the real controller, the real ledger and the real
+# recorder gate. Only *timing points* are blocked with events/barriers; no
+# controller or ledger decision is rebuilt by a fake.
+
+
+class BlockingGateCloseRecorder(GateAwareRecorder):
+    """Gate-aware recorder whose gate close can be paused deterministically.
+
+    Used for T5 (no new activation between Phase A and the registered input
+    close) and T10 (the input close must not wait for the dispatch boundary
+    while holding the session lock).
+    """
+
+    instances_list = []
+
+    #: Module-level barrier refreshed per test.
+    gate_entered = None
+    gate_release = None
+    gate_blocking = False
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        BlockingGateCloseRecorder.instances_list.append(self)
+
+    @classmethod
+    def reset(cls):
+        cls.instances_list = []
+        cls.gate_entered = threading.Event()
+        cls.gate_release = threading.Event()
+        cls.gate_blocking = False
+
+    def close_controlled_activation(self, activation_id=None, generation=None):
+        if type(self).gate_blocking:
+            type(self).gate_entered.set()
+            type(self).gate_release.wait(timeout=30)
+        return super().close_controlled_activation(
+            activation_id, generation=generation
+        )
+
+
+class BlockingRecoveryRecorder(GateAwareRecorder):
+    """Gate-aware recorder whose recovery abort can be paused (T6).
+
+    ``fail_gate_close`` keeps the foreground stuck in ``closing_input`` (the
+    fault that makes recovery necessary); ``recovery_blocking`` then pauses
+    the recovery worker inside the defensive abort so the test can prove no
+    new activation is admitted while the cleanup runs.
+    """
+
+    instances_list = []
+
+    recovery_entered = None
+    recovery_release = None
+    recovery_blocking = False
+    fail_gate_close = False
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        BlockingRecoveryRecorder.instances_list.append(self)
+
+    @classmethod
+    def reset(cls):
+        cls.instances_list = []
+        cls.recovery_entered = threading.Event()
+        cls.recovery_release = threading.Event()
+        cls.recovery_blocking = False
+        cls.fail_gate_close = False
+
+    def close_controlled_activation(self, activation_id=None, generation=None):
+        if type(self).fail_gate_close:
+            raise RuntimeError("controlled gate refused to close")
+        return super().close_controlled_activation(
+            activation_id, generation=generation
+        )
+
+    def abort_controlled_activation(self):
+        if type(self).recovery_blocking:
+            type(self).recovery_entered.set()
+            type(self).recovery_release.wait(timeout=30)
+        return super().abort_controlled_activation()
+
+
+class HardFailRecorder(BlockingGateCloseRecorder):
+    """Recorder where every close/abort/flush path fails (T16)."""
+
+    instances_list = []
+
+    fail_gate_close = False
+    fail_abort = False
+    fail_flush = False
+    fail_hard_abort = False
+
+    @classmethod
+    def reset(cls):
+        cls.instances_list = []
+        cls.fail_gate_close = False
+        cls.fail_abort = False
+        cls.fail_flush = False
+        cls.fail_hard_abort = False
+
+    def close_controlled_activation(self, activation_id=None, generation=None):
+        if type(self).fail_gate_close:
+            raise RuntimeError("gate close failed")
+        return super().close_controlled_activation(
+            activation_id, generation=generation
+        )
+
+    def abort_controlled_activation(self):
+        if type(self).fail_abort:
+            raise RuntimeError("gate abort failed")
+        return super().abort_controlled_activation()
+
+    def abort(self):
+        if type(self).fail_hard_abort:
+            raise RuntimeError("recorder hard abort failed")
+        return super().abort()
+
+    def flush_buffered_audio(self, min_abs_level=50):
+        if type(self).fail_flush:
+            raise RuntimeError("recorder flush failed")
+        return super().flush_buffered_audio(min_abs_level)
+
+
+@unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
+class ControlSourceNeutralEndToEndTests(ControlledCommandTestCase):
+    """T2/T3: controls are source-neutral and need an observed activation id."""
+
+    def test_control_without_activation_id_cannot_touch_a_newer_activation(self):
+        """T2: A opens/closes, B opens. A control without id never touches B."""
+        with TestClient(self.app) as client:
+            with ControlledSessionHarness(client, self.QUERY) as session:
+                first = self._activate(session, "t2-open-a")
+                self._trigger(
+                    session,
+                    action="finish",
+                    source="manual",
+                    commandId="t2-close-a",
+                    activationId=first["activationId"],
+                )
+                second = self._trigger(
+                    session, action="activate", source="manual", commandId="t2-open-b"
+                )
+                self.assertNotEqual(
+                    first["activationId"], second["activationId"]
+                )
+                server = session.server_session(self.app)
+                before = server.activation_snapshot()
+
+                for action in ("refresh", "finish", "cancel"):
+                    with self.subTest(action=action):
+                        ack = self._trigger(
+                            session,
+                            action=action,
+                            source="manual",
+                            commandId=f"t2-no-id-{action}",
+                        )
+                        self.assertFalse(ack["accepted"])
+                        self.assertEqual(ack["reason"], "invalid_payload")
+                        after = server.activation_snapshot()
+                        self.assertEqual(
+                            after["activationId"],
+                            second["activationId"],
+                        )
+                        self.assertEqual(after["phase"], before["phase"])
+                        self.assertEqual(
+                            after["timerRevision"], before["timerRevision"]
+                        )
+                        self.assertTrue(
+                            session.recorder().controlled_activation_state()[
+                                "active"
+                            ]
+                        )
+
+    def test_manual_disabled_does_not_disable_control_of_wake_activation(self):
+        """T3: controls of a wake activation work with manual disabled.
+
+        ``manualTriggerEnabled=false`` + ``wakeWordTriggerEnabled=true`` with
+        an active wake-word profile: the wake word opens the activation, and a
+        control without a source must be accepted - never ``trigger_disabled``.
+        """
+        from api_fastapi_server.server import create_app as _create_app
+
+        settings = ServerSettings(
+            model_warmup=False,
+            request_logging_enabled=False,
+            performance_logging_enabled=False,
+            performance_log_mirror_enabled=False,
+            transcription_logging_enabled=False,
+            system_event_logging_enabled=False,
+            event_store_enabled=False,
+            log_live_enabled=False,
+            realtime_processing_pause=0.0,
+            realtime_min_audio_seconds=0.01,
+            min_length_of_recording=0.0,
+            post_speech_silence_duration=60.0,
+            wakeword_backend="openwakeword",
+            wake_words="hey_jarvis",
+            openwakeword_model_paths="C:/models/hey_jarvis.onnx",
+        )
+        app = _create_app(
+            settings,
+            scheduler_factory=_AutoScheduler,
+            recorder_factory=GateAwareRecorder,
+        )
+        query = (
+            "manualTriggerEnabled=false&wakeWordTriggerEnabled=true"
+            "&wakeWordBackend=openwakeword&wakeWords=hey_jarvis"
+            "&initialSpeechTimeout=60&followupTimeout=60"
+        )
+        with TestClient(app) as client:
+            with ControlledSessionHarness(client, query) as session:
+                hello = session.hello
+                self.assertEqual(
+                    hello["activationConfig"]["mode"], "controlled"
+                )
+                self.assertFalse(
+                    hello["activationConfig"]["manualTriggerEnabled"]
+                )
+                self.assertTrue(
+                    hello["activationConfig"]["wakeWordTriggerEnabled"]
+                )
+                session.send({"type": "start"})
+                session.settle()
+
+                # The wake word is the only trigger; it goes through the same
+                # controlled admission.
+                recorder = session.recorder()
+                recorder.simulate_wake_word()
+                detected = session.timeline("wakeword_detected")
+                activation_id = detected.get("activationId")
+                self.assertTrue(activation_id)
+                snapshot = session.server_session(app).activation_snapshot()
+                self.assertEqual(snapshot["primarySource"], "wake_word")
+
+                session.socket.send_bytes(speech_packet())
+                started = session.timeline("recording_started")
+                self.assertEqual(started["activationId"], activation_id)
+                session.recorder().flush_buffered_audio()
+                session.timeline("recording_ended")
+                session.drain("final")
+
+                # Control without any source field: accepted, source-neutral.
+                session.send({
+                    "type": "trigger",
+                    "action": "refresh",
+                    "commandId": "t3-refresh",
+                    "activationId": activation_id,
+                })
+                refreshed = session.drain("trigger_ack")
+                self.assertTrue(refreshed["accepted"])
+                self.assertEqual(refreshed["reason"], "refreshed")
+                self.assertEqual(
+                    refreshed["activationId"], activation_id
+                )
+                refreshed_snapshot = session.server_session(
+                    app
+                ).activation_snapshot()
+                self.assertEqual(
+                    refreshed_snapshot["primarySource"], "wake_word"
+                )
+                self.assertEqual(
+                    refreshed_snapshot["sources"], ["wake_word"]
+                )
+
+                session.send({
+                    "type": "trigger",
+                    "action": "finish",
+                    "commandId": "t3-finish",
+                    "activationId": activation_id,
+                })
+                finished = session.drain("trigger_ack")
+                self.assertTrue(finished["accepted"])
+                self.assertEqual(finished["reason"], "finished")
+
+
+@unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
+class CloseAdmissionRaceEndToEndTests(ControlledCommandTestCase):
+    """T5/T6: no new activation while the input close is being registered."""
+
+    def setUp(self):
+        BlockingGateCloseRecorder.reset()
+        BlockingRecoveryRecorder.reset()
+        super().setUp()
+
+    def test_new_activation_stays_locked_until_normal_input_close_is_registered(self):
+        """T5: during a blocked normal input close, activate B is locked.
+
+        The finish is driven through the production session entry point
+        (``RecorderBackedRealtimeSession.handle_trigger_command``) exactly like
+        the stale-command race test, while the gate close is paused. Because
+        ``activate`` needs the session lock and the controller stays in
+        ``closing_input`` until the input close is registered, a new
+        activation must be refused as ``activation_locked``.
+        """
+        app = build_app(recorder_factory=BlockingGateCloseRecorder)
+        with TestClient(app) as client:
+            with ControlledSessionHarness(client, self.QUERY) as session:
+                session.send({"type": "start"})
+                session.settle()
+                server = session.server_session(app)
+                opened = server.handle_trigger_command({
+                    "type": "trigger",
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "t5-open-a",
+                })
+                self.assertTrue(opened["accepted"])
+
+                BlockingGateCloseRecorder.gate_blocking = True
+                close_result = {}
+
+                def do_finish():
+                    close_result["ack"] = server.handle_trigger_command({
+                        "type": "trigger",
+                        "action": "finish",
+                        "source": "manual",
+                        "commandId": "t5-finish",
+                        "activationId": opened["activationId"],
+                    })
+
+                thread = threading.Thread(target=do_finish)
+                thread.start()
+                self.assertTrue(
+                    BlockingGateCloseRecorder.gate_entered.wait(timeout=20)
+                )
+
+                locked = server.handle_trigger_command({
+                    "type": "trigger",
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "t5-locked-b",
+                })
+                self.assertFalse(locked["accepted"])
+                self.assertEqual(locked["reason"], "activation_locked")
+                self.assertEqual(
+                    locked["activationId"], opened["activationId"]
+                )
+                self.assertEqual(
+                    server.activation_snapshot()["phase"], "closing_input"
+                )
+
+                BlockingGateCloseRecorder.gate_release.set()
+                thread.join(timeout=30)
+                self.assertTrue(close_result["ack"]["accepted"])
+
+                second = server.handle_trigger_command({
+                    "type": "trigger",
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "t5-open-b",
+                })
+                self.assertTrue(second["accepted"])
+                self.assertNotEqual(
+                    second["activationId"], opened["activationId"]
+                )
+                self.assertEqual(
+                    server.activation_snapshot()["activationId"],
+                    second["activationId"],
+                )
+                session.settle()
+                self.assertTrue(
+                    session.recorder().controlled_activation_state()["active"]
+                )
+
+    def test_new_activation_stays_locked_during_recovery_cleanup(self):
+        """T6: while recovery cleanup is running, activate is locked.
+
+        A fault parks the activation in ``closing_input``; the recovery worker
+        then pauses inside the defensive abort. During that pause a new
+        activation must be refused (the foreground is not idle yet and the
+        session is not admitting), and it must stay the gate owner afterwards.
+        """
+        app = build_app(recorder_factory=BlockingRecoveryRecorder)
+        BlockingRecoveryRecorder.fail_gate_close = True
+        query = self.QUERY.replace(
+            "closingRecoveryTimeoutSeconds=60",
+            "closingRecoveryTimeoutSeconds=0.5",
+        )
+        with TestClient(app) as client:
+            with ControlledSessionHarness(client, query) as session:
+                session.send({"type": "start"})
+                session.settle()
+                server = session.server_session(app)
+                opened = server.handle_trigger_command({
+                    "type": "trigger",
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "t6-open-a",
+                })
+                self.assertTrue(opened["accepted"])
+
+                # Let a recording start so there is real input to recover.
+                session.socket.send_bytes(speech_packet())
+                session.timeline("recording_started")
+
+                # Cancel with a fault: gate close fails, phase stays closing.
+                ack = server.handle_trigger_command({
+                    "type": "trigger",
+                    "action": "cancel",
+                    "source": "manual",
+                    "commandId": "t6-cancel",
+                    "activationId": opened["activationId"],
+                })
+                self.assertTrue(ack["accepted"])
+                self.assertEqual(
+                    server.activation_snapshot()["phase"], "closing_input"
+                )
+
+                # The recovery worker parks in the abort gate.
+                BlockingRecoveryRecorder.recovery_blocking = True
+                self.assertTrue(
+                    BlockingRecoveryRecorder.recovery_entered.wait(timeout=20)
+                )
+                locked = server.handle_trigger_command({
+                    "type": "trigger",
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "t6-locked-b",
+                })
+                self.assertFalse(locked["accepted"])
+                self.assertEqual(locked["reason"], "activation_locked")
+                self.assertEqual(
+                    server.activation_snapshot()["phase"], "closing_input"
+                )
+
+                BlockingRecoveryRecorder.recovery_release.set()
+                deadline = time.monotonic() + 20
+                while (
+                    server.activation_snapshot()["phase"] != "idle"
+                    and time.monotonic() < deadline
+                ):
+                    time.sleep(0.01)
+                self.assertEqual(
+                    server.activation_snapshot()["phase"], "idle"
+                )
+                session.settle()
+
+                second = server.handle_trigger_command({
+                    "type": "trigger",
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "t6-open-b",
+                })
+                self.assertTrue(second["accepted"])
+                self.assertEqual(
+                    server.activation_snapshot()["activationId"],
+                    second["activationId"],
+                )
+                session.socket.send_bytes(speech_packet())
+                started = session.timeline("recording_started")
+                self.assertEqual(
+                    started["activationId"], second["activationId"]
+                )
+                self.assertTrue(
+                    session.recorder().controlled_activation_state()["active"]
+                )
+
+
+@unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
+class RecoveryIdentityEndToEndTests(ClosingRecoveryEndToEndTests):
+    """T7: recovery keeps the internal command identity but not the wire link."""
+
+    def test_recovery_preserves_internal_command_identity_without_wrong_wire_correlation(self):
+        with TestClient(self.app) as client:
+            with ControlledSessionHarness(client, self.RECOVERY) as session:
+                opened = self._park_in_closing_input(
+                    session, "fail_recorder_close", command_id="known-finish-id"
+                )
+                server = session.server_session(self.app)
+                while server.activation_snapshot()["phase"] == "closing_input":
+                    closed = session.timeline("activation_closed", timeout=20.0)
+                    break
+                self.assertEqual(closed["cause"], "closing_recovery_timeout")
+                # The wire correlation must be null for a recovery completion.
+                self.assertIsNone(closed.get("causedByCommandId"))
+                self.assertNotIn(closed.get("causedByCommandId"), {"known-finish-id"})
+
+                # Normal finish (no recovery) stays correlated.
+                FaultyGateRecorder.fail_recorder_close = False
+                second = self._trigger(
+                    session,
+                    action="activate",
+                    source="manual",
+                    commandId="t7-open-b",
+                )
+                self._start_segment(session)
+                self._trigger(
+                    session,
+                    action="finish",
+                    source="manual",
+                    commandId="t7-finish",
+                    activationId=second["activationId"],
+                )
+                final = session.drain("final", timeout=20.0)
+                self.assertTrue(final["text"])
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline:
+                    server_events = session.timeline_events("activation_closed")
+                    if len(server_events) >= 2:
+                        break
+                    time.sleep(0.01)
+                closed = session.timeline_events("activation_closed")[-1]
+                self.assertEqual(closed["reason"], "finished")
+                self.assertEqual(
+                    closed.get("causedByCommandId"),
+                    "t7-finish",
+                    "a normal finish without recovery must stay correlated",
+                )
+
+
+@unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
+class AudioAvailabilityCorrelationTests(ControlledCommandTestCase):
+    """T8: the audio-availability command id is not a close correlation."""
+
+    def test_audio_unavailable_command_id_is_not_a_finish_cancel_correlation(self):
+        with TestClient(self.app) as client:
+            with ControlledSessionHarness(client, self.QUERY) as session:
+                opened = self._drive_to(session, "segment_active")
+                session.send({
+                    "type": "audio_availability",
+                    "commandId": "avail-id-1",
+                    "audioAvailable": False,
+                })
+                ack = session.drain("audio_availability_ack")
+                self.assertTrue(ack["accepted"])
+                self.assertEqual(ack["commandId"], "avail-id-1")
+
+                closed = session.timeline("activation_closed", timeout=20.0)
+                self.assertEqual(closed["reason"], "cancelled")
+                self.assertEqual(closed["cause"], "audio_unavailable")
+                self.assertNotIn(
+                    closed.get("causedByCommandId"), {"avail-id-1"}
+                )
+                self.assertIsNone(closed.get("causedByCommandId"))
+
+                # The availability id remains replayable.
+                session.send({
+                    "type": "audio_availability",
+                    "commandId": "avail-id-1",
+                    "audioAvailable": False,
+                })
+                replay = session.drain("audio_availability_ack")
+                self.assertEqual(replay, ack)
+
+
+@unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
+class LedgerCancelTotalOrderTests(ControlledCommandTestCase):
+    """T9: cancel/final total order over the real session-ledger wiring.
+
+    Only the timing point is controlled (an event pauses the visible
+    publication); the decisions and the ledger are entirely real.
+    """
+
+    def _start(self, app):
+        self.client = TestClient(app)
+        self.stream = ControlledSessionHarness(
+            self.client, self.QUERY
+        )
+        self.stream.__enter__()
+        self.stream.send({"type": "start"})
+        server = self.stream.server_session(app)
+        opened = server.handle_trigger_command({
+            "action": "activate",
+            "source": "manual",
+            "commandId": "to-open",
+        })
+        self.assertTrue(opened["accepted"])
+        return opened
+
+    def _finish_stream(self):
+        self.stream.__exit__(None, None, None)
+        self.client.__exit__(None, None, None)
+
+    def test_final_already_inside_dispatch_is_visible_before_cancel_can_be_accepted(self):
+        """T9a/Fall A: a final that holds the dispatch boundary publishes first."""
+        BlockingScheduler.instances = []
+        app = build_app(scheduler_factory=BlockingScheduler)
+        with TestClient(app) as client:
+            with ControlledSessionHarness(client, self.QUERY) as session:
+                session.send({"type": "start"})
+                session.settle()
+                server = session.server_session(app)
+                opened = server.handle_trigger_command({
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "t9a-open",
+                })
+                self.assertTrue(opened["accepted"])
+                session.socket.send_bytes(speech_packet())
+                session.timeline("recording_started")
+                # End the recording so a final job is submitted and *held* by
+                # the blocking scheduler. The activation stays open (follow-up).
+                session.recorder().flush_buffered_audio()
+                session.timeline("recording_ended")
+                server = session.server_session(app)
+                scheduler = BlockingScheduler.instances[0]
+                deadline = time.monotonic() + 10
+                while not scheduler.jobs:
+                    if time.monotonic() >= deadline:
+                        self.fail("the final job was not submitted")
+                    time.sleep(0.01)
+
+                # A final result arrives. Pause its *visible publication* after
+                # the ledger resolved it (inside ``_apply_ledger_update``),
+                # while ``_ledger_dispatch_lock`` is still held.
+                entered = threading.Event()
+                release = threading.Event()
+                original_apply = server._apply_ledger_update
+                publication_visible = []
+
+                def blocking_apply(update):
+                    if update.publications and not release.is_set():
+                        entered.set()
+                        release.wait(timeout=30)
+                    original_apply(update)
+                    if update.publications:
+                        publication_visible.append(update.publications)
+
+                server._apply_ledger_update = blocking_apply
+
+                # Drive the actual final resolution through the real scheduler
+                # submission while the publication is paused. The scheduler
+                # keeps the job pending, so the resolve runs inside the real
+                # dispatch boundary.
+                final_thread = threading.Thread(
+                    target=scheduler.complete,
+                    args=(scheduler.jobs[0], "visible-before-cancel"),
+                )
+                final_thread.start()
+                self.assertTrue(entered.wait(timeout=20))
+
+                # While the final holds the dispatch boundary, a cancel command
+                # must not have been fachlich accepted yet.
+                cancel_result = {}
+                cancel_thread = threading.Thread(
+                    target=lambda: cancel_result.update(
+                        server.handle_trigger_command({
+                            "action": "cancel",
+                            "source": "manual",
+                            "commandId": "t9a-cancel",
+                            "activationId": opened["activationId"],
+                        })
+                    )
+                )
+                cancel_thread.start()
+                time.sleep(0.1)
+                self.assertNotIn("accepted", cancel_result)
+                server._apply_ledger_update = original_apply
+                release.set()
+                final_thread.join(timeout=30)
+                cancel_thread.join(timeout=30)
+
+                self.assertEqual(len(publication_visible), 1)
+                visible = publication_visible[0][0]
+                self.assertEqual(
+                    visible.text, "visible-before-cancel"
+                )
+                self.assertTrue(cancel_result["accepted"])
+                self.assertEqual(
+                    len(session.timeline_events("final_transcript_cancelled")),
+                    0,
+                    "the final was visible before cancel acceptance and stays",
+                )
+
+    def test_cancel_acceptance_blocks_every_later_final_publication(self):
+        """T9b/Fall B: once cancel holds the barrier, no later final publishes."""
+        BlockingScheduler.instances = []
+        app = build_app(scheduler_factory=BlockingScheduler)
+        with TestClient(app) as client:
+            with ControlledSessionHarness(client, self.QUERY) as session:
+                session.send({"type": "start"})
+                session.settle()
+                server = session.server_session(app)
+                opened = server.handle_trigger_command({
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "t9b-open",
+                })
+                self.assertTrue(opened["accepted"])
+                session.socket.send_bytes(speech_packet())
+                session.timeline("recording_started")
+                # A recording exists and its final job is held. Transfer it to
+                # the blocking scheduler so the later resolve runs against the
+                # cancel barrier.
+                session.recorder().flush_buffered_audio()
+                session.timeline("recording_ended")
+                server = session.server_session(app)
+
+                # Pause the cancel right after its barrier is set (still under
+                # the dispatch boundary).
+                barrier_set = threading.Event()
+                release = threading.Event()
+                server._test_cancel_after_barrier = lambda: (
+                    barrier_set.set(), release.wait(timeout=30)
+                )
+
+                cancel_thread = threading.Thread(
+                    target=lambda: server.handle_trigger_command({
+                        "action": "cancel",
+                        "source": "manual",
+                        "commandId": "t9b-cancel",
+                        "activationId": opened["activationId"],
+                    })
+                )
+                cancel_thread.start()
+                self.assertTrue(barrier_set.wait(timeout=20))
+
+                # The final for the accepted segment must go through the real
+                # dispatch boundary. Cancel already holds it, so the resolve
+                # waits and - after the release - sees the cancel barrier.
+                with server.segment_ledger._lock:
+                    ctx = next(
+                        record.context
+                        for record in server.segment_ledger._segments.values()
+                    )
+
+                final_publication = {}
+                final_thread = threading.Thread(
+                    target=lambda: final_publication.update(
+                        server._dispatch_ledger_operation(
+                            server.segment_ledger.resolve_completed,
+                            ctx,
+                            "must-not-publish",
+                        ).publications
+                    )
+                )
+                final_thread.start()
+                time.sleep(0.1)
+                # The final is waiting on the dispatch boundary held by cancel.
+                self.assertTrue(final_thread.is_alive())
+                self.assertEqual(final_publication, {})
+
+                server._test_cancel_after_barrier = None
+                release.set()
+                cancel_thread.join(timeout=30)
+                final_thread.join(timeout=30)
+                deadline = time.monotonic() + 10
+                while time.monotonic() < deadline:
+                    server_ledger = session.server_session(app).snapshot()[
+                        "segmentLedger"
+                    ]
+                    if server_ledger["pendingSegmentCount"] == 0:
+                        break
+                    time.sleep(0.01)
+                session.settle()
+
+                self.assertFalse(any(
+                    message.get("type") == "final"
+                    and message.get("text") == "must-not-publish"
+                    for message in session.messages
+                ))
+                cancelled = session.timeline_events("final_transcript_cancelled")
+                self.assertEqual(len(cancelled), 1)
+                drained = session.timeline_events("activation_drained")
+                self.assertEqual(len(drained), 1)
+                self.assertEqual(drained[0]["state"], "cancelled")
+                ledger = session.server_session(app).snapshot()["segmentLedger"]
+                self.assertEqual(ledger["pendingSegmentCount"], 0)
+                self.assertEqual(
+                    ledger["acceptedSegmentCount"],
+                    ledger["terminalSegmentCount"],
+                )
+
+    def test_cancel_removes_prepared_but_not_yet_published_text(self):
+        """T9c: text already computed but blocked by a sequence hole is gone."""
+        BlockingScheduler.instances = []
+        app = build_app(scheduler_factory=BlockingScheduler)
+        with TestClient(app) as client:
+            with ControlledSessionHarness(client, self.QUERY) as session:
+                session.send({"type": "start"})
+                session.settle()
+                server = session.server_session(app)
+                opened = server.handle_trigger_command({
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "t9c-open",
+                })
+                self.assertTrue(opened["accepted"])
+
+                # Segment 1 (hole) and segment 2 (prepared, unseen).
+                session.socket.send_bytes(speech_packet())
+                session.timeline("recording_started")
+                session.recorder().flush_buffered_audio()
+                session.timeline("recording_ended")
+                session.socket.send_bytes(speech_packet())
+                session.timeline("recording_started")
+
+                ledger = server.segment_ledger
+                # Reconstruct the two contexts from the ledger directly.
+                with server.segment_ledger._lock:
+                    ctxs = [
+                        record.context
+                        for record in server.segment_ledger._segments.values()
+                    ]
+                self.assertEqual(len(ctxs), 2)
+                seg1, seg2 = ctxs
+
+                # Segment 2 finishes while segment 1 is still an open hole.
+                update = server._dispatch_ledger_operation(
+                    ledger.resolve_completed, seg2, "hole-waiting"
+                )
+                self.assertEqual(update.publications, ())
+
+                ack = server.handle_trigger_command({
+                    "action": "cancel",
+                    "source": "manual",
+                    "commandId": "t9c-cancel",
+                    "activationId": opened["activationId"],
+                })
+                self.assertTrue(ack["accepted"])
+                session.settle()
+
+                # Resolving the hole now must not publish the prepared text.
+                update = server._dispatch_ledger_operation(
+                    ledger.resolve_terminal, seg1, "discarded", "empty_final"
+                )
+                self.assertEqual(update.publications, ())
+                session.settle()
+                self.assertFalse(any(
+                    message.get("type") == "final"
+                    and message.get("text") == "hole-waiting"
+                    for message in session.messages
+                ))
+                cancelled = session.timeline_events("final_transcript_cancelled")
+                self.assertEqual(len(cancelled), 2)
+                ledger_snapshot = ledger.snapshot()
+                self.assertEqual(ledger_snapshot["pendingSegmentCount"], 0)
+                self.assertEqual(
+                    ledger_snapshot["acceptedSegmentCount"],
+                    ledger_snapshot["terminalSegmentCount"],
+                )
+
+
+@unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
+class LockOrderEndToEndTests(ControlledCommandTestCase):
+    """T10: session lock is never held while waiting for the dispatch boundary."""
+
+    def setUp(self):
+        BlockingGateCloseRecorder.reset()
+        super().setUp()
+
+    def test_input_close_never_waits_for_dispatch_while_holding_session_lock(self):
+        """A pinned dispatch lock cannot deadlock a normal input close."""
+        BlockingGateCloseRecorder.reset()
+        app = build_app(recorder_factory=BlockingGateCloseRecorder)
+        with TestClient(app) as client:
+            with ControlledSessionHarness(client, self.QUERY) as session:
+                session.send({"type": "start"})
+                session.settle()
+                server = session.server_session(app)
+                opened = server.handle_trigger_command({
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "t10-open",
+                })
+                self.assertTrue(opened["accepted"])
+
+                # Another thread parks inside the dispatch boundary.
+                dispatch_in = threading.Event()
+                dispatch_free = threading.Event()
+                dispatching = []
+
+                def hold_dispatch():
+                    with server._ledger_dispatch_lock:
+                        dispatch_in.set()
+                        dispatch_free.wait(timeout=30)
+                        dispatching.append(True)
+
+                holder = threading.Thread(target=hold_dispatch)
+                holder.start()
+                self.assertTrue(dispatch_in.wait(timeout=20))
+
+                # A normal close accepts and runs Phase B. The gate close is
+                # paused, which proves the close released self.lock before any
+                # dispatch/recorder operation.
+                BlockingGateCloseRecorder.gate_blocking = True
+                close_result = {}
+
+                def do_close():
+                    close_result["ack"] = server.handle_trigger_command({
+                        "action": "finish",
+                        "source": "manual",
+                        "commandId": "t10-finish",
+                        "activationId": opened["activationId"],
+                    })
+
+                closer = threading.Thread(target=do_close)
+                closer.start()
+                self.assertTrue(
+                    BlockingGateCloseRecorder.gate_entered.wait(timeout=20)
+                )
+
+                # While the close is parked in the gate close, the session lock
+                # must be acquirable: the close is NOT holding it.
+                acquired = server.lock.acquire(timeout=5)
+                self.assertTrue(acquired, "close must release self.lock")
+                server.lock.release()
+
+                BlockingGateCloseRecorder.gate_release.set()
+                dispatch_free.set()
+                closer.join(timeout=30)
+                holder.join(timeout=30)
+                self.assertTrue(close_result["ack"]["accepted"])
+
+    def test_cancel_uses_dispatch_then_session_lock_order(self):
+        """Cancel acquires the dispatch boundary before the session lock.
+
+        The instrumentation wraps both locks with delegating trackers that
+        record the *nesting*: acquiring the dispatch boundary while the
+        session lock is already held is the forbidden ``self.lock -> dispatch``
+        and must never happen for a cancel.
+        """
+        app = build_app(recorder_factory=GateAwareRecorder)
+        with TestClient(app) as client:
+            with ControlledSessionHarness(client, self.QUERY) as session:
+                session.send({"type": "start"})
+                session.settle()
+                server = session.server_session(app)
+                opened = server.handle_trigger_command({
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "t10b-open",
+                })
+                self.assertTrue(opened["accepted"])
+
+                state = {
+                    "first": None,
+                    "violations": [],
+                    "depths": {},
+                    "cancel_thread": None,
+                }
+                real_dispatch = server._ledger_dispatch_lock
+                real_session = server.lock
+
+                class TrackingLock:
+                    def __init__(self, delegate, name, on_enter, on_exit):
+                        self._delegate = delegate
+                        self._name = name
+                        self._on_enter = on_enter
+                        self._on_exit = on_exit
+
+                    def __enter__(self):
+                        self._on_enter(self._name)
+                        self._delegate.acquire()
+                        return self
+
+                    def __exit__(self, *exc):
+                        self._on_exit(self._name)
+                        self._delegate.release()
+                        return False
+
+                    def acquire(self, *a, **kw):
+                        self._on_enter(self._name)
+                        result = self._delegate.acquire(*a, **kw)
+                        return result
+
+                    def release(self):
+                        self._on_exit(self._name)
+                        return self._delegate.release()
+
+                def thread_depth():
+                    tid = threading.get_ident()
+                    return state["depths"].setdefault(tid, {"dispatch": 0, "session": 0})
+
+                def on_enter(name):
+                    depth = thread_depth()
+                    if state["first"] is None:
+                        state["first"] = name
+                    if name == "dispatch":
+                        if depth["session"] > 0:
+                            state["violations"].append(
+                                f"dispatch-while-session(tid={threading.get_ident()})"
+                            )
+                        depth["dispatch"] += 1
+                    else:
+                        depth["session"] += 1
+
+                def on_exit(name):
+                    depth = thread_depth()
+                    if name == "dispatch":
+                        depth["dispatch"] -= 1
+                    else:
+                        depth["session"] -= 1
+
+                dispatch_tracker = TrackingLock(
+                    real_dispatch, "dispatch", on_enter, on_exit
+                )
+                session_tracker = TrackingLock(
+                    real_session, "session", on_enter, on_exit
+                )
+                server._ledger_dispatch_lock = dispatch_tracker
+                server.lock = session_tracker
+                try:
+                    ack = server.handle_trigger_command({
+                        "action": "cancel",
+                        "source": "manual",
+                        "commandId": "t10b-cancel",
+                        "activationId": opened["activationId"],
+                    })
+                finally:
+                    server._ledger_dispatch_lock = real_dispatch
+                    server.lock = real_session
+
+                self.assertTrue(ack["accepted"])
+                self.assertEqual(
+                    state["violations"],
+                    [],
+                    "cancel must never acquire dispatch while holding the session lock",
+                )
+                self.assertEqual(
+                    state["first"],
+                    "dispatch",
+                    "cancel must acquire the dispatch boundary first",
+                )
+
+
+@unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
+class RecoveryFailClosedEndToEndTests(ControlledCommandTestCase):
+    """T16: catastrophic recovery failure must fail closed, never fake idle."""
+
+    def setUp(self):
+        HardFailRecorder.reset()
+        super().setUp()
+
+    def test_recovery_cleanup_failure_never_publishes_idle_or_admits_new_activation(self):
+        HardFailRecorder.fail_gate_close = True
+        HardFailRecorder.fail_abort = True
+        HardFailRecorder.fail_flush = True
+        HardFailRecorder.fail_hard_abort = True
+        query = self.QUERY.replace(
+            "closingRecoveryTimeoutSeconds=60",
+            "closingRecoveryTimeoutSeconds=0.5",
+        )
+        app = build_app(recorder_factory=HardFailRecorder)
+        with TestClient(app) as client:
+            with ControlledSessionHarness(client, query) as session:
+                session.send({"type": "start"})
+                session.settle()
+                server = session.server_session(app)
+                opened = server.handle_trigger_command({
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "t16-open",
+                })
+                self.assertTrue(opened["accepted"])
+                session.socket.send_bytes(speech_packet())
+                session.timeline("recording_started")
+
+                # A close fault parks the activation in closing_input.
+                ack = server.handle_trigger_command({
+                    "action": "cancel",
+                    "source": "manual",
+                    "commandId": "t16-cancel",
+                    "activationId": opened["activationId"],
+                })
+                self.assertTrue(ack["accepted"])
+                self.assertEqual(
+                    server.activation_snapshot()["phase"], "closing_input"
+                )
+
+                # Recovery runs, every defensive close path fails -> fail closed.
+                deadline = time.monotonic() + 20
+                while (
+                    server._audio_available
+                    and time.monotonic() < deadline
+                ):
+                    time.sleep(0.01)
+                session.settle()
+                snapshot = server.activation_snapshot()
+                # Never a fake safe idle (F1): the foreground cannot be fake
+                # released while the old input path might still accept audio.
+                self.assertNotEqual(snapshot["phase"], "idle")
+                self.assertFalse(server._audio_available)
+                self.assertEqual(
+                    session.timeline_events("activation_closed"), [],
+                    "no successful close may be claimed after fail-closed",
+                )
+
+                # A new activation must be refused under fail-closed.
+                gate_before = session.recorder().controlled_activation_state()
+                blocked = server.handle_trigger_command({
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "t16-blocked",
+                })
+                self.assertFalse(blocked["accepted"])
+                self.assertEqual(blocked["reason"], "audio_unavailable")
+                # The same (old, stuck) gate identity is still refusing; no new
+                # activation was admitted to replace it.
+                gate_after = session.recorder().controlled_activation_state()
+                self.assertEqual(
+                    gate_after["activationId"], gate_before["activationId"]
+                )
 
 
 if __name__ == "__main__":

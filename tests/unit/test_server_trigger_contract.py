@@ -65,7 +65,8 @@ class TriggerAckContractTests(unittest.TestCase):
         The former version pressed ``extend`` in ``waiting_first_speech`` and
         expected ``extended``. The frozen phase matrix answers ``refresh``
         there with ``invalid_phase`` (PHASE-03), so the positive refresh case
-        moved to :class:`CommandPhaseMatrixTests`.
+        moved to :class:`CommandPhaseMatrixTests`. Since AP-SRV-030 C2,
+        controls carry the observed ``activationId``.
         """
         with TestClient(self.app) as client:
             with self._streaming_session(client) as session:
@@ -73,7 +74,11 @@ class TriggerAckContractTests(unittest.TestCase):
                     session, action="activate", source="manual", commandId="a-1"
                 )
                 refreshed = self._trigger(
-                    session, action="refresh", source="manual", commandId="a-2"
+                    session,
+                    action="refresh",
+                    source="manual",
+                    commandId="a-2",
+                    activationId=first["activationId"],
                 )
                 self.assertFalse(refreshed["accepted"])
                 self.assertEqual(refreshed["reason"], "invalid_phase")
@@ -82,13 +87,21 @@ class TriggerAckContractTests(unittest.TestCase):
                 )
 
                 finished = self._trigger(
-                    session, action="finish", source="manual", commandId="a-3"
+                    session,
+                    action="finish",
+                    source="manual",
+                    commandId="a-3",
+                    activationId=first["activationId"],
                 )
                 self.assertTrue(finished["accepted"])
                 self.assertEqual(finished["reason"], "finished")
 
                 cancelled = self._trigger(
-                    session, action="cancel", source="manual", commandId="a-4"
+                    session,
+                    action="cancel",
+                    source="manual",
+                    commandId="a-4",
+                    activationId=first["activationId"],
                 )
                 self.assertFalse(cancelled["accepted"])
                 self.assertEqual(cancelled["reason"], "not_active")

@@ -133,7 +133,7 @@ stateDiagram-v2
     closing_input --> closing_input: refresh / closing_input
     closing_input --> closing_input: finish/cancel / no_change
     closing_input --> idle: Gate und Recorder geschlossen
-    closing_input --> idle: closing_recovery_timeout
+    closing_input --> idle: Recovery hat Gate/Recorder defensiv geschlossen
 
     waiting_first_speech --> idle: reset
     segment_active --> idle: reset
@@ -242,10 +242,16 @@ Es gibt genau vier: `activate`, `refresh`, `finish`, `cancel`.
 | `followup_wait` | `activation_locked` | Follow-up-Reset | zulässig |
 | `closing_input` | `activation_locked` | `closing_input` | `no_change` (idempotent) |
 
-`refresh`, `finish` und `cancel` dürfen die vom Client beobachtete
-`activationId` mitführen. Passt sie nicht zur laufenden Activation, lautet die
-Antwort `stale_activation` und es entsteht **keine** Zustandsänderung. Bei
-`activate` ist das Feld verboten (`invalid_payload`).
+`refresh`, `finish` und `cancel` **müssen** die vom Client beobachtete
+`activationId` mitführen (AP-SRV-030 C2, F5). Eine fehlende oder leere ID wird
+als `invalid_payload` abgelehnt; eine ID, die nicht zur laufenden Activation
+passt, liefert `stale_activation` und erzeugt **keine** Zustandsänderung. Die
+drei Control-Aktionen sind **source-neutral** (F6): `source` ist kein
+fachliches Feld eines Controls und wird im v1-Übergang allenfalls als
+Legacyfeld toleriert und ignoriert - niemals als Berechtigung oder als Teil der
+Replay-Identität. Bei `activate` ist `activationId` verboten
+(`invalid_payload`); `activate` prüft als einzige Aktion die effektive
+Triggerquelle.
 
 ### Timer
 
@@ -280,10 +286,16 @@ getrimmt; er wird erst beim Sessionabbau freigegeben.
 - gleiche `commandId`, semantisch gleicher Payload (`action`, `source`,
   `activationId`): **exakt dasselbe Ack**, keine zweite Wirkung — keine zweite
   Transition, kein zweiter Timerreset, kein zweites Cancel/Finish, keine zweite
-  Activation und kein zweites Ledgerereignis;
+  Activation und kein zweites Ledgerereignis. Für `activate` zählt
+  `(action, source)`, für Control-Aktionen `(action, activationId)` als
+  Semantik; `source` eines Controls ist kein Replaykriterium (F6);
 - gleiche `commandId`, abweichender Payload: `command_id_conflict`, die
   laufende Activation bleibt unberührt;
-- ein syntaktisch abgelehntes Kommando belegt seine `commandId` **nicht**.
+- ein fachlich abgelehntes Kommando **mit verwendbarer `commandId` belegt**
+  seinen Replayeintrag (F3): ein späteres identisches Kommando erhält exakt
+  dieselbe Antwort, eine Wiederverwendung mit anderem Payload erhält
+  `command_id_conflict`. Nur Kommandos **ohne** verwendbare `commandId`
+  (fehlend oder ungültig) bleiben keyless und belegen keinen Cache.
 
 Der Cache liefert ausschließlich die ursprüngliche Antwort zurück; er ruft
 nichts erneut auf. Ein alter Replay kann dadurch nicht gegen eine neuere
@@ -291,16 +303,71 @@ Activation wirksam werden.
 
 ### Recovery und Audioverfügbarkeit
 
-- Läuft der Recoverytimeout in `closing_input` ab, wird das Gate bedingungslos
+Der Input-Close ist seit AP-SRV-030 C2 **zweiphasig**:
+
+1. **Phase A (fachliche Annahme)** - unter dem Vordergrundlock (bzw. bei
+   cancel-artigen Abschlüssen unter `_ledger_dispatch_lock` und dann
+   `self.lock`) wird der Controller nach `closing_input` bewegt und ein
+   unveränderlicher `CloseContext` mit Abschlussgrund, -ursache und
+   gegebenenfalls der kommandierenden `commandId` gebildet. Es entsteht ein
+   unveränderlicher `InputClosePlan`.
+2. **Phase B (physischer Input-Close)** - läuft **außerhalb** beider Locks:
+   Gate schließen, Recorder stoppen/flushen, Ledger-Input-Close registrieren,
+   und erst danach wird die noch aktuelle identische Activation
+   identitätsgebunden mit `input_closed()` auf `idle` gesetzt. Das
+   Lifecycle-Event folgt erst nach Lockfreigabe.
+
+F1/F5/F10:
+
+- Kein Abschluss räumt den Controller früher auf `idle`, als Gate und Recorder
+  tatsächlich defensiv geschlossen sind. Der Recoverytimeout konsumiert
+  lediglich seine Deadline, hält die Phase `closing_input` und übergibt die
+  physische Bereinigung derselben Orchestrierung.
+- Ein verspäteter `input_closed()`-Aufruf mit alter Activation-Identität wird
+  verworfen (`stale_activation`) und beendet **nie** eine neuere Activation.
+- Kann selbst der harte Recorder-Abbruch keinen sicheren Zustand herstellen,
+  geht die Session **fail-closed**: kein `idle`, keine neue Activation, Audio
+  gilt als nicht verfügbar, kein erfolgreicher Abschluss wird behauptet.
+
+- Läuft der Recoverytimeout in `closing_input` ordentlich ab, wird das Gate
   abgebrochen, der Recorder defensiv gestoppt, ein nicht mehr einreihbares
   Segment als `failed` mit Grund `closing_recovery_timeout` terminalisiert und
   die Activation im Ledger geschlossen. Bereits veröffentlichter Text wird
-  **niemals** zurückgenommen.
+  **niemals** zurückgenommen. Die `causedByCommandId`-Korrelation eines
+  Recoveryabschlusses ist `null`, auch wenn die ursprüngliche Finish-Identität
+  intern bis zum Abschluss erhalten bleibt (F2).
 - `audioAvailable=false` cancelt die offene Activation mit
   `closeCause = audio_unavailable` und beendet **nicht** die Session. Solange
   kein Audio verfügbar ist, wird `activate` mit `audio_unavailable` abgelehnt.
+  Die Availability-`commandId` bleibt reine Ack-/Replay-Identität und erscheint
+  **nicht** als `causedByCommandId` des Close-Events (F7).
 - Stream-Stop, `clear` und Sessionverlust verwerfen die offene Activation wie
   bisher; eine neue Session beginnt in `idle` ohne Fortsetzung.
+
+### Cancel-Publikationsbarriere
+
+Explizites `cancel` (und ein verbundenes `audioAvailable=false`) setzt bei der
+fachlichen Annahme eine Per-Activation-Cancelbarriere im Segmentledger, die mit
+jeder späteren sichtbaren Finalpublikation derselben Activation total
+geordnet wird:
+
+```text
+_ledger_dispatch_lock
+  → self.lock
+  → Controller-Entscheidung → closing_input
+  → SegmentLedger.mark_cancel_requested(...)
+  → Ack erzeugen und Replay speichern
+  → self.lock freigeben
+  → LedgerUpdate der Cancelbarriere sichtbar anwenden
+  → _ledger_dispatch_lock freigeben
+  → physischer Input-Close (Phase B)
+```
+
+Ein Final, das die Dispatchgrenze bereits hält, wird **vor** der
+Cancel-Akzeptanz sichtbar und bleibt bestehen; ein Cancel, das die Grenze
+zuerst gewinnt, blockt jede spätere Nutztextpublikation dieser Activation.
+Auch bereits berechneter, aber wegen eines Sequenzlochs noch unveröffentlichter
+`prepared_text` wird bei der Barriere neutralisiert und terminalisiert.
 
 ### Ownership
 
@@ -348,6 +415,37 @@ steht in Abschnitt 3a.
 `ActivationController` synchronisiert sich selbst über ein `RLock`. Das ist
 notwendig, weil er aus der WebSocket-Coroutine, aus Recorder-Callbackthreads
 und aus dem Timeoutthread erreicht wird.
+
+### Verbindliche Lockordnung (AP-SRV-030 C2)
+
+Seit C2 gilt eine eindeutige globale Lockordnung:
+
+```text
+_ledger_dispatch_lock
+  → self.lock
+  → (kurz) SegmentLedger._lock
+```
+
+- **L1:** Eine Operation, die beide Locks benötigt, erwirbt immer zuerst
+  `_ledger_dispatch_lock`. Der explizite Cancel-Accept-Pfad ist der wichtigste
+  Nutzer dieser Regel (siehe „Cancel-Publikationsbarriere").
+- **L2:** `self.lock` schützt Controller, Session-Lifecycle, Contextpointer und
+  Commandannahme; es darf niemals anschließend `_ledger_dispatch_lock`
+  erwerben.
+- **L3:** `SegmentLedger._lock` ist Blattlock; unter ihm werden keine
+  Session-, Manager-, Publikations- oder Recorderoperationen ausgeführt.
+- **L4:** Unter `_ledger_dispatch_lock` darf bestehender Publikationscode nach
+  der Ledgermutation kurzfristig `self.lock` lesen (Mutatio n → Observable
+  Output bleibt unter der Dispatchgrenze serialisiert).
+- **L5:** Recorderoperationen, die synchron Callbacks auslösen können
+  (`flush_buffered_audio`, `stop`, `abort`, äquivalente Closepfade), laufen
+  weder unter `self.lock` noch unter `_ledger_dispatch_lock`.
+- **L6:** Kein Helper darf die Reihenfolge intern wieder umdrehen
+  (`self.lock → _ledger_dispatch_lock` und
+  `SegmentLedger._lock → callback → self.lock` sind verboten).
+
+Der physische Input-Close (Phase B) läuft deshalb ausdrücklich außerhalb
+beider Locks.
 
 ---
 

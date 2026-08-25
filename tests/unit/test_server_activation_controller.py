@@ -51,6 +51,35 @@ class ServerActivationControllerTests(unittest.TestCase):
         self.ids = iter(f"activation-{index}" for index in range(1, 20))
         self.controller = build_controller(self.clock, self.ids)
 
+    # -- helpers for the source-neutral C2 signatures -----------------------
+
+    def _activation_id(self):
+        return self.controller.snapshot()["activationId"]
+
+    def _activation_sequence(self):
+        return self.controller.snapshot()["activationSequence"]
+
+    def _refresh(self, **kwargs):
+        return self.controller.refresh(
+            activation_id=self._activation_id(), **kwargs
+        )
+
+    def _finish(self, **kwargs):
+        return self.controller.finish(
+            activation_id=self._activation_id(), **kwargs
+        )
+
+    def _cancel(self, **kwargs):
+        return self.controller.cancel(
+            activation_id=self._activation_id(), **kwargs
+        )
+
+    def _close(self):
+        return self.controller.input_closed(
+            activation_id=self._activation_id(),
+            activation_sequence=self._activation_sequence(),
+        )
+
     def test_canonical_foreground_uses_exactly_five_phase_values(self):
         observed = {self.controller.snapshot()["phase"]}
         self.controller.activate("manual")
@@ -59,9 +88,9 @@ class ServerActivationControllerTests(unittest.TestCase):
         observed.add(self.controller.snapshot()["phase"])
         self.controller.recording_ended()
         observed.add(self.controller.snapshot()["phase"])
-        self.controller.finish("manual")
+        self._finish()
         observed.add(self.controller.snapshot()["phase"])
-        self.controller.input_closed()
+        self._close()
         observed.add(self.controller.snapshot()["phase"])
 
         self.assertEqual(
@@ -121,7 +150,7 @@ class ServerActivationControllerTests(unittest.TestCase):
                     self.controller.recording_ended(),
                 ),
             ),
-            (CLOSING_INPUT, lambda: self.controller.finish("manual")),
+            (CLOSING_INPUT, lambda: self._finish()),
         )
         for expected_phase, prepare in phase_setups:
             with self.subTest(phase=expected_phase):
@@ -191,9 +220,9 @@ class ServerActivationControllerTests(unittest.TestCase):
         for transition in (
             self.controller.recording_started,
             self.controller.recording_ended,
-            lambda: self.controller.refresh("manual"),
-            lambda: self.controller.finish("manual"),
-            self.controller.input_closed,
+            lambda: self._refresh(),
+            lambda: self._finish(),
+            self._close,
         ):
             changed = transition()
             self.assertTrue(changed.changed)
@@ -246,7 +275,7 @@ class ServerActivationControllerTests(unittest.TestCase):
     def test_finish_has_explicit_close_barrier_then_idle(self):
         opened = self.controller.activate("manual", {"language": "de"})
         self.controller.recording_started()
-        closing = self.controller.finish("manual")
+        closing = self._finish()
 
         self.assertTrue(closing.accepted)
         self.assertEqual(closing.snapshot["phase"], CLOSING_INPUT)
@@ -256,7 +285,7 @@ class ServerActivationControllerTests(unittest.TestCase):
         )
         self.assertEqual(closing.snapshot["closeReason"], "finished")
 
-        idle = self.controller.input_closed()
+        idle = self._close()
         self.assertTrue(idle.accepted)
         self.assertEqual(idle.snapshot["phase"], IDLE)
         self.assertIsNone(idle.snapshot["activationId"])
@@ -268,20 +297,20 @@ class ServerActivationControllerTests(unittest.TestCase):
 
     def test_finish_without_segment_still_uses_the_close_barrier(self):
         opened = self.controller.activate("manual")
-        closing = self.controller.finish("manual")
+        closing = self._finish()
         self.assertEqual(closing.snapshot["phase"], CLOSING_INPUT)
         self.assertEqual(closing.snapshot["activationId"], opened.snapshot["activationId"])
-        idle = self.controller.input_closed()
+        idle = self._close()
         self.assertEqual(idle.snapshot["phase"], IDLE)
         self.assertEqual(idle.snapshot["closedSegments"], 0)
         self.assertEqual(idle.snapshot["closeReason"], "finished")
 
     def test_cancel_uses_the_same_close_barrier_and_preserves_its_reason(self):
         opened = self.controller.activate("manual")
-        closing = self.controller.cancel("manual")
+        closing = self._cancel()
         self.assertEqual(closing.snapshot["phase"], CLOSING_INPUT)
         self.assertEqual(closing.snapshot["activationId"], opened.snapshot["activationId"])
-        idle = self.controller.input_closed()
+        idle = self._close()
         self.assertEqual(idle.snapshot["phase"], IDLE)
         self.assertEqual(idle.snapshot["closeReason"], "cancelled")
 
@@ -297,15 +326,17 @@ class ServerActivationControllerTests(unittest.TestCase):
             with self.subTest(first_action=first_action):
                 self.controller.reset()
                 opened = self.controller.activate("manual")
-                first = getattr(self.controller, first_action)("manual")
+                first = getattr(self.controller, first_action)(
+                    activation_id=opened.snapshot["activationId"]
+                )
                 before = self.controller.snapshot()
 
                 self.assertTrue(first.accepted)
                 self.assertEqual(first.snapshot["phase"], CLOSING_INPUT)
                 for repeated_action in ("finish", "cancel"):
-                    repeated = getattr(
-                        self.controller, repeated_action
-                    )("manual")
+                    repeated = getattr(self.controller, repeated_action)(
+                        activation_id=opened.snapshot["activationId"]
+                    )
                     self.assertTrue(repeated.accepted)
                     self.assertEqual(repeated.reason, "no_change")
                     self.assertFalse(repeated.changed)
@@ -327,11 +358,11 @@ class ServerActivationControllerTests(unittest.TestCase):
 
     def test_new_activation_after_close_gets_new_id_and_sequence(self):
         first = self.controller.activate("manual")
-        self.controller.cancel("manual")
+        self._cancel()
         self.assertEqual(
             self.controller.activate("wake_word").reason, "activation_locked"
         )
-        self.controller.input_closed()
+        self._close()
         second = self.controller.activate("wake_word")
 
         self.assertEqual(second.snapshot["activationSequence"], 2)
@@ -381,7 +412,7 @@ class ServerActivationControllerTests(unittest.TestCase):
         stale_token = followup.snapshot["timerToken"]
 
         self.clock.monotonic_now = 1001.0
-        refreshed = self.controller.refresh("manual")
+        refreshed = self._refresh()
         fresh_token = refreshed.snapshot["timerToken"]
         self.assertEqual(stale_token.activation_id, fresh_token.activation_id)
         self.assertEqual(stale_token.phase, fresh_token.phase)
@@ -453,16 +484,16 @@ class ServerActivationControllerTests(unittest.TestCase):
         """PHASE-03: the initial-speech window is not refreshable."""
         opened = self.controller.activate("manual")
         before = self.controller.snapshot()
-        for source in ("manual", "wake_word"):
-            with self.subTest(source=source):
-                rejected = self.controller.refresh(source)
-                self.assertFalse(rejected.accepted)
-                self.assertEqual(rejected.reason, "invalid_phase")
-                self.assertFalse(rejected.changed)
-                self.assertEqual(rejected.snapshot, before)
-                self.assertEqual(
-                    rejected.snapshot["deadline"], opened.snapshot["deadline"]
-                )
+        rejected = self.controller.refresh(
+            activation_id=opened.snapshot["activationId"]
+        )
+        self.assertFalse(rejected.accepted)
+        self.assertEqual(rejected.reason, "invalid_phase")
+        self.assertFalse(rejected.changed)
+        self.assertEqual(rejected.snapshot, before)
+        self.assertEqual(
+            rejected.snapshot["deadline"], opened.snapshot["deadline"]
+        )
 
     def test_followup_refresh_restarts_the_window_and_never_accumulates(self):
         """TIME-02/TIME-03: three refreshes are three restarts, not three credits."""
@@ -473,9 +504,9 @@ class ServerActivationControllerTests(unittest.TestCase):
         self.assertEqual(followup.snapshot["deadlineKind"], FOLLOWUP_DEADLINE)
 
         self.clock.monotonic_now = 1002.0
-        first = self.controller.refresh("manual")
-        second = self.controller.refresh("manual")
-        third = self.controller.refresh("manual")
+        first = self._refresh()
+        second = self._refresh()
+        third = self._refresh()
 
         for result in (first, second, third):
             self.assertTrue(result.accepted)
@@ -485,7 +516,7 @@ class ServerActivationControllerTests(unittest.TestCase):
             self.assertEqual(result.snapshot["deadline"], 1005.0)
 
         self.clock.monotonic_now = 1004.0
-        fourth = self.controller.refresh("manual")
+        fourth = self._refresh()
         self.assertEqual(fourth.snapshot["deadline"], 1007.0)
 
     def test_every_effective_refresh_raises_the_timer_revision(self):
@@ -496,13 +527,14 @@ class ServerActivationControllerTests(unittest.TestCase):
         revisions = [followup.snapshot["timerRevision"]]
         for offset in (1.0, 2.0, 3.0):
             self.clock.monotonic_now = 1000.0 + offset
-            refreshed = self.controller.refresh("manual")
+            refreshed = self._refresh()
             self.assertGreater(
                 refreshed.snapshot["timerRevision"], revisions[-1]
             )
             revisions.append(refreshed.snapshot["timerRevision"])
 
-    def test_each_source_can_refresh_the_same_followup_window(self):
+    def test_refresh_does_not_depend_on_the_trigger_source(self):
+        """F6: a control works for either latched source without a source arg."""
         for source in ("manual", "wake_word"):
             with self.subTest(source=source):
                 self.controller.reset()
@@ -511,7 +543,9 @@ class ServerActivationControllerTests(unittest.TestCase):
                 self.controller.recording_started()
                 self.controller.recording_ended()
                 self.clock.monotonic_now = 1001.0
-                refreshed = self.controller.refresh(source)
+                refreshed = self.controller.refresh(
+                    activation_id=opened.snapshot["activationId"]
+                )
                 self.assertTrue(refreshed.accepted)
                 self.assertEqual(refreshed.reason, "refreshed")
                 self.assertEqual(
@@ -522,11 +556,11 @@ class ServerActivationControllerTests(unittest.TestCase):
                 self.assertEqual(refreshed.snapshot["sources"], [source])
                 self.assertEqual(refreshed.snapshot["deadline"], 1004.0)
 
-    def test_a_second_source_refreshes_without_changing_the_latched_source(self):
+    def test_control_does_not_change_the_latched_source(self):
         self.controller.activate("manual")
         self.controller.recording_started()
         self.controller.recording_ended()
-        refreshed = self.controller.refresh("wake_word")
+        refreshed = self._refresh()
         self.assertTrue(refreshed.accepted)
         self.assertEqual(refreshed.reason, "refreshed")
         self.assertEqual(refreshed.snapshot["primarySource"], "manual")
@@ -534,9 +568,11 @@ class ServerActivationControllerTests(unittest.TestCase):
 
     def test_refresh_in_closing_input_has_no_effect(self):
         self.controller.activate("manual")
-        self.controller.finish("manual")
+        self._finish()
         before = self.controller.snapshot()
-        rejected = self.controller.refresh("manual")
+        rejected = self.controller.refresh(
+            activation_id=self._activation_id()
+        )
         self.assertFalse(rejected.accepted)
         self.assertEqual(rejected.reason, "closing_input")
         self.assertFalse(rejected.changed)
@@ -560,7 +596,7 @@ class ServerActivationControllerTests(unittest.TestCase):
         started = self.controller.recording_started()
 
         self.clock.monotonic_now = 1060.0
-        early = self.controller.refresh("manual")
+        early = self._refresh()
         self.assertTrue(early.accepted)
         self.assertEqual(early.reason, "refreshed")
         self.assertFalse(
@@ -576,7 +612,7 @@ class ServerActivationControllerTests(unittest.TestCase):
         self.controller.recording_started()
 
         self.clock.monotonic_now = 1500.0
-        late = self.controller.refresh("manual")
+        late = self._refresh()
         self.assertTrue(late.changed)
         self.assertEqual(late.snapshot["deadline"], 1680.0)
         self.assertEqual(late.snapshot["warningDeadline"], 1650.0)
@@ -586,7 +622,7 @@ class ServerActivationControllerTests(unittest.TestCase):
         self.controller.recording_started()
         self.clock.monotonic_now = 1500.0
         for _ in range(3):
-            refreshed = self.controller.refresh("manual")
+            refreshed = self._refresh()
             self.assertEqual(refreshed.snapshot["deadline"], 1680.0)
 
     def test_vad_activity_does_not_reset_the_watchdog(self):
@@ -653,37 +689,51 @@ class ServerActivationControllerTests(unittest.TestCase):
 
     def test_closing_input_arms_a_recovery_deadline(self):
         self.controller.activate("manual")
-        closing = self.controller.finish("manual")
+        closing = self._finish()
         self.assertEqual(
             closing.snapshot["deadlineKind"], CLOSING_RECOVERY_DEADLINE
         )
         self.assertEqual(closing.snapshot["deadline"], 1005.0)
 
-    def test_closing_recovery_reaches_idle_and_keeps_the_close_reason(self):
-        """PHASE-05: ``closing_input`` must never hang."""
-        self.controller.activate("manual")
-        closing = self.controller.finish("manual")
+    def test_recovery_due_stays_in_closing_input(self):
+        """F1: recovery must not claim idle - only input_closed() may."""
+        opened = self.controller.activate("manual")
+        activation_id = opened.snapshot["activationId"]
+        closing = self._finish(command_id="cmd-r")
         token = closing.snapshot["timerToken"]
+        self.assertEqual(closing.snapshot["phase"], CLOSING_INPUT)
 
         self.clock.monotonic_now = 1005.0
         recovered = self.controller.tick(token)
         self.assertTrue(recovered.accepted)
-        self.assertEqual(recovered.reason, "closing_recovered")
-        self.assertEqual(recovered.snapshot["phase"], IDLE)
-        self.assertTrue(recovered.snapshot["recovered"])
-        self.assertEqual(recovered.snapshot["closeReason"], "finished")
-        self.assertEqual(
-            recovered.snapshot["closeCause"], "closing_recovery_timeout"
-        )
+        self.assertEqual(recovered.reason, "closing_recovery_due")
+        self.assertEqual(recovered.snapshot["phase"], CLOSING_INPUT)
+        self.assertTrue(recovered.snapshot["recoveryRequested"])
+        # The deadline is consumed; the phase is *not* idle (F1).
         self.assertIsNone(recovered.snapshot["deadline"])
-        # The foreground is free again.
-        self.assertTrue(self.controller.activate("manual").accepted)
+        # The close identity survives the recovery deadline (F2).
+        self.assertEqual(
+            recovered.snapshot["closeRequestedByCommandId"], "cmd-r"
+        )
+        # The same close can still complete through identity-bound input_closed.
+        completed = self.controller.input_closed(
+            activation_id=activation_id,
+            activation_sequence=opened.snapshot["activationSequence"],
+        )
+        self.assertTrue(completed.accepted)
+        self.assertEqual(completed.snapshot["phase"], IDLE)
+        self.assertFalse(completed.snapshot["recoveryRequested"])
 
     def test_a_recovery_timer_cannot_touch_a_newer_activation(self):
-        self.controller.activate("manual")
-        closing = self.controller.finish("manual")
+        first = self.controller.activate("manual")
+        activation_id = first.snapshot["activationId"]
+        activation_sequence = first.snapshot["activationSequence"]
+        closing = self.controller.finish(activation_id=activation_id)
         stale_token = closing.snapshot["timerToken"]
-        self.controller.input_closed()
+        self.controller.input_closed(
+            activation_id=activation_id,
+            activation_sequence=activation_sequence,
+        )
         second = self.controller.activate("wake_word")
 
         self.clock.monotonic_now = 9000.0
@@ -704,8 +754,11 @@ class ServerActivationControllerTests(unittest.TestCase):
         """CMD-02/CMD-07: an old id never acts on the newer activation."""
         first = self.controller.activate("manual")
         stale_id = first.snapshot["activationId"]
-        self.controller.finish("manual")
-        self.controller.input_closed()
+        self.controller.finish(activation_id=stale_id)
+        self.controller.input_closed(
+            activation_id=stale_id,
+            activation_sequence=first.snapshot["activationSequence"],
+        )
         second = self.controller.activate("wake_word")
         self.controller.recording_started()
         self.controller.recording_ended()
@@ -714,7 +767,7 @@ class ServerActivationControllerTests(unittest.TestCase):
         for action in ("refresh", "finish", "cancel"):
             with self.subTest(action=action):
                 result = getattr(self.controller, action)(
-                    "manual", activation_id=stale_id
+                    activation_id=stale_id
                 )
                 self.assertFalse(result.accepted)
                 self.assertEqual(result.reason, "stale_activation")
@@ -731,11 +784,9 @@ class ServerActivationControllerTests(unittest.TestCase):
         self.controller.recording_started()
         self.controller.recording_ended()
 
-        refreshed = self.controller.refresh(
-            "manual", activation_id=activation_id
-        )
+        refreshed = self.controller.refresh(activation_id=activation_id)
         self.assertTrue(refreshed.accepted)
-        finished = self.controller.finish("manual", activation_id=activation_id)
+        finished = self.controller.finish(activation_id=activation_id)
         self.assertTrue(finished.accepted)
         self.assertEqual(finished.reason, "finished")
 
@@ -744,6 +795,101 @@ class ServerActivationControllerTests(unittest.TestCase):
         self.assertFalse(rejected.accepted)
         self.assertEqual(rejected.reason, "invalid_payload")
         self.assertEqual(self.controller.snapshot()["phase"], IDLE)
+
+    # -- AP-SRV-030 C2: identity-bound input closed --------------------------
+
+    def test_input_closed_requires_the_closing_activation_identity(self):
+        opened = self.controller.activate("manual")
+        activation_id = opened.snapshot["activationId"]
+        activation_sequence = opened.snapshot["activationSequence"]
+        self.controller.finish(activation_id=activation_id)
+
+        # A matching identity completes the close.
+        completed = self.controller.input_closed(
+            activation_id=activation_id,
+            activation_sequence=activation_sequence,
+        )
+        self.assertTrue(completed.accepted)
+
+    def test_stale_input_closed_cannot_clear_a_newer_activation(self):
+        """A stale close follow-up must never end the newer activation."""
+        first = self.controller.activate("manual")
+        first_id = first.snapshot["activationId"]
+        first_seq = first.snapshot["activationSequence"]
+        self.controller.finish(activation_id=first_id)
+        self.controller.input_closed(
+            activation_id=first_id, activation_sequence=first_seq
+        )
+        second = self.controller.activate("wake_word")
+        second_id = second.snapshot["activationId"]
+
+        # The old close identity is gone; its follow-up cannot open B at all.
+        stale = self.controller.input_closed(
+            activation_id=first_id, activation_sequence=first_seq
+        )
+        self.assertFalse(stale.accepted)
+        self.assertEqual(
+            self.controller.snapshot()["activationId"], second_id
+        )
+        self.assertEqual(
+            self.controller.snapshot()["phase"], WAITING_FIRST_SPEECH
+        )
+
+        # While B is mid-close, a mismatched close identity is also inert.
+        self.controller.finish(activation_id=second_id)
+        before = self.controller.snapshot()
+        mismatched = self.controller.input_closed(
+            activation_id=second_id, activation_sequence=first_seq
+        )
+        self.assertFalse(mismatched.accepted)
+        self.assertEqual(mismatched.reason, "stale_activation")
+        self.assertEqual(mismatched.snapshot, before)
+        self.assertEqual(
+            self.controller.snapshot()["activationId"], second_id
+        )
+        self.assertEqual(
+            self.controller.snapshot()["phase"], CLOSING_INPUT
+        )
+
+    def test_close_context_survives_until_input_closed(self):
+        opened = self.controller.activate("manual")
+        activation_id = opened.snapshot["activationId"]
+        closing = self.controller.finish(
+            activation_id=activation_id, command_id="cmd-7"
+        )
+        self.assertEqual(closing.snapshot["phase"], CLOSING_INPUT)
+        self.assertEqual(closing.snapshot["closeReason"], "finished")
+        self.assertEqual(
+            closing.snapshot["closeRequestedByCommandId"], "cmd-7"
+        )
+        self.assertEqual(
+            closing.snapshot["closeRequestedByAction"], "finish"
+        )
+
+        # The internal identity survives an idempotent repeated close.
+        repeated = self.controller.cancel(activation_id=activation_id)
+        self.assertEqual(repeated.reason, "no_change")
+        self.assertEqual(
+            repeated.snapshot["closeRequestedByCommandId"], "cmd-7"
+        )
+        self.assertEqual(
+            repeated.snapshot["closeRequestedByAction"], "finish"
+        )
+
+        # And it is transported through the identity-bound close completion.
+        completed = self.controller.input_closed(
+            activation_id=activation_id,
+            activation_sequence=opened.snapshot["activationSequence"],
+        )
+        self.assertTrue(completed.accepted)
+        self.assertEqual(completed.snapshot["closeReason"], "finished")
+        self.assertEqual(
+            completed.snapshot["closeRequestedByCommandId"], "cmd-7"
+        )
+        # The live controller no longer holds the context.
+        self.assertIsNone(
+            self.controller.snapshot().get("closeRequestedByCommandId")
+        )
 
     # -- AP-SRV-030: generic audio availability ------------------------------
 
@@ -772,6 +918,11 @@ class ServerActivationControllerTests(unittest.TestCase):
                 self.assertEqual(
                     lost.snapshot["closeCause"], "audio_unavailable"
                 )
+                # F7: an audio loss is never command correlated.
+                self.assertIsNone(
+                    lost.snapshot.get("closeRequestedByCommandId")
+                )
+                self.assertIsNone(lost.snapshot.get("closeRequestedByAction"))
 
     def test_audio_loss_is_idempotent_and_needs_an_open_activation(self):
         self.assertEqual(
@@ -811,24 +962,66 @@ class ServerActivationControllerTests(unittest.TestCase):
             locked.snapshot["activationId"], opened.snapshot["activationId"]
         )
 
-    def test_unknown_source_is_rejected_by_every_source_command(self):
-        self.controller.activate("manual")
+    def test_control_is_independent_of_trigger_source_enablement(self):
+        """F6: controls must work for a wake activation even with manual off."""
+        controller = ActivationController(
+            manual_trigger_enabled=False,
+            wake_word_trigger_enabled=True,
+            clock=self.clock,
+        )
+        opened = controller.activate("wake_word")
+        activation_id = opened.snapshot["activationId"]
+        controller.recording_started()
+        controller.recording_ended()
+
+        refreshed = controller.refresh(activation_id=activation_id)
+        self.assertTrue(refreshed.accepted)
+        self.assertEqual(refreshed.reason, "refreshed")
+        self.assertEqual(refreshed.snapshot["primarySource"], "wake_word")
+
+        finished = controller.finish(activation_id=activation_id)
+        self.assertTrue(finished.accepted)
+        self.assertEqual(finished.reason, "finished")
+
+    def test_control_methods_require_matching_activation_identity(self):
+        opened = self.controller.activate("manual")
+        activation_id = opened.snapshot["activationId"]
+        self.controller.recording_started()
+        self.controller.recording_ended()
         before = self.controller.snapshot()
-        for operation in ("refresh", "finish", "cancel"):
-            with self.subTest(operation=operation):
-                result = getattr(self.controller, operation)("telepathy")
-                self.assertFalse(result.accepted)
-                self.assertEqual(result.reason, "trigger_disabled")
-                self.assertEqual(result.snapshot, before)
+
+        for action in ("refresh", "finish", "cancel"):
+            with self.subTest(action=action):
+                stale = getattr(self.controller, action)(
+                    activation_id="someone-else"
+                )
+                self.assertFalse(stale.accepted)
+                self.assertEqual(stale.reason, "stale_activation")
+                self.assertEqual(stale.snapshot, before)
+                missing = getattr(self.controller, action)(activation_id="")
+                self.assertFalse(missing.accepted)
+                self.assertEqual(missing.reason, "invalid_payload")
+
+        self.assertTrue(
+            self.controller.refresh(activation_id=activation_id).accepted
+        )
+        self.assertTrue(
+            self.controller.finish(activation_id=activation_id).accepted
+        )
 
     def test_invalid_transitions_are_refused(self):
         for call, reason in (
-            (lambda: self.controller.refresh("manual"), "not_active"),
+            (lambda: self.controller.refresh(activation_id="x"), "not_active"),
             (self.controller.recording_started, "not_active"),
             (self.controller.recording_ended, "not_active"),
-            (lambda: self.controller.finish("manual"), "not_active"),
-            (lambda: self.controller.cancel("manual"), "not_active"),
-            (self.controller.input_closed, "not_closing_input"),
+            (lambda: self.controller.finish(activation_id="x"), "not_active"),
+            (lambda: self.controller.cancel(activation_id="x"), "not_active"),
+            (
+                lambda: self.controller.input_closed(
+                    activation_id="x", activation_sequence=1
+                ),
+                "not_closing_input",
+            ),
         ):
             result = call()
             self.assertFalse(result.accepted)
@@ -867,8 +1060,12 @@ class ServerActivationControllerTests(unittest.TestCase):
                 )
                 opened = controller.activate("manual")
                 for transition in transitions:
-                    method = getattr(controller, transition)
-                    method("manual") if transition == "finish" else method()
+                    if transition == "finish":
+                        controller.finish(
+                            activation_id=opened.snapshot["activationId"]
+                        )
+                    else:
+                        getattr(controller, transition)()
                 self.assertEqual(controller.snapshot()["phase"], expected_phase)
 
                 reset = controller.reset()
@@ -992,8 +1189,13 @@ class ConcurrentTriggerTests(unittest.TestCase):
                 controller.activate("manual")
                 controller.recording_started()
                 controller.recording_ended()
-                controller.finish("manual")
-                controller.input_closed()
+                activation_id = controller.snapshot()["activationId"]
+                activation_sequence = controller.snapshot()["activationSequence"]
+                controller.finish(activation_id=activation_id)
+                controller.input_closed(
+                    activation_id=activation_id,
+                    activation_sequence=activation_sequence,
+                )
                 controller.activate("wake_word")
             finally:
                 stop.set()
@@ -1019,11 +1221,18 @@ class ConcurrentTriggerTests(unittest.TestCase):
             release_close = threading.Event()
 
             def close_input():
-                closing = controller.finish("manual")
+                closing = controller.finish(
+                    activation_id=controller.snapshot()["activationId"]
+                )
                 self.assertEqual(closing.snapshot["phase"], CLOSING_INPUT)
                 closing_ready.set()
                 release_close.wait(timeout=10)
-                controller.input_closed()
+                controller.input_closed(
+                    activation_id=controller.snapshot()["activationId"],
+                    activation_sequence=controller.snapshot()[
+                        "activationSequence"
+                    ],
+                )
 
             thread = threading.Thread(target=close_input)
             thread.start()

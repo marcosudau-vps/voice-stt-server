@@ -233,10 +233,13 @@ AP-SRV-070; es trägt seit AP-SRV-030 die nicht kumulative Refresh-Semantik.
 `source` ist `manual` oder `wake_word`. `commandId` ist ein nicht leerer String
 und wird vom Client erzeugt.
 
-Bei `refresh`, `finish` und `cancel` darf zusätzlich die vom Client beobachtete
-`activationId` mitgesendet werden. Der Server prüft sie gegen die laufende
-Activation; eine alte ID wird `stale_activation` und ändert nichts. Bei
-`activate` ist das Feld verboten.
+Bei `refresh`, `finish` und `cancel` ist die vom Client beobachtete
+`activationId` **Pflicht** (AP-SRV-030 C2, F5). Eine fehlende oder leere ID wird
+als `invalid_payload` abgelehnt; eine alte ID wird `stale_activation` und ändert
+nichts. Bei `activate` ist das Feld verboten. Die Control-Aktionen sind
+**source-neutral** (F6): für sie wird kein `source` erwartet. Ein im
+v1-Übergang noch mitgesendetes `source` wird als Legacyfeld toleriert und
+ignoriert — es ist weder eine Berechtigung noch Teil der Replay-Identität.
 
 Jeder Befehl erhält **genau eine** Antwort — auch jede Ablehnung:
 
@@ -290,12 +293,17 @@ Läuft bereits eine Activation, trägt auch eine Ablehnung deren `activationId`.
 
 Der Replaycache gilt für die **gesamte Session**.
 
-- gleiche `commandId`, semantisch gleicher Payload (`action`, `source`,
-  `activationId`): **exakt dasselbe Ack**, keine zweite Wirkung — kein neuer
-  Timer, kein neues Event, kein zweites Segment, kein zweites Cancel/Finish;
+- gleiche `commandId`, semantisch gleicher Payload: **exakt dasselbe Ack**,
+  keine zweite Wirkung — kein neuer Timer, kein neues Event, kein zweites
+  Segment, kein zweites Cancel/Finish. Für `activate` zählt
+  `(action, source)` als Semantik, für Control-Aktionen `(action,
+  activationId)`; ein `source`-Wechsel eines Controls ist kein Konflikt (F6);
 - gleiche `commandId`, anderer Payload: `command_id_conflict`, die laufende
   Activation bleibt unberührt;
-- ein syntaktisch abgelehntes Kommando belegt seine `commandId` nicht.
+- ein fachlich abgelehntes Kommando **mit verwendbarer `commandId` belegt**
+  seinen Replayeintrag (F3): ein identisches Kommando erhält dieselbe Antwort,
+  eine andere Payload-Wiederverwendung erhält `command_id_conflict`. Nur
+  Kommandos ohne verwendbare `commandId` bleiben keyless.
 
 ### Audioverfügbarkeit
 

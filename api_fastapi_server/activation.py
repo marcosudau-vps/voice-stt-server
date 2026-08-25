@@ -37,9 +37,21 @@ Deadline kind           Rule
                         A warning becomes due ``segment_watchdog_warning``
                         before the deadline. VAD does not reset it.
 ``closing_recovery``    ``now + closing_recovery_timeout`` when
-                        ``closing_input`` is entered, so the foreground can
-                        never hang there.
+                        ``closing_input`` is entered, so a stuck input close
+                        can never hang the foreground.
 ======================  ====================================================
+
+Close semantics (AP-SRV-030 C2)
+-------------------------------
+
+Entering ``closing_input`` creates exactly one immutable :class:`CloseContext`
+that keeps the close identity alive until the input close has really
+completed. The controller itself never claims ``idle`` before gate and
+recorder have been cleaned up (F1): ``_recover_closing_locked`` consumes the
+recovery deadline but keeps the phase at ``closing_input``, and only the
+identity-bound :meth:`input_closed` completes the transition to ``idle``.
+Control commands (``refresh|finish|cancel``) are source-neutral (F6): only
+``activate`` is tied to a trigger source.
 """
 
 from copy import deepcopy
@@ -139,6 +151,23 @@ class ActivationDecision:
     changed: bool = False
 
 
+@dataclass(frozen=True)
+class CloseContext:
+    """Immutable close identity held for the whole ``closing_input``.
+
+    The context is created when the close barrier is entered and kept until
+    ``input_closed()`` really ends the activation (or a reset discards it).
+    ``requested_by_action``/``requested_by_command_id`` stay ``None`` for
+    timer, watchdog, device and recovery closes, so the server-side wire
+    correlation can be derived from the *actual* completion cause (F2/F7).
+    """
+
+    reason: str
+    cause: str
+    requested_by_command_id: str | None = None
+    requested_by_action: str | None = None
+
+
 class ActivationController:
     """Thread-safe authority for one session's foreground activation."""
 
@@ -202,8 +231,8 @@ class ActivationController:
         self._warning_deadline = None
         self._warning_fired = False
         self._segment_count = 0
-        self._close_reason = None
-        self._close_cause = None
+        self._close_context = None
+        self._recovery_requested = False
 
     @staticmethod
     def _positive(name, value):
@@ -283,7 +312,7 @@ class ActivationController:
 
     def _snapshot_locked(self):
         sources = [self._primary_source] if self._primary_source else []
-        return {
+        snapshot = {
             "activationId": self._activation_id,
             "activationSequence": self._activation_sequence,
             # Gate generation is retained until the v2 wire migration. It is
@@ -308,6 +337,16 @@ class ActivationController:
             "active": self._phase != IDLE,
             "timerToken": self._timer_token_locked(),
         }
+        context = self._close_context
+        if context is not None:
+            snapshot["closeReason"] = context.reason
+            snapshot["closeCause"] = context.cause
+            snapshot["closeRequestedByCommandId"] = (
+                context.requested_by_command_id
+            )
+            snapshot["closeRequestedByAction"] = context.requested_by_action
+        snapshot["recoveryRequested"] = bool(self._recovery_requested)
+        return snapshot
 
     def snapshot(self):
         with self._lock:
@@ -322,10 +361,11 @@ class ActivationController:
     def _activation_mismatch_locked(self, activation_id):
         """``stale_activation`` guard for the observed activation id.
 
-        ``None`` means "the caller observed no id" and stays allowed, so that
-        server-internal transitions and the not-yet-migrated v1 wire keep
-        working. A *wrong* id is always refused, which is what keeps a command
-        aimed at activation *A* from acting on the newer activation *B*.
+        ``None`` means "the caller observed no id" and stays allowed for the
+        server-internal transitions that are not command driven and for the
+        not-yet-migrated v1 transport. A *wrong* id is always refused, which
+        is what keeps a command aimed at activation *A* from acting on the
+        newer activation *B*.
         """
         if activation_id is None:
             return False
@@ -358,8 +398,8 @@ class ActivationController:
             self._effective_settings = _freeze(effective_settings or {})
             self._phase = WAITING_FIRST_SPEECH
             self._segment_count = 0
-            self._close_reason = None
-            self._close_cause = None
+            self._close_context = None
+            self._recovery_requested = False
             self._set_timer_locked(
                 INITIAL_SPEECH_DEADLINE,
                 self._clock() + self.initial_speech_timeout,
@@ -369,24 +409,24 @@ class ActivationController:
                 True, "activated", self._snapshot_locked(), True
             )
 
-    def refresh(self, source, *, activation_id=None):
-        """The contract ``refresh``: never cumulative, never a time credit.
+    def refresh(self, *, activation_id, command_id=None):
+        """The contract ``refresh``: source-neutral, never cumulative.
 
         * ``waiting_first_speech`` - ``invalid_phase``; the initial-speech
           window is not refreshable.
         * ``segment_active`` - watchdog refresh to
-          ``max(current_deadline, now + watchdog_refresh)``, so an early
-          refresh cannot shorten a longer remaining deadline.
+          ``max(current_deadline, now + watchdog_refresh)``.
         * ``followup_wait`` - the deadline becomes ``now + followup_timeout``.
-          Three refreshes mean three times "start again from now", not three
-          times extra time.
         * ``closing_input`` - ``closing_input``, no effect.
         * ``idle`` - ``not_active``.
+
+        The observed ``activationId`` is mandatory; a missing or wrong id
+        always refuses the command (F5).
         """
         with self._lock:
-            if not self._source_enabled(source):
+            if not activation_id:
                 return ActivationDecision(
-                    False, "trigger_disabled", self._snapshot_locked()
+                    False, "invalid_payload", self._snapshot_locked()
                 )
             if self._phase == IDLE:
                 return ActivationDecision(
@@ -473,21 +513,39 @@ class ActivationController:
                 True, "followup_started", self._snapshot_locked(), True
             )
 
-    def finish(self, source, *, activation_id=None):
+    def finish(self, *, activation_id, command_id=None):
+        """Contract ``finish``: source-neutral, carries the command identity."""
         return self._begin_input_close(
-            source, "finished", "finish", activation_id=activation_id
+            "finished",
+            "finish",
+            activation_id=activation_id,
+            command_id=command_id,
+            requested_by_action="finish",
         )
 
-    def cancel(self, source, *, activation_id=None, cause="cancel"):
+    def cancel(self, *, activation_id, command_id=None, cause="cancel"):
+        """Contract ``cancel``: source-neutral, carries the command identity."""
         return self._begin_input_close(
-            source, "cancelled", cause, activation_id=activation_id
+            "cancelled",
+            cause,
+            activation_id=activation_id,
+            command_id=command_id,
+            requested_by_action="cancel",
         )
 
-    def _begin_input_close(self, source, reason, cause, *, activation_id=None):
+    def _begin_input_close(
+        self,
+        reason,
+        cause,
+        *,
+        activation_id,
+        command_id=None,
+        requested_by_action=None,
+    ):
         with self._lock:
-            if not self._source_enabled(source):
+            if not activation_id:
                 return ActivationDecision(
-                    False, "trigger_disabled", self._snapshot_locked()
+                    False, "invalid_payload", self._snapshot_locked()
                 )
             if self._phase == IDLE:
                 return ActivationDecision(
@@ -505,34 +563,46 @@ class ActivationController:
                 return ActivationDecision(
                     True, "no_change", self._closing_snapshot_locked(), False
                 )
-            return self._enter_close_barrier_locked(reason, cause)
+            return self._enter_close_barrier_locked(
+                reason,
+                cause,
+                requested_by_command_id=command_id,
+                requested_by_action=requested_by_action,
+            )
 
     def _closing_snapshot_locked(self):
-        snapshot = self._snapshot_locked()
-        if self._close_reason:
-            snapshot["closeReason"] = self._close_reason
-            snapshot["closeCause"] = self._close_cause or self._close_reason
-        return snapshot
+        return self._snapshot_locked()
 
-    def _enter_close_barrier_locked(self, reason, cause):
+    def _enter_close_barrier_locked(
+        self,
+        reason,
+        cause,
+        *,
+        requested_by_command_id=None,
+        requested_by_action=None,
+    ):
         self._phase = CLOSING_INPUT
-        self._close_reason = reason
-        self._close_cause = cause
+        self._close_context = CloseContext(
+            reason=reason,
+            cause=cause,
+            requested_by_command_id=requested_by_command_id,
+            requested_by_action=requested_by_action,
+        )
+        self._recovery_requested = False
         self._set_timer_locked(
             CLOSING_RECOVERY_DEADLINE,
             self._clock() + self.closing_recovery_timeout,
         )
         self._version += 1
         snapshot = self._snapshot_locked()
-        snapshot["closeReason"] = reason
-        snapshot["closeCause"] = cause
         return ActivationDecision(True, reason, snapshot, True)
 
     def audio_unavailable(self):
         """A generic loss of the input device cancels the open activation.
 
         The session itself and the background ledger survive; only the open
-        foreground window is cancelled (DEVICE-03).
+        foreground window is cancelled (DEVICE-03). The close is deliberately
+        not command correlated (F7).
         """
         with self._lock:
             if self._phase == IDLE:
@@ -547,17 +617,26 @@ class ActivationController:
                 "cancelled", "audio_unavailable"
             )
 
-    def input_closed(self):
-        """Completes the close barrier after gate/recorder input is closed."""
+    def input_closed(self, *, activation_id, activation_sequence):
+        """Completes the close barrier after gate/recorder input is closed.
+
+        Identity-bound: a stale close/recovery follow-up can never end the
+        activation that now runs instead (F1/CMD identity). On mismatch no
+        state is touched.
+        """
         with self._lock:
             if self._phase != CLOSING_INPUT:
                 return ActivationDecision(
                     False, "not_closing_input", self._snapshot_locked()
                 )
-            snapshot = self._clear_locked(
-                close_reason=self._close_reason,
-                close_cause=self._close_cause,
-            )
+            if (
+                str(activation_id) != str(self._activation_id)
+                or int(activation_sequence) != self._activation_sequence
+            ):
+                return ActivationDecision(
+                    False, "stale_activation", self._snapshot_locked()
+                )
+            snapshot = self._clear_locked(close_context=self._close_context)
             return ActivationDecision(True, "input_closed", snapshot, True)
 
     # -- timer callbacks -----------------------------------------------------
@@ -617,13 +696,23 @@ class ActivationController:
             return self._enter_close_barrier_locked("timed_out", cause)
 
     def _recover_closing_locked(self):
-        """``closing_input`` must never hang, not even on a gate/recorder fault."""
-        snapshot = self._clear_locked(
-            close_reason=self._close_reason or "closing_recovery_timeout",
-            close_cause="closing_recovery_timeout",
+        """``closing_input`` must never hang - but the phase must not lie.
+
+        The recovery deadline is consumed here, yet the foreground stays in
+        ``closing_input`` with the same :class:`CloseContext`. The session
+        runs the actual gate/recorder cleanup outside the lock and completes
+        this close with the identity-bound :meth:`input_closed`; only that
+        call transitions to ``idle`` (F1).
+        """
+        if self._phase != CLOSING_INPUT:
+            return ActivationDecision(
+                False, "not_closing_input", self._snapshot_locked()
+            )
+        self._clear_timer_locked()
+        self._recovery_requested = True
+        return ActivationDecision(
+            True, "closing_recovery_due", self._snapshot_locked(), True
         )
-        snapshot["recovered"] = True
-        return ActivationDecision(True, "closing_recovered", snapshot, True)
 
     def reset(self):
         """Drops foreground state during stop, close or reconnect."""
@@ -635,12 +724,13 @@ class ActivationController:
             snapshot = self._clear_locked()
             return ActivationDecision(True, "reset", snapshot, True)
 
-    def _clear_locked(self, close_reason=None, close_cause=None):
+    def _clear_locked(self, close_context=None):
         closed_id = self._activation_id
         closed_primary = self._primary_source
         closed_settings = _thaw(self._effective_settings)
         closed_segments = self._segment_count
         closed_sequence = self._activation_sequence
+        context = self._close_context if close_context is None else close_context
 
         self._activation_id = None
         self._primary_source = None
@@ -648,8 +738,8 @@ class ActivationController:
         self._phase = IDLE
         self._clear_timer_locked()
         self._segment_count = 0
-        self._close_reason = None
-        self._close_cause = None
+        self._close_context = None
+        self._recovery_requested = False
         self._version += 1
 
         snapshot = self._snapshot_locked()
@@ -663,7 +753,11 @@ class ActivationController:
                 "closedSegments": closed_segments,
             }
         )
-        if close_reason:
-            snapshot["closeReason"] = close_reason
-            snapshot["closeCause"] = close_cause or close_reason
+        if context is not None:
+            snapshot["closeReason"] = context.reason
+            snapshot["closeCause"] = context.cause
+            snapshot["closeRequestedByCommandId"] = (
+                context.requested_by_command_id
+            )
+            snapshot["closeRequestedByAction"] = context.requested_by_action
         return snapshot
