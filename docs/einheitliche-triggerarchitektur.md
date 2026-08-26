@@ -10,7 +10,8 @@ Hintergrund läuft.
 
 > Ergänzende Dokumente: [`docs/client-development/`](client-development/README.md)
 > für den Client-Vertrag, [`docs/fastapi-server.md`](fastapi-server.md) für den
-> Serverbetrieb.
+> Serverbetrieb, [`docs/settings-control-plane.md`](settings-control-plane.md)
+> für die AP-SRV-050-Settings-Control-Plane.
 
 ## 0. Paketgrenze
 
@@ -33,7 +34,9 @@ Folgepaketen zugeordnet:
   Recoverypolitik aus AP-SRV-030 ist davon unabhängig und vollständig.
 - Die Timerwerte sind Sessionparameter der bestehenden Query-Admission. Die
   vollständige Settings-Control-Plane mit Scope, Auth, Constraints und
-  Apply-Policy folgt in AP-SRV-050.
+  Apply-Policy ist in AP-SRV-050 umgesetzt; die Query-Admission der Session
+  bleibt solange unverändert, bis die finale SRV-030-Korrektur den
+  `ActivationSettingsProvider` an den Controller-Konstruktor bindet.
 - Wake-Word-Erkennung verwendet heute den letzten OpenWakeWord-Score gegen die
   konfigurierte Sensitivität. Es existiert kein belastbarer Score-/Audio-
   Evidence-Harness für Cooldown, ausgewähltes Modell und die exakte
@@ -434,7 +437,8 @@ Kombination `false/false` kippen.
 Die Bereiche sind hier bewusst weit, damit deterministische Tests kurze
 Deadlines durch den Produktionspfad treiben können. Die verbindlichen
 Contractbereiche (`60000–3600000` ms für den Watchdog und so weiter) gehören
-zur Settings-Control-Plane aus AP-SRV-050.
+zur Settings-Control-Plane aus AP-SRV-050; diese legt außerdem zentral fest,
+dass `segmentWatchdogWarningSeconds` kleiner als die wirksame Frist sein muss.
 
 **Entfallen mit AP-SRV-030:** `extensionSeconds`. Die additive Extend-Semantik
 ist kein gültiges Soll mehr. Ein alter Client, der den Parameter noch sendet,

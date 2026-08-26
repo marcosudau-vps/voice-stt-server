@@ -6864,6 +6864,31 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             )
         return None
 
+    # AP-SRV-050: reusable settings control plane on the existing runtime
+    # config document. ``app.state.settings_control_plane`` is the seam the
+    # later SRV-040 wire handler calls for ``session_settings.patch``.
+    from api_fastapi_server.settings_control import (
+        SettingsControlPlane,
+        RuntimeSettingsStore,
+        build_default_registry,
+        create_settings_v2_router,
+    )
+
+    settings_store = RuntimeSettingsStore(settings.runtime_config_path)
+    settings_control = SettingsControlPlane(
+        registry=build_default_registry(),
+        store=settings_store,
+        overlay=settings_store.load_overlay(),
+        revision=settings_store.load_revision(),
+    )
+    app.state.settings_control_plane = settings_control
+    app.include_router(
+        create_settings_v2_router(
+            settings_control,
+            admin_auth_error,
+        )
+    )
+
     @app.patch("/api/config")
     async def update_config(payload: dict, request: Request):
         auth_error = admin_auth_error(request)
