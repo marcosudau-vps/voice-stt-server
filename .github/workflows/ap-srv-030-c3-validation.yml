@@ -1,0 +1,144 @@
+name: AP-SRV-030 C3 validation
+
+on:
+  push:
+    branches:
+      - ci/AP-SRV-030-c3-validation
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  validate-c3:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout CI payload branch
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Decode and verify immutable payloads
+        shell: pwsh
+        run: |
+          $temp = $env:RUNNER_TEMP
+          python -c "import base64,gzip,pathlib; s=pathlib.Path('.ci/AP-SRV-030_C1-C2.diff.gz.b64').read_text().strip(); pathlib.Path(r'$temp/c1-c2.diff').write_bytes(gzip.decompress(base64.b64decode(s)))"
+          python -c "import base64,pathlib; s=pathlib.Path('.ci/AP-SRV-030_C3_payload.zip.b64').read_text().strip(); pathlib.Path(r'$temp/c3-payload.zip').write_bytes(base64.b64decode(s))"
+          $diffHash = (Get-FileHash "$temp/c1-c2.diff" -Algorithm SHA256).Hash.ToLower()
+          $payloadHash = (Get-FileHash "$temp/c3-payload.zip" -Algorithm SHA256).Hash.ToLower()
+          if ($diffHash -ne '2516fb49451db5cf2e172b8eab26842ac5efc72fa4bb3543abf10dcf13f3b9dd') { throw "C1-C2 diff hash mismatch: $diffHash" }
+          if ($payloadHash -ne '8353811f66542c879a346cd9657c31c95dc1f9b507efde5135f6d4ecb5a19158') { throw "C3 payload hash mismatch: $payloadHash" }
+          Expand-Archive -LiteralPath "$temp/c3-payload.zip" -DestinationPath "$temp/c3-payload" -Force
+
+      - name: Reconstruct exact C2 tree from C1
+        id: c2
+        shell: pwsh
+        run: |
+          git config user.name "AP-SRV-030 CI"
+          git config user.email "actions@users.noreply.github.com"
+          git checkout -B review/AP-SRV-030/run-01 db3d2b49539afbf4812d90e13f26f099b9314fe9
+          git apply "$env:RUNNER_TEMP/c1-c2.diff"
+          git add -A
+          $tree = (git write-tree).Trim()
+          Write-Host "Reconstructed C2 tree: $tree"
+          if ($tree -ne 'e6ea688730ac3845d734348878834da87c3caba1') { throw "C2 tree mismatch: $tree" }
+          git diff --cached --check
+          git commit -m "fix(trigger): harden AP-SRV-030 close and command invariants"
+          $sha = (git rev-parse HEAD).Trim()
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+          "tree=$tree" >> $env:GITHUB_OUTPUT
+
+      - name: Apply C3 root corrections
+        shell: pwsh
+        run: |
+          $payload = "$env:RUNNER_TEMP/c3-payload"
+          $c2 = (git rev-parse HEAD).Trim()
+          python -c "from pathlib import Path; p=Path(r'$payload/root/AP-SRV-030_C3_ROOT_FIX_APPLY.py'); s=p.read_text(encoding='utf-8'); s=s.replace('REPO = Path(r\"P:\\GithubRepos\\marcosudau-vps\\voice-stt-server\\workspaces\\einheitliche-triggerarchitektur-distributed\")','REPO = Path.cwd()'); s=s.replace('EXPECTED_HEAD = \"3e146533b81d220d4d176b5a4342cb2c8398a343\"',f'EXPECTED_HEAD = \"{r'''$c2'''}\"'); p.write_text(s,encoding='utf-8')"
+          python "$payload/root/AP-SRV-030_C3_ROOT_FIX_APPLY.py"
+          python -c "from pathlib import Path; p=Path(r'$payload/repair/AP-SRV-030_C3_TERMINAL_SEAL_REPAIR.py'); s=p.read_text(encoding='utf-8'); s=s.replace('REPO = Path(r\"P:\\GithubRepos\\marcosudau-vps\\voice-stt-server\\workspaces\\einheitliche-triggerarchitektur-distributed\")','REPO = Path.cwd()'); s=s.replace('EXPECTED_HEAD = \"3e146533b81d220d4d176b5a4342cb2c8398a343\"',f'EXPECTED_HEAD = \"{r'''$c2'''}\"'); p.write_text(s,encoding='utf-8')"
+          python "$payload/repair/AP-SRV-030_C3_TERMINAL_SEAL_REPAIR.py"
+          python -c "from pathlib import Path; p=Path(r'$payload/final/AP-SRV-030_C3_FINAL_FIX.py'); s=p.read_text(encoding='utf-8'); s=s.replace('REPO = Path(r\"P:\\GithubRepos\\marcosudau-vps\\voice-stt-server\\workspaces\\einheitliche-triggerarchitektur-distributed\")','REPO = Path.cwd()'); s=s.replace('EXPECTED_HEAD = \"3e146533b81d220d4d176b5a4342cb2c8398a343\"',f'EXPECTED_HEAD = \"{r'''$c2'''}\"'); p.write_text(s,encoding='utf-8')"
+          python "$payload/final/AP-SRV-030_C3_FINAL_FIX.py"
+          git diff --check
+
+      - name: Install test dependencies
+        shell: pwsh
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest ".[server,openwakeword,faster-whisper]"
+
+      - name: C3 target regressions
+        shell: pwsh
+        run: |
+          python -m pytest -q -p no:warnings --basetemp=.pytest-tmp/pt `
+            tests/unit/test_server_command_timer_e2e.py::CloseEventRegistrationEndToEndTests `
+            tests/unit/test_server_command_timer_e2e.py::RecoveryFailClosedEndToEndTests
+
+      - name: AP-SRV-030 focus suite
+        shell: pwsh
+        run: |
+          python -m pytest -q -p no:warnings --basetemp=.pytest-tmp/pt `
+            tests/unit/test_server_activation_controller.py `
+            tests/unit/test_server_activation_commands.py `
+            tests/unit/test_server_command_timer_e2e.py `
+            tests/unit/test_server_trigger_contract.py `
+            tests/unit/test_server_controlled_e2e.py `
+            tests/unit/test_server_segment_ledger.py
+
+      - name: AP-SRV-020 regression
+        shell: pwsh
+        run: |
+          python -m pytest -q -p no:warnings --basetemp=.pytest-tmp/pt `
+            tests/unit/test_server_segment_ledger.py `
+            tests/unit/test_server_controlled_e2e.py
+
+      - name: Full unit suite
+        shell: pwsh
+        run: python -m pytest -q --basetemp=.pytest-tmp/pt tests/unit
+
+      - name: Race and recovery repetition 20x
+        shell: pwsh
+        run: |
+          1..20 | ForEach-Object {
+            Write-Host "Race iteration $_ / 20"
+            python -m pytest -q -p no:warnings --basetemp=.pytest-tmp/pt `
+              tests/unit/test_server_command_timer_e2e.py::CloseAdmissionRaceEndToEndTests `
+              tests/unit/test_server_command_timer_e2e.py::CloseEventRegistrationEndToEndTests `
+              tests/unit/test_server_command_timer_e2e.py::LedgerCancelTotalOrderTests `
+              tests/unit/test_server_command_timer_e2e.py::LockOrderEndToEndTests `
+              tests/unit/test_server_command_timer_e2e.py::RecoveryIdentityEndToEndTests `
+              tests/unit/test_server_command_timer_e2e.py::RecoveryFailClosedEndToEndTests `
+              tests/unit/test_server_controlled_e2e.py::LifecycleEpochEndToEndTests `
+              tests/unit/test_server_controlled_e2e.py::ControlledRecordingAdmissionTests
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+
+      - name: Commit exact tested C3 candidate
+        id: c3
+        shell: pwsh
+        run: |
+          git diff --check
+          git add -- api_fastapi_server/server.py tests/unit/test_server_command_timer_e2e.py docs/einheitliche-triggerarchitektur.md docs/client-development/03-server-events-kurzreferenz.md
+          git diff --cached --check
+          git commit -m "fix(trigger): complete AP-SRV-030 close terminalization"
+          $sha = (git rev-parse HEAD).Trim()
+          $tree = (git rev-parse 'HEAD^{tree}').Trim()
+          Write-Host "C3 SHA:  $sha"
+          Write-Host "C3 Tree: $tree"
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+          "tree=$tree" >> $env:GITHUB_OUTPUT
+          git diff --check db3d2b49539afbf4812d90e13f26f099b9314fe9..HEAD
+          git status --short
+
+      - name: Publish tested candidate branch
+        shell: pwsh
+        run: |
+          git push origin HEAD:refs/heads/review/AP-SRV-030/ci-validated-c3 --force
