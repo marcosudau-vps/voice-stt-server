@@ -61,12 +61,29 @@ jobs:
         run: |
           $payload = "$env:RUNNER_TEMP/c3-payload"
           $c2 = (git rev-parse HEAD).Trim()
-          python -c "from pathlib import Path; p=Path(r'$payload/root/AP-SRV-030_C3_ROOT_FIX_APPLY.py'); s=p.read_text(encoding='utf-8'); s=s.replace('REPO = Path(r\"P:\\GithubRepos\\marcosudau-vps\\voice-stt-server\\workspaces\\einheitliche-triggerarchitektur-distributed\")','REPO = Path.cwd()'); s=s.replace('EXPECTED_HEAD = \"3e146533b81d220d4d176b5a4342cb2c8398a343\"',f'EXPECTED_HEAD = \"{r'''$c2'''}\"'); p.write_text(s,encoding='utf-8')"
-          python "$payload/root/AP-SRV-030_C3_ROOT_FIX_APPLY.py"
-          python -c "from pathlib import Path; p=Path(r'$payload/repair/AP-SRV-030_C3_TERMINAL_SEAL_REPAIR.py'); s=p.read_text(encoding='utf-8'); s=s.replace('REPO = Path(r\"P:\\GithubRepos\\marcosudau-vps\\voice-stt-server\\workspaces\\einheitliche-triggerarchitektur-distributed\")','REPO = Path.cwd()'); s=s.replace('EXPECTED_HEAD = \"3e146533b81d220d4d176b5a4342cb2c8398a343\"',f'EXPECTED_HEAD = \"{r'''$c2'''}\"'); p.write_text(s,encoding='utf-8')"
-          python "$payload/repair/AP-SRV-030_C3_TERMINAL_SEAL_REPAIR.py"
-          python -c "from pathlib import Path; p=Path(r'$payload/final/AP-SRV-030_C3_FINAL_FIX.py'); s=p.read_text(encoding='utf-8'); s=s.replace('REPO = Path(r\"P:\\GithubRepos\\marcosudau-vps\\voice-stt-server\\workspaces\\einheitliche-triggerarchitektur-distributed\")','REPO = Path.cwd()'); s=s.replace('EXPECTED_HEAD = \"3e146533b81d220d4d176b5a4342cb2c8398a343\"',f'EXPECTED_HEAD = \"{r'''$c2'''}\"'); p.write_text(s,encoding='utf-8')"
-          python "$payload/final/AP-SRV-030_C3_FINAL_FIX.py"
+          $oldRepo = 'REPO = Path(r"P:\GithubRepos\marcosudau-vps\voice-stt-server\workspaces\einheitliche-triggerarchitektur-distributed")'
+          $newRepo = 'REPO = Path.cwd()'
+          $oldHead = 'EXPECTED_HEAD = "3e146533b81d220d4d176b5a4342cb2c8398a343"'
+          $newHead = 'EXPECTED_HEAD = "' + $c2 + '"'
+
+          $rootScript = "$payload/root/AP-SRV-030_C3_ROOT_FIX_APPLY.py"
+          $text = Get-Content -Raw -LiteralPath $rootScript
+          $text = $text.Replace($oldRepo, $newRepo).Replace($oldHead, $newHead)
+          [IO.File]::WriteAllText($rootScript, $text, [Text.UTF8Encoding]::new($false))
+          python $rootScript
+
+          $repairScript = "$payload/repair/AP-SRV-030_C3_TERMINAL_SEAL_REPAIR.py"
+          $text = Get-Content -Raw -LiteralPath $repairScript
+          $text = $text.Replace($oldRepo, $newRepo).Replace($oldHead, $newHead)
+          [IO.File]::WriteAllText($repairScript, $text, [Text.UTF8Encoding]::new($false))
+          python $repairScript
+
+          $finalScript = "$payload/final/AP-SRV-030_C3_FINAL_FIX.py"
+          $text = Get-Content -Raw -LiteralPath $finalScript
+          $text = $text.Replace($oldRepo, $newRepo).Replace($oldHead, $newHead)
+          [IO.File]::WriteAllText($finalScript, $text, [Text.UTF8Encoding]::new($false))
+          python $finalScript
+
           git diff --check
 
       - name: Install test dependencies
