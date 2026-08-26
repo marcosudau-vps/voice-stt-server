@@ -8,8 +8,6 @@ import queue
 
 import numpy as np
 
-from .voice_activity import clear_pre_recording_buffer
-
 
 logger = logging.getLogger("voicestt")
 

@@ -15,7 +15,10 @@ already-replaced activation harmless: a stale ``close`` can never close a newer
 activation, and a stale ``open`` can never re-open or replace a newer one.
 """
 
+from __future__ import annotations
+
 import threading
+from typing import Any, Dict, Optional
 
 
 LEGACY_ACTIVATION_POLICY = "legacy"
@@ -98,7 +101,6 @@ def open_controlled_activation_gate(
         existing_id = recorder._controlled_activation_id
         existing_generation = recorder._controlled_activation_generation
         if generation is not None and generation < existing_generation:
-            # A late open from an already-superseded activation.
             return False
         if existing_id not in {None, normalized_id} and not replace:
             return False
@@ -119,11 +121,6 @@ def close_controlled_activation_gate(
     Returns ``True`` when this call actually closed an open gate. Closing an
     already closed gate is idempotent and returns ``False`` without side
     effects.
-
-    A call is ignored when ``activation_id`` or ``generation`` no longer match
-    the activation that currently holds the gate. That is the case the
-    specification calls out explicitly: a late ``close(A)`` must not close the
-    activation ``B`` that has replaced ``A``.
     """
     normalized_id = (
         None if activation_id is None else str(activation_id).strip()
@@ -142,11 +139,7 @@ def close_controlled_activation_gate(
 
 
 def abort_controlled_activation_gate(recorder):
-    """Unconditionally closes the gate and leaves a deterministic state.
-
-    Used for ``abort`` and for session teardown, where no activation ownership
-    check may stand in the way.
-    """
+    """Unconditionally closes the gate and leaves a deterministic state."""
     with recorder._controlled_activation_lock:
         _ensure_initialized(recorder)
         was_open = recorder._controlled_activation_id is not None
@@ -193,21 +186,12 @@ def recording_activation_gate_is_open(
     *,
     wake_word_activation_delay_passed,
 ):
-    """Decides whether VAD may start a recording.
-
-    In the controlled policy the shared gate is the single authority. In
-    particular ``recorder.wakeword_detected`` must **not** be consulted here:
-    a wake word reaches the recorder only through the ActivationController and
-    the gate, never around it.
-    """
+    """Decides whether VAD may start a recording."""
     if recorder.activation_policy == CONTROLLED_ACTIVATION_POLICY:
         with recorder._controlled_activation_lock:
             _ensure_initialized(recorder)
             if not recorder._controlled_activation_event.is_set():
                 return False
-            # Bind the ensuing recorder-start callback to the activation whose
-            # gate admitted it. A close/new-open race can then never attach an
-            # old start to the new foreground activation.
             recorder._controlled_recording_activation_id = (
                 recorder._controlled_activation_id
             )

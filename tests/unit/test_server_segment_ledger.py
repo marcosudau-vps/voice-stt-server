@@ -60,10 +60,13 @@ class SegmentLedgerTests(unittest.TestCase):
         barrier = threading.Barrier(3)
 
         def resolve(state):
-            barrier.wait()
-            changed.append(
-                self.ledger.resolve_terminal(context, state, state).changed
-            )
+            try:
+                barrier.wait(timeout=2.0)
+                changed.append(
+                    self.ledger.resolve_terminal(context, state, state).changed
+                )
+            except Exception as e:
+                changed.append(e)
 
         threads = [
             threading.Thread(target=resolve, args=("failed",)),
@@ -71,9 +74,9 @@ class SegmentLedgerTests(unittest.TestCase):
         ]
         for thread in threads:
             thread.start()
-        barrier.wait()
+        barrier.wait(timeout=2.0)
         for thread in threads:
-            thread.join()
+            thread.join(timeout=2.0)
 
         self.assertEqual(sorted(changed), [False, True])
         self.assertEqual(self.ledger.snapshot()["terminalSegmentCount"], 1)

@@ -34,11 +34,13 @@ Folgepaketen zugeordnet:
 - Die Timerwerte sind Sessionparameter der bestehenden Query-Admission. Die
   vollständige Settings-Control-Plane mit Scope, Auth, Constraints und
   Apply-Policy folgt in AP-SRV-050.
-- Wake-Word-Erkennung verwendet heute den letzten OpenWakeWord-Score gegen die
-  konfigurierte Sensitivität. Es existiert kein belastbarer Score-/Audio-
-  Evidence-Harness für Cooldown, ausgewähltes Modell und die exakte
-  Pre-Roll-Grenze; Katalog/Settings folgen in AP-SRV-050, Detection/Latch und
-  Evidence in AP-SRV-060. AP-SRV-000 erfindet dafür keine Kalibrierwerte.
+- Wake-Word-Katalog, Detection, Domain-Latch und Evidence sind mit AP-SRV-060 gehärtet:
+  Katalogautorität (OpenWakeWordCatalog) mit versioniertem öffentlichen v2-Katalog (ohne lokale Pfade),
+  strikte atomare v2-Sessionadmission (kein stiller Fallback, maschinenlesbare Problem-IDs),
+  selected-only Modellinitialisierung,
+  server-autoritativer `WakeAdmissionCoordinator` mit fachlichem Domain-Latch (Freigabe gebunden an SRV-030 safe input close),
+  Pre-Roll-Audiogrenzenselektion (Ausschluss des Wake-Words bei Erhalt des Sprachbeginns, 0ms-Support),
+  und reproduzierbares Ressourcen- und Startzeit-Evidence-Harness.
 
 Die Legacy-Sessionauflösung bleibt in dieser Baseline erhalten. Ihre
 Zielmodellierung beginnt in AP-SRV-010; die endgültige Entfernung der alten

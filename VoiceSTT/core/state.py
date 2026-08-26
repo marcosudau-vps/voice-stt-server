@@ -11,14 +11,27 @@ import halo
 logger = logging.getLogger("voicestt")
 
 
+def _invoke_callback(cb, *args, **kwargs):
+    try:
+        return cb(*args, **kwargs)
+    except TypeError as exc:
+        # If callback takes 0 arguments but args were provided, invoke without positional args
+        if args and ("takes 0 positional arguments" in str(exc) or "takes 1 positional argument" in str(exc)):
+            try:
+                return cb(**kwargs)
+            except Exception:
+                raise exc
+        raise
+
+
 def run_callback(recorder, cb, *args, **kwargs):
     """
     Runs a callback according to the recorder threading setting.
     """
     if recorder.start_callback_in_new_thread:
-        threading.Thread(target=cb, args=args, kwargs=kwargs, daemon=True).start()
+        threading.Thread(target=_invoke_callback, args=(cb, *args), kwargs=kwargs, daemon=True).start()
     else:
-        cb(*args, **kwargs)
+        _invoke_callback(cb, *args, **kwargs)
 
 
 def set_recorder_state(recorder, new_state):

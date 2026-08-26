@@ -239,33 +239,44 @@ class LocalModelRegistry:
 class WakeWordRegistry:
     """Discover usable OpenWakeWord models without network access."""
 
-    def __init__(self, openwakeword_root=None):
+    def __init__(self, openwakeword_root=None, disable_provider=None):
         configured = openwakeword_root or os.getenv(OPENWAKEWORD_MODEL_ROOT_ENV, "")
         self.openwakeword_root = Path(configured).expanduser() if configured else None
+        self.disable_provider = disable_provider
+
+    def get_catalog(self, configured_paths=None):
+        return OpenWakeWordCatalog(
+            self.openwakeword_root,
+            configured_paths,
+            disable_provider=self.disable_provider,
+        )
 
     def openwakeword_models(self, configured_paths=None, framework="onnx"):
-        return OpenWakeWordCatalog(
-            self.openwakeword_root,
-            configured_paths,
-        ).entries(framework, include_paths=True)
+        return self.get_catalog(configured_paths).entries(framework, include_paths=True)
 
     def resolve_openwakeword(self, model_ids, configured_paths=None, framework="onnx"):
-        return OpenWakeWordCatalog(
-            self.openwakeword_root,
-            configured_paths,
-        ).resolve(model_ids, framework)
+        return self.get_catalog(configured_paths).resolve(model_ids, framework)
+
+    def resolve_detailed(self, model_ids, configured_paths=None, framework="onnx"):
+        return self.get_catalog(configured_paths).resolve_detailed(model_ids, framework)
 
     def default_openwakeword(self, configured_paths=None, framework="onnx"):
-        catalog = OpenWakeWordCatalog(
-            self.openwakeword_root,
-            configured_paths,
-        )
+        catalog = self.get_catalog(configured_paths)
         resolved, missing = catalog.resolve(None, framework)
         return (resolved[0] if resolved else None), missing
 
     def catalog(self, configured_paths=None, framework="onnx"):
+        cat = self.get_catalog(configured_paths)
         return {
-            "openwakeword": self.openwakeword_models(configured_paths, framework),
+            "catalogRevision": cat.catalog_revision,
+            "openwakeword": cat.entries(framework, include_paths=True),
+        }
+
+    def public_catalog(self, configured_paths=None, framework="onnx"):
+        cat = self.get_catalog(configured_paths)
+        return {
+            "catalogRevision": cat.catalog_revision,
+            "openwakeword": cat.public_entries(framework),
         }
 
 

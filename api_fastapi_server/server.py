@@ -58,6 +58,10 @@ from api_fastapi_server.segment_ledger import (
     SegmentContext,
     SegmentLedger,
 )
+from api_fastapi_server.wake_admission import (
+    AcceptedWakeAdmission,
+    WakeAdmissionCoordinator,
+)
 from VoiceSTT_server.operations import (
     AuditLogManager,
     LocalModelRegistry,
@@ -794,71 +798,33 @@ def resolve_session_wake_word_config(base_settings, request, registry):
                 else None
             )
         )
-        resolved, missing = registry.resolve_openwakeword(
-            requested_model_ids,
-            settings.openwakeword_model_paths,
-            settings.openwakeword_inference_framework,
-        )
+        if hasattr(registry, "resolve_detailed"):
+            resolved, missing, reasons = registry.resolve_detailed(
+                requested_model_ids,
+                settings.openwakeword_model_paths,
+                settings.openwakeword_inference_framework,
+            )
+        else:
+            resolved, missing = registry.resolve_openwakeword(
+                requested_model_ids,
+                settings.openwakeword_model_paths,
+                settings.openwakeword_inference_framework,
+            )
+            reasons = {m: "unavailable" for m in missing}
+
         if requested_words and missing:
-            fallback_source = None
-            if (
-                inherited_backend in OPENWAKEWORD_SESSION_BACKENDS
-                and base_settings.wake_word_enabled()
-            ):
-                settings.wakeword_backend = "openwakeword"
-                settings.wake_words = base_settings.wake_words
-                settings.openwakeword_model_paths = (
-                    base_settings.openwakeword_model_paths
-                )
-                inherited_words = _split_wake_word_ids(
-                    base_settings.wake_words
-                )
-                fallback_source = "server"
-            else:
-                default_resolved, default_missing = (
-                    registry.resolve_openwakeword(
-                        None,
-                        settings.openwakeword_model_paths,
-                        settings.openwakeword_inference_framework,
-                    )
-                )
-                if default_resolved and not default_missing:
-                    settings.wakeword_backend = "openwakeword"
-                    settings.wake_words = ",".join(
-                        entry["id"] for entry in default_resolved
-                    )
-                    settings.openwakeword_model_paths = ",".join(
-                        entry["path"] for entry in default_resolved
-                    )
-                    inherited_words = tuple(
-                        entry["id"] for entry in default_resolved
-                    )
-                    fallback_source = "model_catalog"
-            if fallback_source is None:
-                raise SessionConfigurationError(
-                    "wake_word_fallback_unavailable",
-                    "Das angeforderte Wake Word ist ungültig und es ist kein Fallback-Profil verfügbar.",
-                    unavailableWakeWords=missing,
-                )
-            fallbacks.append({
-                "field": "wakeWords",
-                "source": fallback_source,
-                "value": list(inherited_words),
-                "reason": "unknown_value",
-            })
-            warnings.append({
-                "code": "session_config_value_fallback",
-                "field": "wakeWords",
-                "message": (
-                    "Mindestens ein angefordertes Wake Word war nicht "
-                    "verfügbar; das Fallback-Profil wurde verwendet."
-                ),
-            })
-            source = fallback_source
+            raise SessionConfigurationError(
+                "wake_word_selection_rejected",
+                "Mindestens ein angefordertes Wake Word ist ungültig oder nicht verfügbar.",
+                unavailableWakeWords=missing,
+                rejectedIds=missing,
+                errors=[{"id": m, "reason": reasons.get(m, "unavailable")} for m in missing],
+            )
         elif missing or not resolved:
             raise SessionConfigurationError(
                 "wake_word_default_unavailable",
                 "Wake Word kann nicht aktiviert werden, weil kein verfügbares OpenWakeWord-Standardmodell gefunden wurde.",
+                unavailableWakeWords=missing,
             )
         else:
             settings.wakeword_backend = "openwakeword"
@@ -2686,6 +2652,7 @@ class RecorderBackedRealtimeSession:
         self._force_finalize_in_progress = False
         self._wakeword_voice_window = False
         self._wakeword_followup_generation = 0
+        self.wake_admission = WakeAdmissionCoordinator()
         self.segment_ledger = SegmentLedger(self.session_id)
         # Owns the complete mutation -> observable dispatch boundary. The
         # ledger lock orders state, while this session lock keeps a later
@@ -4829,6 +4796,8 @@ class RecorderBackedRealtimeSession:
         try:
             recorder.wakeword_detected = False
             recorder.wake_word_detect_time = 0
+            if hasattr(self, "wake_admission") and self.wake_admission is not None:
+                self.wake_admission.release_latch()
             if self._recorder_wake_word_timeout_before_followup is not None:
                 recorder.wake_word_timeout = self._recorder_wake_word_timeout_before_followup
             if self._recorder_start_recording_before_followup is not None:
@@ -4896,29 +4865,58 @@ class RecorderBackedRealtimeSession:
             wakeWord=event.get("wakeWord"),
         )
 
-    def _on_wakeword_detected(self):
+    def _on_wakeword_detected(self, detection=None):
         published = []
+        if detection is None and getattr(self, "recorder", None) is not None:
+            detection = getattr(self.recorder, "last_wakeword_detection", None)
+
+        if detection is None:
+            return
+
+        admission = None
         with self.lock:
             self._wakeword_voice_window = True
             self._wakeword_followup_generation += 1
             if self._activation is not None and self._audio_available:
-                # A wake word is a trigger like any other: it goes through the
-                # same admission as a manual command, including the generic
-                # audio-availability gate, and reaches the recorder only via
-                # the controlled gate. It never opens a recording on its own.
-                decision = self._activation.activate(
-                    "wake_word", self._effective_activation_settings()
-                )
-                self._apply_activation_decision_locked(
-                    "activate", decision, published
-                )
-        event = self.timeline.mark_wakeword_detected()
-        self._publish_timeline_event(
-            "wakeword_detected",
-            wakeWord=event.get("wakeWord"),
-        )
-        self._publish_collected_events(published)
-        self.publish_status("wakeword_detected")
+                if hasattr(self, "wake_admission") and self.wake_admission is not None:
+                    admission = self.wake_admission.handle_wake_detection(
+                        detection,
+                        self._activation,
+                        self._effective_activation_settings,
+                    )
+                    if admission is not None:
+                        self._apply_activation_decision_locked(
+                            "activate", admission.decision, published
+                        )
+                else:
+                    decision = self._activation.activate(
+                        "wake_word", self._effective_activation_settings()
+                    )
+                    self._apply_activation_decision_locked(
+                        "activate", decision, published
+                    )
+                    if decision.accepted:
+                        admission = AcceptedWakeAdmission(
+                            decision=decision,
+                            detection=detection,
+                            activation_id=decision.snapshot.get("activationId", ""),
+                            generation=decision.snapshot.get("generation", 0),
+                            wake_word_id=detection.wake_word_id,
+                            score=detection.score,
+                        )
+
+        if admission is not None:
+            event = self.timeline.mark_wakeword_detected()
+            timeline_word = admission.wake_word_id or event.get("wakeWord")
+            self._publish_timeline_event(
+                "wakeword_detected",
+                wakeWord=timeline_word,
+                score=admission.score,
+                activationId=admission.activation_id,
+                primarySource="wake_word",
+            )
+            self._publish_collected_events(published)
+            self.publish_status("wakeword_detected")
 
     def _on_wakeword_timeout(self):
         with self.lock:
@@ -7030,6 +7028,21 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "openwakewordModelPaths": settings.openwakeword_model_paths,
             "availableModels": available_models,
             "appliesTo": "new_sessions",
+        })
+
+    @app.get("/api/v2/wake-words")
+    async def get_wake_words_v2(request: Request):
+        """Versioned build wake-word catalog port (AP-SRV-060 / Contract 8.1 / 9)."""
+        cat_data = service.wakeword_registry.public_catalog(
+            settings.openwakeword_model_paths,
+            settings.openwakeword_inference_framework,
+        )
+        catalog_obj = service.wakeword_registry.get_catalog(settings.openwakeword_model_paths)
+        return JSONResponse({
+            "version": 2,
+            "catalogRevision": cat_data.get("catalogRevision", 1),
+            "wakeWords": cat_data.get("openwakeword", []),
+            "defaultModel": catalog_obj.default_model,
         })
 
     @app.put("/api/wake-word")

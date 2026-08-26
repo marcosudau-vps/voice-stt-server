@@ -201,10 +201,11 @@ def run_recording_worker(recorder):
                         wakeword_detected_time = time.time()
                         wakeword_samples_to_remove = int(self.sample_rate * self.wake_word_buffer_duration)
                         self.wakeword_detected = True
+                        detection = getattr(self, "last_wakeword_detection", None)
                         if self.on_wakeword_detected:
                             if self.use_extended_logging:
                                 logger.debug('Debug: Calling on_wakeword_detected')
-                            run_callback(self, self.on_wakeword_detected)
+                            run_callback(self, self.on_wakeword_detected, detection)
 
                 if self.use_extended_logging:
                     logger.debug('Debug: Checking voice activity conditions')
