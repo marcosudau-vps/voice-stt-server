@@ -2733,6 +2733,10 @@ class RecorderBackedRealtimeSession:
         # ``_on_wakeword_detection_start``; a detect callback whose epoch no
         # longer matches the current lifecycle is inert (F9/T13).
         self._wake_detection_epoch = None
+        # PHASE-04 / C3: the exactly-once input-close lifecycle event is
+        # logically reserved before the foreground slot may become idle.
+        # AP-SRV-040 will bind this seam to eventId/eventSeq/stateVersion.
+        self._registered_input_close_events = {}
         # Session-scoped command idempotency. The contract requires the replay
         # cache to hold for at least the whole session, so it is cleared when
         # the session is torn down, not trimmed while it runs.
@@ -2961,6 +2965,17 @@ class RecorderBackedRealtimeSession:
         # place it is released.
         self._command_replay.clear()
 
+        # C3/PHASE-05 terminal seal: recorder shutdown/abort may synchronously
+        # fire lifecycle callbacks before ``close()`` returns. Those callbacks
+        # may clean recording state, but they must never leave a terminal
+        # session looking reusable again. Recorder lifecycle callbacks are
+        # pinned to synchronous dispatch, so this is the final close
+        # linearization point.
+        with self.lock:
+            self.streaming = False
+            self.status = "closed"
+            self._wake_detection_epoch = None
+
     def clear(self):
         with self.lock:
             cancelled_generation = self.generation
@@ -3111,8 +3126,17 @@ class RecorderBackedRealtimeSession:
             self.final_completed += 1
 
     def publish_status(self, state=None):
+        # ``closed`` is terminal. A timer/recorder callback can complete after
+        # close() invalidated its lifecycle; that stale completion must never
+        # make this same session reusable again (PHASE-05/F9).
+        #
+        # Guard and write share one self.lock acquisition, giving close-vs-
+        # publish a total order: if publish wins first, close overwrites it;
+        # if close wins first, this stale non-closed publish becomes a no-op.
         with self.lock:
             state = state or self.status
+            if self.status == "closed" and state != "closed":
+                return False
             self.status = state
             message = {
                 "type": "status",
@@ -3136,6 +3160,7 @@ class RecorderBackedRealtimeSession:
             }
             message["timestampIso"] = timestamp_iso(message["timestamp"])
         self.service.manager.publish_session(self.session_id, message)
+        return True
 
     def session_config_dict(self):
         session_config = getattr(self, "session_config", None)
@@ -3690,23 +3715,95 @@ class RecorderBackedRealtimeSession:
             "stream_stopped",
         }
 
+    def _reserve_input_close_event(self, plan, *, recovery=False):
+        """Register the exactly-once logical input-close event before ``idle``.
+
+        This does not perform manager/network publication. The session-local
+        record exists while the controller is still in ``closing_input``.
+        AP-SRV-040 can replace this seam with the v2 event registry without
+        changing the close ordering established here.
+        """
+        key = (str(plan.activation_id), int(plan.activation_sequence))
+        with self.lock:
+            snapshot = self._activation.snapshot()
+            sequence = snapshot.get("activationSequence")
+            if (
+                snapshot.get("phase") != "closing_input"
+                or str(snapshot.get("activationId") or "") != key[0]
+                or sequence is None
+                or int(sequence) != key[1]
+            ):
+                return None
+
+            if key in self._registered_input_close_events:
+                return key
+
+            fields = self._activation_event_fields(snapshot)
+            # The event describes the state established by this close. The actual
+            # foreground transition follows immediately after this registration.
+            fields["phase"] = "idle"
+            fields["reason"] = plan.reason
+            if recovery:
+                fields["cause"] = "closing_recovery_timeout"
+                fields["recovered"] = True
+                fields["causedByCommandId"] = None
+            else:
+                fields["cause"] = plan.cause
+                fields["causedByCommandId"] = (
+                    plan.requested_by_command_id
+                    if plan.requested_by_action in ("finish", "cancel")
+                    and plan.requested_by_command_id
+                    else None
+                )
+
+            self._registered_input_close_events[key] = fields
+            return key
+
+    def _discard_registered_input_close_event(self, key):
+        if key is None:
+            return False
+        with self.lock:
+            return self._registered_input_close_events.pop(key, None) is not None
+
+    def _publish_registered_input_close_event(self, key):
+        """Publish an already-registered close event after lock release.
+
+        On publisher failure the logical record remains present instead of being
+        silently lost; SRV-040 can expose/resynchronise that record later.
+        """
+        if key is None:
+            return False
+        with self.lock:
+            fields = self._registered_input_close_events.get(key)
+            if fields is None:
+                return False
+            fields = dict(fields)
+
+        try:
+            self._publish_timeline_event("activation_closed", **fields)
+        except Exception:
+            LOGGER.exception(
+                "Registriertes Input-Close-Event für %s konnte nicht publiziert werden",
+                self.session_id,
+            )
+            return False
+
+        with self.lock:
+            self._registered_input_close_events.pop(key, None)
+        return True
+
     def _run_input_close(self, plan):
-        """Phase B: performs the physical input close for one accepted plan.
+        """Execute normal Phase B with the full PHASE-04 admission barrier.
 
-        Runs **without** ``self.lock`` and without ``_ledger_dispatch_lock``.
-        The order is fix: close the generation-bound gate, stop/flush the
-        recorder with its callbacks running synchronously, register the ledger
-        input close inside the normal dispatch boundary, and only then - under
-        ``self.lock`` - complete the still-current identical activation with the
-        identity-bound ``input_closed()``. The lifecycle event is published
-        only after the lock is released.
+        Strict order:
+          1. generation-bound gate close,
+          2. recorder stop/flush,
+          3. ledger input-close registration,
+          4. logical lifecycle-event registration,
+          5. identity-bound ``input_closed()`` -> idle,
+          6. transport publication of the already-registered event.
 
-        A recovery plan additionally aborts the gate defensively, tries the
-        hard recorder abort when flushing fails, and terminalises an orphaned
-        recording context exactly once. If even the hard abort cannot make the
-        input side safe, the session **fails closed**: it never publishes idle,
-        never admits a new activation and never claims a successful close
-        (F1/T16).
+        Recorder/gate operations run outside both session and dispatch locks.
         """
         if plan.recovery:
             self._run_recovery_close(plan)
@@ -3715,7 +3812,6 @@ class RecorderBackedRealtimeSession:
         activation_id = plan.activation_id
         generation = plan.gate_generation
 
-        # 1. Controlled gate closes generation-bound.
         gate_closed = True
         try:
             self.recorder.close_controlled_activation(
@@ -3729,7 +3825,6 @@ class RecorderBackedRealtimeSession:
                 exc_info=True,
             )
 
-        # 2. Stop/flush the recorder with its callbacks running.
         recorder_ok = True
         if gate_closed:
             try:
@@ -3742,64 +3837,48 @@ class RecorderBackedRealtimeSession:
                     self.session_id,
                 )
 
-        event_fields = None
-        if gate_closed and recorder_ok:
-            # 3. Register the ledger input close inside the dispatch boundary.
-            self._close_ledger_activation(
-                activation_id,
-                plan.reason,
-                requested_terminal=(
-                    "cancelled" if plan.cancel_pending else None
-                ),
-                cancel_pending=plan.cancel_pending,
-            )
-            # 4. Identity-bound controller finalisation under self.lock.
-            with self.lock:
-                completed = self._activation.input_closed(
-                    activation_id=activation_id,
-                    activation_sequence=plan.activation_sequence,
-                )
-                if completed is not None and completed.accepted:
-                    event_fields = self._activation_event_fields(
-                        completed.snapshot
-                    )
-                    event_fields["causedByCommandId"] = (
-                        plan.requested_by_command_id
-                        if plan.requested_by_action in ("finish", "cancel")
-                        and plan.requested_by_command_id
-                        else None
-                    )
-                else:
-                    # A stale/foreign close follow-up must not publish a close
-                    # event for a newer activation.
-                    event_fields = None
-                self._arm_activation_timer_locked(
-                    completed.snapshot
-                    if completed is not None
-                    else self._activation.snapshot()
-                )
-
-        # 5. Publish the single lifecycle event after lock release.
-        if event_fields is not None:
-            self._publish_timeline_event("activation_closed", **event_fields)
         if not (gate_closed and recorder_ok):
             LOGGER.debug(
-                "Input-Close für %s bleibt in closing_input - "
-                "Recovery übernimmt",
+                "Input-Close für %s bleibt in closing_input - Recovery übernimmt",
                 self.session_id,
             )
+            return
+
+        self._close_ledger_activation(
+            activation_id,
+            plan.reason,
+            requested_terminal=("cancelled" if plan.cancel_pending else None),
+            cancel_pending=plan.cancel_pending,
+        )
+
+        event_key = self._reserve_input_close_event(plan, recovery=False)
+        if event_key is None:
+            # A concurrent stream/session reset already won ownership.
+            return
+
+        with self.lock:
+            completed = self._activation.input_closed(
+                activation_id=activation_id,
+                activation_sequence=plan.activation_sequence,
+            )
+            self._arm_activation_timer_locked(
+                completed.snapshot
+                if completed is not None
+                else self._activation.snapshot()
+            )
+
+        if completed is None or not completed.accepted:
+            self._discard_registered_input_close_event(event_key)
+            return
+
+        self._publish_registered_input_close_event(event_key)
 
     def _run_recovery_close(self, plan):
-        """Hard recovery orchestrator for a stuck ``closing_input`` (F1/T16).
+        """Hard recovery for a stuck ``closing_input`` (PHASE-05).
 
-        Runs outside both locks. The controller deliberately stays in
-        ``closing_input`` until the physical side is safe: only then is the
-        identity-bound ``input_closed()`` allowed to reach ``idle``. The
-        authoritative safety check is the controlled-gate snapshot: once the
-        gate is inactive, no old input path can start or continue accepting a
-        new recording. If even the hard recorder abort cannot close the gate,
-        the session **fails closed** (audio treated as unavailable, no new
-        activation, no idle claim, no endless loop).
+        If cleanup becomes safe, use the same PHASE-04 ordering as normal close.
+        If even the hard abort cannot make the old input path safe, terminally
+        close the session instead of leaving a live session stuck forever.
         """
         activation_id = plan.activation_id
 
@@ -3807,10 +3886,11 @@ class RecorderBackedRealtimeSession:
             self.recorder.abort_controlled_activation()
         except Exception:
             LOGGER.debug(
-                "Controlled Gate konnte für %s nicht abgebrochen werden",
+                "Controlled Gate konnte für %s im Recovery nicht abgebrochen werden",
                 self.session_id,
                 exc_info=True,
             )
+
         try:
             if bool(getattr(self.recorder, "is_recording", False)):
                 self.recorder.flush_buffered_audio()
@@ -3819,7 +3899,6 @@ class RecorderBackedRealtimeSession:
                 "Recorder konnte für %s im Recovery nicht geschlossen werden",
                 self.session_id,
             )
-            # Hard fallback: the public recorder abort path outside the lock.
             abort_method = getattr(self.recorder, "abort", None)
             if callable(abort_method):
                 try:
@@ -3830,17 +3909,12 @@ class RecorderBackedRealtimeSession:
                         self.session_id,
                     )
 
-        # No old recording context may still accept audio. The gate snapshot is
-        # the single authority: once inactive, a later VAD start is refused.
-        gate_active = True
         try:
             gate_active = bool(
                 self.recorder.controlled_activation_state().get("active")
             )
         except Exception:  # pragma: no cover - fakes may differ
-            gate_active = bool(
-                getattr(self.recorder, "is_recording", False)
-            )
+            gate_active = bool(getattr(self.recorder, "is_recording", False))
         close_safe = not gate_active
 
         with self.lock:
@@ -3857,9 +3931,6 @@ class RecorderBackedRealtimeSession:
                 orphaned = None
 
         if not close_safe:
-            # Fail closed: never publish idle, never admit a new activation,
-            # never claim a successful close (F1/T16). Audio is treated as
-            # unavailable so a later activate is refused.
             self.fail_closed_for_recovery(activation_id)
             return
 
@@ -3870,66 +3941,103 @@ class RecorderBackedRealtimeSession:
                 "failed",
                 "closing_recovery_timeout",
             )
+
         if activation_id:
             self._close_ledger_activation(
                 activation_id,
                 plan.reason,
-                requested_terminal=(
-                    "cancelled" if plan.cancel_pending else None
-                ),
+                requested_terminal=("cancelled" if plan.cancel_pending else None),
                 cancel_pending=plan.cancel_pending,
             )
 
-        event_fields = None
+        event_key = self._reserve_input_close_event(plan, recovery=True)
+        if event_key is None:
+            return
+
         with self.lock:
             completed = self._activation.input_closed(
                 activation_id=activation_id,
                 activation_sequence=plan.activation_sequence,
             )
-            if completed is not None and completed.accepted:
-                event_fields = self._activation_event_fields(
-                    completed.snapshot
-                )
-                event_fields["reason"] = plan.reason
-                event_fields["cause"] = "closing_recovery_timeout"
-                event_fields["recovered"] = True
-                # The frozen wire correlation of a recovery completion is null,
-                # even though the internal CloseContext kept the original
-                # command identity (F2).
-                event_fields["causedByCommandId"] = None
             self._arm_activation_timer_locked(
                 completed.snapshot
                 if completed is not None
                 else self._activation.snapshot()
             )
 
-        if event_fields is not None:
-            self._publish_timeline_event("activation_closed", **event_fields)
+        if completed is None or not completed.accepted:
+            self._discard_registered_input_close_event(event_key)
+            return
+
+        self._publish_registered_input_close_event(event_key)
 
     def fail_closed_for_recovery(self, activation_id):
-        """Puts the session into the defined fail-closed state after a
-        catastrophic recovery failure: audio unavailable, no new activation,
-        no safe-idle claim, no endless retry loop."""
+        """Terminally close a session whose input path cannot be made safe.
+
+        A live ``closing_input`` may not become a permanent state. The fallback
+        therefore uses the existing terminal session-close lifecycle instead of
+        claiming a reusable ``idle``.
+        """
         with self.lock:
+            if self.status == "closed":
+                return False
             self._audio_available = False
+
         LOGGER.error(
             "Recovery für %s konnte den Eingabepfad nicht sicher schließen; "
-            "Sitzung fail-closed (Audio nicht verfügbar)",
+            "Sitzung wird technisch beendet",
             self.session_id,
         )
-        self.service.manager.publish_session(
-            self.session_id,
-            {
-                "type": "warning",
-                "sessionId": self.session_id,
-                "message": (
-                    "Der Eingabepfad konnte nicht sicher geschlossen werden; "
-                    "neue Aktivierungen sind bis zum Wiederanmelden gesperrt."
-                ),
-                "recovery": "fail_closed",
-                "activationId": activation_id,
-            },
-        )
+
+        try:
+            self.service.manager.publish_session(
+                self.session_id,
+                {
+                    "type": "warning",
+                    "sessionId": self.session_id,
+                    "message": (
+                        "Der Eingabepfad konnte nicht sicher geschlossen werden; "
+                        "die Sitzung wird beendet und muss neu aufgebaut werden."
+                    ),
+                    "recovery": "session_terminated",
+                    "activationId": activation_id,
+                },
+            )
+        except Exception:
+            LOGGER.debug(
+                "Recovery-Warnung für %s konnte nicht publiziert werden",
+                self.session_id,
+                exc_info=True,
+            )
+
+        try:
+            self.close()
+        except Exception:
+            # close() marks the session terminal before downstream cleanup. Keep
+            # that terminal state even if a best-effort cleanup operation raises.
+            LOGGER.exception(
+                "Terminaler Session-Abschluss nach Recoveryfehler für %s "
+                "war nur teilweise erfolgreich",
+                self.session_id,
+            )
+            with self.lock:
+                self.streaming = False
+                self.status = "closed"
+                self._activation_timer_generation += 1
+                self._armed_timer_token = None
+            try:
+                self._dispatch_ledger_operation(
+                    self.segment_ledger.cancel_all, "session_closed"
+                )
+            except Exception:
+                LOGGER.exception(
+                    "Ledger konnte nach terminalem Recoveryfehler für %s "
+                    "nicht vollständig abgeräumt werden",
+                    self.session_id,
+                )
+            return False
+
+        return True
 
     def _watchdog_warning_fields(self, snapshot):
         context = self._active_recording_context

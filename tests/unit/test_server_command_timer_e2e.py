@@ -1573,6 +1573,89 @@ class CloseAdmissionRaceEndToEndTests(ControlledCommandTestCase):
 
 
 @unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
+class CloseEventRegistrationEndToEndTests(ControlledCommandTestCase):
+    """C3/PHASE-04: event registration precedes foreground release."""
+
+    def test_new_activation_remains_locked_until_input_close_event_is_registered(self):
+        with TestClient(self.app) as client:
+            with ControlledSessionHarness(client, self.QUERY) as session:
+                opened = self._activate(session, command_id="c3-event-open")
+                server = session.server_session(self.app)
+
+                event_registered = threading.Event()
+                release_after_registration = threading.Event()
+                original_reserve = server._reserve_input_close_event
+
+                def blocking_reserve(plan, *, recovery=False):
+                    key = original_reserve(plan, recovery=recovery)
+                    self.assertIsNotNone(key)
+                    with server.lock:
+                        self.assertIn(
+                            key, server._registered_input_close_events
+                        )
+                    event_registered.set()
+                    release_after_registration.wait(timeout=30)
+                    return key
+
+                server._reserve_input_close_event = blocking_reserve
+                finish_result = {}
+
+                def finish_a():
+                    finish_result["ack"] = server.handle_trigger_command({
+                        "type": "trigger",
+                        "action": "finish",
+                        "source": "manual",
+                        "commandId": "c3-event-finish",
+                        "activationId": opened["activationId"],
+                    })
+
+                thread = threading.Thread(target=finish_a)
+                thread.start()
+                self.assertTrue(event_registered.wait(timeout=20))
+
+                self.assertEqual(
+                    server.activation_snapshot()["phase"], "closing_input"
+                )
+                blocked = server.handle_trigger_command({
+                    "type": "trigger",
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "c3-event-blocked-b",
+                })
+                self.assertFalse(blocked["accepted"])
+                self.assertEqual(blocked["reason"], "activation_locked")
+                self.assertEqual(
+                    blocked["activationId"], opened["activationId"]
+                )
+
+                release_after_registration.set()
+                thread.join(timeout=30)
+                self.assertFalse(thread.is_alive())
+                self.assertTrue(finish_result["ack"]["accepted"])
+                self.assertEqual(
+                    server.activation_snapshot()["phase"], "idle"
+                )
+
+                session.settle()
+                close_events = [
+                    event
+                    for event in session.timeline_events("activation_closed")
+                    if event.get("activationId") == opened["activationId"]
+                ]
+                self.assertEqual(len(close_events), 1)
+
+                second = server.handle_trigger_command({
+                    "type": "trigger",
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "c3-event-open-b",
+                })
+                self.assertTrue(second["accepted"])
+                self.assertNotEqual(
+                    second["activationId"], opened["activationId"]
+                )
+
+@unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
 class RecoveryIdentityEndToEndTests(ClosingRecoveryEndToEndTests):
     """T7: recovery keeps the internal command identity but not the wire link."""
 
@@ -2139,6 +2222,7 @@ class RecoveryFailClosedEndToEndTests(ControlledCommandTestCase):
         super().setUp()
 
     def test_recovery_cleanup_failure_never_publishes_idle_or_admits_new_activation(self):
+        """Unrecoverable input cleanup terminates the session instead of hanging."""
         HardFailRecorder.fail_gate_close = True
         HardFailRecorder.fail_abort = True
         HardFailRecorder.fail_flush = True
@@ -2153,6 +2237,31 @@ class RecoveryFailClosedEndToEndTests(ControlledCommandTestCase):
                 session.send({"type": "start"})
                 session.settle()
                 server = session.server_session(app)
+
+                terminated = threading.Event()
+                original_close = server.close
+
+                def observed_close():
+                    try:
+                        return original_close()
+                    finally:
+                        terminated.set()
+
+                server.close = observed_close
+
+                stale_waiting_publish_attempted = threading.Event()
+                original_publish_status = server.publish_status
+
+                def observed_publish_status(state=None):
+                    if (
+                        terminated.is_set()
+                        and state in {"listening", "wakeword_wait"}
+                    ):
+                        stale_waiting_publish_attempted.set()
+                    return original_publish_status(state)
+
+                server.publish_status = observed_publish_status
+
                 opened = server.handle_trigger_command({
                     "action": "activate",
                     "source": "manual",
@@ -2162,7 +2271,6 @@ class RecoveryFailClosedEndToEndTests(ControlledCommandTestCase):
                 session.socket.send_bytes(speech_packet())
                 session.timeline("recording_started")
 
-                # A close fault parks the activation in closing_input.
                 ack = server.handle_trigger_command({
                     "action": "cancel",
                     "source": "manual",
@@ -2174,40 +2282,37 @@ class RecoveryFailClosedEndToEndTests(ControlledCommandTestCase):
                     server.activation_snapshot()["phase"], "closing_input"
                 )
 
-                # Recovery runs, every defensive close path fails -> fail closed.
-                deadline = time.monotonic() + 20
-                while (
-                    server._audio_available
-                    and time.monotonic() < deadline
-                ):
-                    time.sleep(0.01)
-                session.settle()
-                snapshot = server.activation_snapshot()
-                # Never a fake safe idle (F1): the foreground cannot be fake
-                # released while the old input path might still accept audio.
-                self.assertNotEqual(snapshot["phase"], "idle")
+                self.assertTrue(terminated.wait(timeout=20))
+                # Wait until the recovery timer worker has resumed and
+                # attempted to publish the waiting state it calculated
+                # before fail_closed_for_recovery(). The terminal guard
+                # must make that stale publication inert.
+                self.assertTrue(
+                    stale_waiting_publish_attempted.wait(timeout=20)
+                )
+                self.assertEqual(server.status, "closed")
+                self.assertFalse(server.streaming)
                 self.assertFalse(server._audio_available)
+
+                activation = server.activation_snapshot()
+                self.assertEqual(activation["phase"], "idle")
+                self.assertIsNone(activation["activationId"])
+
+                ledger = server.segment_ledger.snapshot()
+                self.assertEqual(ledger["pendingSegmentCount"], 0)
+                self.assertEqual(ledger["pendingActivationCount"], 0)
                 self.assertEqual(
-                    session.timeline_events("activation_closed"), [],
-                    "no successful close may be claimed after fail-closed",
+                    ledger["acceptedSegmentCount"],
+                    ledger["terminalSegmentCount"],
                 )
 
-                # A new activation must be refused under fail-closed.
-                gate_before = session.recorder().controlled_activation_state()
                 blocked = server.handle_trigger_command({
                     "action": "activate",
                     "source": "manual",
                     "commandId": "t16-blocked",
                 })
                 self.assertFalse(blocked["accepted"])
-                self.assertEqual(blocked["reason"], "audio_unavailable")
-                # The same (old, stuck) gate identity is still refusing; no new
-                # activation was admitted to replace it.
-                gate_after = session.recorder().controlled_activation_state()
-                self.assertEqual(
-                    gate_after["activationId"], gate_before["activationId"]
-                )
+                self.assertEqual(blocked["reason"], "session_closed")
 
-
-if __name__ == "__main__":
-    unittest.main()
+                close_event = session.timeline("activation_closed", timeout=20)
+                self.assertEqual(close_event.get("reason"), "session_closed")

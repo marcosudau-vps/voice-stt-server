@@ -312,10 +312,11 @@ Der Input-Close ist seit AP-SRV-030 C2 **zweiphasig**:
    gegebenenfalls der kommandierenden `commandId` gebildet. Es entsteht ein
    unveränderlicher `InputClosePlan`.
 2. **Phase B (physischer Input-Close)** - läuft **außerhalb** beider Locks:
-   Gate schließen, Recorder stoppen/flushen, Ledger-Input-Close registrieren,
-   und erst danach wird die noch aktuelle identische Activation
-   identitätsgebunden mit `input_closed()` auf `idle` gesetzt. Das
-   Lifecycle-Event folgt erst nach Lockfreigabe.
+   Gate schließen, Recorder stoppen/flushen, Ledger-Input-Close registrieren
+   und das genau-einmal Lifecycle-Ereignis **logisch registrieren**. Erst
+   danach wird die noch aktuelle identische Activation identitätsgebunden mit
+   `input_closed()` auf `idle` gesetzt. Die Transportpublikation des bereits
+   registrierten Events folgt nach Lockfreigabe.
 
 F1/F5/F10:
 
@@ -326,8 +327,10 @@ F1/F5/F10:
 - Ein verspäteter `input_closed()`-Aufruf mit alter Activation-Identität wird
   verworfen (`stale_activation`) und beendet **nie** eine neuere Activation.
 - Kann selbst der harte Recorder-Abbruch keinen sicheren Zustand herstellen,
-  geht die Session **fail-closed**: kein `idle`, keine neue Activation, Audio
-  gilt als nicht verfügbar, kein erfolgreicher Abschluss wird behauptet.
+  bleibt die Session **nicht** dauerhaft in `closing_input`: sie wird über den
+  bestehenden Session-Close-Pfad technisch beendet. Es wird kein wieder
+  benutzbares `idle` behauptet; offene Ledgerarbeit wird cancel-/terminalisiert
+  und eine neue Session muss aufgebaut werden.
 
 - Läuft der Recoverytimeout in `closing_input` ordentlich ab, wird das Gate
   abgebrochen, der Recorder defensiv gestoppt, ein nicht mehr einreihbares
