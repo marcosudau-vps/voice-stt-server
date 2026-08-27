@@ -1,0 +1,232 @@
+{
+  "schemaVersion": 1,
+  "protocolVersion": 2,
+  "description": "Repositoryuebergreifende Vertragsvektoren fuer AP-SRV-040, AP-CLI-010 und AP-INT-010.",
+  "ids": {
+    "clientRunId": "10000000-0000-4000-8000-000000000001",
+    "sessionId": "20000000-0000-4000-8000-000000000001",
+    "activationId": "30000000-0000-4000-8000-000000000001",
+    "segmentId": "40000000-0000-4000-8000-000000000001",
+    "activateCommandId": "50000000-0000-4000-8000-000000000001",
+    "refreshCommandId": "50000000-0000-4000-8000-000000000002",
+    "eventId": "60000000-0000-4000-8000-000000000001"
+  },
+  "validMessages": [
+    {
+      "name": "hello_v2",
+      "direction": "client_to_server",
+      "message": {
+        "type": "hello",
+        "supportedProtocolVersions": [2],
+        "clientVersion": "2.0.0-test",
+        "clientCommit": "client-test-commit",
+        "clientRunId": "10000000-0000-4000-8000-000000000001",
+        "requestedSession": {
+          "trigger": {
+            "manual": true,
+            "wakeWord": true
+          },
+          "wakeWordIds": ["hey_jarvis"]
+        },
+        "runtimeSuppression": {
+          "manual": false,
+          "wakeWord": false
+        }
+      },
+      "expected": "hello.accepted"
+    },
+    {
+      "name": "manual_activate",
+      "direction": "client_to_server",
+      "message": {
+        "type": "activation.command",
+        "protocolVersion": 2,
+        "sessionId": "20000000-0000-4000-8000-000000000001",
+        "commandId": "50000000-0000-4000-8000-000000000001",
+        "action": "activate",
+        "source": "manual"
+      },
+      "expectedAck": {
+        "accepted": true,
+        "result": "applied"
+      }
+    },
+    {
+      "name": "manual_activate_replay",
+      "direction": "client_to_server",
+      "sameLogicalMessageAs": "manual_activate",
+      "message": {
+        "type": "activation.command",
+        "protocolVersion": 2,
+        "sessionId": "20000000-0000-4000-8000-000000000001",
+        "commandId": "50000000-0000-4000-8000-000000000001",
+        "action": "activate",
+        "source": "manual"
+      },
+      "expected": "identical_ack_and_single_effect"
+    },
+    {
+      "name": "refresh_active_activation",
+      "direction": "client_to_server",
+      "message": {
+        "type": "activation.command",
+        "protocolVersion": 2,
+        "sessionId": "20000000-0000-4000-8000-000000000001",
+        "commandId": "50000000-0000-4000-8000-000000000002",
+        "action": "refresh",
+        "activationId": "30000000-0000-4000-8000-000000000001"
+      },
+      "expectedAck": {
+        "accepted": true,
+        "result": "applied"
+      }
+    },
+    {
+      "name": "activation_started_event",
+      "direction": "server_to_client",
+      "message": {
+        "type": "activation.started",
+        "protocolVersion": 2,
+        "sessionId": "20000000-0000-4000-8000-000000000001",
+        "eventId": "60000000-0000-4000-8000-000000000001",
+        "eventSeq": 1,
+        "stateVersion": 1,
+        "occurredAtUnixMs": 1787616000000,
+        "activationId": "30000000-0000-4000-8000-000000000001",
+        "activationSequence": 1,
+        "primarySource": "manual",
+        "inputPhase": "waiting_first_speech",
+        "effectiveSettings": {
+          "activation.followupTimeoutMs": 3000
+        }
+      },
+      "expected": "mirror_waiting_first_speech"
+    },
+    {
+      "name": "idle_snapshot",
+      "direction": "server_to_client",
+      "message": {
+        "type": "session.snapshot",
+        "protocolVersion": 2,
+        "serverVersion": "2.0.0-test",
+        "serverCommit": "server-test-commit",
+        "sessionId": "20000000-0000-4000-8000-000000000001",
+        "stateVersion": 8,
+        "lastEventSeq": 12,
+        "settingsRevision": 3,
+        "input": {
+          "phase": "idle",
+          "activationId": null,
+          "primarySource": null,
+          "deadlineAtUnixMs": null,
+          "remainingMs": null,
+          "closeRequested": false
+        },
+        "pendingActivations": [],
+        "trigger": {
+          "configured": {"manual": true, "wakeWord": true},
+          "suppressed": {"manual": false, "wakeWord": false},
+          "effective": {"manual": true, "wakeWord": true}
+        },
+        "audioAvailable": true,
+        "effectiveSettings": {},
+        "wakeWordCapabilities": {
+          "catalogRevision": 1,
+          "availableWakeWordIds": ["hey_jarvis"]
+        }
+      },
+      "expected": "mirror_idle"
+    }
+  ],
+  "invalidMessages": [
+    {
+      "name": "wake_enabled_without_selection",
+      "direction": "client_to_server",
+      "message": {
+        "type": "hello",
+        "supportedProtocolVersions": [2],
+        "clientVersion": "2.0.0-test",
+        "clientCommit": "client-test-commit",
+        "clientRunId": "10000000-0000-4000-8000-000000000002",
+        "requestedSession": {
+          "trigger": {
+            "manual": true,
+            "wakeWord": true
+          },
+          "wakeWordIds": []
+        },
+        "runtimeSuppression": {
+          "manual": false,
+          "wakeWord": true
+        }
+      },
+      "expected": "session.rejected",
+      "expectedErrorCode": "wake_word_selection_required"
+    },
+    {
+      "name": "client_claims_wake_word",
+      "direction": "client_to_server",
+      "message": {
+        "type": "activation.command",
+        "protocolVersion": 2,
+        "sessionId": "20000000-0000-4000-8000-000000000001",
+        "commandId": "50000000-0000-4000-8000-000000000003",
+        "action": "activate",
+        "source": "wake_word"
+      },
+      "expectedAck": {
+        "accepted": false,
+        "result": "invalid_payload"
+      }
+    },
+    {
+      "name": "activate_with_activation_id",
+      "direction": "client_to_server",
+      "message": {
+        "type": "activation.command",
+        "protocolVersion": 2,
+        "sessionId": "20000000-0000-4000-8000-000000000001",
+        "commandId": "50000000-0000-4000-8000-000000000004",
+        "action": "activate",
+        "source": "manual",
+        "activationId": "30000000-0000-4000-8000-000000000001"
+      },
+      "expectedAck": {
+        "accepted": false,
+        "result": "invalid_payload"
+      }
+    },
+    {
+      "name": "refresh_without_activation_id",
+      "direction": "client_to_server",
+      "message": {
+        "type": "activation.command",
+        "protocolVersion": 2,
+        "sessionId": "20000000-0000-4000-8000-000000000001",
+        "commandId": "50000000-0000-4000-8000-000000000005",
+        "action": "refresh"
+      },
+      "expectedAck": {
+        "accepted": false,
+        "result": "invalid_payload"
+      }
+    },
+    {
+      "name": "command_id_conflict",
+      "direction": "client_to_server",
+      "precondition": "manual_activate was already handled",
+      "message": {
+        "type": "activation.command",
+        "protocolVersion": 2,
+        "sessionId": "20000000-0000-4000-8000-000000000001",
+        "commandId": "50000000-0000-4000-8000-000000000001",
+        "action": "cancel",
+        "activationId": "30000000-0000-4000-8000-000000000001"
+      },
+      "expectedAck": {
+        "accepted": false,
+        "result": "command_id_conflict"
+      }
+    }
+  ]
+}

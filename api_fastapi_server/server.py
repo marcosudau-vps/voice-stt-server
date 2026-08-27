@@ -57,6 +57,8 @@ from api_fastapi_server.segment_ledger import (
     SegmentContext,
     SegmentLedger,
 )
+from api_fastapi_server.protocol_v2 import schema as protocol_v2_schema
+from api_fastapi_server.protocol_v2.connection import ProtocolV2Connection
 from VoiceSTT_server.operations import (
     AuditLogManager,
     LocalModelRegistry,
@@ -1231,10 +1233,28 @@ def coerce_setting_value(name, value):
 
 
 class SegmentState:
-    def __init__(self):
+    """Owns the identity of the segment currently being recorded.
+
+    ``id_factory`` is the authoritative creation point of a segment id. The v1
+    transport keeps the historical integer counter; a protocol v2 session
+    injects a canonical UUID factory here, so the very same string travels
+    through ledger, events and results without any boundary reformatting
+    (AP-SRV-040 K1).
+    """
+
+    def __init__(self, id_factory=None):
         self._lock = threading.Lock()
-        self._segment_id = 1
+        self._id_factory = id_factory
+        self._counter = 1
+        self._segment_id = 1 if id_factory is None else id_factory()
         self._has_realtime = False
+
+    def _advance_locked(self):
+        self._counter += 1
+        self._segment_id = (
+            self._counter if self._id_factory is None else self._id_factory()
+        )
+        return self._segment_id
 
     def realtime(self):
         with self._lock:
@@ -1244,7 +1264,7 @@ class SegmentState:
     def final(self):
         with self._lock:
             segment_id = self._segment_id
-            self._segment_id += 1
+            self._advance_locked()
             self._has_realtime = False
             return segment_id
 
@@ -1254,9 +1274,8 @@ class SegmentState:
 
     def reset(self):
         with self._lock:
-            self._segment_id += 1
             self._has_realtime = False
-            return self._segment_id
+            return self._advance_locked()
 
 
 def timestamp_iso(timestamp):
@@ -1591,6 +1610,10 @@ class InputClosePlan:
     requested_by_action: Optional[str] = None
     cancel_pending: bool = False
     recovery: bool = False
+    #: Accepted segments of this activation, sampled before the ledger close.
+    #: Closing an activation whose segments are already terminal drops its
+    #: ledger record immediately, so the count has to travel with the plan.
+    accepted_segment_count: int = 0
 
 
 class ConnectionManager:
@@ -2663,6 +2686,7 @@ class RecorderBackedRealtimeSession:
         settings=None,
         session_config=None,
         activation_config=None,
+        canonical_ids=False,
     ):
         self.service = service
         self.settings = settings or replace(service.settings)
@@ -2682,7 +2706,17 @@ class RecorderBackedRealtimeSession:
         )
         self.session_id = session_id
         self.client_id = normalized_client_id(client_id)
-        self.segment_state = SegmentState()
+        # A protocol v2 session generates canonical, hyphenated UUIDs at every
+        # authoritative id source. The v1 transport keeps its compact ids until
+        # the legacy cut in AP-SRV-070.
+        self.canonical_ids = bool(canonical_ids)
+        self._id_factory = (
+            (lambda: str(uuid.uuid4())) if self.canonical_ids else None
+        )
+        #: Optional single subscriber on the lifecycle funnel. AP-SRV-040 binds
+        #: its event projection here; it never becomes a second authority.
+        self._protocol_observer = None
+        self.segment_state = SegmentState(id_factory=self._id_factory)
         self.timeline = SegmentTimelineTracker(self.settings)
         self.lock = threading.RLock()
         self.streaming = False
@@ -2767,6 +2801,7 @@ class RecorderBackedRealtimeSession:
                 closing_recovery_timeout=(
                     self.activation_config.closing_recovery_timeout
                 ),
+                id_factory=self._id_factory,
             )
         self.text_thread = threading.Thread(
             target=self._text_worker,
@@ -3228,6 +3263,40 @@ class RecorderBackedRealtimeSession:
         if activation is None:
             return None
         return activation.snapshot()
+
+    # -- protocol v2 seams ---------------------------------------------------
+    #
+    # Narrow, read-only accessors so the AP-SRV-040 wire layer never reaches
+    # into private session state. None of them owns a decision.
+
+    def activation_controller(self):
+        """The foreground authority of this session, or ``None`` in legacy mode."""
+        return self._activation
+
+    def audio_available(self):
+        """The generic device availability flag of this session."""
+        with self.lock:
+            return bool(self._audio_available)
+
+    def active_segment_identity(self):
+        """``(segmentId, segmentSequence)`` of the segment being recorded."""
+        context = self._active_recording_context
+        if context is None:
+            return None, None
+        return context.segment_id, context.segment_sequence
+
+    def set_protocol_observer(self, observer):
+        """Registers the single lifecycle subscriber of a protocol session."""
+        with self.lock:
+            self._protocol_observer = observer
+
+    def protocol_replay_lookup(self, command_id, payload_key):
+        """Shared ``commandId`` idempotency - there is only one replay cache."""
+        return self._command_replay.lookup(command_id, payload_key)
+
+    def protocol_replay_store(self, command_id, payload_key, result):
+        """Occupies the replay identity of a command this session answered."""
+        self._command_replay.store(command_id, payload_key, result)
 
     def _activation_correlation(self):
         """Fields every recording/transcription event carries in controlled mode.
@@ -3743,6 +3812,11 @@ class RecorderBackedRealtimeSession:
             # foreground transition follows immediately after this registration.
             fields["phase"] = "idle"
             fields["reason"] = plan.reason
+            # Captured before the ledger close, because closing an activation
+            # whose segments are already terminal drops its record at once.
+            fields["acceptedSegmentCount"] = int(
+                getattr(plan, "accepted_segment_count", 0) or 0
+            )
             if recovery:
                 fields["cause"] = "closing_recovery_timeout"
                 fields["recovered"] = True
@@ -3809,6 +3883,7 @@ class RecorderBackedRealtimeSession:
             self._run_recovery_close(plan)
             return
 
+        self._notify_input_closing(plan)
         activation_id = plan.activation_id
         generation = plan.gate_generation
 
@@ -3844,6 +3919,12 @@ class RecorderBackedRealtimeSession:
             )
             return
 
+        plan = replace(
+            plan,
+            accepted_segment_count=self.segment_ledger.accepted_segment_count(
+                activation_id
+            ),
+        )
         self._close_ledger_activation(
             activation_id,
             plan.reason,
@@ -3880,6 +3961,7 @@ class RecorderBackedRealtimeSession:
         If even the hard abort cannot make the old input path safe, terminally
         close the session instead of leaving a live session stuck forever.
         """
+        self._notify_input_closing(plan)
         activation_id = plan.activation_id
 
         try:
@@ -3943,6 +4025,12 @@ class RecorderBackedRealtimeSession:
             )
 
         if activation_id:
+            plan = replace(
+                plan,
+                accepted_segment_count=(
+                    self.segment_ledger.accepted_segment_count(activation_id)
+                ),
+            )
             self._close_ledger_activation(
                 activation_id,
                 plan.reason,
@@ -5510,6 +5598,42 @@ class RecorderBackedRealtimeSession:
                 segment_id=segment_id,
                 **event_fields,
             )
+        self._notify_protocol_observer(event, payload)
+
+    #: Synthetic notification for the visible entry into ``closing_input``.
+    #: The phase transition itself has already happened under the session lock;
+    #: AP-SRV-030 publishes no lifecycle event for it, so the wire layer needs
+    #: this marker to version a visible state change that has no own event.
+    #: It is not a domain event and never becomes one.
+    INPUT_CLOSING_NOTIFICATION = "__input_closing__"
+
+    def _notify_input_closing(self, plan):
+        self._notify_protocol_observer(
+            self.INPUT_CLOSING_NOTIFICATION,
+            {
+                "activationId": plan.activation_id,
+                "activationSequence": plan.activation_sequence,
+                "reason": plan.reason,
+                "recovery": bool(plan.recovery),
+            },
+        )
+
+    def _notify_protocol_observer(self, event, payload):
+        """Hands one already published lifecycle event to the wire projection.
+
+        This is a notification, not a second emitter: the event has already
+        happened and has already been published on the legacy path. A failing
+        observer must never break the domain, so it is fully contained.
+        """
+        observer = self._protocol_observer
+        if observer is None:
+            return
+        try:
+            observer(event, dict(payload))
+        except Exception:
+            LOGGER.exception(
+                "Protokollbeobachter für '%s' ist fehlgeschlagen", event
+            )
 
     def _timeline_snapshot(self, segment_id=None):
         timeline = getattr(self, "timeline", None)
@@ -5890,6 +6014,7 @@ class VoiceSTTService:
         wake_word_request=None,
         client_id=None,
         activation_request=None,
+        canonical_ids=False,
     ):
         self.touch_model_activity("websocket_connection")
         wake_word_request = wake_word_request or SessionWakeWordRequest()
@@ -5918,6 +6043,7 @@ class VoiceSTTService:
                 settings=session_settings,
                 session_config=session_config,
                 activation_config=activation_config,
+                canonical_ids=canonical_ids,
             )
             if not self.sessions.add(session):
                 session.close()
@@ -8966,6 +9092,111 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 clientId=client_id,
                 transport="websocket",
             )
+
+    @app.websocket("/ws/v2")
+    async def websocket_protocol_v2(websocket: WebSocket):
+        """The frozen protocol v2 endpoint (AP-SRV-040 K2).
+
+        Deliberately separate from ``/ws/transcribe``: v1 admits a session
+        from query parameters before the first message and sends a *server*
+        ``hello``, while v2 admits nothing until the *client* ``hello`` has
+        been validated. Mixing both into one route would need a protocol
+        branch inside an already admitted session, which the frozen contract
+        forbids. The legacy route stays untouched until AP-SRV-070.
+
+        A v2 connection is deliberately not registered in the shared
+        ``ConnectionManager``: everything a v2 client sees passes through the
+        v2 projection, so no legacy payload can reach it.
+        """
+        await websocket.accept()
+        client_id = normalized_client_id(
+            websocket.query_params.get("clientId")
+            or websocket.headers.get("x-voicestt-client-id")
+        )
+        connection = ProtocolV2Connection(service, client_id=client_id)
+        loop = asyncio.get_running_loop()
+        outbound = asyncio.Queue()
+
+        def sink(payload):
+            try:
+                loop.call_soon_threadsafe(outbound.put_nowait, payload)
+            except RuntimeError:
+                # The loop is gone; the connection is being torn down anyway.
+                pass
+
+        connection.set_sink(sink)
+
+        async def writer():
+            while True:
+                payload = await outbound.get()
+                if payload is None:
+                    return
+                try:
+                    await websocket.send_text(
+                        json.dumps(payload, separators=(",", ":"))
+                    )
+                except Exception:
+                    return
+
+        writer_task = asyncio.create_task(writer())
+        try:
+            while True:
+                if connection.accepted:
+                    message = await websocket.receive()
+                else:
+                    try:
+                        message = await asyncio.wait_for(
+                            websocket.receive(),
+                            timeout=connection.handshake_timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        connection.request_close(
+                            protocol_v2_schema.CLOSE_HANDSHAKE_TIMEOUT
+                        )
+                        break
+                if message.get("type") == "websocket.disconnect":
+                    break
+                if message.get("bytes") is not None:
+                    connection.handle_binary(message["bytes"])
+                elif message.get("text") is not None:
+                    connection.handle_text(message["text"])
+                if connection.closed:
+                    break
+        except WebSocketDisconnect:
+            pass
+        except RuntimeError as exc:
+            if "disconnect" not in str(exc).lower():
+                LOGGER.exception("v2-Verbindung ist unerwartet gescheitert")
+                connection.request_close(
+                    protocol_v2_schema.CLOSE_INTERNAL_ERROR
+                )
+        except Exception:
+            LOGGER.exception("v2-Verbindung ist unerwartet gescheitert")
+            connection.request_close(protocol_v2_schema.CLOSE_INTERNAL_ERROR)
+        finally:
+            close_code = connection.close_code
+            connection.request_close(close_code or 1000)
+            try:
+                await asyncio.wait_for(writer_task, timeout=5.0)
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                writer_task.cancel()
+            session_id = (
+                None if connection.session is None
+                else connection.session.session_id
+            )
+            connection.close_session()
+            if close_code is not None:
+                try:
+                    await websocket.close(code=close_code)
+                except Exception:
+                    pass
+            if session_id is not None:
+                service.audit.event(
+                    "session.closed",
+                    sessionId=session_id,
+                    clientId=client_id,
+                    transport="websocket_v2",
+                )
 
     app.state.voicestt_service = service
     return app
