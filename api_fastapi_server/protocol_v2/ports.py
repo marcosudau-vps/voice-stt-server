@@ -56,6 +56,14 @@ class SettingsPort:
         """
         return self._session.settings_requested_for_wire()
 
+    def settings_projection(self):
+        """One atomic snapshot settings bundle (AP-SRV-050 C3).
+
+        revision/requested/effective come from the session settings authority
+        as a single atomic read; the port never stores anything.
+        """
+        return self._session.settings_projection_for_wire()
+
     def patch(self, base_revision, changes):
         """Binds ``session_settings.patch`` to the session settings control.
 

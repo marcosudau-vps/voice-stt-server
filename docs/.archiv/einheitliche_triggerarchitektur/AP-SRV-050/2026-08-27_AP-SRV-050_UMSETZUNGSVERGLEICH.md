@@ -1,13 +1,13 @@
 # AP-SRV-050 – Umsetzungsvergleich (Soll/Ist)
 
 **Datum:** 2026-08-27
-**Geprüfter Stand:** Branch `review/AP-SRV-050/run-01`, **Stand C2**
-(Implementierung C1 `489ac23a` + Root-Korrektur C2)
+**Geprüfter Stand:** Branch `review/AP-SRV-050/run-01`, **Stand C3**
+(Implementierung C1 `489ac23a` + Root-Korrekturen C2 + C3)
 **Basis:** `c0806e5bc5d503580070f2dacc88831d51447938`
 
-Prüfgegenstand ist der veröffentlichte Stand (C1+C2) gegen jeden wesentlichen
-Punkt des Auftrags inklusive der sechs Root-Findings der C2-Korrektur.
-Statuswerte: ✅ vollständig, 🟡 teilweise, ⛔ nicht umgesetzt.
+Prüfgegenstand ist der veröffentlichte Stand (C1+C2+C3) gegen jeden
+wesentlichen Punkt des Auftrags einschließlich der Root-Findings der C2- und
+C3-Korrektur. Statuswerte: ✅ vollständig, 🟡 teilweise, ⛔ nicht umgesetzt.
 
 | # | Requirement (Prompt) | Status | Nachweis (Code/Test) | Abweichung |
 |---|---|---|---|---|
@@ -79,6 +79,17 @@ Statuswerte: ✅ vollständig, 🟡 teilweise, ⛔ nicht umgesetzt.
 | F4 persisted Control beim Startup strikt validiert (fail fast) | ✅ | `ServerSettingsState.__init__` + `load_control()`; `TestStartupPersistenceValidation` | – |
 | F5 prepare→persist→commit; Persistenzfehler ohne RAM-/Revisions-Mutation; HTTP 500 | ✅ | `patch_server`; `TestServerSettingsCommitOnFailure`; REST 500-Tests | – |
 | F6 `session.snapshot.requestedSettings` additiv; SettingsPort Adapter | ✅ | `snapshot.py` + `settings_requested_for_wire()`; `RequestedSettingsWireTests` | – |
+
+## C3 – Wire-Atomicity / Snapshot-Consistency
+
+| Punkt | Status | Nachweis (Code/Test) | Abweichung |
+|---|---|---|---|
+| passiver Settings-Wire-Block (Mutation → Mirror → `settings.changed`) unter `_event_dispatch_lock` | ✅ | `connection._apply_settings_patch()` | – |
+| Snapshot unter derselben `_event_dispatch_lock`-Grenze | ✅ | `connection._snapshot_payload()` | – |
+| atomarer Projection-Bundle-Read (`SessionSettingsProjection` / `settings_projection()`) | ✅ | `settings_control.py` + `ports.py` | – |
+| Snapshot-Build aus dem Bundle (revision/requested/effective), stateVersion/lastEventSeq bei `ProtocolSessionState` | ✅ | `snapshot.py` | – |
+| doppelter `settingsRevision`-Eintrag entfernt | ✅ | `snapshot.py` | – |
+| deterministische RED-FIRST-Tests (Patch vs. Snapshot, Patch vs. Domainevent) | ✅ | `WireLinearizationTests` (Test A/B, je 20× grün) | – |
 
 ## Abweichungsnotizen
 

@@ -3337,6 +3337,53 @@ class RecorderBackedRealtimeSession:
         settled = snapshot.get("effectiveSettings")
         return dict(settled) if isinstance(settled, dict) else {}
 
+    def _suppression_live(self):
+        """Live runtime suppression from the single controller authority."""
+        controller = self._activation
+        suppressed = {}
+        if controller is not None:
+            try:
+                suppressed = (
+                    (controller.trigger_state() or {}).get("suppressed") or {}
+                )
+            except Exception:  # noqa: BLE001 - defensive projection
+                suppressed = {}
+        return {
+            settings_control_module.RUNTIME_SUPPRESSION_MANUAL: bool(
+                suppressed.get("manual")
+            ),
+            settings_control_module.RUNTIME_SUPPRESSION_WAKE_WORD: bool(
+                suppressed.get("wakeWord")
+            ),
+        }
+
+    def settings_projection_for_wire(self):
+        """One atomic projection bundle for the wire settings (AP-SRV-050 C3).
+
+        ``settings_revision``, ``requestedSettings`` and ``effectiveSettings``
+        all derive from the same ``SessionSettingsState.settings_projection()``
+        snapshot - a snapshot can never span two settings revisions. The
+        running-activation latch and the live runtime suppression are overlaid
+        afterwards without re-reading the settings authority.
+        """
+        bundle = self.settings_state.settings_projection()
+        requested = dict(bundle.requested_settings)
+        effective = dict(bundle.effective_settings)
+        latched = self._latched_wire_effective()
+        if latched:
+            for key in list(requested):
+                if key in latched:
+                    effective[key] = latched[key]
+        live = self._suppression_live()
+        for key, value in live.items():
+            requested[key] = value
+            effective[key] = value
+        return settings_control_module.SessionSettingsProjection(
+            settings_revision=bundle.settings_revision,
+            requested_settings=settings_control_module._freeze(requested),
+            effective_settings=settings_control_module._freeze(effective),
+        )
+
     def settings_effective_for_wire(self):
         """The flat ``effectiveSettings`` projection for snapshot/events.
 
@@ -3346,60 +3393,17 @@ class RecorderBackedRealtimeSession:
         suppression is always read live from the controller - the control
         plane stores no suppression value.
         """
-        latched = self._latched_wire_effective()
-        if latched:
-            result = dict(latched)
-        else:
-            result = {
-                key: value
-                for key, value in self.settings_state.effective_values().items()
-                if key in self.settings_state.registry.session_keys()
-            }
-        controller = self._activation
-        if controller is not None:
-            try:
-                suppressed = (
-                    (controller.trigger_state() or {}).get("suppressed") or {}
-                )
-            except Exception:  # noqa: BLE001 - defensive projection
-                suppressed = {}
-            result[settings_control_module.RUNTIME_SUPPRESSION_MANUAL] = bool(
-                suppressed.get("manual")
-            )
-            result[settings_control_module.RUNTIME_SUPPRESSION_WAKE_WORD] = bool(
-                suppressed.get("wakeWord")
-            )
-        return result
+        return dict(self.settings_projection_for_wire().effective_settings)
 
     def settings_requested_for_wire(self):
         """The additive ``requestedSettings`` snapshot projection.
 
-        Requested values come from the session settings authority
-        (``SessionSettingsState.requested_values()``) filtered to
+        Requested values come from the session settings authority filtered to
         server-managed session keys; runtime suppression keeps its live
         controller authority and is read live (AP-SRV-050 C2 F6). Reads never
         mutate a revision or the state version.
         """
-        result = {
-            key: value
-            for key, value in self.settings_state.requested_values().items()
-            if key in self.settings_state.registry.session_keys()
-        }
-        controller = self._activation
-        if controller is not None:
-            try:
-                suppressed = (
-                    (controller.trigger_state() or {}).get("suppressed") or {}
-                )
-            except Exception:  # noqa: BLE001 - defensive projection
-                suppressed = {}
-            result[settings_control_module.RUNTIME_SUPPRESSION_MANUAL] = bool(
-                suppressed.get("manual")
-            )
-            result[settings_control_module.RUNTIME_SUPPRESSION_WAKE_WORD] = bool(
-                suppressed.get("wakeWord")
-            )
-        return result
+        return dict(self.settings_projection_for_wire().requested_settings)
 
     def _new_activation_inputs(self):
         """``(wire_settings, timing_policy)`` for one activation admission.

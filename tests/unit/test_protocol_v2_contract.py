@@ -830,6 +830,18 @@ class SnapshotCombinationTests(unittest.TestCase):
             def requested_settings(self):
                 return {"activation.followupTimeoutMs": 3000}
 
+            def settings_projection(self):
+                from api_fastapi_server.settings_control import (
+                    SessionSettingsProjection,
+                )
+
+                effective = self.effective_settings()
+                return SessionSettingsProjection(
+                    settings_revision=0,
+                    requested_settings=dict(effective),
+                    effective_settings=dict(effective),
+                )
+
         class FakeWake:
             def capabilities(self):
                 return {"catalogRevision": 1, "availableWakeWordIds": []}

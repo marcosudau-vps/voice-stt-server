@@ -632,6 +632,22 @@ class ActivationAdmissionSettings:
     timing_seconds: Mapping[str, float]
 
 
+@dataclass(frozen=True)
+class SessionSettingsProjection:
+    """One immutable atomic read for the wire settings projection (AP-SRV-050 C3).
+
+    ``settings_revision``, ``requested_settings`` and ``effective_settings`` all
+    come from the very same locked snapshot of the session settings authority,
+    so a ``session.snapshot`` can never mix two settings revisions. The running
+    activation latch and the live runtime suppression are overlaid *afterwards*
+    by the session/port without re-reading the settings authority.
+    """
+
+    settings_revision: int
+    requested_settings: Mapping[str, Any]
+    effective_settings: Mapping[str, Any]
+
+
 class SessionSettingsState:
     """Server-authoritative per-session requested/effective settings overlay.
 
@@ -900,6 +916,29 @@ class SessionSettingsState:
                 settings_revision=self._revision,
                 effective_settings=_freeze(effective),
                 timing_seconds=_freeze(timing),
+            )
+
+    def settings_projection(self) -> SessionSettingsProjection:
+        """One atomic read of revision/requested/effective for the wire.
+
+        Reads all three under a single ``self._lock`` section and returns them
+        defensively immutable, so a snapshot never spans two settings revisions
+        (AP-SRV-050 C3). The running-activation latch and runtime suppression
+        are applied by the session/port *after* this snapshot.
+        """
+        with self._lock:
+            requested: Dict[str, Any] = {}
+            effective: Dict[str, Any] = {}
+            for key in sorted(self._requested):
+                definition = self._registry.get(key)
+                if definition is None or definition.scope != SCOPE_SESSION:
+                    continue
+                requested[key] = _thaw(self._requested[key])
+                effective[key] = _thaw(self._effective[key])
+            return SessionSettingsProjection(
+                settings_revision=self._revision,
+                requested_settings=_freeze(requested),
+                effective_settings=_freeze(effective),
             )
 
 

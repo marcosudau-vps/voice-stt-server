@@ -495,11 +495,19 @@ class ProtocolV2Connection:
 
     def _apply_settings_patch(self, parsed):
         def apply():
-            patch = self.settings_port.patch(
-                parsed.payload["baseSettingsRevision"],
-                parsed.payload["changes"],
-            )
-            return self._bind_settings_patch(patch)
+            # AP-SRV-050 C3: the whole settings wire block - domain mutation,
+            # wire mirror, settings.changed - runs under the shared
+            # ``_event_dispatch_lock`` linearization boundary, so a parallel
+            # snapshot or domain event can never observe a revision-mixed
+            # intermediate state. The lock is an RLock; the reentrant
+            # acquisitions inside ``_emit_settings_changed``/``_dispatch_events``
+            # are intentional.
+            with self._event_dispatch_lock:
+                patch = self.settings_port.patch(
+                    parsed.payload["baseSettingsRevision"],
+                    parsed.payload["changes"],
+                )
+                return self._bind_settings_patch(patch)
 
         return self._answer_cached(parsed, apply)
 
@@ -749,16 +757,22 @@ class ProtocolV2Connection:
     # -- snapshot ------------------------------------------------------------
 
     def _snapshot_payload(self):
-        return snapshot_layer.build_snapshot(
-            state=self.state,
-            controller=self.session.activation_controller(),
-            ledger=self.session.segment_ledger,
-            audio_available=self.session.audio_available(),
-            settings_port=self.settings_port,
-            wake_word_port=self.wake_word_port,
-            server_version=self.server_version,
-            server_commit=self.server_commit,
-        )
+        # AP-SRV-050 C3: the complete snapshot is built under the same
+        # ``_event_dispatch_lock`` boundary as the settings patch block, so no
+        # snapshot can be captured mid-way between a settings domain commit and
+        # its wire mirror / settings.changed. The revision-mixed window is
+        # structurally unreachable from this side as well.
+        with self._event_dispatch_lock:
+            return snapshot_layer.build_snapshot(
+                state=self.state,
+                controller=self.session.activation_controller(),
+                ledger=self.session.segment_ledger,
+                audio_available=self.session.audio_available(),
+                settings_port=self.settings_port,
+                wake_word_port=self.wake_word_port,
+                server_version=self.server_version,
+                server_commit=self.server_commit,
+            )
 
     def _controller_snapshot(self):
         session = self.session

@@ -15,6 +15,7 @@ import uuid
 
 from api_fastapi_server import activation as activation_module
 from api_fastapi_server.activation import ActivationController, ActivationTimingPolicy
+from api_fastapi_server.protocol_v2 import commands as command_layer
 from api_fastapi_server.protocol_v2 import events as event_layer
 from api_fastapi_server.protocol_v2 import ports, schema
 from api_fastapi_server.protocol_v2.connection import ProtocolV2Connection
@@ -1300,6 +1301,182 @@ class PersistenceFailureRestTests(unittest.TestCase):
             )
             server = client.get("/api/v2/settings/server")
             self.assertEqual(server.json()["settingsRevision"], 0)
+
+
+@unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
+class WireLinearizationTests(unittest.TestCase):
+    """AP-SRV-050 C3 - wire atomicity on the shared ``_event_dispatch_lock``.
+
+    Test A  - a ``session.snapshot`` must never observe the window between a
+              settings domain commit (session state N+1) and the wire mirror /
+              ``settings.changed`` (still N).
+    Test B  - ``settings.changed`` for N+1 must precede every domain event that
+              already uses settings N+1; eventSeq stays strictly monotonic,
+              gapless and duplicate-free.
+
+    Both open the window deterministically via a controlled mirror seam
+    (an ``Event`` pausing ``ProtocolSessionState.set_settings_revision``) -
+    no ``sleep()`` anywhere.
+    """
+
+    def setUp(self):
+        GateAwareRecorder.instances = []
+        self.app = build_app()
+
+    def _rebuilt_connection(self, server_session, session_id):
+        connection = ProtocolV2Connection(server_session.service)
+        connection.session = server_session
+        connection.hello = None
+        connection.state = ProtocolSessionState(
+            session_id,
+            protocol_version=schema.PROTOCOL_VERSION,
+            settings_revision=server_session.settings_state.settings_revision,
+        )
+        connection.projector = event_layer.EventProjector(connection.state)
+        connection.settings_port = ports.SettingsPort(server_session)
+        return connection
+
+    @staticmethod
+    def _patch_parsed(base, changes):
+        return command_layer.ParsedCommand(
+            type=schema.SESSION_SETTINGS_PATCH,
+            command_id=schema.new_canonical_id(),
+            payload_key=("raw",),
+            payload={"baseSettingsRevision": base, "changes": changes},
+        )
+
+    def _pause_mirror(self, connection):
+        mirrored = threading.Event()
+        release = threading.Event()
+        original = connection.state.set_settings_revision
+
+        def blocking_mirror(revision):
+            mirrored.set()
+            release.wait(timeout=10)
+            return original(revision)
+
+        connection.state.set_settings_revision = blocking_mirror
+        return mirrored, release
+
+    def test_snapshot_never_observes_the_mutation_mirror_gap(self):
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                server_session = session.server_session(self.app)
+                connection = self._rebuilt_connection(
+                    server_session, session.session_id
+                )
+                self.addCleanup(server_session.service.remove_session,
+                                server_session.session_id)
+                mirrored, release = self._pause_mirror(connection)
+                errors = []
+
+                def patcher():
+                    try:
+                        connection._apply_settings_patch(
+                            self._patch_parsed(
+                                0, {sc.ACTIVATION_FOLLOWUP: 8000}
+                            )
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        errors.append(exc)
+
+                patcher_thread = threading.Thread(target=patcher)
+                patcher_thread.start()
+                self.assertTrue(mirrored.wait(timeout=10),
+                                "wire mirror was not paused")
+
+                box = {}
+                launched = threading.Event()
+
+                def snapshotter():
+                    launched.set()
+                    box["payload"] = connection._snapshot_payload()
+
+                snap_thread = threading.Thread(target=snapshotter)
+                snap_thread.start()
+                self.assertTrue(launched.wait(timeout=10))
+                release.set()
+                patcher_thread.join(timeout=15)
+                snap_thread.join(timeout=15)
+                self.assertEqual(errors, [])
+                snapshot = box["payload"]
+                # never a revision-mixed snapshot
+                self.assertEqual(snapshot["settingsRevision"], 1)
+                self.assertEqual(
+                    snapshot["requestedSettings"][sc.ACTIVATION_FOLLOWUP], 8000
+                )
+                self.assertEqual(
+                    snapshot["effectiveSettings"][sc.ACTIVATION_FOLLOWUP], 8000
+                )
+
+    def test_settings_changed_precedes_domain_events_that_use_new_settings(self):
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                server_session = session.server_session(self.app)
+                connection = self._rebuilt_connection(
+                    server_session, session.session_id
+                )
+                self.addCleanup(server_session.service.remove_session,
+                                server_session.session_id)
+                mirrored, release = self._pause_mirror(connection)
+                errors = []
+
+                def patcher():
+                    try:
+                        connection._apply_settings_patch(
+                            self._patch_parsed(
+                                0, {sc.ACTIVATION_FOLLOWUP: 8000}
+                            )
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        errors.append(exc)
+
+                patcher_thread = threading.Thread(target=patcher)
+                patcher_thread.start()
+                self.assertTrue(mirrored.wait(timeout=10),
+                                "wire mirror was not paused")
+
+                launched = threading.Event()
+
+                def domainer():
+                    launched.set()
+                    connection._on_domain_event(
+                        "activation_started",
+                        {
+                            "activationId": "act-1",
+                            "activationSequence": 1,
+                            "primarySource": "manual",
+                            "timestamp": time.time(),
+                        },
+                    )
+
+                domain_thread = threading.Thread(target=domainer)
+                domain_thread.start()
+                self.assertTrue(launched.wait(timeout=10))
+                release.set()
+                patcher_thread.join(timeout=15)
+                domain_thread.join(timeout=15)
+                self.assertEqual(errors, [])
+
+                events = [m for m in connection.drain()
+                          if m.get("type") in schema.EVENT_TYPES]
+                changed = [e for e in events
+                           if e.get("type") == schema.EVENT_SETTINGS_CHANGED]
+                domain = [e for e in events
+                          if e.get("type") == schema.EVENT_ACTIVATION_STARTED]
+                self.assertEqual(len(changed), 1)
+                self.assertEqual(len(domain), 1)
+                self.assertEqual(changed[0]["settingsRevision"], 1)
+                # the domain event indeed carries the NEW settings value
+                self.assertEqual(
+                    domain[0]["effectiveSettings"][sc.ACTIVATION_FOLLOWUP], 8000
+                )
+                # settings.changed (revision 1) must precede that domain event
+                self.assertLess(changed[0]["eventSeq"], domain[0]["eventSeq"])
+                # strictly monotonic and unique
+                sequences = [event["eventSeq"] for event in events]
+                self.assertEqual(sequences, sorted(sequences))
+                self.assertEqual(len(set(sequences)), len(sequences))
 
 
 if __name__ == "__main__":  # pragma: no cover
