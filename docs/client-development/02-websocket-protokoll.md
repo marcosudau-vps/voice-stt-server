@@ -142,9 +142,16 @@ Die Triggerquellen werden beim Upgrade festgelegt:
 | --- | --- | --- | --- |
 | `manualTriggerEnabled` | Bool | – | Manualtrigger darf eine Activation öffnen |
 | `wakeWordTriggerEnabled` | Bool | – | Wake Word darf eine Activation öffnen |
-| `initialSpeechTimeout` | Zahl 0.1–3600 | `15` | Wartezeit auf die erste Sprache |
-| `followupTimeout` | Zahl 0.1–3600 | `3` | Nachfragefenster nach einem Segment |
-| `extensionSeconds` | Zahl 0.1–3600 | `5` | Verlängerung je `extend` |
+| `initialSpeechTimeout` | Zahl 0.01–3600 | `15` | Wartezeit auf die erste Sprache |
+| `followupTimeout` | Zahl 0.01–3600 | `3` | Nachfragefenster nach einem Segment |
+| `segmentWatchdogInitialSeconds` | Zahl 0.01–3600 | `600` | Daueraufnahme-Watchdog beim Segmentstart |
+| `segmentWatchdogRefreshSeconds` | Zahl 0.01–3600 | `180` | Mindestrestzeit, die ein `refresh` sichert |
+| `segmentWatchdogWarningSeconds` | Zahl 0.01–3600 | `30` | Vorwarnung vor dem Watchdog-Ablauf |
+| `closingRecoveryTimeoutSeconds` | Zahl 0.01–3600 | `5` | Recoveryfrist in `closing_input` |
+
+`extensionSeconds` ist mit AP-SRV-030 entfallen; die additive Extend-Semantik
+ist kein gültiges Soll mehr. Ein Client, der den Parameter noch sendet, wird
+nicht abgelehnt — der Wert wird ignoriert.
 
 Wahrheitswerte: `true/1/yes/on` und `false/0/no/off`. Ein nicht
 interpretierbarer Wert wird **abgelehnt**, nicht als `false` gedeutet.
@@ -169,14 +176,17 @@ Die tatsächlich wirksame Auflösung steht in `hello.activationConfig` und
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "mode": "controlled",
   "manualTriggerEnabled": true,
   "wakeWordTriggerEnabled": false,
   "wakeWordProfileEnabled": false,
   "initialSpeechTimeout": 15.0,
   "followupTimeout": 3.0,
-  "extensionSeconds": 5.0
+  "segmentWatchdogInitialSeconds": 600.0,
+  "segmentWatchdogRefreshSeconds": 180.0,
+  "segmentWatchdogWarningSeconds": 30.0,
+  "closingRecoveryTimeoutSeconds": 5.0
 }
 ```
 
@@ -189,16 +199,21 @@ den Vertrag anbietet. Die Capability steht in `hello.sessionCapabilities` und
 ```json
 "activationTriggers": {
   "supported": true,
-  "version": 1,
+  "version": 2,
   "sources": ["manual", "wake_word"],
-  "actions": ["activate", "extend", "finish", "cancel"],
+  "actions": ["activate", "refresh", "finish", "cancel"],
+  "deprecatedActionAliases": ["extend"],
   "commandType": "trigger",
   "ackType": "trigger_ack",
   "commandIdRequired": true,
   "commandIdIdempotent": true,
-  "commandHistory": 200,
-  "activationEvents": ["activation.started", "activation.extended",
-                       "activation.closed"]
+  "commandHistory": "session",
+  "activationIdValidated": true,
+  "audioAvailabilityCommandType": "audio_availability",
+  "audioAvailabilityAckType": "audio_availability_ack",
+  "retiredQueryParameters": ["extensionSeconds"],
+  "activationEvents": ["activation.started", "activation.refreshed",
+                       "activation.closed", "watchdog.warning"]
 }
 ```
 
@@ -212,15 +227,26 @@ gegen einen Legacyserver: nur `start`/`stop`, keine Triggerkommandos.
   "commandId": "6f1c..." }
 ```
 
-`action` ist eines von `activate`, `extend`, `finish`, `cancel`.
+`action` ist eines von `activate`, `refresh`, `finish`, `cancel`. `extend`
+bleibt als veraltete Schreibweise für `refresh` zulässig und entfällt mit
+AP-SRV-070; es trägt seit AP-SRV-030 die nicht kumulative Refresh-Semantik.
 `source` ist `manual` oder `wake_word`. `commandId` ist ein nicht leerer String
 und wird vom Client erzeugt.
+
+Bei `refresh`, `finish` und `cancel` ist die vom Client beobachtete
+`activationId` **Pflicht** (AP-SRV-030 C2, F5). Eine fehlende oder leere ID wird
+als `invalid_payload` abgelehnt; eine alte ID wird `stale_activation` und ändert
+nichts. Bei `activate` ist das Feld verboten. Die Control-Aktionen sind
+**source-neutral** (F6): für sie wird kein `source` erwartet. Ein im
+v1-Übergang noch mitgesendetes `source` wird als Legacyfeld toleriert und
+ignoriert — es ist weder eine Berechtigung noch Teil der Replay-Identität.
 
 Jeder Befehl erhält **genau eine** Antwort — auch jede Ablehnung:
 
 ```json
 { "type": "trigger_ack", "commandId": "6f1c...", "accepted": true,
-  "reason": "activated", "activationId": "a42...", "sessionId": "s..." }
+  "reason": "activated", "activationId": "a42...",
+  "phase": "waiting_first_speech", "sessionId": "s..." }
 ```
 
 Läuft bereits eine Activation, trägt auch eine Ablehnung deren `activationId`.
@@ -228,14 +254,18 @@ Läuft bereits eine Activation, trägt auch eine Ablehnung deren `activationId`.
 | `reason` | `accepted` | Bedeutung |
 | --- | --- | --- |
 | `activated` | true | neue Activation eröffnet |
-| `merged` | true | zusätzliche Quelle in die laufende Activation aufgenommen |
-| `already_active` | true | dieselbe Quelle erneut, keine Änderung |
-| `extended` | true | Fenster verlängert |
+| `refreshed` | true | Follow-up- beziehungsweise Watchdog-Deadline neu gesetzt |
 | `finished` | true | Turn kontrolliert beendet |
 | `cancelled` | true | Turn verworfen |
+| `no_change` | true | idempotente Zustandsantwort; der gewünschte Zustand liegt bereits an |
+| `activation_locked` | false | `activate` traf eine nicht-idle Phase; die laufende Activation bleibt unverändert |
+| `invalid_phase` | false | `refresh` in `waiting_first_speech` |
+| `closing_input` | false | `refresh` während der Eingabebarriere |
 | `not_active` | false | keine Activation offen |
+| `stale_activation` | false | mitgeschickte `activationId` ist nicht die laufende |
+| `audio_unavailable` | false | `activate` bei `audioAvailable=false` |
 | `trigger_disabled` | false | diese Quelle ist für die Session nicht aktiviert |
-| `invalid_payload` | false | Befehl ist kein Objekt |
+| `invalid_payload` | false | Befehl ist kein Objekt, oder `activate` trug eine `activationId` |
 | `missing_command_id` | false | `commandId` fehlt oder ist leer |
 | `invalid_command_id` | false | `commandId` ist kein String |
 | `invalid_action` | false | `action` unbekannt oder falscher Typ |
@@ -245,14 +275,49 @@ Läuft bereits eine Activation, trägt auch eine Ablehnung deren `activationId`.
 | `stream_not_started` | false | Trigger vor `start` oder nach `stop` |
 | `session_closed` | false | Session ist bereits geschlossen |
 
+> Hinweis: Die früher hier genannten Werte `merged` und `already_active`
+> stammen aus der Zeit vor AP-SRV-010. Seit First-Trigger-wins gibt es sie
+> nicht mehr; ein zweiter `activate` wird `activation_locked`.
+
+### Phasenmatrix
+
+| Phase | `activate` | `refresh` | `finish` / `cancel` |
+| --- | --- | --- | --- |
+| `idle` | gemäß effektiver Triggerquelle | `not_active` | `not_active` |
+| `waiting_first_speech` | `activation_locked` | `invalid_phase` | zulässig |
+| `segment_active` | `activation_locked` | `refreshed` (Watchdog) | zulässig |
+| `followup_wait` | `activation_locked` | `refreshed` (Follow-up) | zulässig |
+| `closing_input` | `activation_locked` | `closing_input` | `no_change` |
+
 ### Idempotenz
 
-Eine Session merkt sich die letzten 200 `commandId`-Ergebnisse.
+Der Replaycache gilt für die **gesamte Session**.
 
-- gleiche `commandId`, gleicher Payload: **exakt dasselbe Ack**, keine zweite
-  Wirkung — kein neuer Timer, kein neues Event, kein zweites Segment;
+- gleiche `commandId`, semantisch gleicher Payload: **exakt dasselbe Ack**,
+  keine zweite Wirkung — kein neuer Timer, kein neues Event, kein zweites
+  Segment, kein zweites Cancel/Finish. Für `activate` zählt
+  `(action, source)` als Semantik, für Control-Aktionen `(action,
+  activationId)`; ein `source`-Wechsel eines Controls ist kein Konflikt (F6);
 - gleiche `commandId`, anderer Payload: `command_id_conflict`, die laufende
-  Activation bleibt unberührt.
+  Activation bleibt unberührt;
+- ein fachlich abgelehntes Kommando **mit verwendbarer `commandId` belegt**
+  seinen Replayeintrag (F3): ein identisches Kommando erhält dieselbe Antwort,
+  eine andere Payload-Wiederverwendung erhält `command_id_conflict`. Nur
+  Kommandos ohne verwendbare `commandId` bleiben keyless.
+
+### Audioverfügbarkeit
+
+```json
+{ "type": "audio_availability", "commandId": "3f0e...",
+  "audioAvailable": false }
+```
+
+Antwort ist ein `audio_availability_ack` mit `accepted`, `reason`,
+`audioAvailable`, `activationId`, `phase` und `sessionId`. `false` cancelt eine
+offene Activation, beendet aber **nicht** die Session; bereits veröffentlichter
+Text bleibt bestehen. Solange kein Audio verfügbar ist, wird `activate` mit
+`audio_unavailable` abgelehnt. Welches Gerät betroffen ist, erfährt der Server
+bewusst nicht.
 
 ### Verbindliche Clientregel
 
@@ -287,7 +352,7 @@ sequenceDiagram
 
     Note over S: kurz darauf erkennt der Server ein Wake Word
     S->>A: activate("wake_word")
-    A-->>S: merged, sources=[manual, wake_word]
+    A-->>S: activation_locked, primarySource bleibt manual
     Note over G: dieselbe Activation, kein zweites Öffnen
 ```
 

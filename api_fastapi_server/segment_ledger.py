@@ -145,6 +145,67 @@ class SegmentLedger:
             self._highest_activation_sequence = activation_sequence
             return True
 
+    def mark_cancel_requested(self, activation_id, reason):
+        """Sets the per-activation cancel publication barrier.
+
+        This is the *fachliche Annahme* of a cancel: from this instant on a
+        later segment of this activation can never publish useful text, and
+        text that was already computed but silently waiting behind a sequence
+        hole is neutralised and terminalised as ``cancelled``.
+
+        The method deliberately does **not** publish anything and does not
+        call back into the session or the manager. It is expected to run under
+        the caller's external ``_ledger_dispatch_lock``, and the returned
+        :class:`LedgerUpdate` is applied visibly by the session under that same
+        dispatch boundary *after* the foreground lock has been released.
+
+        ``input_closed`` stays ``False`` here: the physical input close and the
+        activation terminal are the responsibility of
+        :meth:`close_activation` once the barrier has been set.
+        """
+        with self._lock:
+            activation = self._activations.get(activation_id)
+            if activation is None:
+                return LedgerUpdate()
+            if activation.requested_terminal == "cancelled":
+                # Idempotent: the barrier is already set (F-cancel idempotency).
+                return LedgerUpdate()
+            activation.requested_terminal = "cancelled"
+            cancel_reason = str(reason or "cancelled")
+            if not activation.close_reason:
+                activation.close_reason = cancel_reason
+
+            changed = False
+            resolutions = []
+            for sequence in activation.accepted_sequences:
+                segment = self._segments[sequence]
+                if segment.drained:
+                    continue
+                if (
+                    segment.terminal_state is None
+                    or segment.prepared_text is not None
+                ):
+                    segment.prepared_text = None
+                    if segment.terminal_state is None:
+                        self._terminal_segment_count += 1
+                    segment.terminal_state = "cancelled"
+                    segment.terminal_reason = cancel_reason
+                    resolutions.append(
+                        SegmentResolution(
+                            segment.context, "cancelled", cancel_reason
+                        )
+                    )
+                    changed = True
+
+            publications = self._drain_locked()
+            terminals = self._terminalize_activations_locked()
+            return LedgerUpdate(
+                changed=changed,
+                resolutions=tuple(resolutions),
+                publications=tuple(publications),
+                activation_terminals=tuple(terminals),
+            )
+
     def accept_segment(self, activation_id, segment_id):
         with self._lock:
             activation = self._activations.get(activation_id)
@@ -152,6 +213,12 @@ class SegmentLedger:
                 raise KeyError(f"unknown activation: {activation_id}")
             if activation.input_closed:
                 raise RuntimeError("activation input is already closed")
+            if activation.requested_terminal == "cancelled":
+                # A recorder callback that loses the cancel race must not
+                # register a new segment behind the barrier (C2). The physical
+                # close may still be running, so ``input_closed`` can be False
+                # while the barrier is already effective.
+                raise RuntimeError("activation input is cancelled")
             sequence = self._next_segment_sequence
             self._next_segment_sequence += 1
             context = SegmentContext(
@@ -231,6 +298,27 @@ class SegmentLedger:
             segment = self._matching_pending_locked(context)
             if segment is None or segment.prepared_text is not None:
                 return LedgerUpdate()
+            activation = self._activations.get(context.activation_id)
+            if activation is not None and activation.requested_terminal == "cancelled":
+                # The cancel barrier is already set. Text that finishes after
+                # the cancel must never be prepared or published: it is
+                # terminalised exactly once as ``cancelled`` (C2). The segment
+                # itself is still pending, so this also keeps drain correct.
+                segment.prepared_text = None
+                self._terminal_segment_count += 1
+                segment.terminal_state = "cancelled"
+                segment.terminal_reason = activation.close_reason or "cancelled"
+                resolution = SegmentResolution(
+                    context, "cancelled", segment.terminal_reason
+                )
+                publications = self._drain_locked()
+                terminals = self._terminalize_activations_locked()
+                return LedgerUpdate(
+                    changed=True,
+                    resolutions=(resolution,),
+                    publications=tuple(publications),
+                    activation_terminals=tuple(terminals),
+                )
             segment.prepared_text = text
             publications = self._drain_locked()
             terminals = self._terminalize_activations_locked()

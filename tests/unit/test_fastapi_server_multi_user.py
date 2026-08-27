@@ -1027,6 +1027,9 @@ class FastAPIMultiUserSessionTests(unittest.TestCase):
         )
         session = service.admit_session("first")
         self.assertIsNotNone(session)
+        # Wake-word callbacks are lifecycle-bound (C2/F9): only a running
+        # stream arms them, exactly like the production recorder thread.
+        session.start_streaming()
         recorder = FakeRecorder.instances[-1]
 
         recorder.on_wakeword_detection_start()
@@ -1147,6 +1150,8 @@ class FastAPIMultiUserSessionTests(unittest.TestCase):
         session.start_streaming()
         recorder = FakeRecorder.instances[-1]
 
+        # Lifecycle-bound detection: arm the wake epoch first (C2/F9).
+        recorder.on_wakeword_detection_start()
         recorder.on_wakeword_detected()
         recorder.on_vad_detect_start()
         recorder.on_recording_start()

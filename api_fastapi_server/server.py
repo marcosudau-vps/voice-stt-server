@@ -32,7 +32,26 @@ from VoiceSTT_server.event_logging import (
     resolve_calendar_timezone,
     resolve_log_level,
 )
-from api_fastapi_server.activation import ActivationController
+from api_fastapi_server.activation import (
+    ActivationController,
+    DEFAULT_CLOSING_RECOVERY_TIMEOUT,
+    DEFAULT_FOLLOWUP_TIMEOUT,
+    DEFAULT_INITIAL_SPEECH_TIMEOUT,
+    DEFAULT_SEGMENT_WATCHDOG_INITIAL,
+    DEFAULT_SEGMENT_WATCHDOG_REFRESH,
+    DEFAULT_SEGMENT_WATCHDOG_WARNING,
+)
+from api_fastapi_server.activation_commands import (
+    ACTIVATE,
+    ACTIVATION_ACTIONS,
+    CANCEL,
+    CONFLICT,
+    CommandReplayCache,
+    FINISH,
+    REFRESH,
+    REPLAY,
+    prepare_activation_command,
+)
 from api_fastapi_server.segment_ledger import (
     LedgerUpdate,
     SegmentContext,
@@ -916,25 +935,35 @@ SESSION_ACTIVATION_QUERY_FIELDS = (
     "wakeWordTriggerEnabled",
     "initialSpeechTimeout",
     "followupTimeout",
-    "extensionSeconds",
+    "segmentWatchdogInitialSeconds",
+    "segmentWatchdogRefreshSeconds",
+    "segmentWatchdogWarningSeconds",
+    "closingRecoveryTimeoutSeconds",
 )
 
-#: How many ``commandId`` results a session remembers for idempotency. Bounded
-#: on purpose: a session must not accumulate unbounded state, and a client that
-#: replays a command this old has long since reconnected.
-TRIGGER_COMMAND_HISTORY = 200
+#: Removed with AP-SRV-030. The additive ``extensionSeconds`` semantics is no
+#: longer part of the contract, so the parameter configures nothing. It is
+#: listed here only so that an old URL that still carries it is ignored rather
+#: than rejected; the settings control plane of AP-SRV-050 owns the final
+#: schema.
+SESSION_ACTIVATION_RETIRED_QUERY_FIELDS = ("extensionSeconds",)
 
 ACTIVATION_SOURCES_PUBLIC = ("manual", "wake_word")
-ACTIVATION_ACTIONS_PUBLIC = ("activate", "extend", "finish", "cancel")
+ACTIVATION_ACTIONS_PUBLIC = tuple(ACTIVATION_ACTIONS)
+#: Deprecated v1 spelling still accepted by the parser; removed in AP-SRV-070.
+ACTIVATION_ACTION_ALIASES_PUBLIC = ("extend",)
 
 
 @dataclass(frozen=True)
 class SessionActivationRequest:
     manual_enabled: Optional[bool] = None
     wake_word_enabled: Optional[bool] = None
-    initial_speech_timeout: float = 15.0
-    followup_timeout: float = 3.0
-    extension_seconds: float = 5.0
+    initial_speech_timeout: float = DEFAULT_INITIAL_SPEECH_TIMEOUT
+    followup_timeout: float = DEFAULT_FOLLOWUP_TIMEOUT
+    segment_watchdog_initial: float = DEFAULT_SEGMENT_WATCHDOG_INITIAL
+    segment_watchdog_refresh: float = DEFAULT_SEGMENT_WATCHDOG_REFRESH
+    segment_watchdog_warning: float = DEFAULT_SEGMENT_WATCHDOG_WARNING
+    closing_recovery_timeout: float = DEFAULT_CLOSING_RECOVERY_TIMEOUT
 
 
 @dataclass(frozen=True)
@@ -944,12 +973,15 @@ class ResolvedSessionActivationConfig:
     wake_word_enabled: bool
     initial_speech_timeout: float
     followup_timeout: float
-    extension_seconds: float
+    segment_watchdog_initial: float = DEFAULT_SEGMENT_WATCHDOG_INITIAL
+    segment_watchdog_refresh: float = DEFAULT_SEGMENT_WATCHDOG_REFRESH
+    segment_watchdog_warning: float = DEFAULT_SEGMENT_WATCHDOG_WARNING
+    closing_recovery_timeout: float = DEFAULT_CLOSING_RECOVERY_TIMEOUT
     wake_word_profile_enabled: bool = False
 
     def public_dict(self):
         return {
-            "version": 1,
+            "version": 2,
             "mode": self.mode,
             "manualTriggerEnabled": self.manual_enabled,
             "wakeWordTriggerEnabled": self.wake_word_enabled,
@@ -959,14 +991,48 @@ class ResolvedSessionActivationConfig:
             "wakeWordProfileEnabled": self.wake_word_profile_enabled,
             "initialSpeechTimeout": self.initial_speech_timeout,
             "followupTimeout": self.followup_timeout,
-            "extensionSeconds": self.extension_seconds,
+            "segmentWatchdogInitialSeconds": self.segment_watchdog_initial,
+            "segmentWatchdogRefreshSeconds": self.segment_watchdog_refresh,
+            "segmentWatchdogWarningSeconds": self.segment_watchdog_warning,
+            "closingRecoveryTimeoutSeconds": self.closing_recovery_timeout,
         }
 
 
+#: ``queryName -> (fieldName, default, minimum, maximum)``. The bounds stay
+#: deliberately wide so that deterministic tests can drive short deadlines
+#: through the production entry point; the contract ranges are enforced by the
+#: settings control plane in AP-SRV-050.
 SESSION_ACTIVATION_TIMING_FIELDS = {
-    "initialSpeechTimeout": ("initial_speech_timeout", 15.0, 0.1, 3600.0),
-    "followupTimeout": ("followup_timeout", 3.0, 0.1, 3600.0),
-    "extensionSeconds": ("extension_seconds", 5.0, 0.1, 3600.0),
+    "initialSpeechTimeout": (
+        "initial_speech_timeout", DEFAULT_INITIAL_SPEECH_TIMEOUT, 0.01, 3600.0
+    ),
+    "followupTimeout": (
+        "followup_timeout", DEFAULT_FOLLOWUP_TIMEOUT, 0.01, 3600.0
+    ),
+    "segmentWatchdogInitialSeconds": (
+        "segment_watchdog_initial",
+        DEFAULT_SEGMENT_WATCHDOG_INITIAL,
+        0.01,
+        3600.0,
+    ),
+    "segmentWatchdogRefreshSeconds": (
+        "segment_watchdog_refresh",
+        DEFAULT_SEGMENT_WATCHDOG_REFRESH,
+        0.01,
+        3600.0,
+    ),
+    "segmentWatchdogWarningSeconds": (
+        "segment_watchdog_warning",
+        DEFAULT_SEGMENT_WATCHDOG_WARNING,
+        0.01,
+        3600.0,
+    ),
+    "closingRecoveryTimeoutSeconds": (
+        "closing_recovery_timeout",
+        DEFAULT_CLOSING_RECOVERY_TIMEOUT,
+        0.01,
+        3600.0,
+    ),
 }
 
 _ACTIVATION_TRUE_VALUES = {"true", "1", "yes", "on"}
@@ -1057,7 +1123,10 @@ def resolve_session_activation_config(request, effective_wake_word_enabled):
             wake_word_profile_enabled=effective_wake_word_enabled,
             initial_speech_timeout=request.initial_speech_timeout,
             followup_timeout=request.followup_timeout,
-            extension_seconds=request.extension_seconds,
+            segment_watchdog_initial=request.segment_watchdog_initial,
+            segment_watchdog_refresh=request.segment_watchdog_refresh,
+            segment_watchdog_warning=request.segment_watchdog_warning,
+            closing_recovery_timeout=request.closing_recovery_timeout,
         )
 
     man_enabled = bool(request.manual_enabled)
@@ -1089,7 +1158,10 @@ def resolve_session_activation_config(request, effective_wake_word_enabled):
         wake_word_profile_enabled=bool(effective_wake_word_enabled),
         initial_speech_timeout=request.initial_speech_timeout,
         followup_timeout=request.followup_timeout,
-        extension_seconds=request.extension_seconds,
+        segment_watchdog_initial=request.segment_watchdog_initial,
+        segment_watchdog_refresh=request.segment_watchdog_refresh,
+        segment_watchdog_warning=request.segment_watchdog_warning,
+        closing_recovery_timeout=request.closing_recovery_timeout,
     )
 
 
@@ -1497,6 +1569,28 @@ class QueueSubmitResult:
     accepted: bool
     reason: str = ""
     coalesced: bool = False
+
+
+@dataclass(frozen=True)
+class InputClosePlan:
+    """One immutable description of an input-close operation to execute.
+
+    ``_run_input_close(plan)`` is the single orchestrator for both normal
+    closes and recovery. It runs **outside** ``self.lock`` and outside
+    ``_ledger_dispatch_lock``: closing the gate, flushing the recorder and
+    dispatching the ledger close happen there, and only afterwards the
+    identity-bound controller finalisation turns the phase to ``idle``.
+    """
+
+    activation_id: str
+    activation_sequence: int
+    gate_generation: int
+    reason: str
+    cause: str
+    requested_by_command_id: Optional[str] = None
+    requested_by_action: Optional[str] = None
+    cancel_pending: bool = False
+    recovery: bool = False
 
 
 class ConnectionManager:
@@ -2583,9 +2677,8 @@ class RecorderBackedRealtimeSession:
             mode="legacy",
             manual_enabled=False,
             wake_word_enabled=self.settings.wake_word_enabled(),
-            initial_speech_timeout=15.0,
-            followup_timeout=3.0,
-            extension_seconds=5.0,
+            initial_speech_timeout=DEFAULT_INITIAL_SPEECH_TIMEOUT,
+            followup_timeout=DEFAULT_FOLLOWUP_TIMEOUT,
         )
         self.session_id = session_id
         self.client_id = normalized_client_id(client_id)
@@ -2630,7 +2723,27 @@ class RecorderBackedRealtimeSession:
         self._recorder_stop_recording_before_followup = None
         self._activation = None
         self._activation_timer_generation = 0
-        self._trigger_command_results = collections.OrderedDict()
+        #: The timer token the single scheduled worker was armed with.
+        self._armed_timer_token = None
+        # Monotone stream/lifecycle Epoch. Every stream start/stop/close
+        # advances it, which invalidates lifecycle-bound recorder callbacks
+        # from an earlier stream (F9/T11-T13).
+        self._lifecycle_epoch = 0
+        # The wake-detection epoch latched by a *valid synchronous*
+        # ``_on_wakeword_detection_start``; a detect callback whose epoch no
+        # longer matches the current lifecycle is inert (F9/T13).
+        self._wake_detection_epoch = None
+        # PHASE-04 / C3: the exactly-once input-close lifecycle event is
+        # logically reserved before the foreground slot may become idle.
+        # AP-SRV-040 will bind this seam to eventId/eventSeq/stateVersion.
+        self._registered_input_close_events = {}
+        # Session-scoped command idempotency. The contract requires the replay
+        # cache to hold for at least the whole session, so it is cleared when
+        # the session is torn down, not trimmed while it runs.
+        self._command_replay = CommandReplayCache()
+        # Generic device availability. The server never learns which device or
+        # why - that stays client responsibility (DEVICE-01/DEVICE-02).
+        self._audio_available = True
         self.queue_delay = {"realtime": RunningStats(), "final": RunningStats()}
         self.inference_duration = {"realtime": RunningStats(), "final": RunningStats()}
         self.total_latency = {"realtime": RunningStats(), "final": RunningStats()}
@@ -2642,7 +2755,18 @@ class RecorderBackedRealtimeSession:
                 wake_word_trigger_enabled=self.activation_config.wake_word_enabled,
                 initial_speech_timeout=self.activation_config.initial_speech_timeout,
                 followup_timeout=self.activation_config.followup_timeout,
-                extension_seconds=self.activation_config.extension_seconds,
+                segment_watchdog_initial=(
+                    self.activation_config.segment_watchdog_initial
+                ),
+                segment_watchdog_refresh=(
+                    self.activation_config.segment_watchdog_refresh
+                ),
+                segment_watchdog_warning=(
+                    self.activation_config.segment_watchdog_warning
+                ),
+                closing_recovery_timeout=(
+                    self.activation_config.closing_recovery_timeout
+                ),
             )
         self.text_thread = threading.Thread(
             target=self._text_worker,
@@ -2669,6 +2793,11 @@ class RecorderBackedRealtimeSession:
             "spinner": False,
             "use_microphone": False,
             "level": resolve_log_level(self.settings.log_level),
+            # C2 lifecycle invariant: lifecycle-relevant recordercallbacks
+            # (wake detection, recording start/stop) must run synchronously.
+            # Setting this explicitly - rather than relying on the constructor
+            # default - is part of the C2 safety architecture (T14).
+            "start_callback_in_new_thread": False,
             "model": self.settings.model,
             "realtime_model_type": self.settings.realtime_model,
             "language": self.settings.language,
@@ -2753,6 +2882,8 @@ class RecorderBackedRealtimeSession:
 
     def start_streaming(self):
         with self.lock:
+            self._lifecycle_epoch += 1
+            self._wake_detection_epoch = None
             self.streaming = True
             self.status = (
                 "wakeword_wait"
@@ -2764,6 +2895,8 @@ class RecorderBackedRealtimeSession:
 
     def stop_streaming(self):
         with self.lock:
+            self._lifecycle_epoch += 1
+            self._wake_detection_epoch = None
             self.streaming = False
             self.status = "idle"
             # An activation cannot outlive the audio stream it belongs to.
@@ -2791,6 +2924,8 @@ class RecorderBackedRealtimeSession:
             cancelled_segment = self.segment_state.current()
             should_cancel = self.status in {"recording", "transcribing"}
             self.generation += 1
+            self._lifecycle_epoch += 1
+            self._wake_detection_epoch = None
             self.streaming = False
             self.status = "closed"
             self.timeline.reset()
@@ -2826,6 +2961,20 @@ class RecorderBackedRealtimeSession:
             LOGGER.debug("Recorder für %s konnte nicht beendet werden", self.session_id, exc_info=True)
         if self.text_thread is not None:
             self.text_thread.join(timeout=3)
+        # The replay cache is session scoped by contract, so this is the one
+        # place it is released.
+        self._command_replay.clear()
+
+        # C3/PHASE-05 terminal seal: recorder shutdown/abort may synchronously
+        # fire lifecycle callbacks before ``close()`` returns. Those callbacks
+        # may clean recording state, but they must never leave a terminal
+        # session looking reusable again. Recorder lifecycle callbacks are
+        # pinned to synchronous dispatch, so this is the final close
+        # linearization point.
+        with self.lock:
+            self.streaming = False
+            self.status = "closed"
+            self._wake_detection_epoch = None
 
     def clear(self):
         with self.lock:
@@ -2977,8 +3126,17 @@ class RecorderBackedRealtimeSession:
             self.final_completed += 1
 
     def publish_status(self, state=None):
+        # ``closed`` is terminal. A timer/recorder callback can complete after
+        # close() invalidated its lifecycle; that stale completion must never
+        # make this same session reusable again (PHASE-05/F9).
+        #
+        # Guard and write share one self.lock acquisition, giving close-vs-
+        # publish a total order: if publish wins first, close overwrites it;
+        # if close wins first, this stale non-closed publish becomes a no-op.
         with self.lock:
             state = state or self.status
+            if self.status == "closed" and state != "closed":
+                return False
             self.status = state
             message = {
                 "type": "status",
@@ -3002,6 +3160,7 @@ class RecorderBackedRealtimeSession:
             }
             message["timestampIso"] = timestamp_iso(message["timestamp"])
         self.service.manager.publish_session(self.session_id, message)
+        return True
 
     def session_config_dict(self):
         session_config = getattr(self, "session_config", None)
@@ -3035,18 +3194,27 @@ class RecorderBackedRealtimeSession:
 
     # -- activation control -------------------------------------------------
 
-    TRIGGER_ACTIONS = ("activate", "extend", "finish", "cancel")
-    TRIGGER_SOURCES = ("manual", "wake_word")
+    TRIGGER_ACTIONS = ACTIVATION_ACTIONS_PUBLIC
+    TRIGGER_SOURCES = ACTIVATION_SOURCES_PUBLIC
 
-    def _trigger_ack(self, command_id, accepted, reason, activation_id=None):
+    def _trigger_ack(
+        self, command_id, accepted, reason, activation_id=None, phase=None
+    ):
         return {
             "type": "trigger_ack",
             "commandId": command_id,
             "accepted": bool(accepted),
             "reason": reason,
             "activationId": activation_id,
+            "phase": phase if phase is not None else self._current_phase(),
             "sessionId": self.session_id,
         }
+
+    def _current_phase(self):
+        activation = getattr(self, "_activation", None)
+        if activation is None:
+            return None
+        return activation.snapshot().get("phase")
 
     def _current_activation_id(self):
         """The running activation id, used to correlate rejections as well."""
@@ -3082,118 +3250,391 @@ class RecorderBackedRealtimeSession:
         }
 
     def handle_trigger_command(self, data):
-        """Processes one ``trigger`` command and returns its ``trigger_ack``.
+        """Processes one activation command and returns its ``trigger_ack``.
 
         Every syntactically valid command gets exactly one deterministic
         answer, and every answer carries the ``commandId`` so that the client
         can correlate it - rejections included.
+
+        The order is deliberate and is what makes the replay rules hold:
+
+        1. the envelope is prepared first; a usable ``commandId`` always owns a
+           deterministic replay key, *including* fachlich rejected commands
+           (F3);
+        2. under the correct lock boundary the ``commandId`` is looked up - a
+           replay returns the stored answer and never re-enters the state
+           machine, a conflicting payload is refused without any effect;
+        3. only then the command runs through the controller, which owns the
+           phase matrix and the ``activationId`` validation.
+
+        Explicit cancel is accepted under the outer dispatch boundary
+        (``_ledger_dispatch_lock`` first), because its accept already sets the
+        per-activation publication barrier (F4).
         """
-        if not isinstance(data, dict):
-            return self._trigger_ack("", False, "invalid_payload")
+        prepared = prepare_activation_command(data)
+        if not prepared.command_id:
+            # Keyless rejection: no usable commandId, no replay identity.
+            return self._trigger_ack(
+                "", False, prepared.rejection_reason or "invalid_payload"
+            )
 
-        raw_command_id = data.get("commandId")
-        if raw_command_id is not None and not isinstance(raw_command_id, str):
-            return self._trigger_ack("", False, "invalid_command_id")
-        command_id = str(raw_command_id or "").strip()
-        if not command_id:
-            return self._trigger_ack("", False, "missing_command_id")
-
-        raw_action = data.get("action")
-        raw_source = data.get("source")
-        if raw_action is not None and not isinstance(raw_action, str):
-            return self._trigger_ack(command_id, False, "invalid_action")
-        if raw_source is not None and not isinstance(raw_source, str):
-            return self._trigger_ack(command_id, False, "invalid_source")
-
-        action = str(raw_action or "").strip().lower()
-        source = str(raw_source or "").strip().lower()
-
-        if action not in self.TRIGGER_ACTIONS:
-            return self._trigger_ack(command_id, False, "invalid_action")
-        if source not in self.TRIGGER_SOURCES:
-            return self._trigger_ack(command_id, False, "invalid_source")
+        if prepared.command is not None and prepared.command.action == CANCEL:
+            return self._handle_cancel_accept(prepared)
 
         published = []
         with self.lock:
-            # Idempotency: the same commandId must never take effect twice.
-            cached = self._trigger_command_results.get(command_id)
-            if cached is not None:
-                cached_data, cached_ack = cached
-                same = (
-                    cached_data.get("action") == action
-                    and cached_data.get("source") == source
-                )
-                if same:
-                    return cached_ack
+            lookup = self._command_replay.lookup(
+                prepared.command_id, prepared.payload_key
+            )
+            if lookup.state == REPLAY:
+                return dict(lookup.result)
+            if lookup.state == CONFLICT:
+                # A conflict is deliberately not stored: the original entry
+                # stays authoritative for its own payload.
                 return self._trigger_ack(
-                    command_id,
+                    prepared.command_id,
                     False,
                     "command_id_conflict",
                     self._current_activation_id(),
                 )
 
-            if self._activation is None:
+            if prepared.rejection_reason is not None:
+                # A fachlich rejected command with a usable commandId still
+                # occupies its replay identity (F3): the stored first answer
+                # stays authoritative.
                 ack = self._trigger_ack(
-                    command_id, False, "controlled_activation_disabled"
-                )
-                self._cache_trigger_command_result(command_id, data, ack)
-                return ack
-
-            # Stream lifecycle: triggers are only meaningful while the session
-            # is streaming audio. Before start, after stop and after close the
-            # command is rejected - but still acknowledged and correlated.
-            if self.status == "closed":
-                ack = self._trigger_ack(
-                    command_id,
+                    prepared.command_id,
                     False,
-                    "session_closed",
+                    prepared.rejection_reason,
                     self._current_activation_id(),
                 )
-                self._cache_trigger_command_result(command_id, data, ack)
-                return ack
-            if not self.streaming:
-                ack = self._trigger_ack(
-                    command_id,
-                    False,
-                    "stream_not_started",
-                    self._current_activation_id(),
+                self._command_replay.store(
+                    prepared.command_id, prepared.payload_key, ack
                 )
-                self._cache_trigger_command_result(command_id, data, ack)
-                return ack
+                return dict(ack)
 
-            if action == "activate":
-                decision = self._activation.activate(
-                    source, self._effective_activation_settings()
-                )
-            elif action == "extend":
-                decision = self._activation.extend(source)
-            elif action == "finish":
-                decision = self._activation.finish(source)
-            else:
-                decision = self._activation.cancel(source)
-
-            activation_id = self._apply_activation_decision_locked(
-                action, decision, published
+            ack = self._run_activation_command_locked(
+                prepared.command, published
             )
-            ack = self._trigger_ack(
-                command_id, decision.accepted, decision.reason, activation_id
+            self._command_replay.store(
+                prepared.command_id, prepared.payload_key, ack
             )
-            self._cache_trigger_command_result(command_id, data, ack)
 
         self._publish_collected_events(published)
-        return ack
+        return dict(ack)
 
-    def _cache_trigger_command_result(self, command_id, data, ack):
-        self._trigger_command_results[command_id] = (data, ack)
-        if len(self._trigger_command_results) > TRIGGER_COMMAND_HISTORY:
-            self._trigger_command_results.popitem(last=False)
+    def _handle_cancel_accept(self, prepared):
+        """Cancel acceptance under the total order.
 
-    def _apply_activation_decision_locked(self, action, decision, published):
+        The cancel barrier must be serialised with every other ledger
+        publication, so the whole acceptance runs under ``_ledger_dispatch_lock``
+        first and ``self.lock`` second:
+
+        ``_ledger_dispatch_lock -> self.lock -> controller decides -> closing_input
+        -> SegmentLedger.mark_cancel_requested() -> ack built and stored
+        -> self.lock released -> barrier LedgerUpdate applied visibly (still
+        under dispatch) -> _ledger_dispatch_lock released -> physical close``
+
+        A final thread that already holds the dispatch boundary publishes its
+        result before the cancel is accepted (Fall A); a cancel that wins the
+        boundary makes every later final of this activation a ``cancelled``
+        terminal (Fall B). There is no state in which a publication can escape
+        after the cancel was accepted (F4).
+        """
+        cancel_update = None
+        plan = None
+        with self._ledger_dispatch_lock:
+            with self.lock:
+                if self._activation is None:
+                    return self._trigger_ack(
+                        prepared.command_id,
+                        False,
+                        "controlled_activation_disabled",
+                    )
+                if self.status == "closed":
+                    return self._trigger_ack(
+                        prepared.command_id,
+                        False,
+                        "session_closed",
+                        self._current_activation_id(),
+                    )
+                if not self.streaming:
+                    return self._trigger_ack(
+                        prepared.command_id,
+                        False,
+                        "stream_not_started",
+                        self._current_activation_id(),
+                    )
+
+                lookup = self._command_replay.lookup(
+                    prepared.command_id, prepared.payload_key
+                )
+                if lookup.state == REPLAY:
+                    return dict(lookup.result)
+                if lookup.state == CONFLICT:
+                    return self._trigger_ack(
+                        prepared.command_id,
+                        False,
+                        "command_id_conflict",
+                        self._current_activation_id(),
+                    )
+
+                decision = self._activation.cancel(
+                    activation_id=prepared.command.activation_id,
+                    command_id=prepared.command.command_id,
+                )
+                activation_id = self._apply_activation_decision_locked(
+                    CANCEL, decision, [], command_id=prepared.command.command_id
+                )
+                plan = decision.snapshot.get("__close_plan__")
+                if plan is not None:
+                    close_reason = plan.reason or "cancelled"
+                    cancel_update = self.segment_ledger.mark_cancel_requested(
+                        plan.activation_id, close_reason
+                    )
+                    # Deterministic test hook (T9b): lets a test block the
+                    # cancel accept *after* the barrier is set but while the
+                    # dispatch boundary and the session lock are still held.
+                    hook = getattr(self, "_test_cancel_after_barrier", None)
+                    if hook is not None:
+                        hook()
+                ack = self._trigger_ack(
+                    prepared.command_id,
+                    decision.accepted,
+                    decision.reason,
+                    activation_id,
+                )
+                self._command_replay.store(
+                    prepared.command_id, prepared.payload_key, ack
+                )
+            if cancel_update is not None:
+                self._apply_ledger_update(cancel_update)
+
+        if plan is not None:
+            self._run_input_close(plan)
+        return dict(ack)
+
+    def _run_activation_command_locked(self, command, published):
+        """Applies one already de-duplicated command. Requires ``self.lock``."""
+        if self._activation is None:
+            return self._trigger_ack(
+                command.command_id, False, "controlled_activation_disabled"
+            )
+
+        # Stream lifecycle: triggers are only meaningful while the session is
+        # streaming audio. Before start, after stop and after close the command
+        # is rejected - but still acknowledged and correlated.
+        if self.status == "closed":
+            return self._trigger_ack(
+                command.command_id,
+                False,
+                "session_closed",
+                self._current_activation_id(),
+            )
+        if not self.streaming:
+            return self._trigger_ack(
+                command.command_id,
+                False,
+                "stream_not_started",
+                self._current_activation_id(),
+            )
+
+        if command.action == ACTIVATE:
+            if not self._audio_available:
+                # Opening an activation without an input device would produce
+                # a window that can never receive speech.
+                return self._trigger_ack(
+                    command.command_id,
+                    False,
+                    "audio_unavailable",
+                    self._current_activation_id(),
+                )
+            decision = self._activation.activate(
+                command.source, self._effective_activation_settings()
+            )
+        elif command.action == REFRESH:
+            decision = self._activation.refresh(
+                activation_id=command.activation_id
+            )
+        elif command.action == FINISH:
+            decision = self._activation.finish(
+                activation_id=command.activation_id,
+                command_id=command.command_id,
+            )
+        else:  # pragma: no cover - the parser admits no other action
+            return self._trigger_ack(
+                command.command_id, False, "invalid_action"
+            )
+
+        activation_id = self._apply_activation_decision_locked(
+            command.action, decision, published, command_id=command.command_id
+        )
+        return self._trigger_ack(
+            command.command_id,
+            decision.accepted,
+            decision.reason,
+            activation_id,
+        )
+
+    def handle_audio_availability_command(self, data):
+        """Processes the generic ``audioAvailable`` status of one session.
+
+        The server never learns *which* device changed or why; that stays with
+        the client (DEVICE-01/DEVICE-02). Losing audio cancels the open
+        activation and leaves the session and its background ledger intact
+        (DEVICE-03). An audio loss that cancels an activation uses the same
+        publication barrier as an explicit cancel (F7/T8), but the
+        availability ``commandId`` stays replay-/ack-identity only and never
+        becomes a finish-/cancel-``causedByCommandId``.
+
+        The final v2 message (``audio_availability.set``) belongs to
+        AP-SRV-040; this is the additive v1 form of the same server policy.
+        """
+        if not isinstance(data, dict):
+            return self._audio_availability_ack("", False, "invalid_payload")
+
+        raw_command_id = data.get("commandId")
+        if raw_command_id is not None and not isinstance(raw_command_id, str):
+            return self._audio_availability_ack("", False, "invalid_command_id")
+        command_id = str(raw_command_id or "").strip()
+        if not command_id:
+            return self._audio_availability_ack("", False, "missing_command_id")
+
+        available = data.get("audioAvailable")
+        if not isinstance(available, bool):
+            return self._audio_availability_ack(
+                command_id, False, "invalid_payload"
+            )
+
+        payload_key = ("audio_availability", available)
+        published = []
+
+        def store_and_return(ack):
+            self._command_replay.store(command_id, payload_key, ack)
+            return dict(ack)
+
+        if available:
+            with self.lock:
+                lookup = self._command_replay.lookup(command_id, payload_key)
+                if lookup.state == REPLAY:
+                    return dict(lookup.result)
+                if lookup.state == CONFLICT:
+                    return self._audio_availability_ack(
+                        command_id, False, "command_id_conflict"
+                    )
+                changed = self._audio_available != available
+                self._audio_available = available
+                reason = "applied" if changed else "no_change"
+                ack = self._audio_availability_ack(command_id, True, reason)
+                return store_and_return(ack)
+
+        # ``available=False``: cancels the open activation with the same
+        # publication barrier as an explicit cancel.
+        cancel_update = None
+        plan = None
+        discard = []
+        with self._ledger_dispatch_lock:
+            with self.lock:
+                lookup = self._command_replay.lookup(command_id, payload_key)
+                if lookup.state == REPLAY:
+                    return dict(lookup.result)
+                if lookup.state == CONFLICT:
+                    return self._audio_availability_ack(
+                        command_id, False, "command_id_conflict"
+                    )
+                changed = self._audio_available != available
+                self._audio_available = available
+                reason = "applied" if changed else "no_change"
+                if self._activation is not None:
+                    decision = self._activation.audio_unavailable()
+                    activation_id = self._apply_activation_decision_locked(
+                        "audio_unavailable",
+                        decision,
+                        discard,
+                        command_id=None,
+                    )
+                    plan = decision.snapshot.get("__close_plan__")
+                    if plan is not None:
+                        cancel_update = self.segment_ledger.mark_cancel_requested(
+                            plan.activation_id, "cancelled"
+                        )
+                ack = self._audio_availability_ack(command_id, True, reason)
+                self._command_replay.store(command_id, payload_key, ack)
+            if cancel_update is not None:
+                self._apply_ledger_update(cancel_update)
+
+        if plan is not None:
+            self._run_input_close(plan)
+        return dict(ack)
+
+    def _audio_availability_ack(self, command_id, accepted, reason):
+        return {
+            "type": "audio_availability_ack",
+            "commandId": command_id,
+            "accepted": bool(accepted),
+            "reason": reason,
+            "audioAvailable": bool(self._audio_available),
+            "activationId": self._current_activation_id(),
+            "phase": self._current_phase(),
+            "sessionId": self.session_id,
+        }
+
+    def _build_close_plan_locked(self, snapshot, *, requested_by_command_id=None,
+                                 recovery=False):
+        """Creates the immutable :class:`InputClosePlan` for a close decision.
+
+        Requires ``self.lock``. The plan captures the accepted activation
+        identity, gate generation, close reason/cause and - when a control
+        command caused the close - the command identity from the persistent
+        :class:`CloseContext` (F2/F7). A recovery plan keeps the same
+        identity and requests the recovery orchestrator.
+        """
+        activation_id = (
+            snapshot.get("activationId")
+            or snapshot.get("closedActivationId")
+        )
+        activation_sequence = (
+            snapshot.get("activationSequence")
+            or snapshot.get("closedActivationSequence")
+            or 0
+        )
+        reason = snapshot.get("closeReason") or "input_closed"
+        cause = snapshot.get("closeCause") or snapshot.get("closeReason")
+        requested_by_command_id = snapshot.get("closeRequestedByCommandId")
+        requested_by_action = snapshot.get("closeRequestedByAction")
+        close_reason = reason or "cancelled"
+        plan = InputClosePlan(
+            activation_id=activation_id or "",
+            activation_sequence=activation_sequence,
+            gate_generation=snapshot.get("generation") or activation_sequence,
+            reason=close_reason,
+            cause=cause or close_reason,
+            requested_by_command_id=requested_by_command_id,
+            requested_by_action=requested_by_action,
+            cancel_pending=self._cancel_close_reason(close_reason),
+            recovery=recovery,
+        )
+        snapshot["__close_plan__"] = plan
+        return plan
+
+    def _apply_activation_decision_locked(
+        self, action, decision, published, command_id=None
+    ):
         """Turns a controller decision into gate, timer and event side effects.
 
         Must be called with ``self.lock`` held. Events are collected into
         ``published`` and emitted by the caller **after** the lock is released,
         so that publishing can never deadlock against a recorder callback.
+
+        Since AP-SRV-030 C2, entering ``closing_input`` is strictly a two-phase
+        close:
+
+        * **Phase A (here):** the controller moves to ``closing_input`` and
+          creates the persistent :class:`CloseContext`. The session only builds
+          the immutable :class:`InputClosePlan`; no gate close, no recorder
+          flush and no idle happen under ``self.lock``.
+        * **Phase B:** ``_run_input_close(plan)`` runs *outside* ``self.lock``
+          and outside ``_ledger_dispatch_lock`` and performs the actual close.
         """
         snapshot = decision.snapshot
         activation_id = (
@@ -3203,13 +3644,40 @@ class RecorderBackedRealtimeSession:
         if not decision.accepted:
             return activation_id
 
+        if not decision.changed:
+            # An accepted but effect-free decision - the idempotent state
+            # answer of a repeated finish/cancel in ``closing_input``, or a
+            # refresh that did not move a longer remaining deadline. It must
+            # not touch the gate, the ledger or the armed timer.
+            return activation_id
+
+        if decision.reason == "watchdog_warning":
+            published.append(
+                ("watchdog_warning", self._watchdog_warning_fields(snapshot))
+            )
+            return activation_id
+
+        if snapshot.get("phase") == "closing_input":
+            # Phase A only. For a recovery the controller has already consumed
+            # its recovery deadline but stays in closing_input; the orchestration
+            # is the same, only marked to run the hard cleanup first.
+            recovery = bool(snapshot.get("recoveryRequested"))
+            plan = self._build_close_plan_locked(
+                snapshot,
+                requested_by_command_id=command_id,
+                recovery=recovery,
+            )
+            # The recovery deadline armed by the controller keeps the single
+            # worker honest while the physical close runs.
+            self._arm_activation_timer_locked(snapshot)
+            published.append(("__input_close__", plan))
+            return activation_id
+
         if decision.reason == "activated":
             self._open_ledger_activation(snapshot)
 
         generation = snapshot.get("generation")
         window_open = bool(snapshot.get("windowOpen"))
-
-        input_gate_closed = True
         if window_open:
             open_id = snapshot.get("activationId")
             if open_id:
@@ -3223,86 +3691,386 @@ class RecorderBackedRealtimeSession:
                         self.session_id,
                         exc_info=True,
                     )
-        else:
-            closed_id = (
-                snapshot.get("activationId")
-                or snapshot.get("closedActivationId")
-            )
-            try:
-                closed_now = self.recorder.close_controlled_activation(
-                    closed_id, generation=generation
-                )
-                if not closed_now and hasattr(
-                    self.recorder, "controlled_activation_state"
-                ):
-                    input_gate_closed = not bool(
-                        self.recorder.controlled_activation_state().get("active")
-                    )
-            except Exception:
-                input_gate_closed = False
-                LOGGER.debug(
-                    "Controlled Gate konnte für %s nicht geschlossen werden",
-                    self.session_id,
-                    exc_info=True,
+
+        self._arm_activation_timer_locked(snapshot)
+
+        event = self._activation_event_name(action, decision.reason)
+        if event is not None:
+            fields = self._activation_event_fields(snapshot)
+            published.append((event, fields))
+        return activation_id
+
+    @staticmethod
+    def _cancel_close_reason(close_reason):
+        """Whether a close reason suppresses still unpublished results.
+
+        Finish, every timer expiry and the watchdog keep processing the audio
+        that was already accepted; only a deliberate cancel, a lost device, a
+        stopped stream or a closed session suppress it.
+        """
+        return close_reason in {
+            "cancelled",
+            "client_cancel",
+            "session_closed",
+            "stream_stopped",
+        }
+
+    def _reserve_input_close_event(self, plan, *, recovery=False):
+        """Register the exactly-once logical input-close event before ``idle``.
+
+        This does not perform manager/network publication. The session-local
+        record exists while the controller is still in ``closing_input``.
+        AP-SRV-040 can replace this seam with the v2 event registry without
+        changing the close ordering established here.
+        """
+        key = (str(plan.activation_id), int(plan.activation_sequence))
+        with self.lock:
+            snapshot = self._activation.snapshot()
+            sequence = snapshot.get("activationSequence")
+            if (
+                snapshot.get("phase") != "closing_input"
+                or str(snapshot.get("activationId") or "") != key[0]
+                or sequence is None
+                or int(sequence) != key[1]
+            ):
+                return None
+
+            if key in self._registered_input_close_events:
+                return key
+
+            fields = self._activation_event_fields(snapshot)
+            # The event describes the state established by this close. The actual
+            # foreground transition follows immediately after this registration.
+            fields["phase"] = "idle"
+            fields["reason"] = plan.reason
+            if recovery:
+                fields["cause"] = "closing_recovery_timeout"
+                fields["recovered"] = True
+                fields["causedByCommandId"] = None
+            else:
+                fields["cause"] = plan.cause
+                fields["causedByCommandId"] = (
+                    plan.requested_by_command_id
+                    if plan.requested_by_action in ("finish", "cancel")
+                    and plan.requested_by_command_id
+                    else None
                 )
 
-        # ``closing_input`` is a foreground barrier, not a transcription
-        # phase. The gate closes first; an active recorder segment is then
-        # stopped and handed to the existing final pipeline. Only after those
-        # input-side effects have happened may the controller publish idle.
-        if snapshot.get("phase") == "closing_input":
-            if not input_gate_closed:
-                self._arm_activation_timer_locked(snapshot)
-                return activation_id
+            self._registered_input_close_events[key] = fields
+            return key
+
+    def _discard_registered_input_close_event(self, key):
+        if key is None:
+            return False
+        with self.lock:
+            return self._registered_input_close_events.pop(key, None) is not None
+
+    def _publish_registered_input_close_event(self, key):
+        """Publish an already-registered close event after lock release.
+
+        On publisher failure the logical record remains present instead of being
+        silently lost; SRV-040 can expose/resynchronise that record later.
+        """
+        if key is None:
+            return False
+        with self.lock:
+            fields = self._registered_input_close_events.get(key)
+            if fields is None:
+                return False
+            fields = dict(fields)
+
+        try:
+            self._publish_timeline_event("activation_closed", **fields)
+        except Exception:
+            LOGGER.exception(
+                "Registriertes Input-Close-Event für %s konnte nicht publiziert werden",
+                self.session_id,
+            )
+            return False
+
+        with self.lock:
+            self._registered_input_close_events.pop(key, None)
+        return True
+
+    def _run_input_close(self, plan):
+        """Execute normal Phase B with the full PHASE-04 admission barrier.
+
+        Strict order:
+          1. generation-bound gate close,
+          2. recorder stop/flush,
+          3. ledger input-close registration,
+          4. logical lifecycle-event registration,
+          5. identity-bound ``input_closed()`` -> idle,
+          6. transport publication of the already-registered event.
+
+        Recorder/gate operations run outside both session and dispatch locks.
+        """
+        if plan.recovery:
+            self._run_recovery_close(plan)
+            return
+
+        activation_id = plan.activation_id
+        generation = plan.gate_generation
+
+        gate_closed = True
+        try:
+            self.recorder.close_controlled_activation(
+                activation_id, generation=generation
+            )
+        except Exception:
+            gate_closed = False
+            LOGGER.debug(
+                "Controlled Gate konnte für %s nicht geschlossen werden",
+                self.session_id,
+                exc_info=True,
+            )
+
+        recorder_ok = True
+        if gate_closed:
             try:
                 if bool(getattr(self.recorder, "is_recording", False)):
                     self.recorder.flush_buffered_audio()
             except Exception:
+                recorder_ok = False
                 LOGGER.exception(
                     "Controlled Input konnte für %s nicht geschlossen werden",
                     self.session_id,
                 )
-                self._arm_activation_timer_locked(snapshot)
-                return activation_id
-            completed = self._activation.input_closed()
-            if completed.accepted:
-                snapshot = completed.snapshot
-                close_reason = snapshot.get("closeReason") or decision.reason
-                cancelled = close_reason in {
-                    "cancelled",
-                    "client_cancel",
-                    "session_closed",
-                    "stream_stopped",
-                }
-                published.append((
-                    "__ledger_operation__",
-                    {
-                        "operation": self.segment_ledger.close_activation,
-                        "args": (activation_id, close_reason),
-                        "kwargs": {
-                            "requested_terminal": (
-                                "cancelled" if cancelled else None
-                            ),
-                            "cancel_pending": cancelled,
-                        },
-                    },
-                ))
 
-        self._arm_activation_timer_locked(snapshot)
+        if not (gate_closed and recorder_ok):
+            LOGGER.debug(
+                "Input-Close für %s bleibt in closing_input - Recovery übernimmt",
+                self.session_id,
+            )
+            return
 
-        if decision.changed:
-            event = self._activation_event_name(action, decision.reason)
-            if event is not None:
-                published.append((event, self._activation_event_fields(snapshot)))
-        return activation_id
+        self._close_ledger_activation(
+            activation_id,
+            plan.reason,
+            requested_terminal=("cancelled" if plan.cancel_pending else None),
+            cancel_pending=plan.cancel_pending,
+        )
+
+        event_key = self._reserve_input_close_event(plan, recovery=False)
+        if event_key is None:
+            # A concurrent stream/session reset already won ownership.
+            return
+
+        with self.lock:
+            completed = self._activation.input_closed(
+                activation_id=activation_id,
+                activation_sequence=plan.activation_sequence,
+            )
+            self._arm_activation_timer_locked(
+                completed.snapshot
+                if completed is not None
+                else self._activation.snapshot()
+            )
+
+        if completed is None or not completed.accepted:
+            self._discard_registered_input_close_event(event_key)
+            return
+
+        self._publish_registered_input_close_event(event_key)
+
+    def _run_recovery_close(self, plan):
+        """Hard recovery for a stuck ``closing_input`` (PHASE-05).
+
+        If cleanup becomes safe, use the same PHASE-04 ordering as normal close.
+        If even the hard abort cannot make the old input path safe, terminally
+        close the session instead of leaving a live session stuck forever.
+        """
+        activation_id = plan.activation_id
+
+        try:
+            self.recorder.abort_controlled_activation()
+        except Exception:
+            LOGGER.debug(
+                "Controlled Gate konnte für %s im Recovery nicht abgebrochen werden",
+                self.session_id,
+                exc_info=True,
+            )
+
+        try:
+            if bool(getattr(self.recorder, "is_recording", False)):
+                self.recorder.flush_buffered_audio()
+        except Exception:
+            LOGGER.exception(
+                "Recorder konnte für %s im Recovery nicht geschlossen werden",
+                self.session_id,
+            )
+            abort_method = getattr(self.recorder, "abort", None)
+            if callable(abort_method):
+                try:
+                    abort_method()
+                except Exception:
+                    LOGGER.exception(
+                        "Harter Recorder-Abbruch für %s fehlgeschlagen",
+                        self.session_id,
+                    )
+
+        try:
+            gate_active = bool(
+                self.recorder.controlled_activation_state().get("active")
+            )
+        except Exception:  # pragma: no cover - fakes may differ
+            gate_active = bool(getattr(self.recorder, "is_recording", False))
+        close_safe = not gate_active
+
+        with self.lock:
+            orphaned = self._active_recording_context
+            if orphaned is not None and (
+                activation_id is None or orphaned.activation_id == activation_id
+            ):
+                self._active_recording_context = None
+                try:
+                    self.recorder._active_recording_context = None
+                except Exception:  # pragma: no cover - fakes may differ
+                    pass
+            else:
+                orphaned = None
+
+        if not close_safe:
+            self.fail_closed_for_recovery(activation_id)
+            return
+
+        if orphaned is not None:
+            self._dispatch_ledger_operation(
+                self.segment_ledger.resolve_terminal,
+                orphaned,
+                "failed",
+                "closing_recovery_timeout",
+            )
+
+        if activation_id:
+            self._close_ledger_activation(
+                activation_id,
+                plan.reason,
+                requested_terminal=("cancelled" if plan.cancel_pending else None),
+                cancel_pending=plan.cancel_pending,
+            )
+
+        event_key = self._reserve_input_close_event(plan, recovery=True)
+        if event_key is None:
+            return
+
+        with self.lock:
+            completed = self._activation.input_closed(
+                activation_id=activation_id,
+                activation_sequence=plan.activation_sequence,
+            )
+            self._arm_activation_timer_locked(
+                completed.snapshot
+                if completed is not None
+                else self._activation.snapshot()
+            )
+
+        if completed is None or not completed.accepted:
+            self._discard_registered_input_close_event(event_key)
+            return
+
+        self._publish_registered_input_close_event(event_key)
+
+    def fail_closed_for_recovery(self, activation_id):
+        """Terminally close a session whose input path cannot be made safe.
+
+        A live ``closing_input`` may not become a permanent state. The fallback
+        therefore uses the existing terminal session-close lifecycle instead of
+        claiming a reusable ``idle``.
+        """
+        with self.lock:
+            if self.status == "closed":
+                return False
+            self._audio_available = False
+
+        LOGGER.error(
+            "Recovery für %s konnte den Eingabepfad nicht sicher schließen; "
+            "Sitzung wird technisch beendet",
+            self.session_id,
+        )
+
+        try:
+            self.service.manager.publish_session(
+                self.session_id,
+                {
+                    "type": "warning",
+                    "sessionId": self.session_id,
+                    "message": (
+                        "Der Eingabepfad konnte nicht sicher geschlossen werden; "
+                        "die Sitzung wird beendet und muss neu aufgebaut werden."
+                    ),
+                    "recovery": "session_terminated",
+                    "activationId": activation_id,
+                },
+            )
+        except Exception:
+            LOGGER.debug(
+                "Recovery-Warnung für %s konnte nicht publiziert werden",
+                self.session_id,
+                exc_info=True,
+            )
+
+        try:
+            self.close()
+        except Exception:
+            # close() marks the session terminal before downstream cleanup. Keep
+            # that terminal state even if a best-effort cleanup operation raises.
+            LOGGER.exception(
+                "Terminaler Session-Abschluss nach Recoveryfehler für %s "
+                "war nur teilweise erfolgreich",
+                self.session_id,
+            )
+            with self.lock:
+                self.streaming = False
+                self.status = "closed"
+                self._activation_timer_generation += 1
+                self._armed_timer_token = None
+            try:
+                self._dispatch_ledger_operation(
+                    self.segment_ledger.cancel_all, "session_closed"
+                )
+            except Exception:
+                LOGGER.exception(
+                    "Ledger konnte nach terminalem Recoveryfehler für %s "
+                    "nicht vollständig abgeräumt werden",
+                    self.session_id,
+                )
+            return False
+
+        return True
+
+    def _watchdog_warning_fields(self, snapshot):
+        context = self._active_recording_context
+        deadline = snapshot.get("deadline")
+        return {
+            "activationId": snapshot.get("activationId"),
+            "activationSequence": snapshot.get("activationSequence"),
+            # ``segment_id`` is a named parameter of the timeline publisher, so
+            # it must not travel as a plain field.
+            "segment_id": None if context is None else context.segment_id,
+            "segmentSequence": (
+                None if context is None else context.segment_sequence
+            ),
+            "phase": snapshot.get("phase"),
+            "timerRevision": snapshot.get("timerRevision"),
+            "remainingSeconds": (
+                None if deadline is None
+                else max(0.0, float(deadline) - time.monotonic())
+            ),
+        }
 
     @staticmethod
     def _activation_event_name(action, reason):
         if reason == "activated":
             return "activation_started"
-        if reason == "extended":
-            return "activation_extended"
-        if reason in {"finished", "cancelled", "timed_out"}:
+        if reason == "refreshed":
+            return "activation_refreshed"
+        if reason in {
+            "finished",
+            "cancelled",
+            "timed_out",
+            "segment_watchdog_timeout",
+        }:
             return "activation_closed"
         if reason == "recording_started":
             return None
@@ -3329,68 +4097,102 @@ class RecorderBackedRealtimeSession:
             ),
             "sources": list(sources),
             "phase": snapshot.get("phase"),
+            "timerRevision": snapshot.get("timerRevision"),
         }
         if snapshot.get("closeReason"):
             fields["reason"] = snapshot["closeReason"]
+            fields["cause"] = (
+                snapshot.get("closeCause") or snapshot["closeReason"]
+            )
         return fields
 
     def _arm_activation_timer_locked(self, snapshot):
-        """Schedules the activation timeout, bound to the controller version.
+        """Owns exactly one scheduled worker per armed deadline.
 
-        Any later state change raises the version, so a timer that fires late
-        is rejected by ``ActivationController.expire`` instead of ending an
-        activation it no longer belongs to.
+        The worker is bound to the controller's :class:`TimerToken`, which
+        carries the activation id, the activation sequence, the
+        ``timerRevision``, the phase and the segment token. A worker whose
+        token is no longer the armed one stops without touching anything, and
+        an unchanged token deliberately does not spawn a second worker - a
+        watchdog warning, for instance, keeps the very same deadline.
         """
+        token = snapshot.get("timerToken")
         deadline = snapshot.get("deadline")
-        if deadline is None or not snapshot.get("windowOpen"):
+        if deadline is None or token is None or token.kind is None:
             self._activation_timer_generation += 1
+            self._armed_timer_token = None
+            return
+        if token == getattr(self, "_armed_timer_token", None):
             return
 
-        version = snapshot.get("version")
         self._activation_timer_generation += 1
-        timer_generation = self._activation_timer_generation
-        delay = max(0.0, float(deadline) - time.monotonic())
+        self._armed_timer_token = token
         thread = threading.Thread(
-            target=self._activation_timeout_worker,
-            args=(timer_generation, version, delay),
+            target=self._activation_timer_worker,
+            args=(token,),
             name=f"VoiceSTTActivationTimeout-{self.session_id}",
             daemon=True,
         )
         thread.start()
 
-    def _activation_timeout_worker(self, timer_generation, version, delay):
-        remaining = delay
+    def _next_timer_due_locked(self, token):
+        """The next monotonic instant this worker has to look at, or ``None``."""
+        if getattr(self, "_armed_timer_token", None) != token:
+            return None
+        activation = self._activation
+        if activation is None:
+            return None
+        snapshot = activation.snapshot()
+        if snapshot.get("timerToken") != token:
+            return None
+        deadline = snapshot.get("deadline")
+        if deadline is None:
+            return None
+        warning = snapshot.get("warningDeadline")
+        if warning is not None and warning < deadline:
+            return min(float(warning), float(deadline))
+        return float(deadline)
+
+    def _activation_timer_worker(self, token):
+        """Drives one armed deadline, including its optional warning."""
         while True:
-            if self.service.stop_event.wait(timeout=remaining):
-                return
-            published = []
             with self.lock:
-                if timer_generation != self._activation_timer_generation:
+                due = self._next_timer_due_locked(token)
+            if due is None:
+                return
+            remaining = due - time.monotonic()
+            if remaining > 0 and self.service.stop_event.wait(timeout=remaining):
+                return
+
+            published = []
+            waiting_state = None
+            expired = False
+            with self.lock:
+                if getattr(self, "_armed_timer_token", None) != token:
                     # A newer timer took over; this one has nothing to do.
                     return
                 activation = self._activation
                 if activation is None:
                     return
-                decision = activation.expire(version)
+                decision = activation.tick(token)
                 if not decision.accepted:
                     if decision.reason != "not_due":
                         return
                     # `Event.wait` may return marginally early - on Windows the
                     # timer granularity is around 15 ms. Treating that as "the
                     # timeout did not happen" would drop the deadline forever,
-                    # because this is a one-shot timer. So wait out the rest.
-                    deadline = decision.snapshot.get("deadline")
-                    if deadline is None:
-                        return
-                    remaining = max(0.001, float(deadline) - time.monotonic())
+                    # so the loop simply waits out the rest.
                     continue
                 self._apply_activation_decision_locked(
-                    "expire", decision, published
+                    "timer", decision, published
                 )
-                waiting_state = self._waiting_state_locked()
+                expired = decision.reason != "watchdog_warning"
+                if expired:
+                    waiting_state = self._waiting_state_locked()
             self._publish_collected_events(published)
-            self.publish_status(waiting_state)
-            return
+            if expired:
+                self.publish_status(waiting_state)
+                return
 
     def _reset_activation_locked(self, reason):
         """Drops any activation and closes the gate. Used by stop/close/clear.
@@ -3400,6 +4202,7 @@ class RecorderBackedRealtimeSession:
         """
         activation = self._activation
         self._activation_timer_generation += 1
+        self._armed_timer_token = None
         if activation is None:
             return None
         decision = activation.reset()
@@ -3449,11 +4252,14 @@ class RecorderBackedRealtimeSession:
     def _dispatch_ledger_operation(self, operation, *args, **kwargs):
         """Serializes ledger mutation together with all observable output.
 
-        Callers must not hold ``self.lock``. Publication may inspect the
-        foreground snapshot, so the one permitted lock order is dispatch lock
-        then (briefly) session lock. Ledger callbacks never re-enter the
-        dispatch boundary, and manager/event dispatch is synchronous and
-        bounded, so no waiter can remain parked after an operation completes.
+        Lock order (L1/L4): this boundary is the *outermost* lock, so the only
+        permitted order is ``_ledger_dispatch_lock`` then (briefly)
+        ``self.lock`` for a session snapshot read. Callers must not hold
+        ``self.lock`` here, and no recorder operation that can synchronously
+        fire callbacks (flush/stop/abort) may run under either lock (L5).
+        Because these callers deliberately never hold ``self.lock`` while a
+        dispatch is in flight, a dispatch can never wait on a session lock
+        that is held by the same input-close path (T10).
         """
         with self._ledger_dispatch_lock:
             update = operation(*args, **kwargs)
@@ -3478,12 +4284,9 @@ class RecorderBackedRealtimeSession:
 
     def _publish_collected_events(self, published):
         for event, fields in published:
-            if event == "__ledger_operation__":
-                self._dispatch_ledger_operation(
-                    fields["operation"],
-                    *fields.get("args", ()),
-                    **fields.get("kwargs", {}),
-                )
+            if event == "__input_close__":
+                # Phase B runs outside self.lock and outside the dispatch lock.
+                self._run_input_close(fields)
             else:
                 self._publish_timeline_event(event, **fields)
 
@@ -4124,103 +4927,112 @@ class RecorderBackedRealtimeSession:
         recording_admitted = False
         stop_unadmitted_recording = False
         with self.lock:
-            self._active_recording_context = None
-            self.recorder._active_recording_context = None
-            self._wakeword_followup_generation += 1
-            self._clear_recorder_followup_gate_locked()
-            if not self.service.try_activate_speaker(self.session_id):
-                self.reject_current_recording = True
-                self.recording_sample_count = 0
-                self._force_finalize_in_progress = False
-                self._wakeword_voice_window = False
-                self.rejected_audio_chunks += 1
-                self.service.manager.publish_session(
-                    self.session_id,
-                    {
-                        "type": "warning",
-                        "sessionId": self.session_id,
-                        "message": "Die maximale Anzahl gleichzeitig sprechender Personen ist erreicht; die Aufnahme wird ignoriert.",
-                    },
-                )
+            # C2 recording admission: a late or barely-lost recorder start after
+            # stop/close/cancel must not accept a segment, create a ledger
+            # record or keep a speaker active (F9/T15). Callback-capable work is
+            # deferred until the lock is released below.
+            lifecycle_ok = self.streaming and self.status != "closed"
+            if not lifecycle_ok:
+                stop_unadmitted_recording = True
+                self.service.deactivate_speaker(self.session_id)
             else:
-                activation_admitted = True
-                if self._activation is not None:
-                    current_activation = self._activation.snapshot()
-                    recording_activation = None
-                    if hasattr(
-                        self.recorder,
-                        "controlled_recording_activation_state",
-                    ):
-                        recording_activation = (
-                            self.recorder.controlled_recording_activation_state()
-                        )
-                    if (
-                        recording_activation
-                        and recording_activation.get("activationId")
-                        and (
-                            recording_activation.get("activationId")
-                            != current_activation.get("activationId")
-                            or recording_activation.get("generation")
-                            != current_activation.get("generation")
-                        )
-                    ):
-                        activation_admitted = False
-                    else:
-                        decision = self._activation.recording_started()
-                        activation_admitted = decision.accepted
-                        if decision.changed:
-                            # Speech has started, so the initial deadline is
-                            # over; invalidate the timer armed for it.
-                            self._arm_activation_timer_locked(decision.snapshot)
-                if activation_admitted:
-                    recording_admitted = True
-                    self.reject_current_recording = False
+                self._active_recording_context = None
+                self.recorder._active_recording_context = None
+                self._wakeword_followup_generation += 1
+                self._clear_recorder_followup_gate_locked()
+                if not self.service.try_activate_speaker(self.session_id):
+                    self.reject_current_recording = True
                     self.recording_sample_count = 0
                     self._force_finalize_in_progress = False
                     self._wakeword_voice_window = False
-                    segment_id = self.segment_state.current()
+                    self.rejected_audio_chunks += 1
+                    self.service.manager.publish_session(
+                        self.session_id,
+                        {
+                            "type": "warning",
+                            "sessionId": self.session_id,
+                            "message": "Die maximale Anzahl gleichzeitig sprechender Personen ist erreicht; die Aufnahme wird ignoriert.",
+                        },
+                    )
+                else:
+                    activation_admitted = True
                     if self._activation is not None:
-                        activation_snapshot = self._activation.snapshot()
-                        activation_id = activation_snapshot.get("activationId")
+                        current_activation = self._activation.snapshot()
+                        recording_activation = None
+                        if hasattr(
+                            self.recorder,
+                            "controlled_recording_activation_state",
+                        ):
+                            recording_activation = (
+                                self.recorder.controlled_recording_activation_state()
+                            )
+                        if (
+                            recording_activation
+                            and recording_activation.get("activationId")
+                            and (
+                                recording_activation.get("activationId")
+                                != current_activation.get("activationId")
+                                or recording_activation.get("generation")
+                                != current_activation.get("generation")
+                            )
+                        ):
+                            activation_admitted = False
+                        else:
+                            decision = self._activation.recording_started()
+                            activation_admitted = decision.accepted
+                            if decision.changed:
+                                # Speech has started, so the initial deadline is
+                                # over; invalidate the timer armed for it.
+                                self._arm_activation_timer_locked(decision.snapshot)
+                    if activation_admitted:
+                        recording_admitted = True
+                        self.reject_current_recording = False
+                        self.recording_sample_count = 0
+                        self._force_finalize_in_progress = False
+                        self._wakeword_voice_window = False
+                        segment_id = self.segment_state.current()
+                        if self._activation is not None:
+                            activation_snapshot = self._activation.snapshot()
+                            activation_id = activation_snapshot.get("activationId")
+                        else:
+                            self._legacy_activation_sequence += 1
+                            activation_id = (
+                                f"legacy-{self.session_id}-"
+                                f"{self._legacy_activation_sequence}"
+                            )
+                            activation_snapshot = {
+                                "activationId": activation_id,
+                                "activationSequence": self._legacy_activation_sequence,
+                                "effectiveSettings": self._effective_activation_settings(),
+                            }
+                            self._open_ledger_activation(activation_snapshot)
+                        try:
+                            context = self.segment_ledger.accept_segment(
+                                activation_id, segment_id
+                            )
+                        except (KeyError, RuntimeError):
+                            LOGGER.exception(
+                                "Segment %s konnte nicht im Ledger registriert werden",
+                                segment_id,
+                            )
+                            recording_admitted = False
+                            self.reject_current_recording = True
+                            stop_unadmitted_recording = True
+                            self.service.deactivate_speaker(self.session_id)
+                        else:
+                            self._active_recording_context = context
+                            self._last_final_context = context
+                            self.recorder._active_recording_context = context
+                        segment = self.timeline.mark_recording_started(segment_id)
                     else:
-                        self._legacy_activation_sequence += 1
-                        activation_id = (
-                            f"legacy-{self.session_id}-"
-                            f"{self._legacy_activation_sequence}"
-                        )
-                        activation_snapshot = {
-                            "activationId": activation_id,
-                            "activationSequence": self._legacy_activation_sequence,
-                            "effectiveSettings": self._effective_activation_settings(),
-                        }
-                        self._open_ledger_activation(activation_snapshot)
-                    try:
-                        context = self.segment_ledger.accept_segment(
-                            activation_id, segment_id
-                        )
-                    except (KeyError, RuntimeError):
-                        LOGGER.exception(
-                            "Segment %s konnte nicht im Ledger registriert werden",
-                            segment_id,
-                        )
-                        recording_admitted = False
+                        # The gate-close barrier won a race after the recorder had
+                        # observed the old open gate. Do not resurrect a segment
+                        # after the controller has published idle.
                         self.reject_current_recording = True
+                        self._active_recording_context = None
+                        self.recorder._active_recording_context = None
                         stop_unadmitted_recording = True
                         self.service.deactivate_speaker(self.session_id)
-                    else:
-                        self._active_recording_context = context
-                        self._last_final_context = context
-                        self.recorder._active_recording_context = context
-                    segment = self.timeline.mark_recording_started(segment_id)
-                else:
-                    # The gate-close barrier won a race after the recorder had
-                    # observed the old open gate. Do not resurrect a segment
-                    # after the controller has published idle.
-                    self.reject_current_recording = True
-                    self._active_recording_context = None
-                    self.recorder._active_recording_context = None
-                    stop_unadmitted_recording = True
-                    self.service.deactivate_speaker(self.session_id)
         if stop_unadmitted_recording:
             try:
                 self.recorder.flush_buffered_audio()
@@ -4507,7 +5319,17 @@ class RecorderBackedRealtimeSession:
             return self._waiting_state_locked()
 
     def _on_wakeword_detection_start(self):
+        """Records the wake-detection epoch for the *current* lifecycle.
+
+        Only a valid, synchronously executed start may arm the detection: the
+        stream must be running and the session not closed. Stop/close have
+        already invalidated the epoch, so a stale start can never re-arm it
+        (F9/T13).
+        """
         with self.lock:
+            if not self.streaming or self.status == "closed":
+                return
+            self._wake_detection_epoch = self._lifecycle_epoch
             self._wakeword_voice_window = False
             self._wakeword_followup_generation += 1
             self._clear_recorder_followup_gate_locked()
@@ -4526,14 +5348,26 @@ class RecorderBackedRealtimeSession:
         )
 
     def _on_wakeword_detected(self):
-        published = []
+        """Admission-gated wake detection.
+
+        A late wake callback from a stopped/closed session - or one whose
+        detection epoch no longer matches the current lifecycle (a stale
+        callback from a previous stream) - returns without any fachlich
+        effect: no gate open, no activation, no timeline event (F9/T11-T13).
+        """
         with self.lock:
+            if not self.streaming or self.status == "closed":
+                return
+            if self._wake_detection_epoch != self._lifecycle_epoch:
+                return
+            published = []
             self._wakeword_voice_window = True
             self._wakeword_followup_generation += 1
-            if self._activation is not None:
+            if self._activation is not None and self._audio_available:
                 # A wake word is a trigger like any other: it goes through the
-                # controller and reaches the recorder only via the gate. It
-                # must never open a recording on its own.
+                # same admission as a manual command, including the generic
+                # audio-availability gate, and reaches the recorder only via
+                # the controlled gate. It never opens a recording on its own.
                 decision = self._activation.activate(
                     "wake_word", self._effective_activation_settings()
                 )
@@ -4649,9 +5483,10 @@ class RecorderBackedRealtimeSession:
         self.service.manager.publish_session(self.session_id, payload)
         structured_events = {
             "activation_started": "activation.started",
-            "activation_extended": "activation.extended",
+            "activation_refreshed": "activation.refreshed",
             "activation_closed": "activation.closed",
             "activation_drained": "activation.drained",
+            "watchdog_warning": "watchdog.warning",
             "recording_started": "transcription.recording_started",
             "recording_ended": "transcription.recording_ended",
             "transcription_started": "transcription.started",
@@ -5439,19 +6274,31 @@ class VoiceSTTService:
             # accepted activation actually drives the recorder gate.
             "activationTriggers": {
                 "supported": True,
-                "version": 1,
+                "version": 2,
                 "sources": list(ACTIVATION_SOURCES_PUBLIC),
                 "actions": list(ACTIVATION_ACTIONS_PUBLIC),
+                "deprecatedActionAliases": list(
+                    ACTIVATION_ACTION_ALIASES_PUBLIC
+                ),
                 "commandType": "trigger",
                 "ackType": "trigger_ack",
                 "commandIdRequired": True,
                 "commandIdIdempotent": True,
-                "commandHistory": TRIGGER_COMMAND_HISTORY,
+                # The replay cache holds for the whole session, as required by
+                # the frozen idempotency contract.
+                "commandHistory": "session",
+                "activationIdValidated": True,
+                "audioAvailabilityCommandType": "audio_availability",
+                "audioAvailabilityAckType": "audio_availability_ack",
                 "queryParameters": list(SESSION_ACTIVATION_QUERY_FIELDS),
+                "retiredQueryParameters": list(
+                    SESSION_ACTIVATION_RETIRED_QUERY_FIELDS
+                ),
                 "activationEvents": [
                     "activation.started",
-                    "activation.extended",
+                    "activation.refreshed",
                     "activation.closed",
+                    "watchdog.warning",
                 ],
             },
         }
@@ -8094,6 +8941,9 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                         }))
                     elif command == "trigger":
                         ack = session.handle_trigger_command(data)
+                        await websocket.send_text(json.dumps(ack))
+                    elif command == "audio_availability":
+                        ack = session.handle_audio_availability_command(data)
                         await websocket.send_text(json.dumps(ack))
                     else:
                         await websocket.send_text(json.dumps({
