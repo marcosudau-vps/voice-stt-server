@@ -71,6 +71,7 @@ jobs:
           "Reconstructed C2 tree: $tree" | Tee-Object -FilePath "$env:CI_LOG_DIR/c2-tree.txt"
           if ($tree -ne 'e6ea688730ac3845d734348878834da87c3caba1') { throw "C2 tree mismatch: $tree" }
           git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git commit -m "fix(trigger): harden AP-SRV-030 close and command invariants"
           $sha = (git rev-parse HEAD).Trim()
           "Reconstructed C2 SHA: $sha" | Tee-Object -FilePath "$env:CI_LOG_DIR/c2-tree.txt" -Append
@@ -99,7 +100,13 @@ jobs:
             python $script 2>&1 | Tee-Object -FilePath "$env:CI_LOG_DIR/apply.txt" -Append
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
+
+          # The generated C3 test template historically left one extra blank
+          # line at EOF. Normalize only that file to one final newline; this is
+          # whitespace-only and makes diff-check a real hard gate.
+          python -c "from pathlib import Path; p=Path('tests/unit/test_server_command_timer_e2e.py'); s=p.read_text(encoding='utf-8'); p.write_text(s.rstrip()+'\n', encoding='utf-8')"
           git diff --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git status --short | Tee-Object -FilePath "$env:CI_LOG_DIR/apply-status.txt"
 
       - name: Install test dependencies
@@ -112,7 +119,7 @@ jobs:
       - name: C3 target regressions
         shell: pwsh
         run: |
-          python -m pytest -q -p no:warnings --basetemp=.pytest-tmp/target --junitxml="$env:CI_LOG_DIR/target.xml" `
+          python -m pytest -q -p no:warnings --basetemp="$env:RUNNER_TEMP/pytest-target" --junitxml="$env:CI_LOG_DIR/target.xml" `
             tests/unit/test_server_command_timer_e2e.py::CloseEventRegistrationEndToEndTests `
             tests/unit/test_server_command_timer_e2e.py::RecoveryFailClosedEndToEndTests 2>&1 | Tee-Object -FilePath "$env:CI_LOG_DIR/target.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -120,7 +127,7 @@ jobs:
       - name: AP-SRV-030 focus suite
         shell: pwsh
         run: |
-          python -m pytest -q -p no:warnings --basetemp=.pytest-tmp/focus --junitxml="$env:CI_LOG_DIR/focus.xml" `
+          python -m pytest -q -p no:warnings --basetemp="$env:RUNNER_TEMP/pytest-focus" --junitxml="$env:CI_LOG_DIR/focus.xml" `
             tests/unit/test_server_activation_controller.py `
             tests/unit/test_server_activation_commands.py `
             tests/unit/test_server_command_timer_e2e.py `
@@ -132,7 +139,7 @@ jobs:
       - name: AP-SRV-020 regression
         shell: pwsh
         run: |
-          python -m pytest -q -p no:warnings --basetemp=.pytest-tmp/regression --junitxml="$env:CI_LOG_DIR/regression.xml" `
+          python -m pytest -q -p no:warnings --basetemp="$env:RUNNER_TEMP/pytest-regression" --junitxml="$env:CI_LOG_DIR/regression.xml" `
             tests/unit/test_server_segment_ledger.py `
             tests/unit/test_server_controlled_e2e.py 2>&1 | Tee-Object -FilePath "$env:CI_LOG_DIR/regression.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -140,16 +147,25 @@ jobs:
       - name: Full unit suite
         shell: pwsh
         run: |
-          python -m pytest -q --basetemp=.pytest-tmp/full --junitxml="$env:CI_LOG_DIR/full.xml" tests/unit 2>&1 | Tee-Object -FilePath "$env:CI_LOG_DIR/full.txt"
+          $pyTemp = "$env:RUNNER_TEMP/py-long-temp"
+          New-Item -ItemType Directory -Force $pyTemp | Out-Null
+          $env:TEMP = $pyTemp
+          $env:TMP = $pyTemp
+          $fullBase = "$env:RUNNER_TEMP/pytest-full"
+          python -m pytest -q --basetemp="$fullBase" --junitxml="$env:CI_LOG_DIR/full.xml" tests/unit 2>&1 | Tee-Object -FilePath "$env:CI_LOG_DIR/full.txt"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Race and recovery repetition 20x
         shell: pwsh
         run: |
+          $pyTemp = "$env:RUNNER_TEMP/py-long-temp"
+          New-Item -ItemType Directory -Force $pyTemp | Out-Null
+          $env:TEMP = $pyTemp
+          $env:TMP = $pyTemp
           1..20 | ForEach-Object {
             $i = $_
             Write-Host "Race iteration $i / 20"
-            python -m pytest -q -p no:warnings --basetemp=".pytest-tmp/race-$i" `
+            python -m pytest -q -p no:warnings --basetemp="$env:RUNNER_TEMP/pytest-race-$i" `
               tests/unit/test_server_command_timer_e2e.py::CloseAdmissionRaceEndToEndTests `
               tests/unit/test_server_command_timer_e2e.py::CloseEventRegistrationEndToEndTests `
               tests/unit/test_server_command_timer_e2e.py::LedgerCancelTotalOrderTests `
@@ -166,6 +182,7 @@ jobs:
         shell: pwsh
         run: |
           git diff --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $expected = @(
             'api_fastapi_server/server.py',
             'docs/client-development/03-server-events-kurzreferenz.md',
@@ -182,6 +199,7 @@ jobs:
           }
           git add -- $expected
           git diff --cached --check
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git commit -m "fix(trigger): complete AP-SRV-030 close terminalization"
           $sha = (git rev-parse HEAD).Trim()
           $tree = (git rev-parse 'HEAD^{tree}').Trim()
@@ -190,6 +208,9 @@ jobs:
           "sha=$sha" >> $env:GITHUB_OUTPUT
           "tree=$tree" >> $env:GITHUB_OUTPUT
           git diff --check db3d2b49539afbf4812d90e13f26f099b9314fe9..HEAD
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $dirty = @(git status --porcelain)
+          if ($dirty.Count -ne 0) { throw "Candidate worktree is not clean after commit: $($dirty -join '; ')" }
 
       - name: Upload validation evidence
         if: always()
