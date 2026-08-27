@@ -41,9 +41,10 @@ jobs:
           [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/c1-c2.diff.gz", [Convert]::FromBase64String($encoded))
           python -c "import gzip,pathlib; p=pathlib.Path(r'$env:RUNNER_TEMP/c1-c2.diff.gz'); pathlib.Path(r'$env:RUNNER_TEMP/c1-c2.diff').write_bytes(gzip.decompress(p.read_bytes()))"
 
-          $c3parts = Get-ChildItem .ci/payload2/c3v2-*.b64 | Sort-Object Name
-          if ($c3parts.Count -ne 3) { throw "Expected exactly 3 C3 payload chunks, got $($c3parts.Count)" }
+          $c3parts = Get-ChildItem .ci/payload3/c3-*.b64 | Sort-Object Name
+          if ($c3parts.Count -ne 7) { throw "Expected exactly 7 C3 payload chunks, got $($c3parts.Count)" }
           $c3encoded = ($c3parts | ForEach-Object { (Get-Content -Raw -LiteralPath $_.FullName).Trim() }) -join ''
+          if ($c3encoded.Length -ne 20256) { throw "C3 base64 length mismatch: $($c3encoded.Length)" }
           [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/c3-payload.zip", [Convert]::FromBase64String($c3encoded))
 
           $diffHash = (Get-FileHash "$env:RUNNER_TEMP/c1-c2.diff" -Algorithm SHA256).Hash.ToLower()
