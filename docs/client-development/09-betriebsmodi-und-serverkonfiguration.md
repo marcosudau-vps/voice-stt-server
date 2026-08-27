@@ -97,9 +97,11 @@ mit `activation_wake_word_unavailable` ab, statt taub zu laufen.
 wss://SERVER/ws/transcribe?manualTriggerEnabled=true&wakeWordTriggerEnabled=true&wakeWordEnabled=true
 ```
 
-Der erste Trigger eröffnet die Activation und wird deren `primarySource`; ein
-zweiter Trigger derselben Activation wird nur in `sources` ergänzt. Es entsteht
-keine zweite Activation, kein zweites Segment und kein zweites Final.
+Der erste Trigger eröffnet die Activation und wird deren `primarySource`. Jeder
+weitere `activate`-Versuch — derselben oder der anderen Quelle — wird
+deterministisch mit `activation_locked` abgelehnt und lässt die laufende
+Activation vollständig unverändert. Es entsteht keine zweite Activation, kein
+zweites Segment und kein zweites Final.
 
 ## Legacy-Verhalten
 
