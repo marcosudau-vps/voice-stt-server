@@ -28,6 +28,9 @@ relevant.
 | `GET` | `/api/logs/transcriptions/{transcriptionId}` | Admin oder passender Sessiontoken | Historie einer Transkription |
 | `POST` | `/api/config/validate` | Admin | Kandidatenkonfiguration prüfen |
 | `POST` | `/api/config/reload` | Admin | persistierte Runtime-Konfiguration neu anwenden |
+| `GET` | `/api/v2/settings/schema` | keine | öffentliches Settingsschema der Control-Plane |
+| `GET` | `/api/v2/settings/server` | keine | nicht geheime Serverwerte + Serverrevision |
+| `PATCH` | `/api/v2/settings/server` | Admin | Serverdefaults atomar ändern (optimistische Concurrency) |
 | `GET` | `/v1/models` | OpenAI-Key* | geladene Modelle/Aliasse |
 | `POST` | `/v1/audio/transcriptions` | OpenAI-Key* | abgeschlossene Audiodatei transkribieren |
 | `WS` | `/ws/transcribe` | keine im Handler | kontinuierliches Live-Audio |
@@ -47,10 +50,12 @@ Bevorzugter Header:
 X-VoiceSTT-Admin-Key: <admin-key>
 ```
 
-Alternativ:
+Alternativ (derselbe Guard, AP-SRV-050 unterstützt zusätzlich den Frozen
+Header):
 
 ```http
 Authorization: Bearer <admin-key>
+X-Admin-Key: <admin-key>
 ```
 
 Wenn kein Admin-Key konfiguriert ist, erlaubt der Code Adminzugriffe nur von

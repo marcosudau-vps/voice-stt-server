@@ -1,0 +1,82 @@
+# AP-SRV-050 – Umsetzungsvergleich (Soll/Ist)
+
+**Datum:** 2026-08-27
+**Geprüfter Stand:** Branch `review/AP-SRV-050/run-01`, C1-Commit
+**Basis:** `c0806e5bc5d503580070f2dacc88831d51447938`
+
+Prüfgegenstand ist der veröffentlichte C1-Stand gegen jeden wesentlichen Punkt
+des Auftrags. Statuswerte: ✅ vollständig, 🟡 teilweise, ⛔ nicht umgesetzt.
+
+| # | Requirement (Prompt) | Status | Nachweis (Code/Test) | Abweichung |
+|---|---|---|---|---|
+| 5/6 | Registry veröffentlicht key/scope/auth/type/constraints/defaultValue/requestedValue/effectiveValue/applyPolicy/settingsRevision je Einstellung | ✅ | `settings_control.py`; Schema/REST in `server.py`; Tests `test_settings_control_plane.py` | – |
+| 6 | Scopes session/server/client_local; Server nur session/server | ✅ | Registry Konstanten | – |
+| 6 | Apply-Policies live/next_activation/next_session/server_restart; keine Synonyme | ✅ | `APPLY_POLICIES`, Registry; Test „no private synonyms“ | – |
+| 7.1 | Sechs Activation-Timings, exakte Keys/Default/Bereiche, scope/auth/apply | ✅ | Registry; Tests alle sechs | – |
+| 7.1 | Cross-Field gegen finalen Candidate, warning<initial und <refresh | ✅ | `validate_timing_bundle`; Pflichttests §30 | – |
+| 7.2 | Wake-Sensitivity session/Serverdefault 0.5, next_activation | ✅ | Registry + Tests | – |
+| 7.3 | Wake-Auswahl session/next_session atomar; leer nur wenn kein WW; unbekannte IDs maschinenlesbar; laufende Session nicht umgebaut | ✅ | Registry + Session-Validator; Tests | – |
+| 7.4 | Runtime-Suppression nur Registry-/Metadaten; kein zweiter Write-Pfad | ✅ | `writable=False`; Session-Patch lehnt ab; `trigger_suppression.set` bleibt Autorität | – |
+| 7.5 | Server-Restregistry für Serverdefaults, Sensitivity-Default, Global-Disable | ✅ | `ServerSettingsState`, Keys | – |
+| 9 | Donor-Konzepte portierbar (Registry, Timingkeys, Sensitivität, Auswahl, Suppression-Darstellung, Disable, monotone Revision, optimistic concurrency, no_change, requested/effective, REST, Admin-Guard) | ✅ | Donor-Traceability im REPORT | – |
+| 10.2 | Genau eine Settings-Domainautorität; ProtocolSessionState Wire-Spiegel; SettingsPort Adapter | ✅ | `connection._activate_session`, `ports.py`, `settings_control.py` | – |
+| 10.3 | next_activation reale Timerwirkung | ✅ | `ActivationTimingPolicy`; §28/§29 Tests mit exakten Deadlines | – |
+| 11.1 | Timingwerte pro Activation latchen; immutable Repräsentation | ✅ | `ActivationTimingPolicy`, `_timing_locked()` | – |
+| 11.2 | Keine rückwirkende Mutation bei Patch während offener Activation | ✅ | §28 Wire-Test (Deadline unverändert) | – |
+| 11.3 | Manual und Wake gleiche Seam | ✅ | `_new_activation_inputs()` in beiden Admission-Pfaden | – |
+| 12 | Eine Quelle für effectiveSettings (snapshot/event/controller/ledger/Timer/Metadaten) | ✅ | `settings_effective_for_wire()`; Konsistenztest §33 | – |
+| 13 | Requested/Effective-Semantik live/next_activation/next_session/server_restart | ✅ | Tests Verhalten je Policy | – |
+| 14.1 | Optimistic concurrency; stale → settings_revision_conflict; keine Effekte | ✅ | Domain- + Wire-Tests | – |
+| 14.2 | Atomare Validierung; settings_rejected; sortierte Errors; 0 Effekte | ✅ | Domain- + Wire-Tests | – |
+| 14.3 | no_change ohne Bump/Event | ✅ | Domain- + Wire-Tests | – |
+| 14.4 | Revision N→N+1 genau einmal pro Transaktion | ✅ | Tests Multi-Key/Multi-Policy | – |
+| 15 | Multi-Policy-Patch: eine Revision, Gruppen live/next_activation/next_session/server_restart, changedKeys lexikographisch, stateVersion +1 genau einmal | ✅ | `_emit_settings_changed`; Tests | – |
+| 16 | settings.changed über AP-040-Dispatch-Seam | ✅ | `_dispatch_events(produce)` | – |
+| 17 | Command-Replay unverändert; identisches Ack; kein zweites Event; command_id_conflict | ✅ | Wire-Tests | – |
+| 18 | REST `/api/v2/settings/schema` + `/server` + PATCH | ✅ | `server.py` Endpunkte; REST-Tests | – |
+| 18 | vorhandener Wake-Endpunkt bleibt | ✅ | `GET /api/wake-word` bleibt; kein neuer Katalogendpunkt | Siehe Abweichungsnotiz |
+| 19 | Bestehender Admin-Guard; X-Admin-Key als Alias; öffentliche Reads; nie Secrets | ✅ | `admin_auth_error`; REST-/Secret-Leak-Tests | – |
+| 20 | Server-PATCH: 409 conflict, atomic reject, Erfolg persistiert, no_change kein Bump | ✅ | REST-Tests + Persistenz-Tests | – |
+| 21/53 | Neue Session: Serverdefault + Session-Overrides; bestehende Sessions nicht rückwirkend | ✅ | Admission-Seeding; Domain-Test | – |
+| 22–25 | RuntimeConfigStore-Koexistenz; beide Schreibreihenfolgen; atomar; eine Lock-Seam | ✅ | `operations.py`; Persistenz-Tests A–F | – |
+| 26 | Pflichttests A–F | ✅ | `test_settings_runtime_persistence.py` | – |
+| 27 | keine Secrets persisieren | ✅ | Registry `secret`; Server-Patch lehnt Secrets ab | – |
+| 28 | Pflicht-E2E Follow-up 3000→8000, laufende unverändert, nächste real 8.0s | ✅ | `test_protocol_v2_settings.py` | – |
+| 29 | Alle sechs Timings real gebunden | ✅ | Controller-Level exakte Deadlines | – |
+| 30 | Watchdog-Cross-Field-Pflichttests | ✅ | 4 Szenarien + final-Candidate | – |
+| 31 | Session-Revision-/Event-Matrix 1–9 | ✅ | Domain- + Wire-Tests inkl. 20x Race | – |
+| 32 | settings.changed + Domain-Ordering deterministisch (eventSeq monoton, keine Lücke/Duplikat) | ✅ | 20 Iterationen Barrier-getrieben | – |
+| 33 | Snapshot-Konsistenz aller Revisionen/effectiveSettings | ✅ | `test_session_snapshot_consistency` | – |
+| 34 | Public Settings Schema, sortiert, keine Secrets/Interna | ✅ | REST-Test | – |
+| 35 | Server Settings Read öffentlich, nicht geheim, Revision, requested/effective | ✅ | REST-Test | – |
+| 36 | Server Settings Patch: Adminauth, atomic, base revision, nur server-default-writable, Session-Key abgelehnt, Secrets nie | ✅ | REST-Tests | – |
+| 37 | HTTP-Auth-Pflichttests + Secret-Leaktests | ✅ | REST-Klasse | – |
+| 38 | v1/Legacy-Isolation; Legacy-Endpunkte funktional | ✅ | v1-Tests grün; kein Legacyumbau | – |
+| 39/40 | AP-060 nicht vorwegnehmen; keine Cooldown-/Pre-Roll-Werte | ✅ | Keine AP-060-Fachlogik | – |
+| 41–44 | Archive-Akte (PLAN/README/runs/REPORT/evidence/UMSETZUNGSVERGLEICH) | ✅ | Ordner angelegt | – |
+| 42 | Originalprompt byteidentisch + SHA256 | ✅ | Gleich `2F64EB44...` | – |
+| 45 | Produktdokumentation aktualisiert | ✅ | siehe Abschnitt 4 REPORT | – |
+| 46 | Archive-Register der Gesamtaktion bleibt „In Umsetzung“ | ✅ | `docs/.archiv/README.md` unverändert | – |
+| 47 | Kleine Module statt server-Monolith | ✅ | `settings_control.py` + Adapter | – |
+| 48 | Fehlerformate field/code/message; frozen result codes | ✅ | `FieldError`; Wire nutzt RESULT_CODES | – |
+| 49 | Determinsmus (Sortierung) | ✅ | Keys/Errors/changedKeys/Gruppen sortiert | – |
+| 50 | Thread Safety; Barrier/Event statt sleep | ✅ | RLock + Barrier-Szenarien | – |
+| 51 | stateVersion +1 je sichtbarer Settings-Transaktion; nicht bei no_change/reject/replay/conflict | ✅ | Wire-Tests | – |
+| 52 | Server- vs Session-Settingsrevision getrennt | ✅ | Zwei Revision-Streams; Separationstests | – |
+| 54 | Pflicht-Testdateien | ✅ | drei neue Dateien | – |
+| 55–58 | Testbefehle und Ergebnisse | ✅ | REPORT + Evidence | – |
+| 59/61/64 | diff check, Worktree, genau ein C1-Commit, Parent exakt, kein Push | ✅ | Abschlussprüfung | – |
+
+## Abweichungsnotizen
+
+1. **Wake-Endpunkt (Punkt 18).** Der Frozen Contract nennt `GET /api/v2/
+   wake-words`. Die kanonische Basis besitzt stattdessen `GET /api/wake-word`
+   (Admin-guarded, v1-Pfad). AP-SRV-050 lässt den vorhandenen Endpunkt
+   funktional bestehen und führt **keinen** neuen `v2`-Katalogendpunkt ein; der
+   vollständige Wake-Katalog-/Admission-Vertrag ist explizit AP-SRV-060.
+   Dadurch bleibt die „keine AP-060-/070-Implementierung vorziehen“-Grenze
+   gewahrt. Bewusste Entscheidung, dokumentierte Abweichung ohne Produktbug.
+2. **Fokus-Befehl Umgebungsmitigation.** `python -m pytest` läuft auf dieser
+   Maschine wegen eines blockierenden WMI-Zugriffs im torch-Import nur mit
+   einem out-of-tree `sitecustomize`-Mitigationspfad. Testbefehle und
+   Sollbefunde unverändert; Nachweis im REPORT/Evidence.

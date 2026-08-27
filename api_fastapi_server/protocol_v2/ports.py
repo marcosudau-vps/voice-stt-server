@@ -26,72 +26,35 @@ REQUIRES_AP_SRV_060_BINDING = "REQUIRES_AP_SRV_060_BINDING"
 
 
 class SettingsPort:
-    """Read-only projection of the settings a v2 session must publish.
+    """Adapter of the AP-SRV-050 session settings control to the v2 wire.
 
-    The port never stores a value. ``effective_settings`` reads the activation
-    configuration AP-SRV-030 resolved for this session, so a running
-    activation keeps exactly the snapshot it started with.
+    The port never stores a value and holds no settings authority; it reads the
+    session's one :class:`SessionSettingsState` and lets the wire layer
+    (``connection``) project the transaction result into ``command.ack`` and
+    ``settings.changed`` through the existing AP-SRV-040 event dispatch seam.
     """
 
     binding = REQUIRES_AP_SRV_050_BINDING
-
-    #: The session settings revision until AP-SRV-050 owns it.
-    INITIAL_REVISION = 0
 
     def __init__(self, session):
         self._session = session
 
     @property
     def revision(self):
-        return self.INITIAL_REVISION
+        """The revision of *this* v2 session only (never the server revision)."""
+        return self._session.settings_state.settings_revision
 
     def effective_settings(self):
-        """The activation timings that are in force for this session."""
-        config = getattr(self._session, "activation_config", None)
-        if config is None:
-            return {}
-        return {
-            "activation.initialSpeechTimeoutMs": _ms(
-                config.initial_speech_timeout
-            ),
-            "activation.followupTimeoutMs": _ms(config.followup_timeout),
-            "activation.segmentWatchdogInitialMs": _ms(
-                config.segment_watchdog_initial
-            ),
-            "activation.segmentWatchdogRefreshMs": _ms(
-                config.segment_watchdog_refresh
-            ),
-            "activation.segmentWatchdogWarningMs": _ms(
-                config.segment_watchdog_warning
-            ),
-            "activation.closingRecoveryTimeoutMs": _ms(
-                config.closing_recovery_timeout
-            ),
-        }
+        """The flat, latch-consistent effective settings of this session."""
+        return self._session.settings_effective_for_wire()
 
     def patch(self, base_revision, changes):
-        """Refuses every patch until AP-SRV-050 owns the control plane.
+        """Binds ``session_settings.patch`` to the session settings control.
 
-        Returns ``(result, errors)``. A stale base revision is reported as a
-        revision conflict so the client learns the correct distinction even
-        before the control plane exists.
+        Returns a ``PatchResult``; the connection handler decides the ack
+        result and the settings.changed emission.
         """
-        if int(base_revision) != self.revision:
-            return "settings_revision_conflict", [{
-                "field": "baseSettingsRevision",
-                "code": "stale_settings_revision",
-                "message": (
-                    "Die angegebene Settings-Revision ist nicht die aktuelle."
-                ),
-            }]
-        return "settings_rejected", [{
-            "field": key,
-            "code": "settings_control_plane_unavailable",
-            "message": (
-                "Die serverautoritative Settings-Control-Plane wird mit "
-                "AP-SRV-050 bereitgestellt."
-            ),
-        } for key in sorted(str(name) for name in changes)]
+        return self._session.apply_settings_patch(base_revision, changes)
 
 
 class WakeWordPort:
@@ -151,9 +114,3 @@ class WakeWordPort:
                     ),
                 })
         return errors
-
-
-def _ms(seconds):
-    if seconds is None:
-        return None
-    return int(round(float(seconds) * 1000))

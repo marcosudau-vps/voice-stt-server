@@ -47,6 +47,7 @@ from . import commands as command_layer
 from . import events as event_layer
 from . import handshake as handshake_layer
 from . import identity, ports, schema, snapshot as snapshot_layer
+from ..settings_control import POLICY_EVENT_ORDER
 from .session import ProtocolSessionState
 
 LOGGER = logging.getLogger(__name__)
@@ -494,13 +495,74 @@ class ProtocolV2Connection:
 
     def _apply_settings_patch(self, parsed):
         def apply():
-            # REQUIRES_AP_SRV_050_BINDING
-            return self.settings_port.patch(
+            patch = self.settings_port.patch(
                 parsed.payload["baseSettingsRevision"],
                 parsed.payload["changes"],
             )
+            return self._bind_settings_patch(patch)
 
         return self._answer_cached(parsed, apply)
+
+    def _bind_settings_patch(self, patch):
+        """Projects one confirmed settings transaction onto the wire state.
+
+        On a real change the session settings revision is mirrored into
+        ``ProtocolSessionState`` exactly once and the ``settings.changed``
+        events are minted through the existing ``_dispatch_events`` seam - the
+        same linearization boundary every AP-SRV-040 domain event uses - so
+        ``eventSeq`` order, ``stateVersion`` and retry identity stay at
+        AP-SRV-040.
+        """
+        if patch.result == schema.RESULT_NO_CHANGE:
+            return schema.RESULT_NO_CHANGE, None
+        if patch.result == schema.RESULT_SETTINGS_REVISION_CONFLICT:
+            return schema.RESULT_SETTINGS_REVISION_CONFLICT, patch.error_dicts
+        if patch.result == schema.RESULT_SETTINGS_REJECTED:
+            return schema.RESULT_SETTINGS_REJECTED, patch.error_dicts
+
+        self.state.set_settings_revision(patch.settings_revision)
+        self._emit_settings_changed(patch)
+        return schema.RESULT_APPLIED, None
+
+    def _emit_settings_changed(self, patch):
+        """Emits the settings.changed groups of one confirmed transaction.
+
+        Changed keys are grouped deterministicly by apply policy
+        (``live``, ``next_activation``, ``next_session``, ``server_restart``),
+        sorted lexicographically inside each group. Only the first event is a
+        visible state change, so one transaction raises ``stateVersion``
+        exactly once while every event carries the same new revision.
+        """
+        revision = int(patch.settings_revision)
+        groups = {policy: [] for policy in POLICY_EVENT_ORDER}
+        for key in patch.changed_keys:
+            policy = patch.apply_policies.get(key)
+            if policy in groups:
+                groups[policy].append(key)
+
+        def produce():
+            payloads = []
+            first = True
+            for policy in POLICY_EVENT_ORDER:
+                keys = sorted(groups[policy])
+                if not keys:
+                    continue
+                envelope = self.state.mint_event(
+                    schema.EVENT_SETTINGS_CHANGED,
+                    logical_key=("settings.changed", revision, policy),
+                    state_change=first,
+                )
+                envelope.update({
+                    "settingsRevision": revision,
+                    "scope": "session",
+                    "changedKeys": keys,
+                    "applyPolicy": policy,
+                })
+                payloads.append(envelope)
+                first = False
+            return payloads
+
+        self._dispatch_events(produce)
 
     def _apply_snapshot_request(self, parsed):
         ack = self._answer_cached(

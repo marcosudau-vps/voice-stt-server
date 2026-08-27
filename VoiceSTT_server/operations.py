@@ -50,6 +50,11 @@ PERFORMANCE_EVENT_MESSAGES_DE = {
     "transcription.realtime_emitted": "Realtime-Transkript ausgegeben",
 }
 
+#: Shared module-wide write lock for every RuntimeConfigStore instance, so
+#: independent instances writing the same runtime config path serialize their
+#: read-modify-write and never lose a top-level section (AP-SRV-050 prompt 25).
+_RUNTIME_CONFIG_WRITE_LOCK = threading.RLock()
+
 
 if sys.platform == "win32":
     import ctypes
@@ -344,11 +349,26 @@ class PerformanceLogManager:
 
 
 class RuntimeConfigStore:
-    """Persist non-secret runtime settings as JSON with atomic replacement."""
+    """Persist non-secret runtime settings as JSON with atomic replacement.
+
+    The runtime config document is a coexistence format (AP-SRV-050 prompt
+    22-25): the legacy ``settings`` section, the additive
+    ``settingsControlOverlay``/``settingsRevision`` sections and every unknown
+    compatible top-level field live in the *same* file and must never clobber
+    one another. Both write families therefore read-modify-write the whole
+    document under one shared lock and replace it atomically via
+    ``temp file -> os.replace``. The lock is module-wide, so even separate
+    instances writing the same path serialize correctly and no section is lost.
+    """
+
+    #: Binding top-level overlay name of the AP-SRV-050 server defaults.
+    OVERLAY_FIELD = "settingsControlOverlay"
+    #: Binding top-level revision name of the server settings revision.
+    REVISION_FIELD = "settingsRevision"
 
     def __init__(self, path=None):
         self.path = Path(path).expanduser() if path else None
-        self._lock = threading.RLock()
+        self._lock = _RUNTIME_CONFIG_WRITE_LOCK
 
     def load(self):
         if self.path is None or not self.path.is_file():
@@ -366,14 +386,81 @@ class RuntimeConfigStore:
             values = asdict(settings)
         else:
             values = dict(settings)
-        payload = {
+        legacy = {
             "version": 1,
             "updatedAt": _utc_now(),
-            "settings": {name: values[name] for name in sorted(allowed_names) if name in values},
+            "settings": {
+                name: values[name]
+                for name in sorted(allowed_names)
+                if name in values
+            },
         }
+        return self._write_merged(legacy)
+
+    def save_settings_control(self, overlay, revision):
+        """Atomically adds/updates the control overlay and its revision.
+
+        The legacy ``settings`` section and every other compatible top-level
+        field are preserved untouched.
+        """
+        if self.path is None:
+            return None
+        overlay = dict(overlay or {})
+        revision = int(revision) if not isinstance(revision, bool) else 0
+        if revision < 0:
+            revision = 0
+        fields = {
+            "version": 1,
+            "updatedAt": _utc_now(),
+            self.OVERLAY_FIELD: overlay,
+            self.REVISION_FIELD: revision,
+        }
+        return self._write_merged(fields)
+
+    def load_control(self):
+        """``(overlay, revision)`` of the persisted settings control plane."""
+        if self.path is None or not self.path.is_file():
+            return {}, 0
+        try:
+            payload = json.loads(self.path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, ValueError):
+            return {}, 0
+        if not isinstance(payload, dict):
+            return {}, 0
+        overlay = payload.get(self.OVERLAY_FIELD)
+        overlay = dict(overlay) if isinstance(overlay, dict) else {}
+        revision = payload.get(self.REVISION_FIELD, 0)
+        if isinstance(revision, bool) or not isinstance(revision, int):
+            revision = 0
+        return overlay, revision if revision >= 0 else 0
+
+    def _write_merged(self, new_fields):
+        """Read-modify-write the whole document under the shared lock."""
+        if self.path is None:
+            return None
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = self.path.with_name(f".{self.path.name}.{uuid.uuid4().hex}.tmp")
+        temporary = self.path.with_name(
+            f".{self.path.name}.{uuid.uuid4().hex}.tmp"
+        )
         with self._lock:
-            temporary.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+            # The read happens *inside* the shared lock, so two read-modify-
+            # write transactions cannot both start from the same stale payload.
+            payload = self._read_payload()
+            payload.update(dict(new_fields))
+            temporary.write_text(
+                json.dumps(payload, indent=2, ensure_ascii=False),
+                encoding="utf-8",
+            )
             os.replace(temporary, self.path)
         return str(self.path.resolve())
+
+    def _read_payload(self):
+        if self.path is None or not self.path.is_file():
+            return {}
+        try:
+            payload = json.loads(
+                self.path.read_text(encoding="utf-8", errors="replace")
+            )
+        except (OSError, ValueError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
