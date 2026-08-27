@@ -3883,6 +3883,7 @@ class RecorderBackedRealtimeSession:
             self._run_recovery_close(plan)
             return
 
+        self._notify_input_closing(plan)
         activation_id = plan.activation_id
         generation = plan.gate_generation
 
@@ -3960,6 +3961,7 @@ class RecorderBackedRealtimeSession:
         If even the hard abort cannot make the old input path safe, terminally
         close the session instead of leaving a live session stuck forever.
         """
+        self._notify_input_closing(plan)
         activation_id = plan.activation_id
 
         try:
@@ -5597,6 +5599,24 @@ class RecorderBackedRealtimeSession:
                 **event_fields,
             )
         self._notify_protocol_observer(event, payload)
+
+    #: Synthetic notification for the visible entry into ``closing_input``.
+    #: The phase transition itself has already happened under the session lock;
+    #: AP-SRV-030 publishes no lifecycle event for it, so the wire layer needs
+    #: this marker to version a visible state change that has no own event.
+    #: It is not a domain event and never becomes one.
+    INPUT_CLOSING_NOTIFICATION = "__input_closing__"
+
+    def _notify_input_closing(self, plan):
+        self._notify_protocol_observer(
+            self.INPUT_CLOSING_NOTIFICATION,
+            {
+                "activationId": plan.activation_id,
+                "activationSequence": plan.activation_sequence,
+                "reason": plan.reason,
+                "recovery": bool(plan.recovery),
+            },
+        )
 
     def _notify_protocol_observer(self, event, payload):
         """Hands one already published lifecycle event to the wire projection.

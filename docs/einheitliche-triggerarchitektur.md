@@ -1009,10 +1009,63 @@ ein v2-Event.
 
 Legacyereignisse ohne v2-Entsprechung werden verworfen, nicht durchgereicht.
 
-`stateVersion` steigt nur bei einer nach außen sichtbaren Zustandsänderung;
-`watchdog.warning` und `activation.trigger_suppressed` sind diagnostisch und
-erhöhen sie nicht. Ein Transportretry desselben logischen Ereignisses liefert
-dieselbe `eventId`, dieselbe `eventSeq` und dieselbe `stateVersion`.
+Ein Transportretry desselben logischen Ereignisses liefert dieselbe `eventId`,
+dieselbe `eventSeq` und dieselbe `stateVersion`.
+
+`eventSeq` ist die verbindliche Reihenfolge. Sie wird unter dem Protokolllock
+vergeben; die Zustellreihenfolge kann davon abweichen, wenn zwei
+Domainthreads gleichzeitig publizieren. Ein Client ordnet und dedupliziert
+deshalb nach `eventSeq`/`eventId` und leitet aus einer Lücke einen
+`session.snapshot.request` ab.
+
+### 12.5.1 `stateVersion`
+
+`stateVersion` ist an **sichtbaren Zustand** gebunden, nicht an den
+Eventkatalog. Sie steigt bei jeder nach außen sichtbaren Zustandsänderung, und
+zwar genau einmal je logischer Änderung.
+
+Die meisten sichtbaren Änderungen tragen ihre Version über ein kanonisches
+Event. Drei sichtbare Änderungen haben aber kein eigenes Event und werden
+deshalb ausdrücklich versioniert:
+
+| sichtbare Änderung | warum es kein Event gibt |
+| --- | --- |
+| `trigger.suppressed` / `trigger.effective` nach `trigger_suppression.set` | `activation.trigger_suppressed` ist diagnostisch und entsteht erst beim später abgewiesenen Trigger |
+| `audioAvailable` nach `audio_availability.set` | der Frozen Eventkatalog kennt kein Availability-Event |
+| Eintritt in `closing_input` | `activation.input_closed` beschreibt den **abgeschlossenen** Close, nicht seinen Beginn |
+
+Für den Eingabeschluss gilt daher:
+
+```text
+offene Phase
+ -> akzeptiertes finish/cancel
+ -> closing_input sichtbar        -> stateVersion N+1  (Ack trägt N+1)
+ -> sicherer Close abgeschlossen
+ -> activation.input_closed        -> stateVersion > N+1
+```
+
+Das Ack eines akzeptierten `finish`/`cancel` zeigt `inputPhase = closing_input`
+und trägt die Version dieses Eintritts – nicht die höhere Version des später
+abgeschlossenen Close.
+
+Ein scheiternder Close, den die Recovery wiederholt, ist derselbe logische
+Eintritt und erhöht die Version kein zweites Mal. Ändert ein einzelnes
+akzeptiertes Kommando gleichzeitig Availability und Phase – etwa
+`audioAvailable=false` bei offener Activation –, ist das eine logische
+Änderung mit genau einem Versionsfortschritt.
+
+**Nicht** erhöht wird die Version bei:
+
+```text
+no_change
+Replay desselben Commands (das Ack trägt die ursprüngliche Version)
+command_id_conflict
+invalid_payload / stale_session / stale_activation
+session.snapshot.request
+watchdog.warning
+activation.trigger_suppressed
+refresh, der eine längere Restfrist nicht verschoben hat
+```
 
 ### 12.6 `activation.input_closed`
 

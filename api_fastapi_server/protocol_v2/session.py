@@ -83,6 +83,23 @@ class ProtocolSessionState:
         with self._lock:
             return self._state_version, self._settings_revision
 
+    def advance_state(self):
+        """Records one visible state change that carries no domain event.
+
+        The frozen contract binds ``stateVersion`` to *visible state*, not to
+        the event catalogue. Several visible changes have no canonical event of
+        their own - a runtime suppression, the generic audio availability, and
+        the entry into ``closing_input`` - and they must still be observable as
+        a new version.
+
+        Callers apply the rule "one logical visible change, one advance": if
+        the same change already minted a state event through
+        :meth:`mint_event`, this is not called again.
+        """
+        with self._lock:
+            self._state_version += 1
+            return self._state_version
+
     # -- event identity ------------------------------------------------------
 
     def mint_event(self, event_type, *, logical_key=None, state_change=None,

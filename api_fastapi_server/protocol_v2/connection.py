@@ -90,6 +90,10 @@ class ProtocolV2Connection:
         self.hello = None
         #: commandId -> the v2 ack that was answered first.
         self._ack_memo = {}
+        #: (activationId, activationSequence) -> the stateVersion that made the
+        #: entry into ``closing_input`` visible. One closing entry advances the
+        #: version once, even if a failed close is retried by the recovery.
+        self._closing_versions = {}
 
     # -- outbound ------------------------------------------------------------
 
@@ -361,18 +365,35 @@ class ProtocolV2Connection:
             legacy["source"] = parsed.payload["source"]
         else:
             legacy["activationId"] = parsed.payload["activationId"]
-        return self._answer_domain(parsed, self.session.handle_trigger_command(legacy))
+        before = self.state.state_version
+        legacy_ack = self.session.handle_trigger_command(legacy)
+        # An accepted activation change always carries its own version: it
+        # either mints a state event (``activation.started``,
+        # ``activation.phase_changed``) or it is the entry into
+        # ``closing_input``, which is versioned by the closing observer. A
+        # refresh that did not move a longer deadline changes nothing visible
+        # and must therefore not advance anything.
+        return self._answer_domain(parsed, legacy_ack, before=before)
 
     def _apply_audio_availability(self, parsed):
         legacy = {
             "commandId": parsed.command_id,
             "audioAvailable": parsed.payload["audioAvailable"],
         }
+        before = self.state.state_version
+        legacy_ack = self.session.handle_audio_availability_command(legacy)
+        # ``audioAvailable`` is a mandatory snapshot field, so an effective
+        # change is visible even though the frozen event catalogue has no
+        # availability event. If losing the device also closed an activation,
+        # that one logical change is already versioned by the closing observer
+        # and must not be counted twice.
         return self._answer_domain(
-            parsed, self.session.handle_audio_availability_command(legacy)
+            parsed, legacy_ack, before=before, visible_without_event=True
         )
 
-    def _answer_domain(self, parsed, legacy_ack):
+    def _answer_domain(
+        self, parsed, legacy_ack, *, before=None, visible_without_event=False
+    ):
         """Projects one AP-SRV-030 ack, honouring its replay bookkeeping."""
         reason = legacy_ack.get("reason")
         try:
@@ -392,15 +413,56 @@ class ProtocolV2Connection:
         memo = self._memoised(parsed.command_id)
         if memo is not None:
             # The domain replayed its stored answer; the original wire ack -
-            # including its original version values - is authoritative.
+            # including its original version values - is authoritative. A
+            # replay never advances the state version.
             self.send(dict(memo))
             return memo
 
-        ack = self._emit_ack(parsed.command_id, result, legacy_ack=legacy_ack)
+        state_version = self._state_version_for(
+            result,
+            legacy_ack,
+            before=before,
+            visible_without_event=visible_without_event,
+        )
+        ack = self._emit_ack(
+            parsed.command_id,
+            result,
+            legacy_ack=legacy_ack,
+            state_version=state_version,
+        )
         self._memoise(parsed.command_id, ack)
         if result == schema.RESULT_TRIGGER_SUPPRESSED:
             self._emit_trigger_suppressed(parsed)
         return ack
+
+    def _state_version_for(
+        self, result, legacy_ack, *, before, visible_without_event
+    ):
+        """The version one accepted domain command has to report.
+
+        Three cases, in this order:
+
+        * the command entered ``closing_input`` - the ack reports the version
+          of that entry, not the higher one of the close that followed inside
+          the same call;
+        * the command changed visible state that has no event of its own and
+          nothing advanced the version during the call - advance once here;
+        * anything else - report the current version, which the minted state
+          events already advanced.
+        """
+        if result != schema.RESULT_APPLIED or before is None:
+            return None
+
+        if legacy_ack.get("phase") == schema.CLOSING_INPUT:
+            closing = self._closing_version(
+                legacy_ack.get("activationId"), newer_than=before
+            )
+            if closing is not None:
+                return closing
+
+        if visible_without_event and self.state.state_version == before:
+            return self.state.advance_state()
+        return None
 
     # -- commands answered by this layer -------------------------------------
 
@@ -413,9 +475,16 @@ class ProtocolV2Connection:
                 manual=parsed.payload["manual"],
                 wake_word=parsed.payload["wakeWord"],
             )
-            return (
-                schema.RESULT_APPLIED if changed else schema.RESULT_NO_CHANGE
-            ), None
+            if not changed:
+                return schema.RESULT_NO_CHANGE, None
+            # ``trigger.suppressed`` and ``trigger.effective`` are mandatory
+            # snapshot fields, so this is a visible change - and the frozen
+            # event catalogue has no event for it.
+            # ``activation.trigger_suppressed`` is diagnostic and only appears
+            # when a later trigger is refused, so the version has to be
+            # advanced here.
+            self.state.advance_state()
+            return schema.RESULT_APPLIED, None
 
         return self._answer_cached(parsed, apply)
 
@@ -465,9 +534,14 @@ class ProtocolV2Connection:
 
     # -- ack construction ----------------------------------------------------
 
-    def _emit_ack(self, command_id, result, *, legacy_ack=None, errors=None):
+    def _emit_ack(
+        self, command_id, result, *, legacy_ack=None, errors=None,
+        state_version=None,
+    ):
         controller_snapshot = self._controller_snapshot()
-        state_version, settings_revision = self.state.versions()
+        current_version, settings_revision = self.state.versions()
+        if state_version is None:
+            state_version = current_version
         if legacy_ack is not None:
             activation_id = legacy_ack.get("activationId")
             input_phase = legacy_ack.get("phase")
@@ -522,6 +596,9 @@ class ProtocolV2Connection:
         projector = self.projector
         if projector is None:
             return
+        if legacy_event == self.session.INPUT_CLOSING_NOTIFICATION:
+            self._observe_input_closing(payload)
+            return
         try:
             context = self._projection_context()
             for event in projector.project(legacy_event, payload, context):
@@ -530,6 +607,40 @@ class ProtocolV2Connection:
             LOGGER.exception(
                 "v2-Eventprojektion für '%s' ist fehlgeschlagen", legacy_event
             )
+
+    def _observe_input_closing(self, payload):
+        """Versions the visible entry into ``closing_input``.
+
+        ``closing_input`` is one of the five canonical foreground phases, so
+        reaching it is a visible state change - but AP-SRV-030 publishes no
+        lifecycle event for it, and ``activation.input_closed`` describes the
+        *completed* close, not its beginning. Without this the ack that already
+        reports ``inputPhase = closing_input`` would carry the version of the
+        later close.
+
+        A failed close that the recovery retries is the same logical entry and
+        therefore advances the version only once.
+        """
+        key = (
+            str(payload.get("activationId")),
+            int(payload.get("activationSequence") or 0),
+        )
+        with self._lock:
+            if key in self._closing_versions:
+                return self._closing_versions[key]
+            version = self.state.advance_state()
+            self._closing_versions[key] = version
+            return version
+
+    def _closing_version(self, activation_id, *, newer_than):
+        """The closing version of this activation, if this call created it."""
+        if activation_id is None:
+            return None
+        with self._lock:
+            for (identifier, _sequence), version in self._closing_versions.items():
+                if identifier == str(activation_id) and version > newer_than:
+                    return version
+        return None
 
     def _projection_context(self):
         controller_snapshot = self._controller_snapshot()
