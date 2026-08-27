@@ -45,7 +45,7 @@ jobs:
           "C1-C2 diff SHA256: $diffHash" | Tee-Object -FilePath "$logDir/payload.txt"
           "C3 payload SHA256: $payloadHash" | Tee-Object -FilePath "$logDir/payload.txt" -Append
           if ($diffHash -ne '2516fb49451db5cf2e172b8eab26842ac5efc72fa4bb3543abf10dcf13f3b9dd') { throw "C1-C2 diff hash mismatch: $diffHash" }
-          if ($payloadHash -ne '8353811f66542c879a346cd9657c31c95dc1f9b507efde5135f6d4ecb5a19158') { throw "C3 payload hash mismatch: $payloadHash" }
+          if ($payloadHash -ne '88dc1045530ea752b8230eba3dc1343f9e672c51a9dd331b655ac2b8e2c06210') { throw "C3 payload hash mismatch: $payloadHash" }
           Expand-Archive -LiteralPath "$env:RUNNER_TEMP/c3-payload.zip" -DestinationPath "$env:RUNNER_TEMP/c3-payload" -Force
 
       - name: Reconstruct exact C2 tree from C1
