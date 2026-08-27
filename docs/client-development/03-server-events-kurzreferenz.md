@@ -52,6 +52,16 @@ Nicht jedes Event enthält alle gemeinsamen Felder.
 | `activation_started` | eine Activation wurde eröffnet | `activationId`, `generation`, `primarySource`, `sources`, `phase`, `timerRevision` |
 | `activation_refreshed` | Follow-up- oder Watchdog-Deadline neu gesetzt | wie oben |
 | `activation_closed` | Eingabepfad der Activation ist geschlossen; genau einmal je Activation | wie oben, zusätzlich `reason`, `cause` und `causedByCommandId` |
+
+`activation_closed` wird erst ausgelöst, wenn Gate und Recorder tatsächlich
+geschlossen sind (zweiphasiger Input-Close, AP-SRV-030 C2). `causedByCommandId`
+trägt nur bei einem normalen, kommandogetriebenen `finish`/`cancel` die
+zugehörige `commandId`; Timer-, Watchdog-, Geräte- (`audio_unavailable`) und
+Recoveryabschlüsse sind **nicht** kommandokorreliert (`null`), auch wenn die
+ursprüngliche Finish-Identität intern bis zum Abschluss erhalten bleibt.
+Recoveryabschlüsse kennzeichnet zusätzlich `cause: closing_recovery_timeout`
+und `recovered: true`. Ein verspäteter Close mit alter Activation-Identität
+wird verworfen und beendet keine neuere Activation.
 | `activation_drained` | Hintergrundledger der Activation ist terminal | `activationId`, `activationSequence`, `state`, `reason`, `acceptedSegmentCount`, `terminalSegmentCount` |
 | `watchdog_warning` | Vorwarnung vor dem Daueraufnahme-Ablauf | `activationId`, `activationSequence`, `segmentId`, `segmentSequence`, `phase`, `timerRevision`, `remainingSeconds` |
 | `wakeword_detected` | Weckwort erkannt; Sprache wird erwartet | `wakeWord` |

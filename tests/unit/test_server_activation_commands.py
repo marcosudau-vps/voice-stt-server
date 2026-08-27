@@ -4,6 +4,14 @@ These are the pure unit tests of the layer that sits *around* the state
 machine. The end-to-end proof that a replay really has no second effect on the
 gate, the timers and the ledger lives in
 ``tests/unit/test_server_command_timer_e2e.py``.
+
+AP-SRV-030 C2 additions:
+
+* control commands require a non-empty ``activationId`` (T1);
+* control commands are source-neutral: a legacy ``source`` field is neither
+  an authorisation nor part of the semantic payload identity (F6);
+* a rejected command with a usable ``commandId`` still occupies the replay
+  identity, so a later valid command with the same id is a conflict (F3).
 """
 
 import threading
@@ -16,6 +24,7 @@ from api_fastapi_server.activation_commands import (
     CommandReplayCache,
     MISS,
     REPLAY,
+    prepare_activation_command,
     parse_activation_command,
 )
 
@@ -47,7 +56,6 @@ class ActivationCommandParsingTests(unittest.TestCase):
                 command = parse_activation_command({
                     "commandId": "c-2",
                     "action": action,
-                    "source": "manual",
                     "activationId": "a-7",
                 })
                 self.assertEqual(command.action, action)
@@ -55,10 +63,15 @@ class ActivationCommandParsingTests(unittest.TestCase):
 
     def test_the_deprecated_extend_alias_normalises_to_refresh(self):
         aliased = parse_activation_command({
-            "commandId": "c-3", "action": "extend", "source": "manual",
+            "commandId": "c-3",
+            "action": "extend",
+            "source": "manual",
+            "activationId": "a-1",
         })
         canonical = parse_activation_command({
-            "commandId": "c-3", "action": "refresh", "source": "manual",
+            "commandId": "c-3",
+            "action": "refresh",
+            "activationId": "a-1",
         })
         self.assertEqual(aliased.action, "refresh")
         # The spelling must not turn a replay into a conflict.
@@ -74,6 +87,57 @@ class ActivationCommandParsingTests(unittest.TestCase):
             },
             "invalid_payload",
             "c-4",
+        )
+
+    def test_control_commands_require_activation_id(self):
+        """T1 / F5: ``refresh|finish|cancel`` without activation id is invalid."""
+        for action in ("refresh", "finish", "cancel"):
+            for payload in (
+                {"commandId": "c-t1", "action": action},
+                {"commandId": "c-t1", "action": action, "activationId": ""},
+                {
+                    "commandId": "c-t1",
+                    "action": action,
+                    "activationId": "   ",
+                },
+                {
+                    "commandId": "c-t1",
+                    "action": action,
+                    "source": "manual",
+                },
+            ):
+                with self.subTest(action=action, payload=payload):
+                    prepared = prepare_activation_command(payload)
+                    self.assertIsNone(prepared.command)
+                    self.assertEqual(
+                        prepared.rejection_reason, "invalid_payload"
+                    )
+                    self.assertEqual(prepared.command_id, "c-t1")
+
+    def test_control_source_is_not_part_of_semantic_payload_identity(self):
+        """F6: a legacy source field must not create a replay conflict."""
+        with_source = prepare_activation_command({
+            "commandId": "c-6",
+            "action": "refresh",
+            "source": "manual",
+            "activationId": "a-1",
+        })
+        without_source = prepare_activation_command({
+            "commandId": "c-6",
+            "action": "refresh",
+            "activationId": "a-1",
+        })
+        another_source = prepare_activation_command({
+            "commandId": "c-6",
+            "action": "refresh",
+            "source": "wake_word",
+            "activationId": "a-1",
+        })
+        self.assertEqual(
+            with_source.payload_key, without_source.payload_key
+        )
+        self.assertEqual(
+            with_source.payload_key, another_source.payload_key
         )
 
     def test_every_malformed_payload_has_its_own_reason(self):
@@ -114,7 +178,6 @@ class ActivationCommandParsingTests(unittest.TestCase):
                 {
                     "commandId": "c-9",
                     "action": "finish",
-                    "source": "manual",
                     "activationId": 12,
                 },
                 "invalid_payload",
@@ -129,13 +192,11 @@ class ActivationCommandParsingTests(unittest.TestCase):
         base = {
             "commandId": "c-10",
             "action": "finish",
-            "source": "manual",
             "activationId": "a-1",
         }
         original = parse_activation_command(base).payload_key
         for field, value in (
             ("action", "cancel"),
-            ("source", "wake_word"),
             ("activationId", "a-2"),
         ):
             with self.subTest(field=field):
@@ -144,6 +205,69 @@ class ActivationCommandParsingTests(unittest.TestCase):
                 self.assertNotEqual(
                     parse_activation_command(changed).payload_key, original
                 )
+
+    # -- AP-SRV-030 C2: replay identity of rejected commands (F3) ------------
+
+    def _prepared(self, payload):
+        return prepare_activation_command(payload)
+
+    def test_invalid_action_with_valid_command_id_has_replay_identity(self):
+        prepared = self._prepared({
+            "commandId": "m-1",
+            "action": "teleport",
+            "source": "manual",
+        })
+        self.assertEqual(prepared.command_id, "m-1")
+        self.assertEqual(prepared.rejection_reason, "invalid_action")
+        self.assertIsNone(prepared.command)
+        self.assertTrue(prepared.payload_key)
+
+    def test_same_invalid_payload_has_same_key(self):
+        payload = {
+            "commandId": "m-2",
+            "action": "teleport",
+            "source": "manual",
+        }
+        first = prepare_activation_command(payload)
+        second = prepare_activation_command({
+            "source": "manual",
+            "action": "teleport",
+            "commandId": "m-2",
+        })
+        self.assertEqual(first.payload_key, second.payload_key)
+
+    def test_different_invalid_payload_has_different_key(self):
+        teleport = prepare_activation_command({
+            "commandId": "m-3", "action": "teleport", "source": "manual",
+        })
+        other = prepare_activation_command({
+            "commandId": "m-3", "action": "activate", "source": "manual",
+        })
+        self.assertNotEqual(teleport.payload_key, other.payload_key)
+        self.assertNotEqual(
+            teleport.payload_key,
+            prepare_activation_command({
+                "commandId": "m-3",
+                "action": "teleport",
+                "source": "wake_word",
+            }).payload_key,
+        )
+
+    def test_missing_command_id_has_no_replay_identity(self):
+        prepared = prepare_activation_command({
+            "action": "activate", "source": "manual",
+        })
+        self.assertEqual(prepared.command_id, "")
+        self.assertEqual(prepared.payload_key, ())
+        self.assertEqual(prepared.rejection_reason, "missing_command_id")
+
+    def test_invalid_command_id_has_no_replay_identity(self):
+        prepared = prepare_activation_command({
+            "commandId": 17, "action": "activate", "source": "manual",
+        })
+        self.assertEqual(prepared.command_id, "")
+        self.assertEqual(prepared.payload_key, ())
+        self.assertEqual(prepared.rejection_reason, "invalid_command_id")
 
 
 class CommandReplayCacheTests(unittest.TestCase):
@@ -184,6 +308,34 @@ class CommandReplayCacheTests(unittest.TestCase):
         )
         self.cache.clear()
         self.assertEqual(len(self.cache), 0)
+
+    def test_a_rejected_command_with_valid_id_occupies_the_identity(self):
+        """F3: a usable commandId stays occupied even when the payload rejects."""
+        payload = {
+            "commandId": "m-1",
+            "action": "teleport",
+            "source": "manual",
+        }
+        prepared = prepare_activation_command(payload)
+        self.cache.store(
+            prepared.command_id, prepared.payload_key, {"reason": "invalid_action"}
+        )
+        self.assertEqual(
+            self.cache.lookup(prepared.command_id, prepared.payload_key).state,
+            REPLAY,
+        )
+        valid = prepare_activation_command({
+            "commandId": "m-1", "action": "activate", "source": "manual",
+        })
+        self.assertEqual(
+            self.cache.lookup(valid.command_id, valid.payload_key).state,
+            CONFLICT,
+        )
+
+    def test_a_keyless_rejection_never_occupies_the_cache(self):
+        self.assertEqual(
+            self.cache.lookup("", ()).state, MISS
+        )
 
     def test_concurrent_first_writers_agree_on_one_answer(self):
         start = threading.Barrier(8)
