@@ -79,6 +79,10 @@ class ProtocolV2Connection:
         self.outbound = queue.Queue()
         self._sink = None
         self._lock = threading.RLock()
+        # One session-local linearization point from event minting through the
+        # thread-safe sink/queue hand-off. The asynchronous WebSocket writer
+        # runs only after this lock has been released.
+        self._event_dispatch_lock = threading.RLock()
         self._closed = False
         self._close_code = None
 
@@ -580,16 +584,27 @@ class ProtocolV2Connection:
     def _emit_trigger_suppressed(self, parsed):
         """Diagnostic event for a refused trigger. Never a state change."""
         source = parsed.payload.get("source") or schema.MANUAL_SOURCE
-        envelope = self.state.mint_event(
-            schema.EVENT_ACTIVATION_TRIGGER_SUPPRESSED
-        )
-        envelope.update({
-            "source": source,
-            "reason": "trigger_suppressed",
-        })
-        self.send(envelope)
+
+        def mint():
+            envelope = self.state.mint_event(
+                schema.EVENT_ACTIVATION_TRIGGER_SUPPRESSED
+            )
+            envelope.update({
+                "source": source,
+                "reason": "trigger_suppressed",
+            })
+            return (envelope,)
+
+        self._dispatch_events(mint)
 
     # -- domain event projection ---------------------------------------------
+
+    def _dispatch_events(self, produce):
+        """Mints and hands one ordered event block to the outbound boundary."""
+        with self._event_dispatch_lock:
+            events = produce()
+            for event in events:
+                self.send(event)
 
     def _on_domain_event(self, legacy_event, payload):
         """Single subscription to the one AP-SRV-030 lifecycle funnel."""
@@ -600,9 +615,9 @@ class ProtocolV2Connection:
             self._observe_input_closing(payload)
             return
         try:
-            context = self._projection_context()
-            for event in projector.project(legacy_event, payload, context):
-                self.send(event)
+            self._dispatch_events(lambda: projector.project(
+                legacy_event, payload, self._projection_context()
+            ))
         except Exception:
             LOGGER.exception(
                 "v2-Eventprojektion für '%s' ist fehlgeschlagen", legacy_event

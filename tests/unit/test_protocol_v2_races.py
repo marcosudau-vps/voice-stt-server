@@ -20,7 +20,11 @@ import unittest
 import uuid
 
 from api_fastapi_server.protocol_v2 import schema
-from api_fastapi_server.protocol_v2.events import EventProjector, ProjectionContext
+from api_fastapi_server.protocol_v2.connection import ProtocolV2Connection
+from api_fastapi_server.protocol_v2.events import (
+    EventProjector,
+    ProjectionContext,
+)
 from api_fastapi_server.protocol_v2.session import ProtocolSessionState
 
 from tests.unit.test_server_controlled_e2e import (
@@ -37,6 +41,209 @@ REPETITIONS = 20
 
 #: Failsafe only - never an ordering mechanism.
 JOIN_TIMEOUT = 30.0
+
+
+class EventDispatchOrderingTests(unittest.TestCase):
+    def test_mint_to_sink_is_linearized_across_domain_threads(self):
+        first_activation = schema.new_canonical_id()
+        second_activation = schema.new_canonical_id()
+        first_minted = threading.Event()
+        contender_waiting = threading.Event()
+        received = []
+
+        class ObservedRLock:
+            def __init__(self):
+                self._lock = threading.RLock()
+                self._owned = threading.Event()
+
+            def __enter__(self):
+                if self._owned.is_set():
+                    contender_waiting.set()
+                self._lock.acquire()
+                self._owned.set()
+                return self
+
+            def __exit__(self, exc_type, exc_value, traceback):
+                self._owned.clear()
+                self._lock.release()
+
+        connection = ProtocolV2Connection(object())
+        connection._event_dispatch_lock = ObservedRLock()
+        connection.session = type(
+            "SessionStub",
+            (),
+            {"INPUT_CLOSING_NOTIFICATION": "__input_closing__"},
+        )()
+        connection.state = ProtocolSessionState(schema.new_canonical_id())
+        delegate = EventProjector(connection.state)
+
+        class GatedProjector:
+            def project(self, legacy_event, payload, context):
+                events = delegate.project(legacy_event, payload, context)
+                if payload["activationId"] == first_activation:
+                    first_minted.set()
+                    if not contender_waiting.wait(timeout=JOIN_TIMEOUT):
+                        raise AssertionError("second publisher never reached dispatch")
+                return events
+
+        connection.projector = GatedProjector()
+        connection._projection_context = lambda: ProjectionContext(
+            phase=schema.SEGMENT_ACTIVE,
+            activation_id=first_activation,
+        )
+
+        connection.set_sink(
+            lambda payload: received.append(payload["eventSeq"])
+        )
+
+        def publish(legacy_event, activation_id):
+            payload = {
+                "activationId": activation_id,
+            }
+            if legacy_event == "activation_drained":
+                payload.update({
+                    "state": "completed",
+                    "acceptedSegmentCount": 0,
+                    "terminalSegmentCount": 0,
+                })
+            connection._on_domain_event(legacy_event, payload)
+
+        # watchdog.warning also derives activation.phase_changed here, so the
+        # first projection is a two-event block that must stay contiguous.
+        first = threading.Thread(
+            target=publish, args=("watchdog_warning", first_activation)
+        )
+        second = threading.Thread(
+            target=publish, args=("activation_drained", second_activation)
+        )
+        first.start()
+        self.assertTrue(first_minted.wait(timeout=JOIN_TIMEOUT))
+        second.start()
+        for thread in (first, second):
+            thread.join(timeout=JOIN_TIMEOUT)
+            self.assertFalse(thread.is_alive())
+
+        self.assertEqual(received, [1, 2, 3])
+
+    def test_many_mixed_domain_and_diagnostic_events_reach_sink_in_mint_order(self):
+        connection = ProtocolV2Connection(object())
+        connection.session = type(
+            "SessionStub",
+            (),
+            {"INPUT_CLOSING_NOTIFICATION": "__input_closing__"},
+        )()
+        connection.state = ProtocolSessionState(schema.new_canonical_id())
+        connection.projector = EventProjector(connection.state)
+        connection._projection_context = ProjectionContext
+        received = []
+        connection.set_sink(received.append)
+
+        workers = 6
+        per_worker = 15
+        start = threading.Barrier(workers)
+
+        def publish(index):
+            start.wait(timeout=JOIN_TIMEOUT)
+            for step in range(per_worker):
+                event_kind = (index + step) % 3
+                if event_kind == 0:
+                    parsed = type(
+                        "ParsedStub",
+                        (),
+                        {"payload": {"source": schema.MANUAL_SOURCE}},
+                    )()
+                    connection._emit_trigger_suppressed(parsed)
+                elif event_kind == 1:
+                    connection._on_domain_event("activation_drained", {
+                        "activationId": schema.new_canonical_id(),
+                        "state": "completed",
+                        "acceptedSegmentCount": 0,
+                        "terminalSegmentCount": 0,
+                    })
+                else:
+                    connection._on_domain_event("activation_started", {
+                        "activationId": schema.new_canonical_id(),
+                        "activationSequence": index * per_worker + step + 1,
+                        "primarySource": schema.MANUAL_SOURCE,
+                    })
+
+        threads = [
+            threading.Thread(target=publish, args=(index,))
+            for index in range(workers)
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=JOIN_TIMEOUT)
+            self.assertFalse(thread.is_alive())
+
+        total = workers * per_worker
+        sequences = [event["eventSeq"] for event in received]
+        versions = [event["stateVersion"] for event in received]
+        self.assertEqual(sequences, list(range(1, total + 1)))
+        self.assertEqual(versions, sorted(versions))
+        self.assertEqual(
+            len({event["eventId"] for event in received}), total
+        )
+        self.assertEqual(
+            {event["type"] for event in received},
+            {
+                schema.EVENT_ACTIVATION_COMPLETED,
+                schema.EVENT_ACTIVATION_STARTED,
+                schema.EVENT_ACTIVATION_TRIGGER_SUPPRESSED,
+            },
+        )
+
+    def test_connection_close_around_sink_handoff_does_not_deadlock(self):
+        connection = ProtocolV2Connection(object())
+        connection.session = type(
+            "SessionStub",
+            (),
+            {"INPUT_CLOSING_NOTIFICATION": "__input_closing__"},
+        )()
+        connection.state = ProtocolSessionState(schema.new_canonical_id())
+        connection.projector = EventProjector(connection.state)
+        connection._projection_context = ProjectionContext
+        event_at_sink = threading.Event()
+        close_at_sink = threading.Event()
+        received = []
+
+        def sink(payload):
+            if payload is None:
+                close_at_sink.set()
+                return
+            event_at_sink.set()
+            if not close_at_sink.wait(timeout=JOIN_TIMEOUT):
+                raise AssertionError("close never reached the sink")
+            received.append(payload["eventSeq"])
+
+        connection.set_sink(sink)
+
+        def publish():
+            connection._on_domain_event("activation_drained", {
+                "activationId": schema.new_canonical_id(),
+                "state": "completed",
+                "acceptedSegmentCount": 0,
+                "terminalSegmentCount": 0,
+            })
+
+        def close():
+            if not event_at_sink.wait(timeout=JOIN_TIMEOUT):
+                raise AssertionError("event never reached the sink")
+            connection.request_close(1000)
+
+        threads = [
+            threading.Thread(target=publish),
+            threading.Thread(target=close),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=JOIN_TIMEOUT)
+            self.assertFalse(thread.is_alive())
+
+        self.assertTrue(connection.closed)
+        self.assertEqual(received, [1])
 
 
 class EventIdentityRaceTests(unittest.TestCase):

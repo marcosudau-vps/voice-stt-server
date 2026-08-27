@@ -643,14 +643,10 @@ class StateVersionMonotonicityTests(unittest.TestCase):
                             message for message in session.messages
                             if message.get("type") in schema.EVENT_TYPES
                         ]
-                        # ``eventSeq`` is the authoritative order: it is minted
-                        # under the protocol state lock, while delivery order
-                        # can differ when two domain threads publish at once.
-                        # The versioning invariants are therefore checked in
-                        # mint order, which is what a client reconstructs.
-                        events = sorted(
-                            received, key=lambda event: event["eventSeq"]
-                        )
+                        # The dispatch boundary preserves mint order on the
+                        # wire, so the client observes the version invariants
+                        # directly without reconstructing a reordered stream.
+                        events = received
                         versions = [
                             event["stateVersion"] for event in events
                         ]
