@@ -1135,11 +1135,11 @@ REQUIRES_AP_SRV_050_BINDING  -> gebunden durch AP-SRV-050 (Settings-Control-Plan
   und session_settings.patch laufen durch die eine Session-Settingsautorität
   (SessionSettingsState) und den SettingsPort als Adapter.
 
-REQUIRES_AP_SRV_060_BINDING
-  wakeWordCapabilities, Wake-Word-Admission und wakeword.detected.
-  Das Eventmodell trägt bereits wakeWordId, score und
-  primarySource = wake_word; es wird keine anonyme Boolean-Wake-Semantik
-  festgeschrieben.
+AP_SRV_060_BINDING           -> gebunden durch AP-SRV-060 (Wake-Word-Katalog,
+  Detection und Audiogrenze, siehe Abschnitt 14). wakeWordCapabilities,
+  Wake-Word-Admission und wakeword.detected laufen durch die eine
+  WakeWordCatalogAuthority und den WakeWordPort als Adapter. Das Eventmodell
+  trägt wakeWordId, score und primarySource = wake_word.
 ```
 
 ### 12.10 Koexistenz mit v1
@@ -1280,3 +1280,197 @@ Sichten getrennt:
   aus dem Controller (`trigger_suppression.set` bleibt eine Autorität).
 - Snapshot-Lesen selbst bumpst weder `stateVersion` noch `settingsRevision`
   und erzeugt kein `settings.changed`.
+
+
+## 14. Wake-Word-Katalog, Detection und Audiogrenze (AP-SRV-060)
+
+AP-SRV-060 macht Wake Words zu einer versionierten Build-Capability des
+Servers. Die fachliche Grundlage liegt im Frozen Contract (Abschnitt
+„Wake-Word-Contract“); dieser Abschnitt beschreibt den tatsächlichen
+Serverstand.
+
+### 14.1 Build-Assets und Manifestautorität
+
+Die Wake-Word-Modelle liegen im Paket unter
+`VoiceSTT/assets/wakeword_models/`; `setup.py` und `MANIFEST.in` liefern sie in
+Wheel und sdist aus, und die Laufzeit löst sie über `importlib.resources` auf.
+Es gibt auf keinem Pfad einen Runtime-Download. `VOICESTT_WAKEWORD_ASSET_ROOT`
+zeigt auf ein abweichend ausgeliefertes Bundle.
+
+`models.json` in diesem Verzeichnis ist die kanonische Catalog Authority des
+v2-Pfades. Sie leitet je Eintrag eindeutig ab:
+
+```text
+id  displayName  aliases[]  artifactVersion  artifact files/formats
+pipeline/feature models
+```
+
+Filesystem-Auto-Discovery ist ausschließlich Diagnose: eine Modelldatei, die
+nur zufällig im Assetordner liegt, wird als `unmanagedArtifacts` gemeldet und
+wird nie öffentliche Build-Capability.
+
+### 14.2 Genau ein Resolver
+
+`normalize_wake_word_token()` ist die einzige Normalisierung im Produkt:
+Unicode-NFKC, außen trimmen, casefold, Trennzeichenläufe (`_`, `-`, `.`,
+Leerraum) zu genau einem `_`. Aufgelöst wird ausschließlich gegen kanonische
+IDs, Anzeigenamen und **explizite** Aliase.
+
+```text
+hey_jarvis   Hey Jarvis   HEY-JARVIS   hey.jarvis   hey__jarvis
+```
+
+Der Frozen Contract verbietet heuristisches Entfernen von „Hey“: `jarvis` löst
+nur deshalb auf `hey_jarvis` auf, weil das Manifest `jarvis` als expliziten
+Alias führt. Nach Normalisierung müssen ID↔ID, Alias↔Alias und Alias↔ID
+kollisionsfrei sein; eine Kollision ist ein Katalogfehler und wird nie über
+Reihenfolge, Dateiname oder Best Match aufgelöst.
+
+### 14.3 Eine Catalog Authority
+
+`VoiceSTT/core/wakeword_catalog.py::WakeWordCatalogAuthority` existiert genau
+einmal serverweit und ist threadsicher. Sie besitzt den last-known-good
+Manifest-Snapshot, die öffentliche Catalog-Projektion, die interne
+Artifact-/Loader-Projektion, den Resolver, die Availability, die globale
+Disable-Projektion und `catalogRevision`.
+
+`catalogRevision` ist von `settingsRevision` getrennt und steigt ausschließlich
+bei einer *sichtbaren* Änderung der öffentlichen Projektion.
+`protocol_v2/ports.py::WakeWordPort` bleibt ein dünner Adapter ohne eigenen
+Speicher; die dort früher konstante Revision existiert nicht mehr.
+
+### 14.4 Öffentliche Catalog-API und Hot Refresh
+
+```text
+GET  /api/v2/wake-words           öffentlich lesbar (SET-13b)
+POST /api/v2/wake-words/refresh   X-Admin-Key, additive Adminaktion
+```
+
+Die öffentliche Payload trägt `protocolVersion`, `catalogRevision` und
+`wakeWords[]` mit `id`, `displayName`, `aliases`, `artifactVersion`,
+`available` und optional `unavailableReason`
+(`globally_disabled`, `artifact_missing`, `pipeline_unavailable`). Sie enthält
+niemals absolute/lokale Pfade, `source`, interne `paths`, Runtimeobjekte oder
+Secrets.
+
+Der Refresh nutzt dieselbe bestehende Admin-Guard wie die v2-Serversettings; es
+gibt keine zweite Authimplementierung. Er liest Manifest und Artefakte neu,
+baut einen vollständigen Candidate, validiert Schema, IDs, Aliase, Kollisionen
+und Dateien und wechselt **nur bei Gesamterfolg** atomar. Bei einem Fehler
+bleibt der letzte gültige Katalog unverändert (HTTP 422). Bei einer sichtbaren
+Änderung steigt `catalogRevision`; bei einer Availability-Änderung wird
+`wakeword.availability_changed` über die bestehende AP-SRV-040-Eventautorität
+ausgegeben. Ein Refresh verändert keine bereits aufgebaute Session und keine
+dort initialisierten Modelle – er wirkt auf neue Sessionadmissions.
+
+### 14.5 Atomare Sessionadmission und selected-only
+
+Bei `trigger.wakeWord=true` muss die Auswahl nicht leer sein, jede ID kanonisch
+bekannt, nicht global deaktiviert, das Artifact ladbar und die Pipelineassets
+vorhanden sein. Ein einziger Problemfall lehnt die **gesamte** Auswahl ab: kein
+Partial Load, kein Default-Fallback, kein stilles Entfernen.
+`session.rejected.errors[]` nennt jede problematische ID maschinenlesbar mit
+`field`, `code = wake_word_unavailable`, additivem `reason` und `wakeWordId`.
+Vor erfolgreicher Admission bleiben Audio, Trigger und Wake Detection gesperrt.
+
+Nach der Admission erhält OpenWakeWord ausschließlich die ausgewählten
+Klassifikatoren; der v1-Namensauflösungspfad mit seinen Fallbacks wird dabei
+bewusst umgangen. Weitere im Build enthaltene Modelle kosten weder RAM noch
+Sessionstartup. Die beiden gemeinsamen Pipelineassets (Melspektrogramm,
+Embedding) gehören dem Katalog und werden je Sessionmodellinstanz einmal
+übergeben, wie die reale OpenWakeWord-API es verlangt.
+
+### 14.6 Detection: Raw vs. Accepted
+
+```text
+RawWakeCandidate      canonicalWakeWordId, rawScore, frame/sample position,
+                      detector generation                      (Diagnose)
+AcceptedWakeDetection canonicalWakeWordId, score, activationId,
+                      audio boundary                           (Domain)
+```
+
+Mehrere gleichzeitig positive Modelle: höchster gültiger Score; bei exaktem
+Gleichstand gewinnt die lexikografisch kleinste kanonische ID. Rohscores
+bleiben Diagnose und werden nie Domain Event.
+
+### 14.7 Wake Admission und Latch
+
+Der Wake-Latch liegt nicht im `ActivationController`; AP-SRV-010/030 bleiben
+die quellenneutrale Activation Authority.
+
+```text
+Raw Candidate -> Detection Evaluation -> Wake Admission Coordinator
+              -> ActivationController.activate(source="wake_word")
+```
+
+Nur bei erfolgreicher Activation-Admission wird die Detection fachlich
+accepted, der Latch gesetzt, die akzeptierte `activationId` übernommen und
+genau ein `wakeword.detected` mit `activationId`, `wakeWordId`, `score` und
+`primarySource = wake_word` erzeugt. Bei `activation_locked`, Suppression oder
+anderer Ablehnung entsteht kein Event, kein neuer fachlicher Latch, keine
+zweite Activation und kein Source-Merge. Ein Wake Word während einer offenen
+Activation hat keinerlei direkte Trigger-, Finish-, Cancel- oder
+Refresh-Wirkung.
+
+Der Latch wird am sicheren Eingabeschluss derselben Activation gelöst – nicht
+bei VAD-Ende, Segmentende, Start/Ende der Final-Inferenz oder Cooldownablauf.
+
+### 14.8 FIND-011, Cooldown und Rearm
+
+Der Mehrfachsignalpfad hatte zwei Ursachen: der Recorder führte die Detection
+nach gesetztem `wakeword_detected` ohne Guard weiter aus, und es gab keine
+Entprellung über die Dauer einer Äußerung. Beides ist behoben:
+
+- der Detector läuft nicht weiter, solange ein Treffer gelatcht ist;
+- der Rearm folgt dem **gemessenen** Empfangsfenster der jeweils gewählten
+  Modelle.
+
+OpenWakeWord schiebt je 1280 Samples (80 ms bei 16 kHz) einen Embeddingframe
+weiter, das Embeddingmodell sieht 76 Melspektrogrammframes (760 ms); ein
+Klassifikator mit `N` Eingangsframes sieht dieselbe Äußerung also noch
+`(N - 1) * 80 + 760` ms. Über den gebündelten Build sind das 1960 ms bis
+3400 ms. `wakeWord.cooldownMs` ist ein *zusätzlicher* Betreiberwert oberhalb
+dieser gemessenen Grenze, kein Ersatz. Eine willkürliche `2 aus 3`- oder
+`5/10`-Regel wird nicht eingeführt.
+
+### 14.9 Audiogrenze und Pre-Roll
+
+Getrennt werden Detector-History, Wake-Word-Audio, Wake-Endgrenze,
+Nutzsprachen-Pre-Roll und freigegebenes Transkript-Audio. Die Grenze hängt an
+der realen Sampleposition der akzeptierten Detection, nicht an einer
+konfigurierten Dauer:
+
+```text
+wakeEnd    = Sampleposition der akzeptierten Detection
+wakeStart  = wakeEnd - gemessenes Empfangsfenster
+release    = max(wakeStart, wakeEnd - preRollMs)
+```
+
+Bei `wakeWord.preRollMs = 0` beginnt das Transkript exakt an der Wake-Endgrenze:
+das Wake Word fehlt, das erste Nutzerwort bleibt vollständig erhalten. Die
+pauschale `wake_word_buffer_duration`-Abschneidung existiert nur noch im
+v1-Recorderpfad und entfällt mit AP-SRV-070.
+
+### 14.10 Settings-Bindung
+
+AP-SRV-060 baut keine zweite Settingsregistry, Revision oder Persistenz. Es
+ergänzt in der AP-SRV-050-Registry:
+
+| Key | Scope | Auth | Bereich | Default | Apply |
+|---|---|---:|---:|---:|---|
+| `wakeWord.cooldownMs` | session | session | 0–3400 | 0 | `next_activation` |
+| `wakeWord.preRollMs` | session | session | 0–1960 | 0 | `next_activation` |
+
+Beide Bereiche sind gemessene Artefakteigenschaften des Builds. Beide Defaults
+sind `0`, weil die verbindliche Entprellung bereits aus der gemessenen
+Artefaktgrenze plus Latch folgt und `0 ms` Pre-Roll vertraglich zulässig ist.
+Ein von realer positiver Wake-Word-Sprache abhängiger anderer Default bleibt
+`EVIDENCE_PENDING` (WW-18/WW-19).
+
+### 14.11 Grenze zu AP-SRV-070
+
+Die alten externen OpenWakeWord-Pfade (`VOICESTT_OPENWAKEWORD_MODEL_ROOT`,
+`openwakeword_model_paths`, die v1-Sessionauflösung mit Fallbackprofil und die
+pauschale `wake_word_buffer_duration`) bleiben als Legacykompatibilität
+bestehen, sind aber nicht mehr die v2-Catalog-Authority. Ihr Abbau gehört zu
+AP-SRV-070.

@@ -77,3 +77,25 @@ Begründung im Archiv erhalten.
 | SQLite-first Eventstream und Admin-Logvertrag | 02.08.2026 | Abgeschlossen | [sqlite_first_admin_eventstream](sqlite_first_admin_eventstream/) |
 | Zentrale Build- und VPS-Deploymentdokumentation | 12.08.2026 | Abgeschlossen | [build_vps_dokumentation](build_vps_dokumentation/) |
 | Einheitliche serverseitige Triggerarchitektur | 12.08.2026 | In Umsetzung | [einheitliche_triggerarchitektur](einheitliche_triggerarchitektur/) |
+
+### Arbeitspaketakten „Einheitliche serverseitige Triggerarchitektur“
+
+Die laufende Aktion ist in Arbeitspaketakten unterhalb von
+[`einheitliche_triggerarchitektur/`](einheitliche_triggerarchitektur/)
+gegliedert. Jede Akte enthält Planung, Runs mit byteidentischer Promptkopie,
+Bericht und Evidence sowie den Umsetzungsvergleich.
+
+| Arbeitspaket | Stand | Akte |
+| --- | --- | --- |
+| AP-SRV-000 Serverbaseline | Root PASS | [AP-SRV-000](einheitliche_triggerarchitektur/AP-SRV-000/) |
+| AP-SRV-010 State Machine | Root PASS | [AP-SRV-010](einheitliche_triggerarchitektur/AP-SRV-010/) |
+| AP-SRV-020 Segmentledger | Root PASS | [AP-SRV-020](einheitliche_triggerarchitektur/AP-SRV-020/) |
+| AP-SRV-030 Commands und Timer | Root PASS | [AP-SRV-030](einheitliche_triggerarchitektur/AP-SRV-030/) |
+| AP-SRV-040 Protokoll v2 | Root PASS | [AP-SRV-040](einheitliche_triggerarchitektur/AP-SRV-040/) |
+| AP-SRV-050 Settings-Control-Plane | Root PASS | [AP-SRV-050](einheitliche_triggerarchitektur/AP-SRV-050/) |
+| AP-SRV-060 Wake-Word-Katalog, Detection und Audiogrenze | **Pending Root Review** (Run 01) | [AP-SRV-060](einheitliche_triggerarchitektur/AP-SRV-060/) |
+
+Die Gesamtaktion bleibt `In Umsetzung`, bis auch die verbleibenden
+Arbeitspakete abgenommen und Umsetzung, Gegenprüfung,
+Abweichungsdokumentation und Fachdokumentation konsistent sind. Ein einzelnes
+Arbeitspaket wird erst nach Root-Abnahme als abgenommen geführt.

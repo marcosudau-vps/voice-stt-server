@@ -316,6 +316,15 @@ transcription executors.
 
 The v2 settings surface is additive and coexists with all existing endpoints:
 
+- `GET  /api/v2/wake-words` – public, versioned wake-word build catalog
+  (`protocolVersion`, `catalogRevision`, `wakeWords[]` with `id`,
+  `displayName`, `aliases`, `artifactVersion`, `available` and optional
+  `unavailableReason`); never contains paths, source markers or internal
+  artifact maps;
+- `POST /api/v2/wake-words/refresh` – admin-auth through the *same* guard as
+  `PATCH /api/v2/settings/server`; rebuilds and validates the catalog and swaps
+  atomically only on total success. A failed refresh answers HTTP 422, keeps
+  the last known good catalog and changes no revision;
 - `GET  /api/v2/settings/schema` – public, non-secret settings metadata;
 - `GET  /api/v2/settings/server` – public, non-secret server values + revision;
 - `PATCH /api/v2/settings/server` – admin-auth (`X-Admin-Key` alias or the

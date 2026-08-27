@@ -78,6 +78,18 @@ ACTIVATION_CLOSING_RECOVERY = "activation.closingRecoveryTimeoutMs"
 WAKE_WORD_SENSITIVITY = "wakeWord.sensitivity"
 WAKE_WORD_SELECTION = "wakeWord.selection"
 WAKE_WORD_GLOBAL_DISABLED = "wakeWord.globalDisabledIds"
+WAKE_WORD_COOLDOWN_MS = "wakeWord.cooldownMs"
+WAKE_WORD_PRE_ROLL_MS = "wakeWord.preRollMs"
+
+#: Measured properties of the bundled ONNX classifiers, not invented numbers.
+#: OpenWakeWord advances one embedding frame per 1280 samples (80 ms at 16 kHz)
+#: and the embedding model looks at 76 melspectrogram frames (760 ms), so a
+#: classifier with ``N`` input frames still sees the same utterance for
+#: ``(N - 1) * 80 + 760`` ms. Across the bundled build that span is 1960 ms at
+#: minimum (16 frames) and 3400 ms at maximum (34 frames). The measurement is
+#: recorded in the AP-SRV-060 evidence README.
+WAKE_WORD_MIN_RECEPTIVE_FIELD_MS = 1960
+WAKE_WORD_MAX_RECEPTIVE_FIELD_MS = 3400
 
 RUNTIME_SUPPRESSION_MANUAL = "runtimeSuppression.manual"
 RUNTIME_SUPPRESSION_WAKE_WORD = "runtimeSuppression.wakeWord"
@@ -379,6 +391,46 @@ def builtin_definitions() -> List[SettingDefinition]:
                 "Schreibautorität bleibt `trigger_suppression.set`."
             ),
             writable=False,
+        ),
+        SettingDefinition(
+            key=WAKE_WORD_COOLDOWN_MS,
+            scope=SCOPE_SESSION,
+            auth=AUTH_SESSION,
+            type=TYPE_INT,
+            constraints={
+                "min": 0,
+                "max": WAKE_WORD_MAX_RECEPTIVE_FIELD_MS,
+                "unit": "ms",
+            },
+            default_value=0,
+            apply_policy=APPLY_NEXT_ACTIVATION,
+            description=(
+                "Zusaetzlicher Wake-Word-Cooldown oberhalb des gemessenen "
+                "Klassifikator-Empfangsfensters der jeweils gewaehlten "
+                "Modelle. Default 0: die verbindliche Entprellung folgt "
+                "bereits aus der gemessenen Artefaktgrenze und dem Latch."
+            ),
+            has_server_default=True,
+        ),
+        SettingDefinition(
+            key=WAKE_WORD_PRE_ROLL_MS,
+            scope=SCOPE_SESSION,
+            auth=AUTH_SESSION,
+            type=TYPE_INT,
+            constraints={
+                "min": 0,
+                "max": WAKE_WORD_MIN_RECEPTIVE_FIELD_MS,
+                "unit": "ms",
+            },
+            default_value=0,
+            apply_policy=APPLY_NEXT_ACTIVATION,
+            description=(
+                "Nutzsprachen-Pre-Roll vor der Wake-Endgrenze. 0 ms ist "
+                "vertraglich zulaessig und gibt das Audio exakt am Ende des "
+                "Wake Words frei; die Obergrenze ist das gemessene kleinste "
+                "Klassifikator-Empfangsfenster des Builds."
+            ),
+            has_server_default=True,
         ),
         SettingDefinition(
             key=WAKE_WORD_GLOBAL_DISABLED,

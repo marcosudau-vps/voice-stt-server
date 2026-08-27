@@ -31,6 +31,8 @@ relevant.
 | `GET` | `/api/v2/settings/schema` | keine | öffentliches Settingsschema der Control-Plane |
 | `GET` | `/api/v2/settings/server` | keine | nicht geheime Serverwerte + Serverrevision |
 | `PATCH` | `/api/v2/settings/server` | Admin | Serverdefaults atomar ändern (optimistische Concurrency; Persistenzfehler = 500 `internal_error`) |
+| `GET` | `/api/v2/wake-words` | keine | versionierter Wake-Word-Build-Katalog (`catalogRevision`, `available`) |
+| `POST` | `/api/v2/wake-words/refresh` | Admin | Katalog atomar neu laden; Fehler = 422 und last-known-good bleibt |
 | `GET` | `/v1/models` | OpenAI-Key* | geladene Modelle/Aliasse |
 | `POST` | `/v1/audio/transcriptions` | OpenAI-Key* | abgeschlossene Audiodatei transkribieren |
 | `WS` | `/ws/transcribe` | keine im Handler | kontinuierliches Live-Audio |
@@ -373,6 +375,46 @@ oder HTTP-Anfrage Modelle automatisch wieder.
 
 `PUT /api/language` gilt für neue Requests und Sessions. Bestehende Sessions
 behalten ihre kopierte Recorderkonfiguration.
+
+### Wake-Word-Katalog (Protokoll v2)
+
+`GET /api/v2/wake-words` ist der maßgebliche Katalog für v2-Clients und ohne
+Key lesbar:
+
+```json
+{
+  "protocolVersion": 2,
+  "catalogRevision": 1,
+  "wakeWords": [
+    {
+      "id": "hey_jarvis",
+      "displayName": "Hey Jarvis",
+      "aliases": ["jarvis"],
+      "artifactVersion": "1",
+      "available": true
+    }
+  ]
+}
+```
+
+Ein nicht verfügbarer Eintrag trägt zusätzlich `unavailableReason`
+(`globally_disabled`, `artifact_missing`, `pipeline_unavailable`). Die Payload
+enthält niemals Dateipfade oder interne Artefaktmaps. `catalogRevision` ist von
+`settingsRevision` getrennt und steigt nur bei sichtbarer Änderung.
+
+Ein Client wählt im `hello` ausschließlich kanonische `id`-Werte. Anzeigenamen
+und Aliase dienen der Oberfläche; der Server löst sie über genau einen Resolver
+auf (Unicode-Trim, case-insensitive, vereinheitlichte Trennzeichen, nur
+explizite Aliase).
+
+`POST /api/v2/wake-words/refresh` ist eine Adminaktion hinter derselben Guard
+wie `PATCH /api/v2/settings/server`. Sie lädt den Katalog neu und wechselt nur
+bei vollständigem Erfolg; ein Fehler liefert HTTP 422 und lässt den laufenden
+Katalog unverändert. Der Refresh wirkt auf neue Sessions, nie auf eine bereits
+aufgebaute. Bei einer Availability-Änderung erhalten laufende v2-Sessions
+`wakeword.availability_changed`.
+
+`GET /api/wake-word` unten bleibt der Adminvertrag des v1-Pfades.
 
 `GET /api/wake-word` liefert:
 

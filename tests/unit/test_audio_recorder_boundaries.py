@@ -110,6 +110,7 @@ class AudioRecorderBoundaryTests(unittest.TestCase):
                 wake_word_activation_delay=0.4,
                 wake_word_timeout=1.5,
                 wake_word_buffer_duration=0.25,
+                wake_word_selection=None,
                 on_wakeword_detected=callback,
                 on_wakeword_timeout=callback,
                 on_wakeword_detection_start=callback,

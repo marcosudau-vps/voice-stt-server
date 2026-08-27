@@ -13,16 +13,18 @@ REQUIRES_AP_SRV_050_BINDING
     settings AP-SRV-030 already resolves, and a patch is refused as
     ``settings_rejected`` with a machine-readable reason.
 
-REQUIRES_AP_SRV_060_BINDING
+AP_SRV_060_BINDING
     ``wakeWordCapabilities``, the wake-word selection admission and
-    ``wakeword.detected``. Until AP-SRV-060 the port reports the build catalog
-    the server already knows and validates the requested selection against it.
-    The event model carries ``wakeWordId``/``score``/``primarySource`` so no
-    anonymous boolean wake semantics are frozen into the wire.
+    ``wakeword.detected``. Since AP-SRV-060 the port reads the one server-wide
+    :class:`~VoiceSTT.core.wakeword_catalog.WakeWordCatalogAuthority`; it holds
+    no catalog, no revision and no resolver of its own.
 """
 
 REQUIRES_AP_SRV_050_BINDING = "REQUIRES_AP_SRV_050_BINDING"
-REQUIRES_AP_SRV_060_BINDING = "REQUIRES_AP_SRV_060_BINDING"
+AP_SRV_060_BINDING = "AP_SRV_060_BINDING"
+#: Historical name of the AP-SRV-060 marker, kept so an external reader of the
+#: module constant does not break at the binding commit.
+REQUIRES_AP_SRV_060_BINDING = AP_SRV_060_BINDING
 
 
 class SettingsPort:
@@ -74,59 +76,61 @@ class SettingsPort:
 
 
 class WakeWordPort:
-    """Catalog and selection admission for wake words.
+    """Thin adapter of the AP-SRV-060 catalog authority to the v2 wire.
 
-    The catalog itself belongs to the server; the selected-only initialisation
-    and the detection latch belong to AP-SRV-060. This port only answers
-    "which ids exist" and "is this selection admissible", which is what the
-    handshake and the snapshot need.
+    The port stores nothing. ``catalogRevision``, availability, the resolver
+    and the atomic admission all live in the one server-wide
+    :class:`~VoiceSTT.core.wakeword_catalog.WakeWordCatalogAuthority`; this
+    class only answers what the handshake and the snapshot ask for.
     """
 
-    binding = REQUIRES_AP_SRV_060_BINDING
+    binding = AP_SRV_060_BINDING
 
     def __init__(self, service):
         self._service = service
 
+    @property
+    def catalog(self):
+        """The one catalog authority, or ``None`` on a service without one."""
+        return getattr(self._service, "wakeword_catalog", None)
+
     def capabilities(self):
-        available = self.available_ids()
-        return {
-            # A real, monotone catalog revision arrives with AP-SRV-060; until
-            # then the catalog is a build constant, so the revision is too.
-            "catalogRevision": 1,
-            "availableWakeWordIds": list(available),
-        }
+        catalog = self.catalog
+        if catalog is None:
+            return {"catalogRevision": 0, "availableWakeWordIds": []}
+        return catalog.capabilities()
+
+    def catalog_revision(self):
+        catalog = self.catalog
+        return catalog.catalog_revision if catalog is not None else 0
 
     def available_ids(self):
-        capabilities = {}
-        try:
-            capabilities = self._service.session_capabilities() or {}
-        except Exception:
+        catalog = self.catalog
+        if catalog is None:
             return []
-        wake_word = capabilities.get("wakeWord") or {}
-        entries = wake_word.get("availableWakeWords") or []
-        ids = []
-        for entry in entries:
-            identifier = (entry or {}).get("id")
-            if isinstance(identifier, str) and identifier:
-                ids.append(identifier)
-        return sorted(set(ids))
+        return list(catalog.available_ids())
+
+    def resolve_selection(self, wake_word_ids):
+        """``(selection, errors)`` of one atomic admission."""
+        catalog = self.catalog
+        if catalog is None:
+            return None, [{
+                "field": "requestedSession.wakeWordIds",
+                "code": "wake_word_unavailable",
+                "message": (
+                    "Der Wake-Word-Katalog ist auf diesem Server nicht "
+                    "verfügbar."
+                ),
+            }]
+        selection, errors = catalog.resolve_selection(wake_word_ids)
+        return selection, [error.to_dict() for error in errors]
 
     def validate_selection(self, wake_word_ids):
         """Atomic admission of one requested selection.
 
-        Every unknown id rejects the whole selection, as the frozen wake-word
-        contract demands - there is no partial catalog.
+        A single unknown, globally disabled or unloadable id rejects the whole
+        selection and every problematic id is named - there is no partial
+        catalog, no default fallback and no silent removal.
         """
-        available = set(self.available_ids())
-        errors = []
-        for identifier in wake_word_ids:
-            if identifier not in available:
-                errors.append({
-                    "field": "requestedSession.wakeWordIds",
-                    "code": "wake_word_unavailable",
-                    "message": (
-                        f"Das Wake Word '{identifier}' ist für diesen Server "
-                        "nicht verfügbar."
-                    ),
-                })
+        _selection, errors = self.resolve_selection(wake_word_ids)
         return errors

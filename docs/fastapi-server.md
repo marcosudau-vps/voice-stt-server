@@ -475,7 +475,32 @@ session. `realtime` and `final` events may include a `segment` object with
 recording start/end timestamps, duration, pre-recording buffer range, and wake
 word timing when available.
 
-### Session-local Wake Word profile
+### Wake Word build catalog (protocol v2)
+
+```text
+GET  /api/v2/wake-words           public, versioned build catalog
+POST /api/v2/wake-words/refresh   admin (X-Admin-Key), hot reload
+```
+
+The server ships its wake-word models inside the package
+(`VoiceSTT/assets/wakeword_models/`) and never downloads them at runtime.
+`models.json` in that directory is the canonical catalog authority: it declares
+canonical ids, display names, explicit aliases, artifact versions and the shared
+pipeline models. `GET /api/v2/wake-words` publishes that catalog with
+`catalogRevision`, `available` and an optional `unavailableReason`, and never
+exposes a filesystem path.
+
+`POST /api/v2/wake-words/refresh` uses the same admin guard as
+`PATCH /api/v2/settings/server`. It rebuilds and fully validates a candidate and
+swaps atomically only on total success; a failed refresh answers HTTP 422 and
+leaves the running catalog untouched. It affects new session admissions only -
+a running session keeps the models it was admitted with. An availability change
+emits `wakeword.availability_changed` on every live v2 session.
+
+`VOICESTT_WAKEWORD_ASSET_ROOT` points the server at a bundle outside the
+package. See [Wake Words](wake-words.md) for the complete contract.
+
+### Session-local Wake Word profile (legacy v1 endpoint)
 
 Wake Word behavior is resolved before the session recorder is created:
 

@@ -308,7 +308,14 @@ setuptools.setup(
     extras_require=extras_require,
     keywords="real-time, audio, transcription, speech-to-text, voice-activity-detection, VAD, real-time-transcription, ambient-noise-detection, microphone-input, faster_whisper, speech-recognition, voice-assistants, audio-processing, buffered-transcription, pyaudio, ambient-noise-level, voice-deactivity",
     package_data={
-        "VoiceSTT": ["assets/warmup_audio.wav"],
+        "VoiceSTT": [
+            "assets/warmup_audio.wav",
+            # AP-SRV-060: the wake-word build assets ship with the package, so
+            # an installed wheel on Windows and on Ubuntu resolves them without
+            # any runtime download.
+            "assets/wakeword_models/models.json",
+            "assets/wakeword_models/*.onnx",
+        ],
         "api_fastapi_server": ["static/index.html"],
     },
     include_package_data=True,

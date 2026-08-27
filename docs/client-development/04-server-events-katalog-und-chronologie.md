@@ -401,6 +401,23 @@ Weckwort erkannt, Sprache wird innerhalb von `wake_word_timeout` erwartet.
 `wakeWord.state` ist `wake_word_detected_waiting_for_voice` und enthält
 `detectedAt`.
 
+Auf dem v2-Pfad (`/ws/v2`) heißt das Ereignis `wakeword.detected` und trägt
+`activationId`, `wakeWordId`, `score` und `primarySource = wake_word`. Es
+entsteht genau einmal je akzeptierter Äußerung und nur, wenn dieselbe Erkennung
+tatsächlich eine Activation geöffnet hat. Eine abgelehnte Erkennung
+(`activation_locked`, Suppression, fehlende Audioverfügbarkeit) erzeugt kein
+Ereignis. Rohscores unterhalb der akzeptierten Detection sind Diagnose und
+erscheinen nie auf der Wire.
+
+#### `wakeword.availability_changed` (nur v2)
+
+Der Wake-Word-Katalog des Servers hat sich sichtbar geändert – etwa durch
+`POST /api/v2/wake-words/refresh` oder eine geänderte globale Disableliste. Das
+Ereignis trägt `catalogRevision` und `availableWakeWordIds`. Es beschreibt den
+Serverkatalog, nicht den Vordergrundzustand der Session, und ändert weder Phase
+noch laufende Modelle. Eine laufende Session behält die Modelle, mit denen sie
+zugelassen wurde; die neue Availability gilt für neue Sessions.
+
 #### `wakeword_timeout`
 
 Nach Erkennung begann nicht rechtzeitig eine gültige Aufnahme. `wakeWord`

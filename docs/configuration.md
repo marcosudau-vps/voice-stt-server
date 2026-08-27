@@ -115,6 +115,14 @@ recorder = AudioToTextRecorder(
 | `openwakeword_model_paths` | `None` | Comma-separated OpenWakeWord classifier paths, a model directory, or a `models.json` manifest path. |
 | `openwakeword_inference_framework` | `"onnx"` | OpenWakeWord inference framework: `"onnx"` or `"tflite"`. |
 
+Diese Parameter beschreiben den Recorder-/v1-Pfad. Der v2-Serverpfad verwendet
+seit AP-SRV-060 den gebündelten Build-Katalog unter
+`VoiceSTT/assets/wakeword_models/` und dessen `models.json` als Autorität; die
+Sessionauswahl läuft über kanonische IDs im `hello`-Handshake. Details in
+[Wake Words](wake-words.md). Ein abweichender Bundleort wird mit
+`VOICESTT_WAKEWORD_ASSET_ROOT` gesetzt; Runtime-Downloads gibt es auf keinem
+Pfad.
+
 ## Callback Parameters
 
 All callbacks are optional. By default they run in the recorder flow; set
@@ -195,6 +203,23 @@ Die serverautoritative Settings-Control-Plane verwaltet als triggerrelevant
 | `activation.segmentWatchdogWarningMs` | int | 30000 | >=5000, < wirksame Frist |
 | `activation.closingRecoveryTimeoutMs` | int | 5000 | 1000–30000 |
 | `wakeWord.sensitivity` | float | 0.5 | 0.0–1.0 |
+| `wakeWord.cooldownMs` | int | 0 | 0–3400 |
+| `wakeWord.preRollMs` | int | 0 | 0–1960 |
+
+`wakeWord.cooldownMs` und `wakeWord.preRollMs` kommen aus AP-SRV-060. Beide
+Bereiche sind gemessene Eigenschaften der gebündelten ONNX-Klassifikatoren:
+OpenWakeWord schiebt je 1280 Samples (80 ms bei 16 kHz) einen Embeddingframe
+weiter und das Embeddingmodell sieht 76 Melspektrogrammframes (760 ms), ein
+Klassifikator mit `N` Eingangsframes also `(N - 1) * 80 + 760` ms. Über den
+Build sind das minimal 1960 ms und maximal 3400 ms. Der Cooldown ist ein
+*zusätzlicher* Betreiberwert oberhalb dieses gemessenen Fensters; `0` bedeutet
+kein zusätzlicher Cooldown. `0 ms` Pre-Roll ist vertraglich zulässig und gibt
+das Audio exakt an der Wake-Endgrenze frei.
+
+Weitere Wake-Word-Settings der Control Plane: `wakeWord.selection` (Session,
+`next_session`), `wakeWord.globalDisabledIds` (Server, Admin-Key,
+`next_session`) und `runtimeSuppression.wakeWord` (Session, `live`, Schreib-
+autorität bleibt `trigger_suppression.set`).
 
 Die öffentliche Verwaltung läuft über `GET/PATCH /api/v2/settings/server`
 (`PATCH` admin-geschützt, optimistische Concurrency) und das Schema über

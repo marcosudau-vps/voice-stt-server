@@ -194,7 +194,21 @@ def validate_requested_session(hello, wake_word_port):
     suppression never replaces the selection: an unsuppressed wake word of the
     same client runtime must still have defined models.
     """
+    errors, _selection = admit_requested_session(hello, wake_word_port)
+    return errors
+
+
+def admit_requested_session(hello, wake_word_port):
+    """``(errors, selection)`` of one atomic session admission.
+
+    The catalog is asked **once**, so the admitted selection and the errors
+    describe exactly the same catalog snapshot; a concurrent catalog refresh
+    can therefore never produce a half-validated session. ``selection`` is the
+    internal artifact projection and is ``None`` whenever the session does not
+    use wake words or was refused.
+    """
     errors: List[Dict[str, Any]] = []
+    selection = None
     if not hello.manual_trigger and not hello.wake_word_trigger:
         errors.append({
             "field": "requestedSession.trigger",
@@ -222,9 +236,15 @@ def validate_requested_session(hello, wake_word_port):
             ),
         })
     if hello.wake_word_trigger and hello.wake_word_ids:
-        # REQUIRES_AP_SRV_060_BINDING: atomic catalog admission.
-        errors.extend(wake_word_port.validate_selection(hello.wake_word_ids))
-    return errors
+        # AP-SRV-060: one atomic catalog admission. A single unknown, globally
+        # disabled or unloadable id rejects the whole selection.
+        selection, selection_errors = wake_word_port.resolve_selection(
+            hello.wake_word_ids
+        )
+        errors.extend(selection_errors)
+        if selection_errors:
+            selection = None
+    return errors, selection
 
 
 def _non_empty_string(value):

@@ -444,10 +444,7 @@ class TestSessionWakeSelectionValidation:
                 return True
 
         class FakeService:
-            def session_capabilities(self):
-                return {"wakeWord": {"availableWakeWords": [
-                    {"id": "hey_jarvis"},
-                ]}}
+            wakeword_catalog = None
 
         class FakeSession:
             settings = FakeSettings()
@@ -469,10 +466,7 @@ class TestSessionWakeSelectionValidation:
                 return False
 
         class FakeService:
-            def session_capabilities(self):
-                return {"wakeWord": {"availableWakeWords": [
-                    {"id": "hey_jarvis"},
-                ]}}
+            wakeword_catalog = None
 
         class FakeSession:
             settings = FakeSettings()
@@ -621,8 +615,7 @@ class TestWakeSelectionFailClosed:
 
     def test_wake_selection_nonempty_rejected_when_catalog_empty(self):
         class EmptyCatalog:
-            def session_capabilities(self):
-                return {"wakeWord": {"availableWakeWords": []}}
+            wakeword_catalog = None
 
         validator, session = self._validator_with(EmptyCatalog())
         errors = validator(session, sc.WAKE_WORD_SELECTION, ["hey_jarvis"])
@@ -631,9 +624,12 @@ class TestWakeSelectionFailClosed:
         assert all(error.field == sc.WAKE_WORD_SELECTION for error in errors)
 
     def test_wake_selection_nonempty_rejected_when_catalog_lookup_raises(self):
-        class RaisingCatalog:
-            def session_capabilities(self):
+        class _Raising:
+            def available_ids(self):
                 raise RuntimeError("catalog unavailable")
+
+        class RaisingCatalog:
+            wakeword_catalog = _Raising()
 
         validator, session = self._validator_with(RaisingCatalog())
         errors = validator(session, sc.WAKE_WORD_SELECTION, ["hey_jarvis"])
@@ -643,21 +639,17 @@ class TestWakeSelectionFailClosed:
         for error in errors:
             assert "catalog unavailable" not in error.message
 
-    def test_wake_selection_known_remains_accepted(self):
-        class KnownCatalog:
-            def session_capabilities(self):
-                return {"wakeWord": {"availableWakeWords": [
-                    {"id": "hey_jarvis"},
-                ]}}
+    def test_wake_selection_known_remains_accepted(self, tmp_path):
+        from .wake_catalog_support import FakeCatalogService, build_authority
 
-        validator, session = self._validator_with(KnownCatalog())
+        service = FakeCatalogService(build_authority(tmp_path / "bundle"))
+        validator, session = self._validator_with(service)
         errors = validator(session, sc.WAKE_WORD_SELECTION, ["hey_jarvis"])
         assert errors == []
 
     def test_wake_selection_empty_allowed_when_wake_not_configured(self):
         class EmptyCatalog:
-            def session_capabilities(self):
-                return {"wakeWord": {"availableWakeWords": []}}
+            wakeword_catalog = None
 
         validator, session = self._validator_with(EmptyCatalog())
         assert validator(session, sc.WAKE_WORD_SELECTION, []) == []
@@ -672,8 +664,7 @@ class TestWakeSelectionFailClosed:
                 return True
 
         class EmptyCatalog:
-            def session_capabilities(self):
-                return {"wakeWord": {"availableWakeWords": []}}
+            wakeword_catalog = None
 
         class FakeSession:
             settings = FakeSettings()
@@ -687,8 +678,7 @@ class TestWakeSelectionFailClosed:
 
     def test_wake_selection_patch_via_session_validator_is_fail_closed(self):
         class EmptyCatalog:
-            def session_capabilities(self):
-                return {"wakeWord": {"availableWakeWords": []}}
+            wakeword_catalog = None
 
         validator, session = self._validator_with(EmptyCatalog())
         state = sc.SessionSettingsState(

@@ -30,7 +30,278 @@ If `wake_words` is set without an explicit backend, the recorder selects
 Porcupine for backward compatibility. This Porcupine path is a library feature;
 it is not selectable through the current FastAPI session or admin contract.
 
-## Local model catalog
+## Bundled build catalog (protocol v2, AP-SRV-060)
+
+The server ships its Wake Word models **inside the package**. There is no
+runtime download on any path.
+
+```text
+VoiceSTT/assets/wakeword_models/
+  models.json            canonical catalog manifest (v2 authority)
+  melspectrogram.onnx    shared pipeline model
+  embedding_model.onnx   shared pipeline model
+  <classifier>.onnx      26 wake-word classifiers
+```
+
+`setup.py` and `MANIFEST.in` carry these assets into wheel and sdist, so a
+package installed on Windows or on Ubuntu resolves them through
+`importlib.resources` - never through a guessed path. A deployment that ships
+the bundle elsewhere can point the server at it with:
+
+```bash
+VOICESTT_WAKEWORD_ASSET_ROOT=/opt/voicestt/wakeword_models
+```
+
+Only ONNX artifacts are bundled, so the v2 catalog resolves ONNX. The bundle is
+regenerated reproducibly from an upstream model directory with:
+
+```bash
+python tools/sync_wakeword_assets.py --source S:/MODELS/openwakeword/resources/models/all_models
+```
+
+`--check` verifies the committed bundle against that source without writing.
+
+### `models.json` is the authority
+
+The manifest - not the directory listing - decides what this build offers. A
+file that merely lies next to the manifest is reported as a diagnostic and
+never becomes public build capability.
+
+```json
+{
+  "manifestVersion": 2,
+  "catalogRevision": 1,
+  "pipeline": {
+    "onnx": {
+      "melspectrogram": {"file": "melspectrogram.onnx", "sha256": "...", "bytes": 1087958},
+      "embedding": {"file": "embedding_model.onnx", "sha256": "...", "bytes": 1326578}
+    }
+  },
+  "wakeWords": [
+    {
+      "id": "hey_jarvis",
+      "displayName": "Hey Jarvis",
+      "aliases": ["jarvis"],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {"file": "jarvis_v2.onnx", "sha256": "...", "bytes": 208134}
+      }
+    }
+  ]
+}
+```
+
+`artifactVersion` is the bundle revision of that artifact and is raised when
+its bytes are replaced; `sha256` records the verifiable byte identity.
+
+A manifest that fails validation - a schema error, a missing field, a
+non-canonical id or an id/alias collision - is refused as a whole. The running
+catalog then keeps its last known good state.
+
+### IDs, display names, aliases and normalisation
+
+Every wake word has one canonical, lower-case snake-case id. Human-edited
+values are resolved by exactly one resolver, which
+
+1. Unicode-normalises (NFKC),
+2. trims the outside,
+3. compares case-insensitively (casefold),
+4. folds every run of `_`, `-`, `.` and whitespace into a single `_`,
+5. matches only against canonical ids, display names and **explicit** aliases.
+
+All of these therefore resolve to the same wake word:
+
+```text
+hey_jarvis   Hey Jarvis   HEY-JARVIS   hey.jarvis   hey__jarvis
+```
+
+The frozen contract forbids heuristically dropping "Hey". `jarvis` resolves to
+`hey_jarvis` **only** because the manifest lists `jarvis` as an explicit alias.
+A wake word without an alias has no short form. After normalisation, ids,
+display names and aliases must be collision-free; a collision is a catalog
+error and is never resolved by ordering, file name or best match.
+
+### Global disable
+
+`wakeWord.globalDisabledIds` (server scope, `X-Admin-Key`, AP-SRV-050) removes
+entries from availability without removing them from the catalog. They stay
+visible as `available: false` with `unavailableReason: globally_disabled`, and
+a session that selects one is refused.
+
+### Public catalog API
+
+```text
+GET /api/v2/wake-words
+```
+
+Publicly readable, no key required:
+
+```json
+{
+  "protocolVersion": 2,
+  "catalogRevision": 1,
+  "wakeWords": [
+    {
+      "id": "hey_jarvis",
+      "displayName": "Hey Jarvis",
+      "aliases": ["jarvis"],
+      "artifactVersion": "1",
+      "available": true
+    }
+  ]
+}
+```
+
+An unavailable entry additionally carries `unavailableReason`
+(`globally_disabled`, `artifact_missing` or `pipeline_unavailable`). The payload
+never contains filesystem paths, source markers or internal artifact maps.
+
+`catalogRevision` is separate from `settingsRevision` and rises only when the
+publicly visible catalog actually changed.
+
+### Catalog hot refresh
+
+```text
+POST /api/v2/wake-words/refresh
+```
+
+Behind the same `X-Admin-Key` guard as the v2 server settings. The refresh
+reads the manifest and artifacts again, builds a complete candidate, validates
+schema, ids, aliases, collisions and files, and swaps atomically only on total
+success. On any failure the last known good catalog stays in place unchanged
+and the response reports `ok: false` with a reason (HTTP 422).
+
+`catalogRevision` rises only on a visible change; an availability change emits
+`wakeword.availability_changed` on every live v2 session. A refresh never
+touches an already admitted session or the models it has initialised - it takes
+effect for new session admissions.
+
+## Session admission and selected-only initialisation
+
+A v2 session declares its wake words in the `hello` handshake:
+
+```json
+"requestedSession": {
+  "trigger": {"manual": true, "wakeWord": true},
+  "wakeWordIds": ["hey_jarvis"]
+}
+```
+
+Admission is **atomic**. A single unknown, globally disabled or unloadable id
+rejects the whole selection with `session.rejected`; there is no partial load,
+no default fallback and no silent removal. Every problematic id is named:
+
+```json
+{
+  "field": "requestedSession.wakeWordIds",
+  "code": "wake_word_unavailable",
+  "reason": "unknown",
+  "message": "...",
+  "wakeWordId": "does_not_exist"
+}
+```
+
+`reason` is one of `unknown`, `globally_disabled`, `artifact_missing`,
+`pipeline_unavailable`. Audio, triggers and wake detection stay locked until the
+admission succeeded.
+
+After a successful admission **only the selected classifiers** are handed to
+OpenWakeWord. Other models contained in the build cost neither RAM nor session
+startup time. The two shared pipeline models (melspectrogram, embedding) belong
+to the catalog and are passed once per session model instance, as the real
+OpenWakeWord API requires.
+
+## Detection, latch and events
+
+Raw detector observations and accepted detections are strictly separated:
+
+- a **raw candidate** carries the canonical id, the raw score, its frame and
+  sample position and the detector generation - it is diagnostics and never a
+  domain event;
+- an **accepted detection** carries the canonical id, the score, the
+  `activationId` that this very hit opened and the audio boundary it
+  established.
+
+Several models above the threshold in the same chunk: the highest valid score
+wins; on an exact tie the lexicographically smallest canonical id wins.
+
+A candidate becomes an activation only through the normal, source-neutral
+activation admission:
+
+```text
+raw candidate -> detection evaluation -> wake admission -> activation
+```
+
+Only if that admission succeeds does the server latch the detection, adopt the
+accepted `activationId` and publish exactly one `wakeword.detected`. If the
+activation is locked, suppressed or otherwise refused, there is **no** event, no
+latch, no second activation and no source merge. A wake word spoken during an
+open activation has no trigger, finish, cancel or refresh effect; its audio is
+ordinary activation audio.
+
+The latch is released at the safe input close of the same activation - not at
+VAD end, not at segment end, not when a final inference starts or ends, and not
+when a cooldown expires.
+
+### Duplicates and re-arm (FIND-011)
+
+One spoken wake word produces exactly one detection. Two things guarantee that:
+
+- the recorder no longer runs the detector for the following chunks while a hit
+  is latched;
+- the detector re-arms only after the *measured* receptive field of the models
+  actually selected.
+
+OpenWakeWord advances one embedding frame per 1280 samples (80 ms at 16 kHz) and
+its embedding model consumes 76 melspectrogram frames (760 ms), so a classifier
+with `N` input frames still sees the same utterance for `(N - 1) * 80 + 760` ms.
+Across the bundled build that is 1960 ms at minimum and 3400 ms at maximum. No
+arbitrary "2 of 3" or "5 hits" rule is applied.
+
+## Audio boundary and pre-roll
+
+The transcript must not contain the wake word, and the first user word must not
+be cut. Five things are kept apart: detector history, wake-word audio, the wake
+end boundary, the user-speech pre-roll and the released transcript audio.
+
+The boundary is anchored to the **real sample position** of the accepted
+detection, not to a configured duration:
+
+```text
+wake end     = sample position of the accepted detection
+wake start   = wake end - measured receptive field
+release      = max(wake start, wake end - preRollMs)
+```
+
+With `wakeWord.preRollMs = 0` the transcript starts exactly at the wake end: the
+wake word is excluded and the following user speech is fully preserved. A larger
+pre-roll moves the release back but never past the wake start.
+
+The legacy `wake_word_buffer_duration` fixed-duration cut still exists for the
+v1 recorder path and is removed with AP-SRV-070.
+
+## Session settings
+
+| Key | Scope | Auth | Range | Default | Apply |
+| --- | --- | --- | --- | --- | --- |
+| `wakeWord.selection` | session | session | ids | `[]` | `next_session` |
+| `wakeWord.sensitivity` | session | session | 0.0-1.0 | 0.5 | `next_activation` |
+| `wakeWord.cooldownMs` | session | session | 0-3400 | 0 | `next_activation` |
+| `wakeWord.preRollMs` | session | session | 0-1960 | 0 | `next_activation` |
+| `wakeWord.globalDisabledIds` | server | admin | ids | `[]` | `next_session` |
+| `runtimeSuppression.wakeWord` | session | session | bool | `false` | `live` |
+
+`wakeWord.cooldownMs` is an operator addition **on top of** the measured
+artifact window, not a replacement for it; `0` means "no extra cooldown". Both
+ranges are measured properties of the bundled classifiers. A different default
+derived from real recorded wake-word speech is still open (`WW-18`/`WW-19`).
+
+## Legacy path (until AP-SRV-070)
+
+Everything below describes the v1/library path. It stays functional but is no
+longer the v2 catalog authority, and it is retired in AP-SRV-070.
+
+## Local model catalog (legacy)
 
 VoiceSTT never downloads Wake Word assets at runtime. It first looks for a
 `models.json` beside the configured model directory. Set the search root with:
@@ -82,7 +353,7 @@ Without a usable manifest, VoiceSTT falls back to scanning local `.onnx` and
 `.tflite` files. A manifest is recommended because it provides exact logical
 IDs, the default model and pipeline-file mappings.
 
-## Python recorder
+## Python recorder (legacy)
 
 Direct classifier paths remain supported:
 
@@ -117,10 +388,11 @@ Model IDs are resolved case-insensitively. An empty `wake_words` value selects
 Supported inference frameworks are `onnx` and `tflite`, selected with
 `openwakeword_inference_framework`.
 
-## FastAPI session-local configuration
+## FastAPI session-local configuration (legacy v1 endpoint)
 
-The WebSocket endpoint resolves Wake Word configuration before creating the
-session recorder:
+The v1 WebSocket endpoint resolves Wake Word configuration before creating the
+session recorder. It keeps its historical fallback behaviour; the atomic v2
+admission described above does **not** use it:
 
 ```text
 /ws/transcribe?wakeWordEnabled=false
@@ -187,4 +459,8 @@ Available callbacks:
 - Raise sensitivity if false activations are common; lower it if detections are
   consistently missed.
 - Increase `wake_word_buffer_duration` if the Wake Word appears in the final
-  transcript.
+  transcript (legacy path only; the v2 path derives the boundary from the
+  accepted detection and needs no such tuning).
+- On the v2 path, check `GET /api/v2/wake-words` for `available` and
+  `unavailableReason`, and use `POST /api/v2/wake-words/refresh` after changing
+  the bundle on disk.

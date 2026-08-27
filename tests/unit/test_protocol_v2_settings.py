@@ -798,6 +798,9 @@ class RestSettingsV2Tests(unittest.TestCase):
                  "wakeWord.sensitivity",
                  "wakeWord.selection",
                  "wakeWord.globalDisabledIds",
+                 # AP-SRV-060 calibration keys.
+                 "wakeWord.cooldownMs",
+                 "wakeWord.preRollMs",
                  "runtimeSuppression.manual",
                  "runtimeSuppression.wakeWord"},
             )

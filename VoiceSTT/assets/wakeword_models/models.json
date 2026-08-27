@@ -1,0 +1,432 @@
+{
+  "manifestVersion": 2,
+  "catalogRevision": 1,
+  "generatedBy": "tools/sync_wakeword_assets.py",
+  "description": "Kanonische Wake-Word-Catalog-Authority des v2-Pfades. Der Abschnitt 'openwakeword_models' ist nur ein Legacyspiegel fuer den v1-Pfad bis AP-SRV-070.",
+  "pipeline": {
+    "onnx": {
+      "melspectrogram": {
+        "file": "melspectrogram.onnx",
+        "sha256": "ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f",
+        "bytes": 1087958
+      },
+      "embedding": {
+        "file": "embedding_model.onnx",
+        "sha256": "70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f",
+        "bytes": 1326578
+      }
+    }
+  },
+  "wakeWords": [
+    {
+      "id": "alexa",
+      "displayName": "Alexa",
+      "aliases": [],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "alexa.onnx",
+          "sha256": "6ff566a01d12670e8d9e3c59da32651db1575d17272a601b7f8a39283dfbae3e",
+          "bytes": 854246
+        }
+      }
+    },
+    {
+      "id": "alice",
+      "displayName": "Alice",
+      "aliases": [],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "Alice.onnx",
+          "sha256": "8363e5d3e0fc64634f18c3866eba20b913ec18bc07fa7cb2a0ff45a423b83e3f",
+          "bytes": 633208
+        }
+      }
+    },
+    {
+      "id": "computer",
+      "displayName": "Computer",
+      "aliases": [],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "Computer.onnx",
+          "sha256": "ad7a4c7f1a7168a46daac25a43cc8a743cd77449038d2db0c941ee2230760527",
+          "bytes": 415224
+        }
+      }
+    },
+    {
+      "id": "hey_alfred",
+      "displayName": "Hey Alfred",
+      "aliases": [
+        "alfred"
+      ],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "Hey_Alfred.onnx",
+          "sha256": "6dfb5ad5e2e6d0700af7d489dfa4f0f5b7cf17f0f4cbd15ae2c4b417d92d0f7f",
+          "bytes": 415224
+        }
+      }
+    },
+    {
+      "id": "hey_billy",
+      "displayName": "Hey Billy",
+      "aliases": [
+        "billy"
+      ],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "Hey_Billy.onnx",
+          "sha256": "a9f0f1d84a99a394581aa6d0664655bcf62daa3b6080d7515290ad5bec91eb75",
+          "bytes": 415224
+        }
+      }
+    },
+    {
+      "id": "hey_bro",
+      "displayName": "Hey Bro",
+      "aliases": [
+        "bro"
+      ],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "Hey_Bro.onnx",
+          "sha256": "278d9c1a8c94ee90b40d2d432551d0f7915cafae14fe6e4165d45e6447f76dbf",
+          "bytes": 415224
+        }
+      }
+    },
+    {
+      "id": "hey_glados",
+      "displayName": "Hey GLaDOS",
+      "aliases": [
+        "glados"
+      ],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "hey_glados.onnx",
+          "sha256": "0885f72fd5f0630a28dc063df6f838ec6892b6af788442141a219e9d16d36262",
+          "bytes": 415224
+        }
+      }
+    },
+    {
+      "id": "hey_hermes",
+      "displayName": "Hey Hermes",
+      "aliases": [
+        "hermes"
+      ],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "Hey_Hermes.onnx",
+          "sha256": "8650376b494f678cb12ba9c007c1f1350d06aa21b9ea6d520b32c527a36f37f4",
+          "bytes": 415224
+        }
+      }
+    },
+    {
+      "id": "hey_jarvis",
+      "displayName": "Hey Jarvis",
+      "aliases": [
+        "jarvis"
+      ],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "jarvis_v2.onnx",
+          "sha256": "dae408c0fa69ec888bf8e3a8b41a41f97677522be3b8163821e4105fa754b988",
+          "bytes": 208134
+        }
+      }
+    },
+    {
+      "id": "hey_lucy",
+      "displayName": "Hey Lucy",
+      "aliases": [
+        "lucy"
+      ],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "Hey_Lucy.onnx",
+          "sha256": "dc13c9ad06892989b202ae5007ffd0641d930a0d341832b46a31d8a47ea46f6f",
+          "bytes": 415224
+        }
+      }
+    },
+    {
+      "id": "hey_luna",
+      "displayName": "Hey Luna",
+      "aliases": [
+        "luna"
+      ],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "Hey_luna.onnx",
+          "sha256": "eabe7ab6d76dfa418b6df24735423ee8e1422bf9c4383a4463e46cb5763935a7",
+          "bytes": 415224
+        }
+      }
+    },
+    {
+      "id": "hey_max",
+      "displayName": "Hey Max",
+      "aliases": [
+        "max"
+      ],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "Hey_Max.onnx",
+          "sha256": "51faf86fcaf615d432d332dea83bc0a803202e9846664d0b90351011640a5b9d",
+          "bytes": 415224
+        }
+      }
+    },
+    {
+      "id": "hey_mira",
+      "displayName": "Hey Mira",
+      "aliases": [
+        "mira"
+      ],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "Hey_Mira.onnx",
+          "sha256": "761ea62cd77644e018550b172a3e7fa641647c32a0d91983f89f411cfd33053b",
+          "bytes": 415224
+        }
+      }
+    },
+    {
+      "id": "hey_mycroft",
+      "displayName": "Hey Mycroft",
+      "aliases": [
+        "mycroft"
+      ],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "hey_mycroft.onnx",
+          "sha256": "c2a311e8fa1338de89c31b3b46dc4dffd4af2f9a8d6ddead48893c2d301b1f18",
+          "bytes": 857691
+        }
+      }
+    },
+    {
+      "id": "hey_nabu",
+      "displayName": "Hey Nabu",
+      "aliases": [
+        "nabu"
+      ],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "hey_nabu.onnx",
+          "sha256": "eaf5ac5cdd3f5311ca2d96af5297aad421e51d21f8187d0312b0cbbddc7c7311",
+          "bytes": 208138
+        }
+      }
+    },
+    {
+      "id": "hey_nexus",
+      "displayName": "Hey Nexus",
+      "aliases": [
+        "nexus"
+      ],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "Hey_Nexus.onnx",
+          "sha256": "85a8a867ddffe3c402aa06a460e048c39430621d88c7e1678c9b15134d0ecb32",
+          "bytes": 415224
+        }
+      }
+    },
+    {
+      "id": "hey_nova",
+      "displayName": "Hey Nova",
+      "aliases": [
+        "nova"
+      ],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "Hey_Nova.onnx",
+          "sha256": "cb0dbc4c2870815325cb68460f96c445b968ba9868a72617a7135a930b8ea2c0",
+          "bytes": 415224
+        }
+      }
+    },
+    {
+      "id": "hey_oracle",
+      "displayName": "Hey Oracle",
+      "aliases": [
+        "oracle"
+      ],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "hey_oracle.onnx",
+          "sha256": "6c7d9d892746fba923464f44d0b0016cd2daf943d49d23c95c1ccd12bab44f1b",
+          "bytes": 415224
+        }
+      }
+    },
+    {
+      "id": "hey_rhasspy",
+      "displayName": "Hey Rhasspy",
+      "aliases": [
+        "rhasspy"
+      ],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "hey_rhasspy.onnx",
+          "sha256": "5a9b3ed3be2910e35780e097905aa9f35a9c10038df47914cf2b3ec4d670f6ea",
+          "bytes": 204081
+        }
+      }
+    },
+    {
+      "id": "hey_rocky",
+      "displayName": "Hey Rocky",
+      "aliases": [
+        "rocky"
+      ],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "Hey_Rocky.onnx",
+          "sha256": "bbbf9dd8a06d5baf88fd3363de77c44896759dab392fd3ab0ac19341298bb46c",
+          "bytes": 415224
+        }
+      }
+    },
+    {
+      "id": "hey_rona",
+      "displayName": "Hey Rona",
+      "aliases": [
+        "rona"
+      ],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "wake_word_hey_rona.onnx",
+          "sha256": "4892063caa218edf4013781f4dc9858d9fade4aa4dfadeb0da40f9d340b0f1eb",
+          "bytes": 351536
+        }
+      }
+    },
+    {
+      "id": "ivy",
+      "displayName": "Ivy",
+      "aliases": [],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "ivy.onnx",
+          "sha256": "01f9176823258fc387b5a58945fb9ddb88cf3d68ffc34098419daefe5ea4a0b3",
+          "bytes": 415224
+        }
+      }
+    },
+    {
+      "id": "pico",
+      "displayName": "Pico",
+      "aliases": [],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "Pico.onnx",
+          "sha256": "758f73ce37f549593bafe3497d0b7e76e66814b4620a4d61605f570a43ad6b13",
+          "bytes": 633208
+        }
+      }
+    },
+    {
+      "id": "stop",
+      "displayName": "Stop",
+      "aliases": [],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "Stop.onnx",
+          "sha256": "bcaa8deea30bf5a6d9dbd25a32b7b53ee1b6041031d5def0ab6965f57d5ece4b",
+          "bytes": 415224
+        }
+      }
+    },
+    {
+      "id": "timer",
+      "displayName": "Timer",
+      "aliases": [],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "timer.onnx",
+          "sha256": "371e44535470a29248b3b8f1bbbbaf2525c86417fd8f75c67fcf02ae0b9626df",
+          "bytes": 1742475
+        }
+      }
+    },
+    {
+      "id": "weather",
+      "displayName": "Weather",
+      "aliases": [],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {
+          "file": "weather.onnx",
+          "sha256": "8441da8e746899e8d969528d5bad5651cdd563079c05962788f77753041f60e7",
+          "bytes": 1149158
+        }
+      }
+    }
+  ],
+  "openwakeword_models": {
+    "path": ".",
+    "default_model": "alexa",
+    "pipeline_models": {
+      "melspectrogram_onnx": "melspectrogram.onnx",
+      "embedding_model_onnx": "embedding_model.onnx"
+    },
+    "onnx_models": {
+      "alexa": "alexa.onnx",
+      "alice": "Alice.onnx",
+      "computer": "Computer.onnx",
+      "hey_alfred": "Hey_Alfred.onnx",
+      "hey_billy": "Hey_Billy.onnx",
+      "hey_bro": "Hey_Bro.onnx",
+      "hey_glados": "hey_glados.onnx",
+      "hey_hermes": "Hey_Hermes.onnx",
+      "hey_jarvis": "jarvis_v2.onnx",
+      "hey_lucy": "Hey_Lucy.onnx",
+      "hey_luna": "Hey_luna.onnx",
+      "hey_max": "Hey_Max.onnx",
+      "hey_mira": "Hey_Mira.onnx",
+      "hey_mycroft": "hey_mycroft.onnx",
+      "hey_nabu": "hey_nabu.onnx",
+      "hey_nexus": "Hey_Nexus.onnx",
+      "hey_nova": "Hey_Nova.onnx",
+      "hey_oracle": "hey_oracle.onnx",
+      "hey_rhasspy": "hey_rhasspy.onnx",
+      "hey_rocky": "Hey_Rocky.onnx",
+      "hey_rona": "wake_word_hey_rona.onnx",
+      "ivy": "ivy.onnx",
+      "pico": "Pico.onnx",
+      "stop": "Stop.onnx",
+      "timer": "timer.onnx",
+      "weather": "weather.onnx"
+    }
+  }
+}

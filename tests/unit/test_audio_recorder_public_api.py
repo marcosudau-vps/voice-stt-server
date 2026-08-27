@@ -133,6 +133,8 @@ class AudioRecorderPublicApiTests(unittest.TestCase):
                 audio_recorder.INIT_WAKE_WORD_BUFFER_DURATION,
                 float,
             ),
+            # AP-SRV-060: the admitted catalog selection of a v2 session.
+            ("wake_word_selection", None, empty),
             ("on_wakeword_detected", None, empty),
             ("on_wakeword_timeout", None, empty),
             ("on_wakeword_detection_start", None, empty),

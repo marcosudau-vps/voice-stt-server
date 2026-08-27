@@ -58,6 +58,7 @@ def build_recorder_init_args(
     wake_word_activation_delay,
     wake_word_timeout,
     wake_word_buffer_duration,
+    wake_word_selection,
     on_wakeword_detected,
     on_wakeword_timeout,
     on_wakeword_detection_start,
@@ -152,6 +153,9 @@ def build_recorder_init_args(
         "wake_word_activation_delay": wake_word_activation_delay,
         "wake_word_timeout": wake_word_timeout,
         "wake_word_buffer_duration": wake_word_buffer_duration,
+        # AP-SRV-060: the admitted catalog selection, or ``None`` for
+        # every legacy session.
+        "wake_word_selection": wake_word_selection,
         "on_wakeword_detected": on_wakeword_detected,
         "on_wakeword_timeout": on_wakeword_timeout,
         "on_wakeword_detection_start": on_wakeword_detection_start,
