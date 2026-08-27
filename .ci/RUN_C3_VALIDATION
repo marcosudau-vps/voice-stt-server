@@ -1,5 +1,6 @@
 AP-SRV-030 C3 validation trigger
-2026-08-27 rerun-04
+2026-08-27 rerun-05
 payload-diff-sha256=2516fb49451db5cf2e172b8eab26842ac5efc72fa4bb3543abf10dcf13f3b9dd
 payload-c3-sha256=88dc1045530ea752b8230eba3dc1343f9e672c51a9dd331b655ac2b8e2c06210
-transport=base64-text-chunks
+transport=7x-safe-base64-text-chunks
+encoded-length=20256
