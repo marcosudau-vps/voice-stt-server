@@ -2,11 +2,17 @@
 
 Diese Datei beschreibt den mit AP-SRV-010, AP-SRV-020 und AP-SRV-030
 implementierten serverautoritativen Vordergrund-Lifecycle, die Command- und
-Timerpolitik sowie den Hintergrund-Drain. Eine Session besitzt genau eine
+Timerpolitik sowie den Hintergrund-Drain, und seit AP-SRV-040 den darüber
+liegenden Protokoll-v2-Vertrag. Eine Session besitzt genau eine
 Activation-State-Machine, genau einen Command-Replaycache und ein
 threadsicheres Segmentledger. Nach sicherem Schließen des Eingabepfads ist der
 Vordergrund wieder `idle`, auch wenn Finalarbeit älterer Segmente im
 Hintergrund läuft.
+
+Die Abschnitte 1 bis 11 beschreiben die Domainautoritäten und den geerbten
+v1-Transport auf `/ws/transcribe`. Abschnitt 12 beschreibt den eingefrorenen
+Protokoll-v2-Vertrag auf `/ws/v2`, der dieselben Autoritäten benutzt und keine
+eigenen besitzt.
 
 > Ergänzende Dokumente: [`docs/client-development/`](client-development/README.md)
 > für den Client-Vertrag, [`docs/fastapi-server.md`](fastapi-server.md) für den
@@ -26,14 +32,17 @@ Folgepaketen zugeordnet:
   `segmentSequence`.
 - Early-Final darf während der Aufnahme anlaufen. Sein Job übernimmt denselben
   unveränderlichen Segmentkontext wie der spätere Recorderabschluss.
-- Die öffentlichen Activation-Nachrichten und Snapshots sind geerbte
-  Baselineformen; der eingefrorene Wire-Vertrag (`hello`-Handshake,
-  `activation.command`/`command.ack`, `eventSeq`, `session.snapshot`) wird erst
-  mit AP-SRV-040 hergestellt. Die serverinterne Command-, Timer- und
-  Recoverypolitik aus AP-SRV-030 ist davon unabhängig und vollständig.
+- Der eingefrorene Wire-Vertrag (`hello`-Handshake,
+  `activation.command`/`command.ack`, `eventSeq`, `session.snapshot`) ist seit
+  AP-SRV-040 auf dem eigenen Endpunkt `/ws/v2` verfügbar; siehe Abschnitt 12.
+  Die hier beschriebenen `trigger`-/`trigger_ack`-Formen sind der geerbte
+  v1-Pfad auf `/ws/transcribe` und bleiben bis AP-SRV-070 unverändert.
 - Die Timerwerte sind Sessionparameter der bestehenden Query-Admission. Die
   vollständige Settings-Control-Plane mit Scope, Auth, Constraints und
-  Apply-Policy folgt in AP-SRV-050.
+  Apply-Policy folgt in AP-SRV-050. Protokoll v2 veröffentlicht sie bereits als
+  `effectiveSettings` und führt `settingsRevision` mit, lehnt einen
+  `session_settings.patch` aber ausdrücklich ab
+  (`REQUIRES_AP_SRV_050_BINDING`).
 - Wake-Word-Erkennung verwendet heute den letzten OpenWakeWord-Score gegen die
   konfigurierte Sensitivität. Es existiert kein belastbarer Score-/Audio-
   Evidence-Harness für Cooldown, ausgewähltes Modell und die exakte
@@ -831,3 +840,258 @@ greifen kann, hat aber Folgen, die bewusst zu tragen sind:
 | Refresh scheint nichts zu bewirken | in `segment_active` ist das korrekt, solange die Restzeit größer als `segmentWatchdogRefreshSeconds` ist (`max()`-Semantik) |
 | `activation.closed` mit `cause: closing_recovery_timeout` | Gate oder Recorder ließen sich nicht schließen; die Recovery hat den Vordergrund freigegeben, das betroffene Segment steht als `final_transcript_failed` im Ledger |
 | `watchdog.warning` kommt sofort | `segmentWatchdogWarningSeconds` ist größer als die wirksame Frist; die Warnung wird dann sofort fällig statt verworfen |
+
+---
+
+## 12. Protokoll v2 (AP-SRV-040)
+
+Protokoll v2 ist die eingefrorene Wire-, Session- und Projektionsgrenze über
+den bereits abgenommenen Autoritäten. Es besitzt **keine** eigene Activation-,
+Timer-, Ledger-, Settings- oder Wake-State-Machine.
+
+```text
+/ws/v2
+  -> Handshake / Sessionadmission
+  -> ProtocolSessionState
+  -> strikter v2-Envelope
+  -> AP-SRV-030 Command-/Activation-Autorität
+  -> AP-SRV-020 Segmentledger
+  -> Eventprojektion und Snapshot
+```
+
+Implementierung: `api_fastapi_server/protocol_v2/`.
+
+### 12.1 Eigener Endpunkt
+
+`/ws/v2` ist bewusst von `/ws/transcribe` getrennt. Der v1-Pfad admittiert
+eine Session aus Queryparametern **vor** der ersten Nachricht und sendet ein
+Server-`hello`; v2 admittiert nichts, bis das Client-`hello` vollständig
+validiert ist. Beides in einer Route zu mischen hieße, innerhalb einer bereits
+admittierten Session auf die Protokollversion zu verzweigen – genau das
+verbietet der Contract. Der v1-Pfad bleibt bis AP-SRV-070 unverändert.
+
+Eine v2-Verbindung wird absichtlich **nicht** im gemeinsamen
+`ConnectionManager` registriert. Alles, was ein v2-Client sieht, läuft durch
+die v2-Projektion; ein Legacy-Payload kann ihn nicht erreichen.
+
+### 12.2 Handshake
+
+Die erste Client-Textnachricht muss `hello` sein. Vor `hello.accepted` sind
+Audio, manuelle Activation, Wake-Word-Erkennung und Domaincommands gesperrt.
+
+```json
+{
+  "type": "hello",
+  "supportedProtocolVersions": [2],
+  "clientVersion": "…",
+  "clientCommit": "…",
+  "clientRunId": "…",
+  "requestedSession": {
+    "trigger": {"manual": true, "wakeWord": false},
+    "wakeWordIds": []
+  },
+  "runtimeSuppression": {"manual": false, "wakeWord": false}
+}
+```
+
+`hello.accepted` enthält `protocolVersion`, `sessionId`, `serverVersion`,
+`serverCommit` und den vollständigen Snapshot unter `snapshot` (ohne dessen
+inneres `type`). Erst danach ist Domaintraffic erlaubt.
+
+Ablehnungen und Close-Codes:
+
+| Fall | Nachricht | Close |
+| --- | --- | ---: |
+| ungültige erste Nachricht, nicht parsebares `hello` | – | `4400` |
+| keine gemeinsame Protokollversion | `protocol.incompatible` | `4406` |
+| Handshake-Timeout | – | `4408` |
+| Sessionadmission abgelehnt | `session.rejected` mit `errors[]` | `4409` |
+| unerwarteter interner Fehler | – | `1011` |
+
+In keinem dieser Fälle entsteht eine `sessionId` oder eine halb aufgebaute
+Session. Fachlich abgelehnte Commands schließen die Verbindung dagegen nie.
+
+`serverCommit` wird aus der Umgebungsvariablen `VOICESTT_SERVER_COMMIT`
+gelesen und fällt sonst auf `unknown` zurück; ein Git-Aufruf zur Laufzeit
+findet nicht statt.
+
+### 12.3 Identitäten
+
+Jede v2-relevante UUID wird an ihrer autoritativen Erzeugungsstelle kanonisch
+mit Bindestrichen erzeugt und läuft unverändert durch Domain, Ledger, Events
+und Snapshot. Es gibt **keine** Umformatierung an der Wire-Grenze und damit
+nie zwei Strings für eine Identität.
+
+| ID | Erzeuger | v2 | v1 |
+| --- | --- | --- | --- |
+| `sessionId` | v2-Verbindung | kanonische UUID | kompakter Hex |
+| `activationId` | `ActivationController` | kanonische UUID | kompakter Hex |
+| `segmentId` | `SegmentState` | kanonische UUID | Integer-Zähler |
+| `eventId` | `ProtocolSessionState` | kanonische UUID | – |
+| `commandId` | Client | kanonisch validiert | frei |
+
+Ein `commandId`, der keine kanonische UUID ist, besitzt keine v2-Identität und
+erhält deshalb kein Ack.
+
+### 12.4 Commands
+
+Gemeinsame Pflichtfelder: `type`, `protocolVersion`, `sessionId`, `commandId`.
+
+```text
+activation.command       activate (source=manual) | refresh|finish|cancel (activationId)
+trigger_suppression.set  manual, wakeWord
+audio_availability.set   audioAvailable
+session_settings.patch   baseSettingsRevision, changes
+session.snapshot.request –
+```
+
+Der v2-Envelope ist strikter als der transportneutrale AP-SRV-030-Parser:
+
+- der Client darf ausschließlich `source=manual` senden; `wake_word` entsteht
+  nur serverintern durch die Detection-Admission;
+- bei `activate` ist `activationId` verboten;
+- bei Controls ist `activationId` Pflicht und `source` verboten;
+- den v1-Alias `extend` gibt es in v2 nicht.
+
+Eine fremde, wohlgeformte `sessionId` ist `stale_session` und wirkt nicht; ein
+unbekannter Nachrichtentyp wird ignoriert und nie als bekannte
+Zustandsänderung gedeutet.
+
+#### Result-Codes
+
+```text
+applied, no_change,
+activation_locked, not_active, invalid_phase, closing_input,
+stale_session, stale_activation, command_id_conflict,
+invalid_payload, trigger_suppressed, audio_unavailable,
+settings_revision_conflict, settings_rejected, internal_error
+```
+
+`accepted=true` gilt ausschließlich für `applied` und `no_change`. Die
+Projektion der AP-SRV-030-Reasons auf diese fünfzehn Codes liegt vollständig
+in `protocol_v2/commands.py`; ein nicht abgebildeter Reason schlägt sichtbar
+fehl, statt still zu `internal_error` zu werden.
+
+#### Replay
+
+Ein `commandId` besitzt genau eine Antwort. Derselbe `commandId` mit identisch
+bedeutendem Payload liefert dasselbe Ack – einschließlich der ursprünglichen
+`stateVersion`/`settingsRevision` – und erzeugt keine zweite Wirkung und kein
+zweites Event. Ein abweichender Payload ist `command_id_conflict`.
+
+Es gibt genau eine Replay-Autorität: die sessionweite `CommandReplayCache` aus
+AP-SRV-030. Auch ein vom v2-Envelope abgelehnter Command belegt dort seine
+Identität. Unbekannte additive Felder ändern den Replay-Schlüssel eines
+gültigen Commands nicht.
+
+### 12.5 Events
+
+Gemeinsame Pflichtfelder: `type`, `protocolVersion`, `sessionId`, `eventId`,
+`eventSeq`, `stateVersion`, `occurredAtUnixMs`.
+
+Die Projektion hängt an genau einem Punkt: dem einen Lifecycle-Funnel
+`_publish_timeline_event`. Dadurch entsteht je logischem Domainereignis genau
+ein v2-Event.
+
+| Legacy | v2 |
+| --- | --- |
+| `activation_started` | `activation.started` |
+| `activation_refreshed` | `activation.phase_changed` (gleiche Phase, neue Deadline) |
+| `activation_closed` | `activation.input_closed` |
+| `activation_drained` | `activation.completed` / `.cancelled` / `.failed` |
+| `recording_started` / `recording_ended` | `segment.recording_started` / `.recording_ended` |
+| `transcription_started` | `transcription.accepted` |
+| `final_transcript` | `transcription.completed` |
+| `final_transcript_discarded` / `_cancelled` | `transcription.discarded` |
+| `final_transcript_failed` | `transcription.failed` |
+| `watchdog_warning` | `watchdog.warning` |
+| `wakeword_detected` | `wakeword.detected` |
+
+Legacyereignisse ohne v2-Entsprechung werden verworfen, nicht durchgereicht.
+
+`stateVersion` steigt nur bei einer nach außen sichtbaren Zustandsänderung;
+`watchdog.warning` und `activation.trigger_suppressed` sind diagnostisch und
+erhöhen sie nicht. Ein Transportretry desselben logischen Ereignisses liefert
+dieselbe `eventId`, dieselbe `eventSeq` und dieselbe `stateVersion`.
+
+### 12.6 `activation.input_closed`
+
+Das Ereignis erscheint genau einmal je wirksamem Eingabeschluss. Es bedeutet,
+dass die Eingabeseite sicher geschlossen ist – nicht, dass die
+Hintergrundinferenz fertig ist. Die Exactly-once-Garantie stammt aus der
+AP-SRV-030-Close-Seam, an die die Projektion gebunden ist; AP-SRV-040 erzeugt
+kein eigenes Close-Ereignis.
+
+`causedByCommandId`:
+
+```text
+akzeptiertes finish / cancel  ->  Command-UUID
+VAD / Timer / Watchdog        ->  null
+Audio / Gerät / Session       ->  null
+Recovery-Abschluss            ->  null
+```
+
+Auch wenn eine Recovery intern aus einem früheren Finish oder Cancel entstand,
+ist der Wire-Abschluss `null`; der interne `CloseContext` behält die
+ursprüngliche Identität für Diagnose und Ledgerkorrelation.
+
+### 12.7 Snapshot und Resync
+
+`session.snapshot` ist die serverautoritative Resync-Sicht und enthält
+`protocolVersion`, `serverVersion`, `serverCommit`, `sessionId`,
+`stateVersion`, `lastEventSeq`, `settingsRevision`, `input`,
+`pendingActivations`, `trigger`, `audioAvailable`, `effectiveSettings` und
+`wakeWordCapabilities`.
+
+`input` trägt `phase`, `activationId`, `primarySource`, `deadlineAtUnixMs`,
+`remainingMs` und `closeRequested`. In `idle` sind alle optionalen Werte
+`null` und `closeRequested` ist `false`.
+
+`pendingActivations` stammt aus dem Segmentledger, nie aus einem globalen
+Current-Activation-Zeiger, ist streng nach `activationSequence` sortiert und
+enthält die offene Vordergrund-Activation nicht. Ein `idle`-Vordergrund mit
+mehreren drainenden Activations ist damit korrekt darstellbar.
+
+Die Domainzeit bleibt monoton. Nur die Projektion übersetzt eine Deadline in
+`deadlineAtUnixMs`/`remainingMs`, indem sie den monotonen Restabstand und die
+Wall Clock im selben Moment abliest. Es entsteht keine zweite Timerautorität.
+
+Bei einer Lücke in `eventSeq` fordert der Client `session.snapshot.request`
+an. Ein Snapshot ist ein Lesevorgang: eine wiederholte Anfrage ändert weder
+`stateVersion` noch Domainzustand.
+
+### 12.8 Trigger-Suppression
+
+Der Snapshot bildet `configured`, `suppressed` und `effective` ab, wobei
+
+```text
+effective = configured && !suppressed
+```
+
+gilt. Die Suppressionsmaske liegt im `ActivationController`, also in derselben
+Triggerautorität, die den Lock hält – es gibt keine zweite Triggerlogik. Sie
+wirkt live auf neue Admissionen, ändert die Quelle einer laufenden Activation
+nicht, beendet keine laufende Activation und merged keine Quellen. Die
+`runtimeSuppression` aus dem `hello` wird atomar mit der Admission gesetzt.
+
+### 12.9 Offene Bindungen
+
+```text
+REQUIRES_AP_SRV_050_BINDING
+  settingsRevision, effectiveSettings, settings.changed,
+  session_settings.patch -> schmaler Port, keine zweite Registry.
+  Bis dahin ist die Revision 0 und ein Patch wird als
+  settings_rejected beziehungsweise settings_revision_conflict abgelehnt.
+
+REQUIRES_AP_SRV_060_BINDING
+  wakeWordCapabilities, Wake-Word-Admission und wakeword.detected.
+  Das Eventmodell trägt bereits wakeWordId, score und
+  primarySource = wake_word; es wird keine anonyme Boolean-Wake-Semantik
+  festgeschrieben.
+```
+
+### 12.10 Koexistenz mit v1
+
+v1 und v2 laufen bis AP-SRV-070 nebeneinander, aber ausschließlich auf der
+Transportebene. Innerhalb einer angenommenen v2-Verbindung gibt es keinen
+v1-Fallback, und keine Domainautorität existiert doppelt.

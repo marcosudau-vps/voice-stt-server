@@ -6,6 +6,14 @@ Alle Servernachrichten sind JSON-Objekte in WebSocket-Textframes. `type` ist der
 primäre Diskriminator. Der produktive Server kann die folgenden **zwölf** Typen
 an einen Client senden.
 
+> **Gilt für `/ws/transcribe` (Protokoll v1).** Der seit AP-SRV-040 verfügbare
+> Endpunkt `/ws/v2` sendet einen anderen, eingefrorenen Nachrichtensatz
+> (`hello.accepted`, `command.ack`, `session.snapshot` und punktgetrennte
+> Domain-Events mit `eventId`/`eventSeq`/`stateVersion`). Keiner der hier
+> beschriebenen Typen erreicht eine v2-Verbindung. Siehe
+> [`docs/einheitliche-triggerarchitektur.md`](../einheitliche-triggerarchitektur.md),
+> Abschnitt 12.
+
 ## Eventübersicht
 
 | `type` | Scope | Wann | Kernfelder | Empfohlene Clientreaktion |

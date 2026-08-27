@@ -15,7 +15,25 @@ WS /ws/transcribe auf einem HTTP-/HTTPS-Port
 ```
 
 Dieses Audio-/Sessionprotokoll bündelt Control und Audio auf genau einem
-WebSocket und ist die primäre Transkriptionsschnittstelle. Zusätzlich existiert
+WebSocket und ist die primäre Transkriptionsschnittstelle.
+
+Seit AP-SRV-040 existiert daneben der eingefrorene **Protokoll-v2-Endpunkt**:
+
+```text
+WS /ws/v2 auf demselben HTTP-/HTTPS-Port
+```
+
+Er benutzt dieselben serverseitigen Autoritäten, aber einen anderen, streng
+versionierten Wire-Vertrag: die erste Clientnachricht ist `hello`, es gibt
+`command.ack` statt `trigger_ack`, punktgetrennte Domain-Events mit
+`eventId`/`eventSeq`/`stateVersion` und `session.snapshot` als
+Resynchronisierung. Ein v2-Client bekommt **keine** v1-Nachricht, und innerhalb
+einer angenommenen v2-Verbindung gibt es keinen v1-Fallback. Der vollständige
+Vertrag steht in
+[`docs/einheitliche-triggerarchitektur.md`](../einheitliche-triggerarchitektur.md),
+Abschnitt 12. Neue Desktop-Clients werden gegen `/ws/v2` gebaut; der
+Browserclient und bestehende Clients bleiben bis AP-SRV-070 auf
+`/ws/transcribe`. Zusätzlich existiert
 auf demselben FastAPI-/HTTP-Port der eigenständige, SQLite-first
 `/ws/logs`-Eventstream. Diese zweite Verbindung transportiert weder Audio noch
 Recorderbefehle und ist nicht mit der unten beschriebenen Zwei-Port-STT-

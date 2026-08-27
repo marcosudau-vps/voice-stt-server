@@ -196,6 +196,10 @@ class ActivationController:
 
         self.manual_trigger_enabled = manual_trigger_enabled
         self.wake_word_trigger_enabled = wake_word_trigger_enabled
+        # Runtime suppression of the *configured* sources. It only gates the
+        # admission of a new activation; a running activation keeps its source
+        # and is never ended by a suppression change (contract 8.1).
+        self._suppressed = {MANUAL_SOURCE: False, WAKE_WORD_SOURCE: False}
         self.initial_speech_timeout = self._positive(
             "initial_speech_timeout", initial_speech_timeout
         )
@@ -254,12 +258,56 @@ class ActivationController:
         with self._lock:
             return self._phase in OPEN_WINDOW_PHASES
 
-    def _source_enabled(self, source):
+    def _configured(self, source):
         if source == MANUAL_SOURCE:
-            return self.manual_trigger_enabled
+            return bool(self.manual_trigger_enabled)
         if source == WAKE_WORD_SOURCE:
-            return self.wake_word_trigger_enabled
+            return bool(self.wake_word_trigger_enabled)
         return False
+
+    def _source_enabled(self, source):
+        """The effective admission gate: configured and not suppressed."""
+        if not self._configured(source):
+            return False
+        return not self._suppressed.get(source, False)
+
+    def set_runtime_suppression(self, *, manual=None, wake_word=None):
+        """Live suppression mask for new admissions. Returns whether it moved.
+
+        Suppression never merges sources, never changes a running activation
+        and never ends one; it only decides whether the *next* trigger of that
+        source is admitted.
+        """
+        with self._lock:
+            changed = False
+            for source, value in (
+                (MANUAL_SOURCE, manual),
+                (WAKE_WORD_SOURCE, wake_word),
+            ):
+                if value is None:
+                    continue
+                value = bool(value)
+                if self._suppressed[source] != value:
+                    self._suppressed[source] = value
+                    changed = True
+            return changed
+
+    def trigger_state(self):
+        """The frozen ``configured``/``suppressed``/``effective`` projection."""
+        with self._lock:
+            configured = {
+                MANUAL_SOURCE: self._configured(MANUAL_SOURCE),
+                WAKE_WORD_SOURCE: self._configured(WAKE_WORD_SOURCE),
+            }
+            suppressed = dict(self._suppressed)
+            return {
+                "configured": configured,
+                "suppressed": suppressed,
+                "effective": {
+                    source: configured[source] and not suppressed[source]
+                    for source in configured
+                },
+            }
 
     # -- timer ownership -----------------------------------------------------
 
