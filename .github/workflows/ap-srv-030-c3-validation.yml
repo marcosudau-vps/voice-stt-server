@@ -4,6 +4,8 @@ on:
   push:
     branches:
       - ci/AP-SRV-030-c3-validation
+    paths:
+      - .ci/RUN_C3_VALIDATION
   workflow_dispatch:
 
 permissions:
