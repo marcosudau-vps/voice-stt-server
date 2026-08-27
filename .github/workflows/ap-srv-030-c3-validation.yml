@@ -2,10 +2,8 @@ name: AP-SRV-030 C3 validation
 
 on:
   push:
-    branches:
-      - ci/AP-SRV-030-c3-validation
-    paths:
-      - .ci/RUN_C3_VALIDATION
+    branches: [ci/AP-SRV-030-c3-validation]
+    paths: [.ci/RUN_C3_VALIDATION]
   workflow_dispatch:
 
 permissions:
@@ -15,15 +13,10 @@ jobs:
   validate-c3:
     runs-on: windows-latest
     timeout-minutes: 90
-
     steps:
-      - name: Checkout CI payload branch
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Setup Python 3.12
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
@@ -34,29 +27,25 @@ jobs:
           $logDir = "$env:RUNNER_TEMP/ci-logs"
           New-Item -ItemType Directory -Force $logDir | Out-Null
           "CI_LOG_DIR=$logDir" >> $env:GITHUB_ENV
-
           $parts = Get-ChildItem .ci/payload2/c1c2-*.b64 | Sort-Object Name
-          if ($parts.Count -ne 6) { throw "Expected exactly 6 C1-C2 payload chunks, got $($parts.Count)" }
-          $encoded = ($parts | ForEach-Object { (Get-Content -Raw -LiteralPath $_.FullName).Trim() }) -join ''
+          if ($parts.Count -ne 6) { throw "Expected 6 C1-C2 chunks, got $($parts.Count)" }
+          $encoded = ($parts | ForEach-Object { (Get-Content -Raw $_.FullName).Trim() }) -join ''
           [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/c1-c2.diff.gz", [Convert]::FromBase64String($encoded))
           python -c "import gzip,pathlib; p=pathlib.Path(r'$env:RUNNER_TEMP/c1-c2.diff.gz'); pathlib.Path(r'$env:RUNNER_TEMP/c1-c2.diff').write_bytes(gzip.decompress(p.read_bytes()))"
-
           $c3parts = Get-ChildItem .ci/payload3/c3-*.b64 | Sort-Object Name
-          if ($c3parts.Count -ne 7) { throw "Expected exactly 7 C3 payload chunks, got $($c3parts.Count)" }
-          $c3encoded = ($c3parts | ForEach-Object { (Get-Content -Raw -LiteralPath $_.FullName).Trim() }) -join ''
+          if ($c3parts.Count -ne 7) { throw "Expected 7 C3 chunks, got $($c3parts.Count)" }
+          $c3encoded = ($c3parts | ForEach-Object { (Get-Content -Raw $_.FullName).Trim() }) -join ''
           if ($c3encoded.Length -ne 20256) { throw "C3 base64 length mismatch: $($c3encoded.Length)" }
           [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/c3-payload.zip", [Convert]::FromBase64String($c3encoded))
-
           $diffHash = (Get-FileHash "$env:RUNNER_TEMP/c1-c2.diff" -Algorithm SHA256).Hash.ToLower()
           $payloadHash = (Get-FileHash "$env:RUNNER_TEMP/c3-payload.zip" -Algorithm SHA256).Hash.ToLower()
-          "C1-C2 diff SHA256: $diffHash" | Tee-Object -FilePath "$logDir/payload.txt"
-          "C3 payload SHA256: $payloadHash" | Tee-Object -FilePath "$logDir/payload.txt" -Append
+          "C1-C2 diff SHA256: $diffHash`nC3 payload SHA256: $payloadHash" | Set-Content "$logDir/payload.txt"
           if ($diffHash -ne '2516fb49451db5cf2e172b8eab26842ac5efc72fa4bb3543abf10dcf13f3b9dd') { throw "C1-C2 diff hash mismatch: $diffHash" }
           if ($payloadHash -ne '88dc1045530ea752b8230eba3dc1343f9e672c51a9dd331b655ac2b8e2c06210') { throw "C3 payload hash mismatch: $payloadHash" }
-          Expand-Archive -LiteralPath "$env:RUNNER_TEMP/c3-payload.zip" -DestinationPath "$env:RUNNER_TEMP/c3-payload" -Force
+          Expand-Archive "$env:RUNNER_TEMP/c3-payload.zip" "$env:RUNNER_TEMP/c3-payload" -Force
+          Get-ChildItem "$env:RUNNER_TEMP/c3-payload" -Recurse -File | Select-Object -ExpandProperty FullName | Set-Content "$logDir/extracted-files.txt"
 
       - name: Reconstruct exact C2 tree from C1
-        id: c2
         shell: pwsh
         run: |
           git config user.name "AP-SRV-030 CI"
@@ -67,150 +56,94 @@ jobs:
           git reset --hard db3d2b49539afbf4812d90e13f26f099b9314fe9
           git apply "$env:RUNNER_TEMP/c1-c2.diff"
           git add -A
-          $tree = (git write-tree).Trim()
-          "Reconstructed C2 tree: $tree" | Tee-Object -FilePath "$env:CI_LOG_DIR/c2-tree.txt"
+          $tree=(git write-tree).Trim()
+          "Reconstructed C2 tree: $tree" | Set-Content "$env:CI_LOG_DIR/c2-tree.txt"
           if ($tree -ne 'e6ea688730ac3845d734348878834da87c3caba1') { throw "C2 tree mismatch: $tree" }
-          git diff --cached --check
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --cached --check; if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           git commit -m "fix(trigger): harden AP-SRV-030 close and command invariants"
-          $sha = (git rev-parse HEAD).Trim()
-          "Reconstructed C2 SHA: $sha" | Tee-Object -FilePath "$env:CI_LOG_DIR/c2-tree.txt" -Append
-          "sha=$sha" >> $env:GITHUB_OUTPUT
-          "tree=$tree" >> $env:GITHUB_OUTPUT
+          "Reconstructed C2 SHA: $((git rev-parse HEAD).Trim())" | Add-Content "$env:CI_LOG_DIR/c2-tree.txt"
 
       - name: Apply C3 root corrections
         shell: pwsh
         run: |
-          $payload = "$env:RUNNER_TEMP/c3-payload"
-          $c2 = (git rev-parse HEAD).Trim()
-          $oldRepo = 'REPO = Path(r"P:\GithubRepos\marcosudau-vps\voice-stt-server\workspaces\einheitliche-triggerarchitektur-distributed")'
-          $newRepo = 'REPO = Path.cwd()'
-          $oldHead = 'EXPECTED_HEAD = "3e146533b81d220d4d176b5a4342cb2c8398a343"'
-          $newHead = 'EXPECTED_HEAD = "' + $c2 + '"'
-          $scripts = @(
-            "$payload/root/AP-SRV-030_C3_ROOT_FIX_APPLY.py",
-            "$payload/repair/AP-SRV-030_C3_TERMINAL_SEAL_REPAIR.py",
-            "$payload/final/AP-SRV-030_C3_FINAL_FIX.py"
-          )
-          foreach ($script in $scripts) {
-            $text = Get-Content -Raw -LiteralPath $script
-            $text = $text.Replace($oldRepo, $newRepo).Replace($oldHead, $newHead)
-            [IO.File]::WriteAllText($script, $text, [Text.UTF8Encoding]::new($false))
-            "RUN $script" | Tee-Object -FilePath "$env:CI_LOG_DIR/apply.txt" -Append
+          $payload="$env:RUNNER_TEMP/c3-payload"
+          $c2=(git rev-parse HEAD).Trim()
+          $oldRepo='REPO = Path(r"P:\GithubRepos\marcosudau-vps\voice-stt-server\workspaces\einheitliche-triggerarchitektur-distributed")'
+          $newRepo='REPO = Path.cwd()'
+          $oldHead='EXPECTED_HEAD = "3e146533b81d220d4d176b5a4342cb2c8398a343"'
+          $newHead='EXPECTED_HEAD = "'+$c2+'"'
+          $names=@('AP-SRV-030_C3_ROOT_FIX_APPLY.py','AP-SRV-030_C3_TERMINAL_SEAL_REPAIR.py','AP-SRV-030_C3_FINAL_FIX.py')
+          foreach($name in $names){
+            $matches=@(Get-ChildItem $payload -Recurse -File -Filter $name)
+            if($matches.Count -ne 1){ throw "Expected exactly one $name, got $($matches.Count)" }
+            $script=$matches[0].FullName
+            $text=Get-Content -Raw $script
+            $text=$text.Replace($oldRepo,$newRepo).Replace($oldHead,$newHead)
+            [IO.File]::WriteAllText($script,$text,[Text.UTF8Encoding]::new($false))
+            "RUN $script" | Add-Content "$env:CI_LOG_DIR/apply.txt"
             python $script 2>&1 | Tee-Object -FilePath "$env:CI_LOG_DIR/apply.txt" -Append
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            if($LASTEXITCODE -ne 0){ exit $LASTEXITCODE }
           }
-
-          # The generated C3 test template historically left one extra blank
-          # line at EOF. Normalize only that file to one final newline; this is
-          # whitespace-only and makes diff-check a real hard gate.
-          python -c "from pathlib import Path; p=Path('tests/unit/test_server_command_timer_e2e.py'); s=p.read_text(encoding='utf-8'); p.write_text(s.rstrip()+'\n', encoding='utf-8')"
-          git diff --check
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          git status --short | Tee-Object -FilePath "$env:CI_LOG_DIR/apply-status.txt"
+          python -c "from pathlib import Path; p=Path('tests/unit/test_server_command_timer_e2e.py'); s=p.read_text(encoding='utf-8'); p.write_text(s.rstrip()+'\n',encoding='utf-8')"
+          git diff --check; if($LASTEXITCODE -ne 0){ exit $LASTEXITCODE }
+          git status --short | Set-Content "$env:CI_LOG_DIR/apply-status.txt"
 
       - name: Install test dependencies
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
           python -m pip install pytest ".[server,openwakeword,faster-whisper]" 2>&1 | Tee-Object -FilePath "$env:CI_LOG_DIR/pip-install.txt"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if($LASTEXITCODE -ne 0){ exit $LASTEXITCODE }
 
       - name: C3 target regressions
         shell: pwsh
         run: |
-          python -m pytest -q -p no:warnings --basetemp="$env:RUNNER_TEMP/pytest-target" --junitxml="$env:CI_LOG_DIR/target.xml" `
-            tests/unit/test_server_command_timer_e2e.py::CloseEventRegistrationEndToEndTests `
-            tests/unit/test_server_command_timer_e2e.py::RecoveryFailClosedEndToEndTests 2>&1 | Tee-Object -FilePath "$env:CI_LOG_DIR/target.txt"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pytest -q -p no:warnings --basetemp="$env:RUNNER_TEMP/pytest-target" --junitxml="$env:CI_LOG_DIR/target.xml" tests/unit/test_server_command_timer_e2e.py::CloseEventRegistrationEndToEndTests tests/unit/test_server_command_timer_e2e.py::RecoveryFailClosedEndToEndTests 2>&1 | Tee-Object -FilePath "$env:CI_LOG_DIR/target.txt"
+          if($LASTEXITCODE -ne 0){ exit $LASTEXITCODE }
 
       - name: AP-SRV-030 focus suite
         shell: pwsh
         run: |
-          python -m pytest -q -p no:warnings --basetemp="$env:RUNNER_TEMP/pytest-focus" --junitxml="$env:CI_LOG_DIR/focus.xml" `
-            tests/unit/test_server_activation_controller.py `
-            tests/unit/test_server_activation_commands.py `
-            tests/unit/test_server_command_timer_e2e.py `
-            tests/unit/test_server_trigger_contract.py `
-            tests/unit/test_server_controlled_e2e.py `
-            tests/unit/test_server_segment_ledger.py 2>&1 | Tee-Object -FilePath "$env:CI_LOG_DIR/focus.txt"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pytest -q -p no:warnings --basetemp="$env:RUNNER_TEMP/pytest-focus" --junitxml="$env:CI_LOG_DIR/focus.xml" tests/unit/test_server_activation_controller.py tests/unit/test_server_activation_commands.py tests/unit/test_server_command_timer_e2e.py tests/unit/test_server_trigger_contract.py tests/unit/test_server_controlled_e2e.py tests/unit/test_server_segment_ledger.py 2>&1 | Tee-Object -FilePath "$env:CI_LOG_DIR/focus.txt"
+          if($LASTEXITCODE -ne 0){ exit $LASTEXITCODE }
 
       - name: AP-SRV-020 regression
         shell: pwsh
         run: |
-          python -m pytest -q -p no:warnings --basetemp="$env:RUNNER_TEMP/pytest-regression" --junitxml="$env:CI_LOG_DIR/regression.xml" `
-            tests/unit/test_server_segment_ledger.py `
-            tests/unit/test_server_controlled_e2e.py 2>&1 | Tee-Object -FilePath "$env:CI_LOG_DIR/regression.txt"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python -m pytest -q -p no:warnings --basetemp="$env:RUNNER_TEMP/pytest-regression" --junitxml="$env:CI_LOG_DIR/regression.xml" tests/unit/test_server_segment_ledger.py tests/unit/test_server_controlled_e2e.py 2>&1 | Tee-Object -FilePath "$env:CI_LOG_DIR/regression.txt"
+          if($LASTEXITCODE -ne 0){ exit $LASTEXITCODE }
 
       - name: Full unit suite
         shell: pwsh
         run: |
-          $pyTemp = "$env:RUNNER_TEMP/py-long-temp"
-          New-Item -ItemType Directory -Force $pyTemp | Out-Null
-          $env:TEMP = $pyTemp
-          $env:TMP = $pyTemp
-          $fullBase = "$env:RUNNER_TEMP/pytest-full"
-          python -m pytest -q --basetemp="$fullBase" --junitxml="$env:CI_LOG_DIR/full.xml" tests/unit 2>&1 | Tee-Object -FilePath "$env:CI_LOG_DIR/full.txt"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:TEMP="$env:RUNNER_TEMP/py-long-temp"; $env:TMP=$env:TEMP; New-Item -ItemType Directory -Force $env:TEMP | Out-Null
+          python -m pytest -q --basetemp="$env:RUNNER_TEMP/pytest-full" --junitxml="$env:CI_LOG_DIR/full.xml" tests/unit 2>&1 | Tee-Object -FilePath "$env:CI_LOG_DIR/full.txt"
+          if($LASTEXITCODE -ne 0){ exit $LASTEXITCODE }
 
       - name: Race and recovery repetition 20x
         shell: pwsh
         run: |
-          $pyTemp = "$env:RUNNER_TEMP/py-long-temp"
-          New-Item -ItemType Directory -Force $pyTemp | Out-Null
-          $env:TEMP = $pyTemp
-          $env:TMP = $pyTemp
+          $env:TEMP="$env:RUNNER_TEMP/py-long-temp"; $env:TMP=$env:TEMP; New-Item -ItemType Directory -Force $env:TEMP | Out-Null
           1..20 | ForEach-Object {
-            $i = $_
-            Write-Host "Race iteration $i / 20"
-            python -m pytest -q -p no:warnings --basetemp="$env:RUNNER_TEMP/pytest-race-$i" `
-              tests/unit/test_server_command_timer_e2e.py::CloseAdmissionRaceEndToEndTests `
-              tests/unit/test_server_command_timer_e2e.py::CloseEventRegistrationEndToEndTests `
-              tests/unit/test_server_command_timer_e2e.py::LedgerCancelTotalOrderTests `
-              tests/unit/test_server_command_timer_e2e.py::LockOrderEndToEndTests `
-              tests/unit/test_server_command_timer_e2e.py::RecoveryIdentityEndToEndTests `
-              tests/unit/test_server_command_timer_e2e.py::RecoveryFailClosedEndToEndTests `
-              tests/unit/test_server_controlled_e2e.py::LifecycleEpochEndToEndTests `
-              tests/unit/test_server_controlled_e2e.py::ControlledRecordingAdmissionTests 2>&1 | Tee-Object -FilePath "$env:CI_LOG_DIR/race-$i.txt"
-            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+            $i=$_; Write-Host "Race iteration $i / 20"
+            python -m pytest -q -p no:warnings --basetemp="$env:RUNNER_TEMP/pytest-race-$i" tests/unit/test_server_command_timer_e2e.py::CloseAdmissionRaceEndToEndTests tests/unit/test_server_command_timer_e2e.py::CloseEventRegistrationEndToEndTests tests/unit/test_server_command_timer_e2e.py::LedgerCancelTotalOrderTests tests/unit/test_server_command_timer_e2e.py::LockOrderEndToEndTests tests/unit/test_server_command_timer_e2e.py::RecoveryIdentityEndToEndTests tests/unit/test_server_command_timer_e2e.py::RecoveryFailClosedEndToEndTests tests/unit/test_server_controlled_e2e.py::LifecycleEpochEndToEndTests tests/unit/test_server_controlled_e2e.py::ControlledRecordingAdmissionTests 2>&1 | Tee-Object -FilePath "$env:CI_LOG_DIR/race-$i.txt"
+            if($LASTEXITCODE -ne 0){ exit $LASTEXITCODE }
           }
 
       - name: Commit exact tested C3 candidate
-        id: c3
         shell: pwsh
         run: |
-          git diff --check
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $expected = @(
-            'api_fastapi_server/server.py',
-            'docs/client-development/03-server-events-kurzreferenz.md',
-            'docs/einheitliche-triggerarchitektur.md',
-            'tests/unit/test_server_command_timer_e2e.py'
-          ) | Sort-Object
-          $actual = @(git diff --name-only) | Sort-Object
-          if ((Compare-Object $expected $actual).Count -ne 0) {
-            "Expected:" | Tee-Object -FilePath "$env:CI_LOG_DIR/unexpected-status.txt"
-            $expected | Tee-Object -FilePath "$env:CI_LOG_DIR/unexpected-status.txt" -Append
-            "Actual:" | Tee-Object -FilePath "$env:CI_LOG_DIR/unexpected-status.txt" -Append
-            $actual | Tee-Object -FilePath "$env:CI_LOG_DIR/unexpected-status.txt" -Append
-            throw 'Unexpected C3 file set before commit'
-          }
+          git diff --check; if($LASTEXITCODE -ne 0){ exit $LASTEXITCODE }
+          $expected=@('api_fastapi_server/server.py','docs/client-development/03-server-events-kurzreferenz.md','docs/einheitliche-triggerarchitektur.md','tests/unit/test_server_command_timer_e2e.py') | Sort-Object
+          $actual=@(git diff --name-only) | Sort-Object
+          if((Compare-Object $expected $actual).Count -ne 0){ throw "Unexpected C3 file set: $($actual -join ', ')" }
           git add -- $expected
-          git diff --cached --check
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          git diff --cached --check; if($LASTEXITCODE -ne 0){ exit $LASTEXITCODE }
           git commit -m "fix(trigger): complete AP-SRV-030 close terminalization"
-          $sha = (git rev-parse HEAD).Trim()
-          $tree = (git rev-parse 'HEAD^{tree}').Trim()
-          "C3 SHA: $sha" | Tee-Object -FilePath "$env:CI_LOG_DIR/c3-result.txt"
-          "C3 Tree: $tree" | Tee-Object -FilePath "$env:CI_LOG_DIR/c3-result.txt" -Append
-          "sha=$sha" >> $env:GITHUB_OUTPUT
-          "tree=$tree" >> $env:GITHUB_OUTPUT
-          git diff --check db3d2b49539afbf4812d90e13f26f099b9314fe9..HEAD
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $dirty = @(git status --porcelain)
-          if ($dirty.Count -ne 0) { throw "Candidate worktree is not clean after commit: $($dirty -join '; ')" }
+          $sha=(git rev-parse HEAD).Trim(); $tree=(git rev-parse 'HEAD^{tree}').Trim()
+          "C3 SHA: $sha`nC3 Tree: $tree" | Set-Content "$env:CI_LOG_DIR/c3-result.txt"
+          git diff --check db3d2b49539afbf4812d90e13f26f099b9314fe9..HEAD; if($LASTEXITCODE -ne 0){ exit $LASTEXITCODE }
+          if(@(git status --porcelain).Count -ne 0){ throw 'Candidate worktree not clean after commit' }
 
       - name: Upload validation evidence
         if: always()
