@@ -30,7 +30,7 @@ relevant.
 | `POST` | `/api/config/reload` | Admin | persistierte Runtime-Konfiguration neu anwenden |
 | `GET` | `/api/v2/settings/schema` | keine | öffentliches Settingsschema der Control-Plane |
 | `GET` | `/api/v2/settings/server` | keine | nicht geheime Serverwerte + Serverrevision |
-| `PATCH` | `/api/v2/settings/server` | Admin | Serverdefaults atomar ändern (optimistische Concurrency) |
+| `PATCH` | `/api/v2/settings/server` | Admin | Serverdefaults atomar ändern (optimistische Concurrency; Persistenzfehler = 500 `internal_error`) |
 | `GET` | `/v1/models` | OpenAI-Key* | geladene Modelle/Aliasse |
 | `POST` | `/v1/audio/transcriptions` | OpenAI-Key* | abgeschlossene Audiodatei transkribieren |
 | `WS` | `/ws/transcribe` | keine im Handler | kontinuierliches Live-Audio |

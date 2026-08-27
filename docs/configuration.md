@@ -200,4 +200,9 @@ Die öffentliche Verwaltung läuft über `GET/PATCH /api/v2/settings/server`
 (`PATCH` admin-geschützt, optimistische Concurrency) und das Schema über
 `GET /api/v2/settings/schema`. Sessionseitig wird der Wert pro Activation
 gelatcht: eine laufende Activation behält ihren Timingsnapshot, die nächste
-verwendet den neuen Wert real.
+verwendet den neuen Wert real. `session.snapshot` veröffentlicht zusätzlich zu
+`effectiveSettings` das additive Feld `requestedSettings`, damit
+Requested/Effective-Unterschiede (`next_activation`/`next_session`) nach einem
+Resync vollständig unterscheidbar sind. Persistierte Control-Daten werden beim
+Startup streng validiert; ein Persistenzfehler eines Serverportches lässt RAM
+und Revision unverändert und wird als `internal_error` (HTTP 500) gemeldet.

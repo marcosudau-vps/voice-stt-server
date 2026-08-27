@@ -324,8 +324,12 @@ The v2 settings surface is additive and coexists with all existing endpoints:
 
 The v1 config/runtime endpoints keep their semantics (legacy removal is
 AP-SRV-070). Errors reuse the frozen wire codes (`settings_revision_conflict`,
-`settings_rejected`) with deterministic `field`/`code`/`message` entries. No
-secret value is ever returned.
+`settings_rejected`) with deterministic `field`/`code`/`message` entries. A
+persistence failure of a server patch returns HTTP 500 with
+`result: internal_error` and code `persistence_failed`, leaving RAM and
+settings revision unchanged. No secret value is ever returned. On the v2 wire,
+`session.snapshot` additionally carries additive `requestedSettings` next to
+`effectiveSettings` and `settingsRevision`.
 
 ## Known Usage Patterns
 

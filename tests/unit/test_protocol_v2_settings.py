@@ -28,7 +28,29 @@ from tests.unit.test_server_controlled_e2e import (
     build_app,
     speech_packet,
 )
-from tests.unit.test_protocol_v2_e2e import V2Session
+from tests.unit.test_protocol_v2_e2e import V2Session, hello_message
+
+
+class FakeWakeRegistry:
+    """A minimal in-memory wake catalog for admission-based C2 tests."""
+
+    def resolve_openwakeword(self, model_ids, configured_paths=None,
+                             framework="onnx"):
+        if model_ids:
+            return [
+                {"id": identifier, "path": f"/fake/{identifier}"}
+                for identifier in model_ids
+            ], []
+        return [], []
+
+    def openwakeword_models(self, configured_paths=None, framework="onnx"):
+        return [{
+            "id": "hey_jarvis", "label": "Hey Jarvis",
+            "availableFormats": ["onnx"], "default": True,
+        }]
+
+    def default_openwakeword(self, configured_paths=None, framework="onnx"):
+        return ({"id": "hey_jarvis", "path": "/fake/hey_jarvis"}, [])
 
 
 def _patch_payload(base, changes):
@@ -154,6 +176,8 @@ class SessionSettingsPatchWireTests(unittest.TestCase):
                 )
 
     def test_multi_policy_patch_groups_deterministically(self):
+        # fail-closed wake selection needs a catalog for the next_session key
+        self.app.state.voicestt_service.wakeword_registry = FakeWakeRegistry()
         with TestClient(self.app) as client:
             with V2Session(client) as session:
                 snapshot = session.snapshot()
@@ -910,6 +934,372 @@ class RestSettingsV2Tests(unittest.TestCase):
                 8000,
             )
             self.assert_no_secrets(server)
+
+
+@unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
+class AtomicAdmissionTests(unittest.TestCase):
+    """F3 - one atomic settings/timing bundle per activation admission."""
+
+    def setUp(self):
+        GateAwareRecorder.instances = []
+        self.app = build_app()
+
+    def _to_followup(self, session, server_session):
+        session.send_bytes(speech_packet())
+        session.event(schema.EVENT_SEGMENT_RECORDING_STARTED)
+        session.recorder().flush_buffered_audio()
+        session.event(schema.EVENT_SEGMENT_RECORDING_ENDED)
+        snap = server_session.activation_controller().snapshot()
+        self.assertEqual(snap["phase"], activation_module.FOLLOWUP_WAIT)
+        return snap
+
+    def test_admission_inputs_use_only_the_atomic_bundle_seam(self):
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                server_session = session.server_session(self.app)
+                state = server_session.settings_state
+
+                def boom(*args, **kwargs):
+                    raise AssertionError("a second settings read was used")
+
+                state.activation_timings_seconds = boom
+                server_session.settings_effective_for_wire = boom
+
+                def stub_bundle():
+                    return sc.ActivationAdmissionSettings(
+                        settings_revision=1,
+                        effective_settings={
+                            sc.ACTIVATION_FOLLOWUP: 4000,
+                            sc.ACTIVATION_INITIAL_SPEECH: 15000,
+                            "wakeWord.selection": [],
+                            "wakeWord.sensitivity": 0.5,
+                            "runtimeSuppression.manual": False,
+                            "runtimeSuppression.wakeWord": False,
+                        },
+                        timing_seconds={
+                            sc.ACTIVATION_FOLLOWUP: 4.0,
+                            sc.ACTIVATION_INITIAL_SPEECH: 15.0,
+                        },
+                    )
+
+                state.activation_admission_settings = stub_bundle
+                wire_settings, policy = server_session._new_activation_inputs()
+                self.assertEqual(
+                    wire_settings[sc.ACTIVATION_FOLLOWUP], 4000
+                )
+                self.assertEqual(policy.followup_timeout, 4.0)
+                self.assertEqual(policy.initial_speech_timeout, 15.0)
+
+    def test_manual_admission_effective_timing_and_real_deadline_are_same_revision(self):
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                server_session = session.server_session(self.app)
+                sent = session.command(_patch_payload(
+                    0, {sc.ACTIVATION_FOLLOWUP: 4000}
+                ))
+                ack = session.ack(sent["commandId"])
+                self.assertTrue(ack["accepted"])
+                session.event(schema.EVENT_SETTINGS_CHANGED)
+
+                _command_id, ack_a = session.activate()
+                started = session.event(schema.EVENT_ACTIVATION_STARTED)
+                # the wire effective settings of the admission
+                self.assertEqual(
+                    started["effectiveSettings"][sc.ACTIVATION_FOLLOWUP], 4000
+                )
+                snap = self._to_followup(session, server_session)
+                # the real follow-up deadline was built from the SAME value
+                self.assertEqual(snap["deadlineKind"], "followup")
+                self.assertAlmostEqual(
+                    snap["deadline"] - time.monotonic(), 4.0, delta=0.9
+                )
+
+    def test_wake_admission_effective_timing_and_real_deadline_are_same_revision(self):
+        app = build_app()
+        GateAwareRecorder.instances = []
+        service = app.state.voicestt_service
+        service.wakeword_registry = FakeWakeRegistry()
+        with TestClient(app) as client:
+            with V2Session(
+                client,
+                hello=hello_message(
+                    manual=True, wake_word=True,
+                    wake_word_ids=("hey_jarvis",),
+                ),
+            ) as session:
+                server_session = session.server_session(app)
+                sent = session.command(_patch_payload(
+                    0, {sc.ACTIVATION_FOLLOWUP: 4000}
+                ))
+                session.ack(sent["commandId"])
+                session.event(schema.EVENT_SETTINGS_CHANGED)
+
+                session.recorder().simulate_wake_word()
+                started = session.event(schema.EVENT_ACTIVATION_STARTED)
+                self.assertEqual(started["primarySource"], "wake_word")
+                self.assertEqual(
+                    started["effectiveSettings"][sc.ACTIVATION_FOLLOWUP], 4000
+                )
+                snap = self._to_followup(session, server_session)
+                self.assertEqual(snap["deadlineKind"], "followup")
+                self.assertAlmostEqual(
+                    snap["deadline"] - time.monotonic(), 4.0, delta=0.9
+                )
+
+    def test_patch_between_admissions_changes_only_the_next_bundle(self):
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                server_session = session.server_session(self.app)
+                _cid, ack_a = session.activate()
+                started_a = session.event(schema.EVENT_ACTIVATION_STARTED)
+                self.assertEqual(
+                    started_a["effectiveSettings"][sc.ACTIVATION_FOLLOWUP],
+                    3000,
+                )
+                # A's armed timer, captured before the patch
+                deadline_a = server_session.activation_controller().snapshot()[
+                    "deadline"
+                ]
+
+                # patch while A is open
+                sent = session.command(_patch_payload(
+                    0, {sc.ACTIVATION_FOLLOWUP: 8000}
+                ))
+                session.ack(sent["commandId"])
+                session.event(schema.EVENT_SETTINGS_CHANGED)
+
+                # A itself keeps its latched value AND its real timer unchanged
+                self.assertEqual(
+                    server_session.settings_effective_for_wire()[
+                        sc.ACTIVATION_FOLLOWUP
+                    ],
+                    3000,
+                )
+                self.assertEqual(
+                    server_session.activation_controller().snapshot()["deadline"],
+                    deadline_a,
+                )
+
+                finish = session.command({
+                    "type": schema.ACTIVATION_COMMAND,
+                    "action": schema.FINISH,
+                    "activationId": ack_a["activationId"],
+                })
+                session.ack(finish["commandId"])
+                session.event(schema.EVENT_ACTIVATION_INPUT_CLOSED)
+
+                _cid, ack_b = session.activate()
+                started_b = session.event(schema.EVENT_ACTIVATION_STARTED)
+                self.assertEqual(
+                    started_b["effectiveSettings"][sc.ACTIVATION_FOLLOWUP],
+                    8000,
+                )
+                # B latches the new timing really
+                self._to_followup(session, server_session)
+                snap_b = server_session.activation_controller().snapshot()
+                self.assertEqual(snap_b["deadlineKind"], "followup")
+                self.assertAlmostEqual(
+                    snap_b["deadline"] - time.monotonic(), 8.0, delta=0.9
+                )
+
+
+@unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
+class RequestedSettingsWireTests(unittest.TestCase):
+    """F6 - session.snapshot exposes requested/effective differences additively."""
+
+    def setUp(self):
+        GateAwareRecorder.instances = []
+        self.app = build_app()
+
+    def test_snapshot_exposes_requested_settings(self):
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                snapshot = session.snapshot()
+                self.assertIn("requestedSettings", snapshot)
+                self.assertIn("effectiveSettings", snapshot)
+                self.assertEqual(
+                    set(snapshot["requestedSettings"]),
+                    set(snapshot["effectiveSettings"]),
+                )
+
+    def test_initial_requested_and_effective_settings_match(self):
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                snapshot = session.snapshot()
+                requested = snapshot["requestedSettings"]
+                effective = snapshot["effectiveSettings"]
+                for key in (sc.ACTIVATION_FOLLOWUP,
+                            sc.ACTIVATION_WATCHDOG_INITIAL,
+                            sc.WAKE_WORD_SELECTION):
+                    self.assertEqual(requested[key], effective[key])
+
+    def test_next_activation_patch_during_open_activation_shows_requested_new_effective_old(self):
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                _cid, _ack = session.activate()
+                session.event(schema.EVENT_ACTIVATION_STARTED)
+                sent = session.command(_patch_payload(
+                    0, {sc.ACTIVATION_FOLLOWUP: 8000}
+                ))
+                session.ack(sent["commandId"])
+                session.event(schema.EVENT_SETTINGS_CHANGED)
+                snapshot = session.snapshot()
+                self.assertEqual(
+                    snapshot["requestedSettings"][sc.ACTIVATION_FOLLOWUP], 8000
+                )
+                self.assertEqual(
+                    snapshot["effectiveSettings"][sc.ACTIVATION_FOLLOWUP], 3000
+                )
+
+    def test_next_activation_after_close_uses_new_requested_and_effective(self):
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                sent = session.command(_patch_payload(
+                    0, {sc.ACTIVATION_FOLLOWUP: 8000}
+                ))
+                session.ack(sent["commandId"])
+                session.event(schema.EVENT_SETTINGS_CHANGED)
+                snapshot = session.snapshot()
+                self.assertEqual(
+                    snapshot["requestedSettings"][sc.ACTIVATION_FOLLOWUP], 8000
+                )
+                self.assertEqual(
+                    snapshot["effectiveSettings"][sc.ACTIVATION_FOLLOWUP], 8000
+                )
+
+    def test_next_session_patch_shows_requested_new_effective_current_session_value(self):
+        self.app.state.voicestt_service.wakeword_registry = FakeWakeRegistry()
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                sent = session.command(_patch_payload(
+                    0, {sc.WAKE_WORD_SELECTION: ["hey_jarvis"]}
+                ))
+                ack = session.ack(sent["commandId"])
+                self.assertTrue(ack["accepted"])
+                session.event(schema.EVENT_SETTINGS_CHANGED)
+                snapshot = session.snapshot()
+                self.assertEqual(
+                    snapshot["requestedSettings"][sc.WAKE_WORD_SELECTION],
+                    ["hey_jarvis"],
+                )
+                # effectiveValue stays the current session selection
+                self.assertEqual(
+                    snapshot["effectiveSettings"][sc.WAKE_WORD_SELECTION], []
+                )
+
+    def test_snapshot_request_resync_preserves_requested_effective_difference(self):
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                _cid, _ack = session.activate()
+                session.event(schema.EVENT_ACTIVATION_STARTED)
+                sent = session.command(_patch_payload(
+                    0, {sc.ACTIVATION_FOLLOWUP: 8000}
+                ))
+                session.ack(sent["commandId"])
+                session.event(schema.EVENT_SETTINGS_CHANGED)
+                first = session.snapshot()
+                second = session.snapshot()
+                self.assertEqual(
+                    first["requestedSettings"], second["requestedSettings"]
+                )
+                self.assertEqual(
+                    first["effectiveSettings"], second["effectiveSettings"]
+                )
+                self.assertEqual(
+                    first["requestedSettings"][sc.ACTIVATION_FOLLOWUP], 8000
+                )
+                self.assertEqual(
+                    first["effectiveSettings"][sc.ACTIVATION_FOLLOWUP], 3000
+                )
+
+    def test_runtime_suppression_requested_and_effective_follow_live_authority(self):
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                sent = session.command({
+                    "type": schema.TRIGGER_SUPPRESSION_SET,
+                    "manual": True,
+                    "wakeWord": False,
+                })
+                session.ack(sent["commandId"])
+                snapshot = session.snapshot()
+                self.assertTrue(
+                    snapshot["requestedSettings"][
+                        sc.RUNTIME_SUPPRESSION_MANUAL
+                    ]
+                )
+                self.assertTrue(
+                    snapshot["effectiveSettings"][
+                        sc.RUNTIME_SUPPRESSION_MANUAL
+                    ]
+                )
+                self.assertFalse(
+                    snapshot["requestedSettings"][
+                        sc.RUNTIME_SUPPRESSION_WAKE_WORD
+                    ]
+                )
+
+    def test_requested_settings_read_does_not_bump_state_or_settings_revision(self):
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                first = session.snapshot()
+                second = session.snapshot()
+                third = session.snapshot()
+                self.assertEqual(first["stateVersion"],
+                                 second["stateVersion"])
+                self.assertEqual(second["stateVersion"],
+                                 third["stateVersion"])
+                self.assertEqual(first["settingsRevision"],
+                                 second["settingsRevision"])
+
+
+@unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
+class PersistenceFailureRestTests(unittest.TestCase):
+    """F5 - persistent server patch failure surfaces as a clean 500."""
+
+    def setUp(self):
+        GateAwareRecorder.instances = []
+        self.app = build_admin_app()
+
+    def test_rest_server_patch_persistence_failure_returns_500_internal_error(self):
+        service = self.app.state.voicestt_service
+
+        def boom(overlay, revision):
+            raise OSError("disk full")
+
+        service.config_store.save_settings_control = boom
+        with TestClient(self.app) as client:
+            response = client.patch(
+                "/api/v2/settings/server",
+                json={"baseSettingsRevision": 0,
+                      "changes": {sc.ACTIVATION_FOLLOWUP: 8000}},
+                headers={"x-admin-key": "test-admin-secret"},
+            )
+            self.assertEqual(response.status_code, 500)
+            payload = response.json()
+            self.assertEqual(payload["result"], "internal_error")
+            self.assertFalse(payload["accepted"])
+            codes = {entry["code"] for entry in payload["errors"]}
+            self.assertIn("persistence_failed", codes)
+            # machine readable, non-secret, no exception details
+            self.assertNotIn("disk full", response.text)
+            self.assertNotIn("test-admin-secret", response.text)
+
+    def test_rest_persistence_failure_does_not_advance_settings_revision(self):
+        service = self.app.state.voicestt_service
+
+        def boom(overlay, revision):
+            raise OSError("disk full")
+
+        service.config_store.save_settings_control = boom
+        with TestClient(self.app) as client:
+            client.patch(
+                "/api/v2/settings/server",
+                json={"baseSettingsRevision": 0,
+                      "changes": {sc.ACTIVATION_FOLLOWUP: 8000}},
+                headers={"x-admin-key": "test-admin-secret"},
+            )
+            server = client.get("/api/v2/settings/server")
+            self.assertEqual(server.json()["settingsRevision"], 0)
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -48,6 +48,14 @@ class SettingsPort:
         """The flat, latch-consistent effective settings of this session."""
         return self._session.settings_effective_for_wire()
 
+    def requested_settings(self):
+        """The requested settings of this session (additive snapshot field).
+
+        Reads exclusively from the session settings authority; the port stores
+        nothing (AP-SRV-050 C2 F6).
+        """
+        return self._session.settings_requested_for_wire()
+
     def patch(self, base_revision, changes):
         """Binds ``session_settings.patch`` to the session settings control.
 

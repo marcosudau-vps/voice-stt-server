@@ -3263,11 +3263,14 @@ class RecorderBackedRealtimeSession:
         )
 
     def _validate_wake_selection_key(self, key, value):
-        """Session-aware ``wakeWord.selection`` rules (AP-SRV-050 prompt 7.3).
+        """Session-aware ``wakeWord.selection`` rules (AP-SRV-050 C2 F2).
 
         Only the selection key is touched here; everything else is left to the
-        registry. The wake catalog stays a validation input - the selected-only
-        initialisation and detection are AP-SRV-060.
+        registry. Validation is **fail-closed**: a non-empty selection must
+        always be checked against the catalog, an empty available-catalog set
+        makes every requested id unavailable, and a catalog lookup failure
+        rejects the whole field. The wake catalog stays a validation input -
+        the selected-only initialisation and detection are AP-SRV-060.
         """
         if key != settings_control_module.WAKE_WORD_SELECTION:
             return []
@@ -3282,25 +3285,35 @@ class RecorderBackedRealtimeSession:
                     "die Auswahl nicht leer sein."
                 ),
             ))
+        if not selection:
+            return errors
         from .protocol_v2 import ports as v2_ports
 
-        available = []
         try:
-            available = v2_ports.WakeWordPort(self.service).available_ids()
-        except Exception:  # noqa: BLE001 - the catalog is best effort here
-            available = []
-        if available:
-            unknown = sorted(set(selection) - set(available))
-            if unknown:
-                errors.append(settings_control_module.FieldError(
-                    field=key,
-                    code=settings_control_module.CODE_WAKE_WORD_UNAVAILABLE,
-                    message=(
-                        "Unbekannte Wake-Word-IDs: "
-                        + ", ".join(unknown)
-                        + "."
-                    ),
-                ))
+            available_ids = set(
+                v2_ports.WakeWordPort(self.service).available_ids()
+            )
+        except Exception:  # noqa: BLE001 - fail closed, never an exception leak
+            errors.append(settings_control_module.FieldError(
+                field=key,
+                code=settings_control_module.CODE_WAKE_WORD_UNAVAILABLE,
+                message=(
+                    "Der Wake-Word-Katalog ist momentan nicht verfügbar; "
+                    "die Auswahl kann nicht geprüft werden."
+                ),
+            ))
+            return errors
+        unknown = sorted(set(selection) - available_ids)
+        if unknown:
+            errors.append(settings_control_module.FieldError(
+                field=key,
+                code=settings_control_module.CODE_WAKE_WORD_UNAVAILABLE,
+                message=(
+                    "Unbekannte Wake-Word-IDs: "
+                    + ", ".join(unknown)
+                    + "."
+                ),
+            ))
         return errors
 
     def apply_settings_patch(self, base_revision, changes):
@@ -3358,16 +3371,66 @@ class RecorderBackedRealtimeSession:
             )
         return result
 
+    def settings_requested_for_wire(self):
+        """The additive ``requestedSettings`` snapshot projection.
+
+        Requested values come from the session settings authority
+        (``SessionSettingsState.requested_values()``) filtered to
+        server-managed session keys; runtime suppression keeps its live
+        controller authority and is read live (AP-SRV-050 C2 F6). Reads never
+        mutate a revision or the state version.
+        """
+        result = {
+            key: value
+            for key, value in self.settings_state.requested_values().items()
+            if key in self.settings_state.registry.session_keys()
+        }
+        controller = self._activation
+        if controller is not None:
+            try:
+                suppressed = (
+                    (controller.trigger_state() or {}).get("suppressed") or {}
+                )
+            except Exception:  # noqa: BLE001 - defensive projection
+                suppressed = {}
+            result[settings_control_module.RUNTIME_SUPPRESSION_MANUAL] = bool(
+                suppressed.get("manual")
+            )
+            result[settings_control_module.RUNTIME_SUPPRESSION_WAKE_WORD] = bool(
+                suppressed.get("wakeWord")
+            )
+        return result
+
     def _new_activation_inputs(self):
         """``(wire_settings, timing_policy)`` for one activation admission.
 
-        v2 sessions resolve both from the AP-SRV-050 session settings state,
-        so the next activation latches the real timing values and the flat wire
-        projection. v1/v2-legacy callers keep the nested legacy view and the
-        controller constructor defaults.
+        v2 sessions resolve both from the **one** atomic admission bundle
+        (:meth:`SessionSettingsState.activation_admission_settings`): the wire
+        effective settings and the six timing values come from exactly the same
+        settings revision, so an admission can never publish a value that the
+        controller would not really use (AP-SRV-050 C2 F3). Runtime suppression
+        keeps its own live authority and is overlaid after the bundle. Legacy
+        (v1) callers keep the nested legacy view and the controller defaults.
         """
         if self.canonical_ids:
-            timings = self.settings_state.activation_timings_seconds()
+            bundle = self.settings_state.activation_admission_settings()
+            wire_settings = dict(bundle.effective_settings)
+            controller = self._activation
+            if controller is not None:
+                try:
+                    suppressed = (
+                        (controller.trigger_state() or {}).get("suppressed")
+                        or {}
+                    )
+                except Exception:  # noqa: BLE001 - defensive projection
+                    suppressed = {}
+                wire_settings[
+                    settings_control_module.RUNTIME_SUPPRESSION_MANUAL
+                ] = bool(suppressed.get("manual"))
+                wire_settings[
+                    settings_control_module.RUNTIME_SUPPRESSION_WAKE_WORD
+                ] = bool(suppressed.get("wakeWord"))
+            timings = bundle.timing_seconds
             policy = ActivationTimingPolicy(
                 initial_speech_timeout=timings.get(
                     settings_control_module.ACTIVATION_INITIAL_SPEECH,
@@ -3394,7 +3457,7 @@ class RecorderBackedRealtimeSession:
                     DEFAULT_CLOSING_RECOVERY_TIMEOUT,
                 ),
             )
-            return self.settings_effective_for_wire(), policy
+            return wire_settings, policy
         return self._effective_activation_settings(), None
 
     # -- activation control -------------------------------------------------
@@ -7930,7 +7993,9 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             payload.get("changes"),
         )
         status = 409 if result.result == "settings_revision_conflict" else (
-            422 if result.result == "settings_rejected" else 200
+            500 if result.result == "internal_error" else (
+                422 if result.result == "settings_rejected" else 200
+            )
         )
         return JSONResponse(result.to_dict(), status_code=status)
 

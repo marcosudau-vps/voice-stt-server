@@ -1,11 +1,13 @@
 # AP-SRV-050 – Umsetzungsvergleich (Soll/Ist)
 
 **Datum:** 2026-08-27
-**Geprüfter Stand:** Branch `review/AP-SRV-050/run-01`, C1-Commit
+**Geprüfter Stand:** Branch `review/AP-SRV-050/run-01`, **Stand C2**
+(Implementierung C1 `489ac23a` + Root-Korrektur C2)
 **Basis:** `c0806e5bc5d503580070f2dacc88831d51447938`
 
-Prüfgegenstand ist der veröffentlichte C1-Stand gegen jeden wesentlichen Punkt
-des Auftrags. Statuswerte: ✅ vollständig, 🟡 teilweise, ⛔ nicht umgesetzt.
+Prüfgegenstand ist der veröffentlichte Stand (C1+C2) gegen jeden wesentlichen
+Punkt des Auftrags inklusive der sechs Root-Findings der C2-Korrektur.
+Statuswerte: ✅ vollständig, 🟡 teilweise, ⛔ nicht umgesetzt.
 
 | # | Requirement (Prompt) | Status | Nachweis (Code/Test) | Abweichung |
 |---|---|---|---|---|
@@ -34,7 +36,7 @@ des Auftrags. Statuswerte: ✅ vollständig, 🟡 teilweise, ⛔ nicht umgesetzt
 | 16 | settings.changed über AP-040-Dispatch-Seam | ✅ | `_dispatch_events(produce)` | – |
 | 17 | Command-Replay unverändert; identisches Ack; kein zweites Event; command_id_conflict | ✅ | Wire-Tests | – |
 | 18 | REST `/api/v2/settings/schema` + `/server` + PATCH | ✅ | `server.py` Endpunkte; REST-Tests | – |
-| 18 | vorhandener Wake-Endpunkt bleibt | ✅ | `GET /api/wake-word` bleibt; kein neuer Katalogendpunkt | Siehe Abweichungsnotiz |
+| 18 | vorhandener Wake-Endpunkt bleibt | ✅ | `GET /api/wake-word` bleibt; kein neuer Katalogendpunkt | Root-entschiedene Paketzuordnung: `GET /api/v2/wake-words` = AP-SRV-060 (SET-13b). Siehe Abweichungsnotiz |
 | 19 | Bestehender Admin-Guard; X-Admin-Key als Alias; öffentliche Reads; nie Secrets | ✅ | `admin_auth_error`; REST-/Secret-Leak-Tests | – |
 | 20 | Server-PATCH: 409 conflict, atomic reject, Erfolg persistiert, no_change kein Bump | ✅ | REST-Tests + Persistenz-Tests | – |
 | 21/53 | Neue Session: Serverdefault + Session-Overrides; bestehende Sessions nicht rückwirkend | ✅ | Admission-Seeding; Domain-Test | – |
@@ -67,15 +69,32 @@ des Auftrags. Statuswerte: ✅ vollständig, 🟡 teilweise, ⛔ nicht umgesetzt
 | 55–58 | Testbefehle und Ergebnisse | ✅ | REPORT + Evidence | – |
 | 59/61/64 | diff check, Worktree, genau ein C1-Commit, Parent exakt, kein Push | ✅ | Abschlussprüfung | – |
 
+## C2 – sechs Root-Findings (Stand C2)
+
+| Finding | Status | Nachweis (Code/Test) | Abweichung |
+|---|---|---|---|
+| F1 sequential cross-field bypass geschlossen | ✅ | `validate_timing_bundle` (`WATCHDOG_CROSS_FIELD_KEYS`); `TestSequentialCrossFieldBypass` | – |
+| F2 Wake-Auswahl fail-closed (leeres Catalog-Set, Katalog-Exception) | ✅ | `_validate_wake_selection_key`; `TestWakeSelectionFailClosed` | – |
+| F3 eine atomare Admission-Seam (effective+timmings aus einer Revision) | ✅ | `activation_admission_settings()` + `_new_activation_inputs()`; `AtomicAdmissionTests` + Race 20× | – |
+| F4 persisted Control beim Startup strikt validiert (fail fast) | ✅ | `ServerSettingsState.__init__` + `load_control()`; `TestStartupPersistenceValidation` | – |
+| F5 prepare→persist→commit; Persistenzfehler ohne RAM-/Revisions-Mutation; HTTP 500 | ✅ | `patch_server`; `TestServerSettingsCommitOnFailure`; REST 500-Tests | – |
+| F6 `session.snapshot.requestedSettings` additiv; SettingsPort Adapter | ✅ | `snapshot.py` + `settings_requested_for_wire()`; `RequestedSettingsWireTests` | – |
+
 ## Abweichungsnotizen
 
 1. **Wake-Endpunkt (Punkt 18).** Der Frozen Contract nennt `GET /api/v2/
    wake-words`. Die kanonische Basis besitzt stattdessen `GET /api/wake-word`
-   (Admin-guarded, v1-Pfad). AP-SRV-050 lässt den vorhandenen Endpunkt
-   funktional bestehen und führt **keinen** neuen `v2`-Katalogendpunkt ein; der
-   vollständige Wake-Katalog-/Admission-Vertrag ist explizit AP-SRV-060.
-   Dadurch bleibt die „keine AP-060-/070-Implementierung vorziehen“-Grenze
-   gewahrt. Bewusste Entscheidung, dokumentierte Abweichung ohne Produktbug.
+   (Admin-guarded, v1-Pfad). Nach dem Root-Review gilt die **Root-entschiedene
+   Paketzuordnung**:
+
+   ```text
+   SET-13a: /api/v2/settings/schema, /server, PATCH -> AP-SRV-050
+   SET-13b: /api/v2/wake-words                       -> AP-SRV-060
+   ```
+
+   `GET /api/v2/wake-words` wird in AP-SRV-050/C2 nicht implementiert
+   (`ROOT_TRACKING_ACTION_REQUIRED`: SET-13 später in SET-13a/SRV-050 und
+   SET-13b/SRV-060 aufteilen).
 2. **Fokus-Befehl Umgebungsmitigation.** `python -m pytest` läuft auf dieser
    Maschine wegen eines blockierenden WMI-Zugriffs im torch-Import nur mit
    einem out-of-tree `sitecustomize`-Mitigationspfad. Testbefehle und

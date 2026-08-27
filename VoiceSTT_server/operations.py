@@ -418,21 +418,51 @@ class RuntimeConfigStore:
         return self._write_merged(fields)
 
     def load_control(self):
-        """``(overlay, revision)`` of the persisted settings control plane."""
+        """``(overlay, revision)`` of the persisted settings control plane.
+
+        AP-SRV-050 C2 F4: a *present but invalid* section fails fast instead of
+        being silently normalized. Missing sections are the only case that
+        defaults to ``({}, 0)``.
+        """
         if self.path is None or not self.path.is_file():
             return {}, 0
         try:
-            payload = json.loads(self.path.read_text(encoding="utf-8", errors="replace"))
+            payload = json.loads(
+                self.path.read_text(encoding="utf-8", errors="replace")
+            )
         except (OSError, ValueError):
-            return {}, 0
+            raise ValueError(
+                "Invalid settingsControlOverlay: Die Laufzeitkonfiguration "
+                "ist kein lesbares JSON."
+            )
         if not isinstance(payload, dict):
-            return {}, 0
-        overlay = payload.get(self.OVERLAY_FIELD)
-        overlay = dict(overlay) if isinstance(overlay, dict) else {}
-        revision = payload.get(self.REVISION_FIELD, 0)
-        if isinstance(revision, bool) or not isinstance(revision, int):
+            raise ValueError(
+                "Invalid settingsControlOverlay: Die Laufzeitkonfiguration "
+                "ist kein Objekt."
+            )
+        if self.OVERLAY_FIELD in payload:
+            overlay = payload[self.OVERLAY_FIELD]
+            if not isinstance(overlay, dict):
+                raise ValueError(
+                    "Invalid settingsControlOverlay: muss ein Objekt sein."
+                )
+        else:
+            overlay = {}
+        if self.REVISION_FIELD in payload:
+            revision = payload[self.REVISION_FIELD]
+            if isinstance(revision, bool) or not isinstance(revision, int):
+                raise ValueError(
+                    "Invalid settingsControlOverlay: settingsRevision muss "
+                    "eine nicht negative Ganzzahl sein."
+                )
+            if revision < 0:
+                raise ValueError(
+                    "Invalid settingsControlOverlay: settingsRevision darf "
+                    "nicht negativ sein."
+                )
+        else:
             revision = 0
-        return overlay, revision if revision >= 0 else 0
+        return overlay, revision
 
     def _write_merged(self, new_fields):
         """Read-modify-write the whole document under the shared lock."""
@@ -442,17 +472,26 @@ class RuntimeConfigStore:
         temporary = self.path.with_name(
             f".{self.path.name}.{uuid.uuid4().hex}.tmp"
         )
-        with self._lock:
-            # The read happens *inside* the shared lock, so two read-modify-
-            # write transactions cannot both start from the same stale payload.
-            payload = self._read_payload()
-            payload.update(dict(new_fields))
-            temporary.write_text(
-                json.dumps(payload, indent=2, ensure_ascii=False),
-                encoding="utf-8",
-            )
-            os.replace(temporary, self.path)
-        return str(self.path.resolve())
+        try:
+            with self._lock:
+                # The read happens *inside* the shared lock, so two read-modify-
+                # write transactions cannot both start from the same stale payload.
+                payload = self._read_payload()
+                payload.update(dict(new_fields))
+                temporary.write_text(
+                    json.dumps(payload, indent=2, ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                os.replace(temporary, self.path)
+            return str(self.path.resolve())
+        except Exception:
+            # A failed write/replace leaves the original file untouched and
+            # removes the temporary file (AP-SRV-050 C2 F5).
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
 
     def _read_payload(self):
         if self.path is None or not self.path.is_file():

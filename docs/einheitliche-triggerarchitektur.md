@@ -1201,6 +1201,13 @@ Initial-Speech-, Follow-up-, Segment-Watchdog- (initial/refresh/warning) und
 gebaut. `next_session`-Werte werden erst mit einer neuen Session wirksam;
 `server_restart` bleibt als Policy repräsentierbar (kein künstlicher Key).
 
+Efficiency/Effective/Timing einer Admission werden als **ein** atomares
+Settings-Bundle
+(`SessionSettingsState.activation_admission_settings()`) gelesen, sodass
+effektive Settings und reale Timerwerte einer Admission immer derselben
+Settingsrevision entstammen (AP-SRV-050 C2 F3); die Live-Runtime-Suppression
+wird unabhängig danach projiziert.
+
 ### 13.4 REST-v2-Oberfläche
 
 - `GET  /api/v2/settings/schema` – öffentlich, deterministisch nach `key`
@@ -1211,8 +1218,12 @@ gebaut. `next_session`-Werte werden erst mit einer neuen Session wirksam;
   Frozen-header `X-Admin-Key` ist dort ein Alias (die bestehenden
   `x-voicestt-admin-key`/Bearer-Pfade bleiben). Regressionen sessiver
   Schlüssel werden maschinenlesbar abgelehnt; Secrets sind nie patchbar.
+  Persistenzfehler werden als `internal_error` mit `persistence_failed` und
+  HTTP 500 beantwortet, ohne eine RAM-/Revisions-Mutation (AP-SRV-050 C2 F5).
 - Der bestehende Wake-Endpunkt (`GET /api/wake-word`, Admin-guarded) bleibt
-  funktional; der vollständige Katalog-/Admissionsvertrag ist AP-SRV-060.
+  funktional. Root-entschiedene Paketzuordnung: `GET /api/v2/wake-words` gehört
+  AP-SRV-060 (SET-13b); der vollständige Katalog-/Admissionsvertrag ist
+  AP-SRV-060.
 
 ### 13.5 Persistenz
 
@@ -1232,7 +1243,11 @@ Legacy- und AP-050-Control-Write erhalten die jeweils fremden Sektionen und
 unbekannte kompatible Top-Level-Felder; beide Schreiben sind atomar
 (temp-Datei → `os.replace`) und über eine gemeinsame Lock-Seam serialisiert.
 `settingsControlOverlay` enthält ausschließlich nicht geheime,
-serververwaltete, persistierbare Registrykeys.
+serververwaltete, persistierbare Registrykeys. Persistierte Control-Daten
+(Overlay-Schema/Keys/Werte und monotone `settingsRevision`) werden beim
+Startup streng validiert und schlagen im ungültigen Fall fehl, statt still mit
+Defaults zu booten (AP-SRV-050 C2 F4); ein Persistenzfehler lässt den zuvor
+angeforderten Server-Settings-Commit wirkungslos (prepare → persist → commit).
 
 ### 13.6 Abgrenzung
 
@@ -1241,3 +1256,27 @@ serververwaltete, persistierbare Registrykeys.
 - Runtime-Suppression bleibt `trigger_suppression.set`-Autorität; die Registry
   stellt sie nur dar (`writable=false`).
 - Der v1-Pfad bleibt unverändert funktional; der Legacyabbau ist AP-SRV-070.
+
+### 13.7 Session-Snapshot – Requested vs. Effective
+
+`session.snapshot` veröffentlicht zu jeder Session-Settingsrevision beide
+Sichten getrennt:
+
+```json
+{
+  "settingsRevision": 4,
+  "requestedSettings": { "...": "letzter bestätigter Request" },
+  "effectiveSettings": { "...": "wirkliche, ggf. gelatchte Werte" }
+}
+```
+
+- `next_activation` bei offener Activation: `requestedSettings` = neuer Wert,
+  `effectiveSettings` = gelatchter Wert der laufenden Activation; im Idle nach
+  Abschluss sind beide gleich (neuer Wert).
+- `next_session`: `requestedSettings` = neuer Wert, `effectiveSettings` = Wert
+  der aktuellen Session (erst ein neuer Handshake stellt einen neuen wirksamen
+  Wert her).
+- Runtime-Suppression: `requestedSettings`/`effectiveSettings` lesen beide live
+  aus dem Controller (`trigger_suppression.set` bleibt eine Autorität).
+- Snapshot-Lesen selbst bumpst weder `stateVersion` noch `settingsRevision`
+  und erzeugt kein `settings.changed`.

@@ -827,6 +827,9 @@ class SnapshotCombinationTests(unittest.TestCase):
             def effective_settings(self):
                 return {"activation.followupTimeoutMs": 3000}
 
+            def requested_settings(self):
+                return {"activation.followupTimeoutMs": 3000}
+
         class FakeWake:
             def capabilities(self):
                 return {"catalogRevision": 1, "availableWakeWordIds": []}

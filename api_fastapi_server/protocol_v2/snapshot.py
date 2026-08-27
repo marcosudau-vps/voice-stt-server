@@ -66,6 +66,8 @@ def build_snapshot(
         "pendingActivations": build_pending_activations(ledger),
         "trigger": build_trigger(controller),
         "audioAvailable": bool(audio_available),
+        "settingsRevision": settings_revision,
+        "requestedSettings": settings_port.requested_settings(),
         "effectiveSettings": settings_port.effective_settings(),
         "wakeWordCapabilities": wake_word_port.capabilities(),
     }

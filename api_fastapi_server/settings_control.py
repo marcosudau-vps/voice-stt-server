@@ -63,6 +63,7 @@ RESULT_APPLIED = "applied"
 RESULT_NO_CHANGE = "no_change"
 RESULT_REVISION_CONFLICT = "settings_revision_conflict"
 RESULT_REJECTED = "settings_rejected"
+RESULT_INTERNAL_ERROR = "internal_error"
 
 
 # -- registry key names --------------------------------------------------------
@@ -99,6 +100,14 @@ WATCHDOG_WARNING_LESS_THAN_KEYS = (
     ACTIVATION_WATCHDOG_REFRESH,
 )
 
+#: The cross-field rule runs as soon as *any* of these three keys takes part in
+#: a transaction. Otherwise a sequential pair of patches could lower a watchdog
+#: deadline below an already accepted warning (AP-SRV-050 C2 F1).
+WATCHDOG_CROSS_FIELD_KEYS = frozenset(
+    {ACTIVATION_WATCHDOG_WARNING, ACTIVATION_WATCHDOG_INITIAL,
+     ACTIVATION_WATCHDOG_REFRESH}
+)
+
 # -- validation result codes ---------------------------------------------------
 
 CODE_UNKNOWN_KEY = "unknown_key"
@@ -112,6 +121,7 @@ CODE_READ_ONLY_AUTHORITY = "read_only_runtime_authority"
 CODE_INVALID_PAYLOAD = "invalid_payload"
 CODE_WAKE_SELECTION_REQUIRED = "wake_word_selection_required"
 CODE_WAKE_WORD_UNAVAILABLE = "wake_word_unavailable"
+CODE_PERSISTENCE_FAILED = "persistence_failed"
 
 
 # -- data structures -----------------------------------------------------------
@@ -554,23 +564,25 @@ def validate_timing_bundle(
 ) -> List[FieldError]:
     """Cross-field rule of the watchdog warning against the final candidate.
 
-    ``activation.segmentWatchdogWarningMs`` must be strictly smaller than the
-    final value of every watchdog deadline it can accompany (initial and
-    refresh). ``changes`` wins over ``candidate`` so the whole transaction is
-    validated atomically, never field by field.
+    The rule runs whenever the transaction touches *any* of the three watchdog
+    keys (warning, initial, refresh), so a sequential lowering of a deadline
+    below an already accepted warning can never slip through. The comparison
+    always uses the fully applied final ``candidate`` - never changes alone,
+    never an intermediate order (AP-SRV-050 C2 F1).
     """
-    if ACTIVATION_WATCHDOG_WARNING not in changes:
+    if not WATCHDOG_CROSS_FIELD_KEYS.intersection(changes):
         return []
-    warning = changes.get(ACTIVATION_WATCHDOG_WARNING)
-    if warning is None or not isinstance(warning, int) or isinstance(warning, bool):
+    warning = candidate.get(ACTIVATION_WATCHDOG_WARNING)
+    if warning is None or isinstance(warning, bool):
+        return []
+    if not isinstance(warning, int):
         return []
     errors = []
-    defn = registry.get(ACTIVATION_WATCHDOG_WARNING)
     for deadline_key in WATCHDOG_WARNING_LESS_THAN_KEYS:
-        effective = candidate.get(deadline_key, changes.get(deadline_key))
-        if effective is None or not isinstance(effective, int):
+        deadline = candidate.get(deadline_key)
+        if deadline is None or not isinstance(deadline, int):
             continue
-        if warning >= effective:
+        if warning >= deadline:
             errors.append(
                 FieldError(
                     field=ACTIVATION_WATCHDOG_WARNING,
@@ -578,7 +590,7 @@ def validate_timing_bundle(
                     message=(
                         f"{ACTIVATION_WATCHDOG_WARNING} ({warning} ms) muss "
                         f"kleiner sein als die wirksame Frist von "
-                        f"{deadline_key} ({effective} ms)."
+                        f"{deadline_key} ({deadline} ms)."
                     ),
                 )
             )
@@ -603,6 +615,21 @@ def _thaw(value: Any) -> Any:
     if isinstance(value, frozenset):
         return {_thaw(item) for item in value}
     return value
+
+
+@dataclass(frozen=True)
+class ActivationAdmissionSettings:
+    """One immutable snapshot read for a single activation admission (C2 F3).
+
+    ``effective_settings`` and ``timing_seconds`` are derived from the **same**
+    locked session snapshot, and ``settings_revision`` records which revision
+    that snapshot belongs to. A settings patch can therefore never yield a
+    mixture ("effective from N, timings from N+1") for one admission.
+    """
+
+    settings_revision: int
+    effective_settings: Mapping[str, Any]
+    timing_seconds: Mapping[str, float]
 
 
 class SessionSettingsState:
@@ -842,7 +869,7 @@ class SessionSettingsState:
             return _freeze(frozen)
 
     def activation_timings_seconds(self) -> Dict[str, float]:
-        """Second-based timing values for the :class:`ActivationController`."""
+        """Second-based timing values lazily derived (kept for compatibility)."""
         frozen = self.freeze_activation()
         timings: Dict[str, float] = {}
         for key in TIMING_KEYS:
@@ -850,6 +877,30 @@ class SessionSettingsState:
             if value is not None:
                 timings[key] = float(value) / 1000.0
         return timings
+
+    def activation_admission_settings(self) -> ActivationAdmissionSettings:
+        """The single atomic settings read for one activation admission.
+
+        Effective wire settings, all six timing values and the revision are
+        taken from the very same locked snapshot, so an admission can never mix
+        two settings revisions (AP-SRV-050 C2 F3).
+        """
+        with self._lock:
+            effective: Dict[str, Any] = {}
+            timing: Dict[str, float] = {}
+            for key in sorted(self._requested):
+                definition = self._registry.get(key)
+                if definition is None or definition.scope != SCOPE_SESSION:
+                    continue
+                value = _thaw(self._effective[key])
+                effective[key] = value
+                if key in TIMING_KEYS and value is not None:
+                    timing[key] = float(value) / 1000.0
+            return ActivationAdmissionSettings(
+                settings_revision=self._revision,
+                effective_settings=_freeze(effective),
+                timing_seconds=_freeze(timing),
+            )
 
 
 # -- server control plane -------------------------------------------------------
@@ -867,16 +918,61 @@ class ServerSettingsState:
     ):
         self._registry = registry
         self._lock = threading.RLock()
-        self._revision = int(revision) if int(revision) >= 0 else 0
+        # AP-SRV-050 C2 F4: persisted control data is validated strictly at
+        # startup - a manually damaged or half-written runtime JSON must never
+        # boot the control plane with out-of-band defaults.
+        if isinstance(revision, bool):
+            raise ValueError(
+                "Invalid settingsControlOverlay: settingsRevision darf kein "
+                "boolescher Wert sein."
+            )
+        revision = int(revision)
+        if revision < 0:
+            raise ValueError(
+                "Invalid settingsControlOverlay: settingsRevision darf nicht "
+                "negativ sein."
+            )
+        self._revision = revision
         self._persist = persist
+        if overlay is not None and not isinstance(overlay, dict):
+            raise ValueError(
+                "Invalid settingsControlOverlay: muss ein Objekt sein."
+            )
         loaded = dict(overlay) if overlay else {}
+        for key in loaded:
+            definition = registry.get(key)
+            if definition is None or not definition.has_server_default:
+                raise ValueError(
+                    f"Invalid settingsControlOverlay: {key} / "
+                    "kein admin-managed Serverdefault."
+                )
+            if definition.secret:
+                raise ValueError(
+                    f"Invalid settingsControlOverlay: {key} / secret_not_allowed"
+                )
+            coerced, error = coerce_definition_value(definition, loaded[key])
+            if error is not None:
+                raise ValueError(
+                    f"Invalid settingsControlOverlay: {key} / {error.code}"
+                )
+            loaded[key] = coerced
+        # validate the fully merged candidate (defaults + persisted values)
+        # against the same rules a patch would use
+        candidate = registry.defaults_for_server_defaults()
+        candidate.update(loaded)
+        persisted_errors = validate_timing_bundle(registry, loaded, candidate)
+        if persisted_errors:
+            first = persisted_errors[0]
+            raise ValueError(
+                f"Invalid settingsControlOverlay: {first.field} / {first.code}"
+            )
         self._overlay: Dict[str, Any] = {}
         for key in sorted(registry.server_default_keys()):
             definition = registry.get(key)
             if definition is None:
                 continue
             self._overlay[key] = _coerce_copy(
-                loaded.get(key, definition.default_value)
+                candidate.get(key, definition.default_value)
             )
         self._server_effective: Dict[str, Any] = dict(self._overlay)
 
@@ -993,14 +1089,40 @@ class ServerSettingsState:
                     },
                 )
 
+            # Prepare -> persist -> commit (AP-SRV-050 C2 F5). The next state is
+            # built as copies and persisted *before* any live mutation; if the
+            # store fails, RAM and revision stay untouched and the caller gets a
+            # machine-readable internal_error instead of a half commit.
+            next_overlay = dict(self._overlay)
+            next_overlay.update(coerced)
+            next_effective = dict(self._server_effective)
             for key, value in coerced.items():
-                self._overlay[key] = value
                 policy = self._registry.get(key).apply_policy
                 if policy != APPLY_SERVER_RESTART:
-                    self._server_effective[key] = value
-            self._revision += 1
+                    next_effective[key] = value
+            next_revision = self._revision + 1
             if self._persist is not None and callable(self._persist):
-                self._persist(self._overlay, self._revision)
+                try:
+                    self._persist(next_overlay, next_revision)
+                except Exception:
+                    return PatchResult(
+                        accepted=False,
+                        result=RESULT_INTERNAL_ERROR,
+                        settings_revision=self._revision,
+                        errors=(
+                            FieldError(
+                                field="persistence",
+                                code=CODE_PERSISTENCE_FAILED,
+                                message=(
+                                    "Servereinstellungen konnten nicht "
+                                    "persistent gespeichert werden."
+                                ),
+                            ),
+                        ),
+                    )
+            self._overlay = next_overlay
+            self._server_effective = next_effective
+            self._revision = next_revision
             requires_restart = any(
                 self._registry.get(key) is not None
                 and self._registry.get(key).apply_policy == APPLY_SERVER_RESTART

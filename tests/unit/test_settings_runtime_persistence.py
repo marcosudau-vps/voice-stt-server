@@ -216,3 +216,87 @@ def test_parallel_writes_against_separate_instances_lose_no_section(tmp_path):
     assert payload["settings"] == {"language": "fr"}
     assert payload["settingsControlOverlay"][sc.ACTIVATION_FOLLOWUP] == 8000
     assert payload["settingsRevision"] == 1
+
+
+# -- F4: persisted control data fails fast on startup ----------------------------
+
+def write_runtime(tmp_path, payload):
+    path = tmp_path / "runtime.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    return path
+
+
+def test_load_control_rejects_negative_persisted_settings_revision(tmp_path):
+    path = write_runtime(tmp_path, {
+        "settingsControlOverlay": {}, "settingsRevision": -1
+    })
+    with pytest.raises(ValueError):
+        RuntimeConfigStore(path).load_control()
+
+
+def test_load_control_rejects_boolean_persisted_settings_revision(tmp_path):
+    path = write_runtime(tmp_path, {
+        "settingsControlOverlay": {}, "settingsRevision": True
+    })
+    with pytest.raises(ValueError):
+        RuntimeConfigStore(path).load_control()
+
+
+def test_load_control_rejects_non_object_settings_control_overlay(tmp_path):
+    path = write_runtime(tmp_path, {
+        "settingsControlOverlay": "not-an-object", "settingsRevision": 1
+    })
+    with pytest.raises(ValueError):
+        RuntimeConfigStore(path).load_control()
+
+
+def test_load_control_accepts_missing_control_sections(tmp_path):
+    path = write_runtime(tmp_path, {"version": 1, "settings": {}})
+    overlay, revision = RuntimeConfigStore(path).load_control()
+    assert overlay == {}
+    assert revision == 0
+
+
+def test_valid_persisted_control_restores_values_and_revision(tmp_path):
+    path = write_runtime(tmp_path, {
+        "settingsControlOverlay": {sc.ACTIVATION_FOLLOWUP: 8000},
+        "settingsRevision": 3,
+    })
+    overlay, revision = RuntimeConfigStore(path).load_control()
+    assert revision == 3
+    assert overlay[sc.ACTIVATION_FOLLOWUP] == 8000
+
+
+# -- F5: persistence failure must stay atomic and replaceable --------------------
+
+def test_os_replace_failure_keeps_original_runtime_json(tmp_path, monkeypatch):
+    import os
+
+    path = tmp_path / "runtime.json"
+    RuntimeConfigStore(path).save({"language": "de"}, {"language"})
+    original = path.read_bytes()
+
+    def failing_replace(source, destination):
+        raise OSError("replace failed")
+
+    monkeypatch.setattr(os, "replace", failing_replace)
+    with pytest.raises(OSError):
+        RuntimeConfigStore(path).save({"language": "fr"}, {"language"})
+
+    assert path.read_bytes() == original
+    # no lingering temporary file
+    leftovers = list(path.parent.glob(f".{path.name}.*.tmp"))
+    assert leftovers == []
+
+
+def test_startup_rejects_bad_validated_control_via_service_shape(tmp_path):
+    """Cross-check: a persisted out-of-range value reaches no live state."""
+    path = write_runtime(tmp_path, {
+        "settingsControlOverlay": {sc.ACTIVATION_FOLLOWUP: -999},
+        "settingsRevision": 1,
+    })
+    overlay, revision = RuntimeConfigStore(path).load_control()
+    with pytest.raises(ValueError):
+        sc.ServerSettingsState(
+            sc.build_default_registry(), overlay=overlay, revision=revision
+        )

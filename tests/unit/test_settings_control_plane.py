@@ -5,10 +5,17 @@ requested/effective apply-policy semantics, the monotonic ``settingsRevision``
 rules, optimistic concurrency, the watchdog cross-field rule and the server
 default overlay. No WebSocket, no socket: every assertion talks to the same
 module the wire layer binds.
+
+AP-SRV-050 C2 (root-correction) additionally covers: sequential cross-field
+bypass (F1), wake-selection fail-closed validation (F2), the atomic activation
+admission bundle (F3), persisted-overlay startup validation (F4) and the
+prepare->persist->commit atomicity of server settings (F5).
 """
 
 import threading
 import time
+
+import pytest
 
 from api_fastapi_server import settings_control as sc
 
@@ -520,6 +527,389 @@ class TestConcurrentSessionPatches:
         assert state.settings_revision == 2
         assert state.effective_values()[sc.ACTIVATION_FOLLOWUP] == 8000
         assert state.effective_values()[sc.ACTIVATION_INITIAL_SPEECH] == 22000
+
+
+# -- F1: sequential cross-field bypass ------------------------------------------
+
+class TestSequentialCrossFieldBypass:
+    def _session_with_warning(self, warning):
+        state = session_state()
+        result = state.apply_patch(0, {
+            sc.ACTIVATION_WATCHDOG_WARNING: warning,
+        })
+        assert result.accepted, result
+        return state
+
+    def test_sequential_session_patch_lowering_refresh_below_existing_warning_is_rejected(self):
+        state = self._session_with_warning(59000)
+        before = dict(state.effective_values())
+        result = state.apply_patch(
+            state.settings_revision, {sc.ACTIVATION_WATCHDOG_REFRESH: 30000}
+        )
+        assert result.result == sc.RESULT_REJECTED
+        assert result.errors[0].code == sc.CODE_CROSS_FIELD_CONFLICT
+        assert result.errors[0].field == sc.ACTIVATION_WATCHDOG_WARNING
+        # no mutation, no revision bump
+        assert state.settings_revision == 1
+        assert state.effective_values()[sc.ACTIVATION_WATCHDOG_WARNING] == \
+            before[sc.ACTIVATION_WATCHDOG_WARNING]
+        assert state.effective_values()[sc.ACTIVATION_WATCHDOG_REFRESH] == \
+            before[sc.ACTIVATION_WATCHDOG_REFRESH]
+
+    def test_sequential_session_patch_lowering_initial_to_existing_warning_is_rejected(self):
+        state = self._session_with_warning(120000)
+        before = dict(state.effective_values())
+        result = state.apply_patch(
+            state.settings_revision, {sc.ACTIVATION_WATCHDOG_INITIAL: 100000}
+        )
+        assert result.result == sc.RESULT_REJECTED
+        assert result.errors[0].code == sc.CODE_CROSS_FIELD_CONFLICT
+        assert state.settings_revision == 1
+        assert state.effective_values()[sc.ACTIVATION_WATCHDOG_INITIAL] == \
+            before[sc.ACTIVATION_WATCHDOG_INITIAL]
+
+    def test_sequential_server_patch_lowering_refresh_below_existing_warning_is_rejected(self):
+        server = server_state(persist=lambda overlay, revision: None)
+        first = server.patch_server(0, {sc.ACTIVATION_WATCHDOG_WARNING: 59000})
+        assert first.accepted, first
+        before = server.overlay()
+        result = server.patch_server(
+            server.settings_revision, {sc.ACTIVATION_WATCHDOG_REFRESH: 30000}
+        )
+        assert result.result == sc.RESULT_REJECTED
+        assert result.errors[0].code == sc.CODE_CROSS_FIELD_CONFLICT
+        assert server.settings_revision == 1
+        assert server.overlay() == before
+
+    def test_transaction_changing_warning_and_refresh_uses_final_candidate_not_input_order(self):
+        # Changing refresh and warning together is judged on the final candidate.
+        ok = session_state()
+        result = ok.apply_patch(0, {
+            sc.ACTIVATION_WATCHDOG_WARNING: 5000,
+            sc.ACTIVATION_WATCHDOG_REFRESH: 30000,
+        })
+        assert result.accepted
+
+        rejected = session_state()
+        result = rejected.apply_patch(0, {
+            sc.ACTIVATION_WATCHDOG_WARNING: 40000,
+            sc.ACTIVATION_WATCHDOG_REFRESH: 30000,
+        })
+        assert result.result == sc.RESULT_REJECTED
+        assert result.errors[0].code == sc.CODE_CROSS_FIELD_CONFLICT
+
+
+# -- F2: wake-word selection fail-closed -----------------------------------------
+
+class TestWakeSelectionFailClosed:
+    @staticmethod
+    def _validator_with(service):
+        from api_fastapi_server.server import (
+            RecorderBackedRealtimeSession as _SessionClass,
+        )
+
+        class FakeSettings:
+            def wake_word_enabled(self):
+                return False
+
+        class FakeSession:
+            settings = FakeSettings()
+
+        session = FakeSession()
+        session.service = service
+        return _SessionClass._validate_wake_selection_key, session
+
+    def test_wake_selection_nonempty_rejected_when_catalog_empty(self):
+        class EmptyCatalog:
+            def session_capabilities(self):
+                return {"wakeWord": {"availableWakeWords": []}}
+
+        validator, session = self._validator_with(EmptyCatalog())
+        errors = validator(session, sc.WAKE_WORD_SELECTION, ["hey_jarvis"])
+        assert any(error.code == sc.CODE_WAKE_WORD_UNAVAILABLE
+                   for error in errors)
+        assert all(error.field == sc.WAKE_WORD_SELECTION for error in errors)
+
+    def test_wake_selection_nonempty_rejected_when_catalog_lookup_raises(self):
+        class RaisingCatalog:
+            def session_capabilities(self):
+                raise RuntimeError("catalog unavailable")
+
+        validator, session = self._validator_with(RaisingCatalog())
+        errors = validator(session, sc.WAKE_WORD_SELECTION, ["hey_jarvis"])
+        assert any(error.code == sc.CODE_WAKE_WORD_UNAVAILABLE
+                   for error in errors)
+        # no exception details leak into the listener-visible message
+        for error in errors:
+            assert "catalog unavailable" not in error.message
+
+    def test_wake_selection_known_remains_accepted(self):
+        class KnownCatalog:
+            def session_capabilities(self):
+                return {"wakeWord": {"availableWakeWords": [
+                    {"id": "hey_jarvis"},
+                ]}}
+
+        validator, session = self._validator_with(KnownCatalog())
+        errors = validator(session, sc.WAKE_WORD_SELECTION, ["hey_jarvis"])
+        assert errors == []
+
+    def test_wake_selection_empty_allowed_when_wake_not_configured(self):
+        class EmptyCatalog:
+            def session_capabilities(self):
+                return {"wakeWord": {"availableWakeWords": []}}
+
+        validator, session = self._validator_with(EmptyCatalog())
+        assert validator(session, sc.WAKE_WORD_SELECTION, []) == []
+
+    def test_wake_selection_empty_rejected_when_wake_configured(self):
+        from api_fastapi_server.server import (
+            RecorderBackedRealtimeSession as _SessionClass,
+        )
+
+        class FakeSettings:
+            def wake_word_enabled(self):
+                return True
+
+        class EmptyCatalog:
+            def session_capabilities(self):
+                return {"wakeWord": {"availableWakeWords": []}}
+
+        class FakeSession:
+            settings = FakeSettings()
+            service = EmptyCatalog()
+
+        errors = _SessionClass._validate_wake_selection_key(
+            FakeSession(), sc.WAKE_WORD_SELECTION, []
+        )
+        assert any(error.code == sc.CODE_WAKE_SELECTION_REQUIRED
+                   for error in errors)
+
+    def test_wake_selection_patch_via_session_validator_is_fail_closed(self):
+        class EmptyCatalog:
+            def session_capabilities(self):
+                return {"wakeWord": {"availableWakeWords": []}}
+
+        validator, session = self._validator_with(EmptyCatalog())
+        state = sc.SessionSettingsState(
+            sc.build_default_registry(),
+            validate_key=lambda key, value: validator(session, key, value),
+        )
+        result = state.apply_patch(0, {sc.WAKE_WORD_SELECTION: ["hey_jarvis"]})
+        assert result.result == sc.RESULT_REJECTED
+        assert any(error.code == sc.CODE_WAKE_WORD_UNAVAILABLE
+                   for error in result.errors)
+        assert state.settings_revision == 0
+        assert state.effective_values()[sc.WAKE_WORD_SELECTION] == []
+
+
+# -- F3: one atomic activation-admission bundle ----------------------------------
+
+class TestActivationAdmissionBundle:
+    def test_activation_admission_settings_bundle_is_atomic(self):
+        state = session_state()
+        state.apply_patch(0, {sc.ACTIVATION_FOLLOWUP: 8000})
+        bundle = state.activation_admission_settings()
+        assert bundle.settings_revision == 1
+        # effective and timing come from the SAME snapshot
+        assert bundle.effective_settings[sc.ACTIVATION_FOLLOWUP] == 8000
+        assert bundle.timing_seconds[sc.ACTIVATION_FOLLOWUP] == 8.0
+        for key in sc.TIMING_KEYS:
+            assert key in bundle.timing_seconds
+        assert bundle.timing_seconds[sc.ACTIVATION_INITIAL_SPEECH] == 15.0
+
+    def test_activation_admission_bundle_never_mixes_revisions(self):
+        state = session_state()
+        state.apply_patch(0, {sc.ACTIVATION_FOLLOWUP: 4000})
+        first = state.activation_admission_settings()
+        state.apply_patch(1, {sc.ACTIVATION_FOLLOWUP: 8000})
+        second = state.activation_admission_settings()
+        assert first.settings_revision == 1
+        assert second.settings_revision == 2
+        assert first.effective_settings[sc.ACTIVATION_FOLLOWUP] == 4000
+        assert first.timing_seconds[sc.ACTIVATION_FOLLOWUP] == 4.0
+        assert second.effective_settings[sc.ACTIVATION_FOLLOWUP] == 8000
+        assert second.timing_seconds[sc.ACTIVATION_FOLLOWUP] == 8.0
+
+    def test_admission_bundle_vs_patch_is_atomically_ordered_20x(self):
+        for _ in range(20):
+            state = session_state()
+            barrier = threading.Barrier(4)
+            observed = []
+            lock = threading.Lock()
+
+            def patcher():
+                try:
+                    barrier.wait(timeout=10)
+                except threading.BrokenBarrierError:
+                    pass
+                for i in range(50):
+                    state.apply_patch(
+                        state.settings_revision,
+                        {sc.ACTIVATION_FOLLOWUP: 3000 + i},
+                    )
+
+            def reader():
+                try:
+                    barrier.wait(timeout=10)
+                except threading.BrokenBarrierError:
+                    pass
+                for _ in range(50):
+                    bundle = state.activation_admission_settings()
+                    effective = bundle.effective_settings[
+                        sc.ACTIVATION_FOLLOWUP
+                    ]
+                    timing_ms = int(round(
+                        bundle.timing_seconds[sc.ACTIVATION_FOLLOWUP] * 1000
+                    ))
+                    with lock:
+                        observed.append((effective, timing_ms))
+
+            threads = [
+                threading.Thread(target=patcher),
+                threading.Thread(target=reader),
+                threading.Thread(target=reader),
+            ]
+
+            def release():
+                try:
+                    barrier.wait(timeout=10)
+                except threading.BrokenBarrierError:
+                    pass
+
+            starter = threading.Thread(target=release)
+            for thread in threads:
+                thread.start()
+            starter.start()
+            for thread in threads + [starter]:
+                thread.join(timeout=30)
+
+            assert observed
+            # every observed bundle is internally consistent: the pair
+            # effective/timing always describes exactly one settings revision.
+            for effective, timing_ms in observed:
+                assert effective == timing_ms, (effective, timing_ms)
+
+
+# -- F4: persisted control data must be validated at startup --------------------
+
+class TestStartupPersistenceValidation:
+    def test_startup_rejects_out_of_range_persisted_control_value(self):
+        with pytest.raises(ValueError):
+            server_state(overlay={sc.ACTIVATION_FOLLOWUP: -999})
+
+    def test_startup_rejects_conflicting_warning_and_initial_bundle(self):
+        with pytest.raises(ValueError):
+            server_state(overlay={
+                sc.ACTIVATION_WATCHDOG_WARNING: 60000,
+                sc.ACTIVATION_WATCHDOG_INITIAL: 60000,
+            })
+
+    def test_startup_rejects_negative_persisted_settings_revision(self):
+        with pytest.raises(ValueError):
+            server_state(revision=-1)
+
+    def test_startup_rejects_boolean_persisted_settings_revision(self):
+        with pytest.raises(ValueError):
+            server_state(revision=True)
+
+    def test_startup_rejects_non_object_settings_control_overlay(self):
+        with pytest.raises(ValueError) as exc:
+            server_state(overlay="not-an-object")
+        # clear operator-readable error naming the control overlay section,
+        # not a bare dict-construction accident
+        assert "settingsControlOverlay" in str(exc.value)
+
+    def test_startup_rejects_unknown_key_inside_settings_control_overlay(self):
+        with pytest.raises(ValueError):
+            server_state(overlay={"nonsense.key": 1})
+
+    def test_startup_rejects_secret_key_inside_settings_control_overlay(self):
+        secret_definition = sc.SettingDefinition(
+            key="admin.secret",
+            scope=sc.SCOPE_SERVER,
+            auth=sc.AUTH_ADMIN,
+            type=sc.TYPE_STRING,
+            constraints={},
+            default_value="",
+            apply_policy=sc.APPLY_NEXT_SESSION,
+            has_server_default=True,
+            secret=True,
+        )
+        reg = sc.SettingsRegistry(
+            [d for d in sc.builtin_definitions()] + [secret_definition]
+        )
+        with pytest.raises(ValueError):
+            sc.ServerSettingsState(reg, overlay={"admin.secret": "x"})
+
+    def test_valid_persisted_overlay_still_restores_values_and_revision(self):
+        server = server_state(
+            overlay={sc.ACTIVATION_FOLLOWUP: 8000},
+            revision=3,
+            persist=lambda overlay, revision: None,
+        )
+        assert server.settings_revision == 3
+        assert server.server_effective()[sc.ACTIVATION_FOLLOWUP] == 8000
+        assert server.server_effective()[sc.ACTIVATION_INITIAL_SPEECH] == 15000
+
+
+# -- F5: persistence failure must not produce a half commit ----------------------
+
+class TestServerSettingsCommitOnFailure:
+    def test_failure_does_not_mutate_server_state(self):
+        def fail_persist(overlay, revision):
+            raise RuntimeError("disk full")
+
+        server = server_state(persist=fail_persist)
+        before_overlay = server.overlay()
+        before_revision = server.settings_revision
+        result = server.patch_server(0, {sc.ACTIVATION_FOLLOWUP: 8000})
+        assert not result.accepted
+        assert result.result == "internal_error"
+        assert result.settings_revision == before_revision
+        assert any(error.code == "persistence_failed" for error in result.errors)
+        assert server.overlay() == before_overlay
+        assert server.settings_revision == before_revision
+
+    def test_retry_with_same_base_can_succeed_after_failure(self):
+        calls = {"n": 0}
+
+        def flaky(overlay, revision):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RuntimeError("disk full")
+
+        server = server_state(persist=flaky)
+        failed = server.patch_server(0, {sc.ACTIVATION_FOLLOWUP: 8000})
+        assert not failed.accepted
+        assert server.settings_revision == 0
+        # retry with the SAME base revision after the store recovered
+        ok = server.patch_server(0, {sc.ACTIVATION_FOLLOWUP: 8000})
+        assert ok.accepted
+        assert ok.settings_revision == 1
+        assert server.settings_revision == 1
+        assert server.server_effective()[sc.ACTIVATION_FOLLOWUP] == 8000
+
+    def test_no_commit_gap_after_failure(self):
+        calls = {"n": 0}
+
+        def flaky(overlay, revision):
+            calls["n"] += 1
+            if calls["n"] == 3:
+                raise RuntimeError("disk full")
+
+        server = server_state(persist=flaky)
+        assert server.patch_server(0, {sc.ACTIVATION_FOLLOWUP: 4000}).accepted
+        assert server.patch_server(1, {sc.ACTIVATION_FOLLOWUP: 5000}).accepted
+        assert server.settings_revision == 2
+        failed = server.patch_server(2, {sc.ACTIVATION_FOLLOWUP: 9000})
+        assert not failed.accepted
+        assert server.settings_revision == 2
+        # next revision after a successful retry is 3 - no gap, no lost value
+        ok = server.patch_server(2, {sc.ACTIVATION_FOLLOWUP: 9000})
+        assert ok.accepted
+        assert ok.settings_revision == 3
+        assert server.server_effective()[sc.ACTIVATION_FOLLOWUP] == 9000
 
 
 if __name__ == "__main__":  # pragma: no cover
