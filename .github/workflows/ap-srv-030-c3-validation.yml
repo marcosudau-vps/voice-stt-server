@@ -34,18 +34,24 @@ jobs:
           $logDir = "$env:RUNNER_TEMP/ci-logs"
           New-Item -ItemType Directory -Force $logDir | Out-Null
           "CI_LOG_DIR=$logDir" >> $env:GITHUB_ENV
+
           $parts = Get-ChildItem .ci/payload2/c1c2-*.b64 | Sort-Object Name
           if ($parts.Count -ne 6) { throw "Expected exactly 6 C1-C2 payload chunks, got $($parts.Count)" }
           $encoded = ($parts | ForEach-Object { (Get-Content -Raw -LiteralPath $_.FullName).Trim() }) -join ''
           [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/c1-c2.diff.gz", [Convert]::FromBase64String($encoded))
           python -c "import gzip,pathlib; p=pathlib.Path(r'$env:RUNNER_TEMP/c1-c2.diff.gz'); pathlib.Path(r'$env:RUNNER_TEMP/c1-c2.diff').write_bytes(gzip.decompress(p.read_bytes()))"
-          Copy-Item .ci/payload2/c3-payload.zip "$env:RUNNER_TEMP/c3-payload.zip"
+
+          $c3parts = Get-ChildItem .ci/payload2/c3v2-*.b64 | Sort-Object Name
+          if ($c3parts.Count -ne 3) { throw "Expected exactly 3 C3 payload chunks, got $($c3parts.Count)" }
+          $c3encoded = ($c3parts | ForEach-Object { (Get-Content -Raw -LiteralPath $_.FullName).Trim() }) -join ''
+          [IO.File]::WriteAllBytes("$env:RUNNER_TEMP/c3-payload.zip", [Convert]::FromBase64String($c3encoded))
+
           $diffHash = (Get-FileHash "$env:RUNNER_TEMP/c1-c2.diff" -Algorithm SHA256).Hash.ToLower()
           $payloadHash = (Get-FileHash "$env:RUNNER_TEMP/c3-payload.zip" -Algorithm SHA256).Hash.ToLower()
           "C1-C2 diff SHA256: $diffHash" | Tee-Object -FilePath "$logDir/payload.txt"
           "C3 payload SHA256: $payloadHash" | Tee-Object -FilePath "$logDir/payload.txt" -Append
           if ($diffHash -ne '2516fb49451db5cf2e172b8eab26842ac5efc72fa4bb3543abf10dcf13f3b9dd') { throw "C1-C2 diff hash mismatch: $diffHash" }
-          if ($payloadHash -ne '6625c35c49deac7fd5a3f90c85d7e045a43765f862725e168e1ad705513f4b20') { throw "C3 payload hash mismatch: $payloadHash" }
+          if ($payloadHash -ne '88dc1045530ea752b8230eba3dc1343f9e672c51a9dd331b655ac2b8e2c06210') { throw "C3 payload hash mismatch: $payloadHash" }
           Expand-Archive -LiteralPath "$env:RUNNER_TEMP/c3-payload.zip" -DestinationPath "$env:RUNNER_TEMP/c3-payload" -Force
 
       - name: Reconstruct exact C2 tree from C1
