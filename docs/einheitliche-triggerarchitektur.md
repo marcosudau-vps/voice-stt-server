@@ -1130,11 +1130,10 @@ nicht, beendet keine laufende Activation und merged keine Quellen. Die
 ### 12.9 Offene Bindungen
 
 ```text
-REQUIRES_AP_SRV_050_BINDING
-  settingsRevision, effectiveSettings, settings.changed,
-  session_settings.patch -> schmaler Port, keine zweite Registry.
-  Bis dahin ist die Revision 0 und ein Patch wird als
-  settings_rejected beziehungsweise settings_revision_conflict abgelehnt.
+REQUIRES_AP_SRV_050_BINDING  -> gebunden durch AP-SRV-050 (Settings-Control-Plane,
+  siehe Abschnitt 13). settingsRevision, effectiveSettings, settings.changed
+  und session_settings.patch laufen durch die eine Session-Settingsautorität
+  (SessionSettingsState) und den SettingsPort als Adapter.
 
 REQUIRES_AP_SRV_060_BINDING
   wakeWordCapabilities, Wake-Word-Admission und wakeword.detected.
@@ -1148,3 +1147,136 @@ REQUIRES_AP_SRV_060_BINDING
 v1 und v2 laufen bis AP-SRV-070 nebeneinander, aber ausschließlich auf der
 Transportebene. Innerhalb einer angenommenen v2-Verbindung gibt es keinen
 v1-Fallback, und keine Domainautorität existiert doppelt.
+
+## 13. Settings-Control-Plane (AP-SRV-050)
+
+AP-SRV-050 ist die eine serverautoritative Settings-Domain für
+triggerrelevante Session- und Serverwerte. Die fachliche Grundlage liegt im
+Frozen Contract („Settings-Control-Plane“); dieser Abschnitt beschreibt den
+tatsächlichen Serverstand.
+
+### 13.1 Registry und Schlüssel
+
+Die Registry (`api_fastapi_server/settings_control.py`) veröffentlicht für
+jeden key: `key, scope, auth, type, constraints, defaultValue, requestedValue,
+effectiveValue, applyPolicy, settingsRevision`. Scopes `session`/`server`
+(Client-local bleibt Clientverantwortung). Apply-Policies sind ausschließlich
+`live`, `next_activation`, `next_session`, `server_restart`; es gibt keine
+Synonyme (`mixed`, `deferred`, …).
+
+Serververwaltete Schlüssel (Details siehe `2026-08-27_PLAN.md` im Archiv):
+
+| Key | Scope | Auth | Apply |
+|---|---|---|---|
+| die sechs `activation.*`-Timings | session | session | next_activation |
+| `wakeWord.sensitivity` | session | session | next_activation |
+| `wakeWord.selection` | session | session | next_session |
+| `runtimeSuppression.manual` / `.wakeWord` | session | session | live (Metadata) |
+| `wakeWord.globalDisabledIds` | server | admin | next_session |
+
+### 13.2 Autorität und Revision
+
+- Jede v2-Session besitzt genau eine `SessionSettingsState` mit eigener
+  monotoner `settingsRevision`; `ProtocolSessionState.settingsRevision` ist
+  deren Wire-Spiegel.
+- `settingsRevision` steigt genau einmal pro wirksamer Transaktion – nie pro
+  Feld; `no_change`, Reject, Replay und `command_id_conflict` bumen nichts.
+- `settings.changed` wird über die bestehende AP-SRV-040-Dispatch-Seam
+  (`_dispatch_events`/`mint_event`) emittiert; bei mehreren Apply-Policy-Gruppen
+  einer Transaktion mintet nur das erste Event `state_change=True`
+  (`stateVersion` +1 genau einmal), alle Events tragen dieselbe neue Revision.
+- Optimistische Concurrency über `baseSettingsRevision`; stale Basis ergibt
+  `settings_revision_conflict`.
+- Server-Settings haben eine getrennte persistente `settingsRevision`.
+
+### 13.3 Requested vs. Effective und Timer-Bindung
+
+`next_activation`-Werte werden pro Activation gelatcht
+(`ActivationTimingPolicy`): Eine laufende Activation behält ihren
+Timingsnapshot; ein Patch während offener Activation ändert weder ihren
+Snapshot noch ihre realen Timer. Die nächste erfolgreiche Activation-Admission
+(manual wie wake word über dieselbe Seam) verwendet die neuen Werte real:
+Initial-Speech-, Follow-up-, Segment-Watchdog- (initial/refresh/warning) und
+`closing_input`-Recovery-Deadlines werden aus dem gelatchten Policy-Wert
+gebaut. `next_session`-Werte werden erst mit einer neuen Session wirksam;
+`server_restart` bleibt als Policy repräsentierbar (kein künstlicher Key).
+
+Efficiency/Effective/Timing einer Admission werden als **ein** atomares
+Settings-Bundle
+(`SessionSettingsState.activation_admission_settings()`) gelesen, sodass
+effektive Settings und reale Timerwerte einer Admission immer derselben
+Settingsrevision entstammen (AP-SRV-050 C2 F3); die Live-Runtime-Suppression
+wird unabhängig danach projiziert.
+
+### 13.4 REST-v2-Oberfläche
+
+- `GET  /api/v2/settings/schema` – öffentlich, deterministisch nach `key`
+  sortiert, keine Secrets;
+- `GET  /api/v2/settings/server` – öffentlich, nicht geheime Serverwerte,
+  Server-Settingsrevision, requested/effective;
+- `PATCH /api/v2/settings/server` – Adminauth über den bestehenden Guard; der
+  Frozen-header `X-Admin-Key` ist dort ein Alias (die bestehenden
+  `x-voicestt-admin-key`/Bearer-Pfade bleiben). Regressionen sessiver
+  Schlüssel werden maschinenlesbar abgelehnt; Secrets sind nie patchbar.
+  Persistenzfehler werden als `internal_error` mit `persistence_failed` und
+  HTTP 500 beantwortet, ohne eine RAM-/Revisions-Mutation (AP-SRV-050 C2 F5).
+- Der bestehende Wake-Endpunkt (`GET /api/wake-word`, Admin-guarded) bleibt
+  funktional. Root-entschiedene Paketzuordnung: `GET /api/v2/wake-words` gehört
+  AP-SRV-060 (SET-13b); der vollständige Katalog-/Admissionsvertrag ist
+  AP-SRV-060.
+
+### 13.5 Persistenz
+
+Die Runtime-Konfigurationsdatei ist ein Koexistenzformat:
+
+```json
+{
+  "version": 1,
+  "updatedAt": "...",
+  "settings": { ... },
+  "settingsControlOverlay": { ... },
+  "settingsRevision": 3
+}
+```
+
+Legacy- und AP-050-Control-Write erhalten die jeweils fremden Sektionen und
+unbekannte kompatible Top-Level-Felder; beide Schreiben sind atomar
+(temp-Datei → `os.replace`) und über eine gemeinsame Lock-Seam serialisiert.
+`settingsControlOverlay` enthält ausschließlich nicht geheime,
+serververwaltete, persistierbare Registrykeys. Persistierte Control-Daten
+(Overlay-Schema/Keys/Werte und monotone `settingsRevision`) werden beim
+Startup streng validiert und schlagen im ungültigen Fall fehl, statt still mit
+Defaults zu booten (AP-SRV-050 C2 F4); ein Persistenzfehler lässt den zuvor
+angeforderten Server-Settings-Commit wirkungslos (prepare → persist → commit).
+
+### 13.6 Abgrenzung
+
+- `wakeWord.*` ist nur Settings-/Metadatenbasis; Detection, Katalog-Admission,
+  Latch, Cooldown, Pre-Roll und Audio-Grenze sind AP-SRV-060.
+- Runtime-Suppression bleibt `trigger_suppression.set`-Autorität; die Registry
+  stellt sie nur dar (`writable=false`).
+- Der v1-Pfad bleibt unverändert funktional; der Legacyabbau ist AP-SRV-070.
+
+### 13.7 Session-Snapshot – Requested vs. Effective
+
+`session.snapshot` veröffentlicht zu jeder Session-Settingsrevision beide
+Sichten getrennt:
+
+```json
+{
+  "settingsRevision": 4,
+  "requestedSettings": { "...": "letzter bestätigter Request" },
+  "effectiveSettings": { "...": "wirkliche, ggf. gelatchte Werte" }
+}
+```
+
+- `next_activation` bei offener Activation: `requestedSettings` = neuer Wert,
+  `effectiveSettings` = gelatchter Wert der laufenden Activation; im Idle nach
+  Abschluss sind beide gleich (neuer Wert).
+- `next_session`: `requestedSettings` = neuer Wert, `effectiveSettings` = Wert
+  der aktuellen Session (erst ein neuer Handshake stellt einen neuen wirksamen
+  Wert her).
+- Runtime-Suppression: `requestedSettings`/`effectiveSettings` lesen beide live
+  aus dem Controller (`trigger_suppression.set` bleibt eine Autorität).
+- Snapshot-Lesen selbst bumpst weder `stateVersion` noch `settingsRevision`
+  und erzeugt kein `settings.changed`.

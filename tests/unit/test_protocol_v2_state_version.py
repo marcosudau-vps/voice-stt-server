@@ -525,10 +525,10 @@ class NonMutatingCommandVersionTests(unittest.TestCase):
                 "action": schema.FINISH,
                 "activationId": "30000000-0000-4000-8000-0000000000ff",
             }),
-            ("settings patch", {
+            ("settings patch rejected", {
                 "type": schema.SESSION_SETTINGS_PATCH,
                 "baseSettingsRevision": 0,
-                "changes": {"activation.followupTimeoutMs": 4000},
+                "changes": {"activation.unknownKey": 1},
             }),
         )
         with TestClient(self.app) as client:

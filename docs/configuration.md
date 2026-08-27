@@ -173,3 +173,36 @@ If you do not use `with`, call:
 ```python
 recorder.shutdown()
 ```
+
+## Server Runtime Settings (AP-SRV-050)
+
+The server persistence document (`runtime.json`, unter `data_root_path/config/`)
+ist ein Coexistenzformat: Die Legacysektion `settings` bleibt unverändert,
+daneben existieren die AP-SRV-050-Sektionen `settingsControlOverlay` und
+`settingsRevision`. Beide Schreibfamilien erhalten die jeweils fremden
+Sektionen; es geht keine Top-Level-Sektion verloren. Secrets werden nie
+persistiert.
+
+Die serverautoritative Settings-Control-Plane verwaltet als triggerrelevant
+`session`-Scoped Werte mit admin-managed Serverdefault:
+
+| Key (public) | Typ | Standard | Bereich |
+|---|---:|---:|---:|
+| `activation.initialSpeechTimeoutMs` | int | 15000 | 100–3600000 |
+| `activation.followupTimeoutMs` | int | 3000 | 100–60000 |
+| `activation.segmentWatchdogInitialMs` | int | 600000 | 60000–3600000 |
+| `activation.segmentWatchdogRefreshMs` | int | 180000 | 30000–600000 |
+| `activation.segmentWatchdogWarningMs` | int | 30000 | >=5000, < wirksame Frist |
+| `activation.closingRecoveryTimeoutMs` | int | 5000 | 1000–30000 |
+| `wakeWord.sensitivity` | float | 0.5 | 0.0–1.0 |
+
+Die öffentliche Verwaltung läuft über `GET/PATCH /api/v2/settings/server`
+(`PATCH` admin-geschützt, optimistische Concurrency) und das Schema über
+`GET /api/v2/settings/schema`. Sessionseitig wird der Wert pro Activation
+gelatcht: eine laufende Activation behält ihren Timingsnapshot, die nächste
+verwendet den neuen Wert real. `session.snapshot` veröffentlicht zusätzlich zu
+`effectiveSettings` das additive Feld `requestedSettings`, damit
+Requested/Effective-Unterschiede (`next_activation`/`next_session`) nach einem
+Resync vollständig unterscheidbar sind. Persistierte Control-Daten werden beim
+Startup streng validiert; ein Persistenzfehler eines Serverportches lässt RAM
+und Revision unverändert und wird als `internal_error` (HTTP 500) gemeldet.

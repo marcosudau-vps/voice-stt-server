@@ -312,6 +312,25 @@ It constructs recorder instances, feeds external audio, reads `is_recording`,
 calls `text()`, `abort()`, and `shutdown()`, and injects scheduler-backed
 transcription executors.
 
+### Server REST Settings (AP-SRV-050)
+
+The v2 settings surface is additive and coexists with all existing endpoints:
+
+- `GET  /api/v2/settings/schema` – public, non-secret settings metadata;
+- `GET  /api/v2/settings/server` – public, non-secret server values + revision;
+- `PATCH /api/v2/settings/server` – admin-auth (`X-Admin-Key` alias or the
+  existing `x-voicestt-admin-key`/Bearer paths), optimistic concurrency via
+  `baseSettingsRevision`, atomic validation.
+
+The v1 config/runtime endpoints keep their semantics (legacy removal is
+AP-SRV-070). Errors reuse the frozen wire codes (`settings_revision_conflict`,
+`settings_rejected`) with deterministic `field`/`code`/`message` entries. A
+persistence failure of a server patch returns HTTP 500 with
+`result: internal_error` and code `persistence_failed`, leaving RAM and
+settings revision unchanged. No secret value is ever returned. On the v2 wire,
+`session.snapshot` additionally carries additive `requestedSettings` next to
+`effectiveSettings` and `settingsRevision`.
+
 ## Known Usage Patterns
 
 Tests, examples, and docs currently exercise these patterns:

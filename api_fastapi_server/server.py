@@ -34,6 +34,7 @@ from VoiceSTT_server.event_logging import (
 )
 from api_fastapi_server.activation import (
     ActivationController,
+    ActivationTimingPolicy,
     DEFAULT_CLOSING_RECOVERY_TIMEOUT,
     DEFAULT_FOLLOWUP_TIMEOUT,
     DEFAULT_INITIAL_SPEECH_TIMEOUT,
@@ -59,6 +60,7 @@ from api_fastapi_server.segment_ledger import (
 )
 from api_fastapi_server.protocol_v2 import schema as protocol_v2_schema
 from api_fastapi_server.protocol_v2.connection import ProtocolV2Connection
+from api_fastapi_server import settings_control as settings_control_module
 from VoiceSTT_server.operations import (
     AuditLogManager,
     LocalModelRegistry,
@@ -2742,6 +2744,10 @@ class RecorderBackedRealtimeSession:
         self._wakeword_voice_window = False
         self._wakeword_followup_generation = 0
         self.segment_ledger = SegmentLedger(self.session_id)
+        # AP-SRV-050: the one session-scoped settings domain authority. Its
+        # ``settingsRevision`` is the revision this session publishes; it is
+        # never the server revision and never a second persisted store.
+        self.settings_state = self._build_settings_state()
         # Owns the complete mutation -> observable dispatch boundary. The
         # ledger lock orders state, while this session lock keeps a later
         # worker from publishing its already-created update first.
@@ -3219,13 +3225,244 @@ class RecorderBackedRealtimeSession:
         """Returns the complete settings view latched by a new activation.
 
         The controller detaches and freezes this value. Later session-setting
-        changes can therefore affect only a later activation.
+        changes can therefore affect only a later activation. The nested shape
+        stays the legacy (v1) view; v2 sessions latch the flat wire projection
+        through :meth:`_new_activation_inputs`.
         """
         return {
             "activationConfig": self.activation_config_dict(),
             "sessionConfig": self.session_config_dict(),
             "sessionSettings": self.public_settings(),
         }
+
+    # -- AP-SRV-050 session settings control ---------------------------------
+
+    def _build_settings_state(self):
+        """The session's own revised settings overlay, seeded from server defaults.
+
+        ``wakeWord.selection`` and ``wakeWord.sensitivity`` reflect the values
+        actually admitted for this session; the six trigger timings inherit the
+        admin-managed server default overlay at admission time, so a later
+        server-default patch never rewrites an already existing session
+        (AP-SRV-050 prompt 21/52/53).
+        """
+        server_defaults = {}
+        control = getattr(self.service, "settings_control", None)
+        if control is not None:
+            server_defaults = dict(control.server_effective())
+        overrides = {}
+        if self.session_config is not None and self.session_config.effective_enabled:
+            overrides[settings_control_module.WAKE_WORD_SELECTION] = list(
+                self.session_config.effective_wake_words
+            )
+        return settings_control_module.SessionSettingsState(
+            settings_control_module.build_default_registry(),
+            server_defaults=server_defaults,
+            requested=overrides,
+            validate_key=self._validate_wake_selection_key,
+        )
+
+    def _validate_wake_selection_key(self, key, value):
+        """Session-aware ``wakeWord.selection`` rules (AP-SRV-050 C2 F2).
+
+        Only the selection key is touched here; everything else is left to the
+        registry. Validation is **fail-closed**: a non-empty selection must
+        always be checked against the catalog, an empty available-catalog set
+        makes every requested id unavailable, and a catalog lookup failure
+        rejects the whole field. The wake catalog stays a validation input -
+        the selected-only initialisation and detection are AP-SRV-060.
+        """
+        if key != settings_control_module.WAKE_WORD_SELECTION:
+            return []
+        selection = list(value or [])
+        errors = []
+        if self.settings.wake_word_enabled() and not selection:
+            errors.append(settings_control_module.FieldError(
+                field=key,
+                code=settings_control_module.CODE_WAKE_SELECTION_REQUIRED,
+                message=(
+                    "Wenn Wake Word für die Session konfiguriert ist, darf "
+                    "die Auswahl nicht leer sein."
+                ),
+            ))
+        if not selection:
+            return errors
+        from .protocol_v2 import ports as v2_ports
+
+        try:
+            available_ids = set(
+                v2_ports.WakeWordPort(self.service).available_ids()
+            )
+        except Exception:  # noqa: BLE001 - fail closed, never an exception leak
+            errors.append(settings_control_module.FieldError(
+                field=key,
+                code=settings_control_module.CODE_WAKE_WORD_UNAVAILABLE,
+                message=(
+                    "Der Wake-Word-Katalog ist momentan nicht verfügbar; "
+                    "die Auswahl kann nicht geprüft werden."
+                ),
+            ))
+            return errors
+        unknown = sorted(set(selection) - available_ids)
+        if unknown:
+            errors.append(settings_control_module.FieldError(
+                field=key,
+                code=settings_control_module.CODE_WAKE_WORD_UNAVAILABLE,
+                message=(
+                    "Unbekannte Wake-Word-IDs: "
+                    + ", ".join(unknown)
+                    + "."
+                ),
+            ))
+        return errors
+
+    def apply_settings_patch(self, base_revision, changes):
+        """Transactional session patch; the wire layer projects the result."""
+        return self.settings_state.apply_patch(base_revision, changes)
+
+    def _latched_wire_effective(self):
+        """The immutable wire settings a running activation started with.
+
+        Empty while no controlled activation is open. v2 sessions latch the
+        flat projection, so snapshot/event/ledger/timer views stay consistent.
+        """
+        if not self.canonical_ids:
+            return {}
+        controller = self._activation
+        if controller is None:
+            return {}
+        snapshot = controller.snapshot()
+        if snapshot.get("phase") in (None, "idle"):
+            return {}
+        settled = snapshot.get("effectiveSettings")
+        return dict(settled) if isinstance(settled, dict) else {}
+
+    def _suppression_live(self):
+        """Live runtime suppression from the single controller authority."""
+        controller = self._activation
+        suppressed = {}
+        if controller is not None:
+            try:
+                suppressed = (
+                    (controller.trigger_state() or {}).get("suppressed") or {}
+                )
+            except Exception:  # noqa: BLE001 - defensive projection
+                suppressed = {}
+        return {
+            settings_control_module.RUNTIME_SUPPRESSION_MANUAL: bool(
+                suppressed.get("manual")
+            ),
+            settings_control_module.RUNTIME_SUPPRESSION_WAKE_WORD: bool(
+                suppressed.get("wakeWord")
+            ),
+        }
+
+    def settings_projection_for_wire(self):
+        """One atomic projection bundle for the wire settings (AP-SRV-050 C3).
+
+        ``settings_revision``, ``requestedSettings`` and ``effectiveSettings``
+        all derive from the same ``SessionSettingsState.settings_projection()``
+        snapshot - a snapshot can never span two settings revisions. The
+        running-activation latch and the live runtime suppression are overlaid
+        afterwards without re-reading the settings authority.
+        """
+        bundle = self.settings_state.settings_projection()
+        requested = dict(bundle.requested_settings)
+        effective = dict(bundle.effective_settings)
+        latched = self._latched_wire_effective()
+        if latched:
+            for key in list(requested):
+                if key in latched:
+                    effective[key] = latched[key]
+        live = self._suppression_live()
+        for key, value in live.items():
+            requested[key] = value
+            effective[key] = value
+        return settings_control_module.SessionSettingsProjection(
+            settings_revision=bundle.settings_revision,
+            requested_settings=settings_control_module._freeze(requested),
+            effective_settings=settings_control_module._freeze(effective),
+        )
+
+    def settings_effective_for_wire(self):
+        """The flat ``effectiveSettings`` projection for snapshot/events.
+
+        While an activation runs, the latched view of that activation is
+        published (next_activation values stay frozen per activation); in idle
+        the session's current effective resolution is published. Runtime
+        suppression is always read live from the controller - the control
+        plane stores no suppression value.
+        """
+        return dict(self.settings_projection_for_wire().effective_settings)
+
+    def settings_requested_for_wire(self):
+        """The additive ``requestedSettings`` snapshot projection.
+
+        Requested values come from the session settings authority filtered to
+        server-managed session keys; runtime suppression keeps its live
+        controller authority and is read live (AP-SRV-050 C2 F6). Reads never
+        mutate a revision or the state version.
+        """
+        return dict(self.settings_projection_for_wire().requested_settings)
+
+    def _new_activation_inputs(self):
+        """``(wire_settings, timing_policy)`` for one activation admission.
+
+        v2 sessions resolve both from the **one** atomic admission bundle
+        (:meth:`SessionSettingsState.activation_admission_settings`): the wire
+        effective settings and the six timing values come from exactly the same
+        settings revision, so an admission can never publish a value that the
+        controller would not really use (AP-SRV-050 C2 F3). Runtime suppression
+        keeps its own live authority and is overlaid after the bundle. Legacy
+        (v1) callers keep the nested legacy view and the controller defaults.
+        """
+        if self.canonical_ids:
+            bundle = self.settings_state.activation_admission_settings()
+            wire_settings = dict(bundle.effective_settings)
+            controller = self._activation
+            if controller is not None:
+                try:
+                    suppressed = (
+                        (controller.trigger_state() or {}).get("suppressed")
+                        or {}
+                    )
+                except Exception:  # noqa: BLE001 - defensive projection
+                    suppressed = {}
+                wire_settings[
+                    settings_control_module.RUNTIME_SUPPRESSION_MANUAL
+                ] = bool(suppressed.get("manual"))
+                wire_settings[
+                    settings_control_module.RUNTIME_SUPPRESSION_WAKE_WORD
+                ] = bool(suppressed.get("wakeWord"))
+            timings = bundle.timing_seconds
+            policy = ActivationTimingPolicy(
+                initial_speech_timeout=timings.get(
+                    settings_control_module.ACTIVATION_INITIAL_SPEECH,
+                    DEFAULT_INITIAL_SPEECH_TIMEOUT,
+                ),
+                followup_timeout=timings.get(
+                    settings_control_module.ACTIVATION_FOLLOWUP,
+                    DEFAULT_FOLLOWUP_TIMEOUT,
+                ),
+                segment_watchdog_initial=timings.get(
+                    settings_control_module.ACTIVATION_WATCHDOG_INITIAL,
+                    DEFAULT_SEGMENT_WATCHDOG_INITIAL,
+                ),
+                segment_watchdog_refresh=timings.get(
+                    settings_control_module.ACTIVATION_WATCHDOG_REFRESH,
+                    DEFAULT_SEGMENT_WATCHDOG_REFRESH,
+                ),
+                segment_watchdog_warning=timings.get(
+                    settings_control_module.ACTIVATION_WATCHDOG_WARNING,
+                    DEFAULT_SEGMENT_WATCHDOG_WARNING,
+                ),
+                closing_recovery_timeout=timings.get(
+                    settings_control_module.ACTIVATION_CLOSING_RECOVERY,
+                    DEFAULT_CLOSING_RECOVERY_TIMEOUT,
+                ),
+            )
+            return wire_settings, policy
+        return self._effective_activation_settings(), None
 
     # -- activation control -------------------------------------------------
 
@@ -3518,8 +3755,11 @@ class RecorderBackedRealtimeSession:
                     "audio_unavailable",
                     self._current_activation_id(),
                 )
+            activation_settings, timing_policy = self._new_activation_inputs()
             decision = self._activation.activate(
-                command.source, self._effective_activation_settings()
+                command.source,
+                activation_settings,
+                timing_policy=timing_policy,
             )
         elif command.action == REFRESH:
             decision = self._activation.refresh(
@@ -5456,8 +5696,11 @@ class RecorderBackedRealtimeSession:
                 # same admission as a manual command, including the generic
                 # audio-availability gate, and reaches the recorder only via
                 # the controlled gate. It never opens a recording on its own.
+                activation_settings, timing_policy = self._new_activation_inputs()
                 decision = self._activation.activate(
-                    "wake_word", self._effective_activation_settings()
+                    "wake_word",
+                    activation_settings,
+                    timing_policy=timing_policy,
                 )
                 self._apply_activation_decision_locked(
                     "activate", decision, published
@@ -5918,6 +6161,16 @@ class VoiceSTTService:
         self.audit = AuditLogManager(settings, self.events)
         self.performance = PerformanceLogManager(settings, self.events)
         self.config_store = RuntimeConfigStore(settings.runtime_config_path)
+        # AP-SRV-050 server-authoritative defaults with their own revision
+        # stream, loaded from the single runtime config document.
+        persisted_overlay, persisted_revision = self.config_store.load_control()
+        self.settings_control = settings_control_module.ServerSettingsState(
+            settings_control_module.build_default_registry(),
+            overlay=persisted_overlay,
+            revision=persisted_revision,
+            persist=self._persist_settings_control,
+        )
+        self.settings_registry = self.settings_control.registry
         self._log_access_tokens = {}
         self._log_access_lock = threading.RLock()
         self.ready_thread = None
@@ -6638,6 +6891,10 @@ class VoiceSTTService:
             "device", "host", "port",
         }
         return self.config_store.save(self.settings, allowed)
+
+    def _persist_settings_control(self, overlay, revision):
+        """Persists the AP-SRV-050 server-default overlay + its revision."""
+        return self.config_store.save_settings_control(overlay, revision)
 
     def model_catalog(self):
         main_engine = normalize_engine_name(self.settings.transcription_engine)
@@ -7436,6 +7693,11 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         authorization = request.headers.get("authorization", "")
         if not supplied and authorization.startswith("Bearer "):
             supplied = authorization[7:]
+        if not supplied:
+            # AP-SRV-050: ``X-Admin-Key`` is an alias inside the *same* guard,
+            # so the frozen server contract header works without weakening any
+            # existing compatible auth path.
+            supplied = request.headers.get("x-admin-key")
         if configured_key:
             if not _admin_key_matches(supplied):
                 return JSONResponse(
@@ -7683,6 +7945,63 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             return JSONResponse({"error": str(exc)}, status_code=400)
         result = service.update_settings(updates)
         return JSONResponse(result, status_code=400 if result["rejected"] else 200)
+
+    # -- AP-SRV-050 settings REST-v2 surface ---------------------------------
+
+    def _settings_server_identity():
+        try:
+            from api_fastapi_server.protocol_v2 import identity as _identity
+
+            return _identity.server_version(), _identity.server_commit()
+        except Exception:  # noqa: BLE001 - metadata must never break REST
+            return "unknown", "unknown"
+
+    @app.get("/api/v2/settings/schema")
+    async def settings_schema_v2():
+        # Public, non-secret registry metadata, deterministically sorted by key.
+        version, commit = _settings_server_identity()
+        return JSONResponse({
+            "protocolVersion": protocol_v2_schema.PROTOCOL_VERSION,
+            "serverVersion": version,
+            "serverCommit": commit,
+            "secretsExposed": False,
+            "settings": service.settings_registry.schema_payload(),
+        })
+
+    @app.get("/api/v2/settings/server")
+    async def settings_server_v2():
+        # Public read: only non-secret server values and the server revision.
+        version, commit = _settings_server_identity()
+        return JSONResponse(service.settings_control.server_public(
+            server_version=version,
+            server_commit=commit,
+        ))
+
+    @app.patch("/api/v2/settings/server")
+    async def patch_settings_server_v2(payload: dict, request: Request):
+        auth_error = admin_auth_error(request)
+        if auth_error is not None:
+            return auth_error
+        if not isinstance(payload, dict):
+            return JSONResponse({
+                "accepted": False,
+                "result": protocol_v2_schema.RESULT_SETTINGS_REJECTED,
+                "errors": [{
+                    "field": "body",
+                    "code": "invalid_payload",
+                    "message": "Der Patch muss ein JSON-Objekt sein.",
+                }],
+            }, status_code=400)
+        result = service.settings_control.patch_server(
+            payload.get("baseSettingsRevision"),
+            payload.get("changes"),
+        )
+        status = 409 if result.result == "settings_revision_conflict" else (
+            500 if result.result == "internal_error" else (
+                422 if result.result == "settings_rejected" else 200
+            )
+        )
+        return JSONResponse(result.to_dict(), status_code=status)
 
     @app.get("/api/logging")
     async def get_logging_config(request: Request):

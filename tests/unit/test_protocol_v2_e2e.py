@@ -895,7 +895,7 @@ class ProtocolV2CommandTests(unittest.TestCase):
                     ack["result"], schema.RESULT_TRIGGER_SUPPRESSED
                 )
 
-    def test_settings_patch_is_refused_until_ap_srv_050(self):
+    def test_settings_patch_is_applied(self):
         with TestClient(self.app) as client:
             with V2Session(client) as session:
                 sent = session.command({
@@ -904,10 +904,14 @@ class ProtocolV2CommandTests(unittest.TestCase):
                     "changes": {"activation.followupTimeoutMs": 4000},
                 })
                 ack = session.ack(sent["commandId"])
-                self.assertFalse(ack["accepted"])
-                self.assertEqual(ack["result"], schema.RESULT_SETTINGS_REJECTED)
-                self.assertTrue(ack["errors"])
-                self.assertEqual(ack["settingsRevision"], 0)
+                self.assertTrue(ack["accepted"])
+                self.assertEqual(ack["result"], schema.RESULT_APPLIED)
+                self.assertEqual(ack["settingsRevision"], 1)
+                changed = session.event(schema.EVENT_SETTINGS_CHANGED)
+                self.assertEqual(changed["settingsRevision"], 1)
+                self.assertEqual(
+                    changed["changedKeys"], ["activation.followupTimeoutMs"]
+                )
 
     def test_settings_patch_with_stale_revision_conflicts(self):
         with TestClient(self.app) as client:

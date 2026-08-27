@@ -827,6 +827,21 @@ class SnapshotCombinationTests(unittest.TestCase):
             def effective_settings(self):
                 return {"activation.followupTimeoutMs": 3000}
 
+            def requested_settings(self):
+                return {"activation.followupTimeoutMs": 3000}
+
+            def settings_projection(self):
+                from api_fastapi_server.settings_control import (
+                    SessionSettingsProjection,
+                )
+
+                effective = self.effective_settings()
+                return SessionSettingsProjection(
+                    settings_revision=0,
+                    requested_settings=dict(effective),
+                    effective_settings=dict(effective),
+                )
+
         class FakeWake:
             def capabilities(self):
                 return {"catalogRevision": 1, "availableWakeWordIds": []}
@@ -1001,14 +1016,38 @@ class PortTests(unittest.TestCase):
             ports.WakeWordPort.binding, "REQUIRES_AP_SRV_060_BINDING"
         )
 
-    def test_a_patch_is_refused_and_a_stale_revision_conflicts(self):
-        port = ports.SettingsPort(session=None)
-        result, errors = port.patch(0, {"a": 1})
-        self.assertEqual(result, "settings_rejected")
-        self.assertTrue(errors)
-        result, errors = port.patch(9, {"a": 1})
-        self.assertEqual(result, "settings_revision_conflict")
-        self.assertEqual(errors[0]["code"], "stale_settings_revision")
+    def test_a_patch_is_applied_and_a_stale_revision_conflicts(self):
+        from api_fastapi_server.settings_control import (
+            SessionSettingsState,
+            build_default_registry,
+        )
+
+        class FakeSettingsSession:
+            def __init__(self, state):
+                self.settings_state = state
+
+            def apply_settings_patch(self, base, changes):
+                return self.settings_state.apply_patch(base, changes)
+
+            def settings_effective_for_wire(self):
+                return dict(self.settings_state.effective_values())
+
+        session = FakeSettingsSession(
+            SessionSettingsState(build_default_registry())
+        )
+        port = ports.SettingsPort(session)
+        result = port.patch(0, {"activation.followupTimeoutMs": 4000})
+        self.assertEqual(result.result, "applied")
+        self.assertTrue(result.accepted)
+        self.assertEqual(result.settings_revision, 1)
+        self.assertEqual(port.revision, 1)
+        # ``effectiveSettings`` reflects the session resolution.
+        self.assertEqual(
+            port.effective_settings()["activation.followupTimeoutMs"], 4000
+        )
+        stale = port.patch(0, {"activation.followupTimeoutMs": 5000})
+        self.assertEqual(stale.result, "settings_revision_conflict")
+        self.assertEqual(stale.errors[0].code, "stale_settings_revision")
 
     def test_wake_word_selection_is_atomic(self):
         class FakeService:

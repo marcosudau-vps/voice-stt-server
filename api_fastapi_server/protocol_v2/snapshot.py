@@ -14,8 +14,10 @@ authority that already owns it:
     the controller's configured/suppressed/effective trigger state;
 ``audioAvailable``
     the session's generic device flag;
-``effectiveSettings`` / ``wakeWordCapabilities``
-    the AP-SRV-050 / AP-SRV-060 ports.
+``requestedSettings`` / ``effectiveSettings`` / ``settingsRevision``
+    the AP-SRV-050 settings port, read as one atomic projection bundle;
+``wakeWordCapabilities``
+    the AP-SRV-060 port.
 
 Timer projection
 ----------------
@@ -49,7 +51,11 @@ def build_snapshot(
     wall_clock = wall_clock or time.time
 
     controller_snapshot = controller.snapshot() if controller is not None else {}
-    state_version, settings_revision = state.versions()
+    state_version = state.state_version
+    # AP-SRV-050 C3: revision/requested/effective come from ONE atomic
+    # settings projection - never from independent reads that could span two
+    # settings revisions. stateVersion/lastEventSeq stay at ProtocolSessionState.
+    projection = settings_port.settings_projection()
 
     payload = {
         "type": schema.SESSION_SNAPSHOT,
@@ -59,14 +65,15 @@ def build_snapshot(
         "sessionId": state.session_id,
         "stateVersion": state_version,
         "lastEventSeq": state.last_event_seq,
-        "settingsRevision": settings_revision,
+        "settingsRevision": projection.settings_revision,
         "input": build_input(
             controller_snapshot, monotonic=monotonic, wall_clock=wall_clock
         ),
         "pendingActivations": build_pending_activations(ledger),
         "trigger": build_trigger(controller),
         "audioAvailable": bool(audio_available),
-        "effectiveSettings": settings_port.effective_settings(),
+        "requestedSettings": dict(projection.requested_settings),
+        "effectiveSettings": dict(projection.effective_settings),
         "wakeWordCapabilities": wake_word_port.capabilities(),
     }
     return payload
