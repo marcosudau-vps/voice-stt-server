@@ -443,7 +443,7 @@ class F3UnloadableSessionTests(unittest.TestCase):
         catalog = self.service.wakeword_catalog
         catalog.set_artifact_prober(
             lambda path: (_ for _ in ()).throw(RuntimeError("corrupt"))
-            if Path(path).name == "jarvis_v2.onnx" else None
+            if Path(path).stem == "jarvis_v2" else None
         )
         with TestClient(self.app) as client:
             with V2Session(
