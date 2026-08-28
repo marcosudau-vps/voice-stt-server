@@ -315,6 +315,7 @@ setuptools.setup(
             # any runtime download.
             "assets/wakeword_models/models.json",
             "assets/wakeword_models/*.onnx",
+            "assets/wakeword_models/*.tflite",
         ],
         "api_fastapi_server": ["static/index.html"],
     },
