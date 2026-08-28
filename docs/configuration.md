@@ -203,29 +203,49 @@ Die serverautoritative Settings-Control-Plane verwaltet als triggerrelevant
 | `activation.segmentWatchdogWarningMs` | int | 30000 | >=5000, < wirksame Frist |
 | `activation.closingRecoveryTimeoutMs` | int | 5000 | 1000–30000 |
 | `wakeWord.sensitivity` | float | 0.5 | 0.0–1.0 |
-| `wakeWord.cooldownMs` | int | 0 | 0–3400 |
-| `wakeWord.preRollMs` | int | 0 | 0–1960 |
+| `wakeWord.minConsecutivePredictionFrames` | int | 1 | >= 1 |
+| `wakeWord.cooldownMs` | int | 0 | >= 0 |
+| `wakeWord.preRollMs` | int | 0 | >= 0 |
+| `wakeWord.detectorGain` | float | 1.0 | 0.0–3.0 |
+| `wakeWord.noiseSuppressionEnabled` | bool | `false` | – |
+| `wakeWord.vadThreshold` | float | 0.0 | 0.0–1.0 |
 
-`wakeWord.cooldownMs` und `wakeWord.preRollMs` kommen aus AP-SRV-060 und sind
-**ausdrücklich vorläufig**: ihre Schemaeinträge tragen
-`constraints.calibration = "pending"` samt der abhängigen Traceability-IDs.
+`wakeWord.sensitivity` ist die gemeinsame Score-Schwelle aller ausgewählten
+Wake Words, `wakeWord.minConsecutivePredictionFrames` die Mindestanzahl
+aufeinanderfolgender OpenWakeWord-Prediction-Frames mit Score >= Schwelle,
+bevor ein Trefferbereich qualifiziert. Gezählt werden ausschließlich echte neue
+Prediction-Frames – nicht Recorderchunks und kein intern wiederholter Score.
 
-Die Zahlen der Bereiche sind gemessene Eigenschaften der gebündelten
-ONNX-Klassifikatoren: OpenWakeWord schiebt je 1280 Samples (80 ms bei 16 kHz)
-einen Embeddingframe weiter und das Embeddingmodell sieht 76
-Melspektrogrammframes (760 ms), ein Klassifikator mit `N` Eingangsframes also
-`(N - 1) * 80 + 760` ms; über den Build minimal 1960 ms und maximal 3400 ms.
-Ein Empfangsfenster ist jedoch **kein kalibrierter Betriebsbereich** – die
-Werte dienen nur als vorläufige Eingabegrenzen, und `0` ist ein neutraler
-Default, keine Empfehlung. Der Cooldown ist ein explizit konfigurierter Wert
-*neben* der impliziten Entprellung derselben Äußerung; `0` bedeutet kein
-konfigurierter Cooldown. Der reale Bereich und Default erfordern reale positive
-Wake-Word-Aufnahmen: `WW-18` und `WW-19` sind derzeit `EVIDENCE_BLOCKED`.
+`wakeWord.preRollMs` bezieht sich auf den operationalen Nullpunkt, die Trailing
+Edge des gewonnenen qualifizierten Wake-Hits. Aus dem Classifier-Receptive-Field
+wird **keine** Obergrenze mehr abgeleitet; die reale Grenze ist die vorgehaltene
+Audiohistorie und wird zur Laufzeit geclampt. `wakeWord.cooldownMs` ist der
+explizit konfigurierte Betreiber-Cooldown nach einem akzeptierten Wake-Hit und
+nicht die interne Gruppierung desselben Trefferbereichs.
+
+`wakeWord.detectorGain` wirkt nur auf einer PCM-Kopie für die Wake-Inferenz
+(sättigendes int16-Clipping); das Originalaudio für Aufnahme, Transkription und
+Audiohistorie bleibt unverändert. `wakeWord.vadThreshold` schaltet das
+OpenWakeWord-interne VAD-Gate vor der Wake-Inferenz (`0.0` = aus),
+`wakeWord.noiseSuppressionEnabled` die vorhandene Speex-Unterstützung.
+
+Die Kalibrierschlüssel sind **ausdrücklich vorläufig**: ihre Schemaeinträge
+tragen `constraints.calibration = "pending"` samt der abhängigen
+Traceability-IDs. `0`, `1` und `1.0` sind neutrale Defaults, keine Empfehlungen.
+Die kalibrierten Betriebswerte erfordern reale positive Wake-Word-Aufnahmen:
+`WW-18` und `WW-19` sind derzeit `EVIDENCE_BLOCKED`.
 
 Weitere Wake-Word-Settings der Control Plane: `wakeWord.selection` (Session,
-`next_session`), `wakeWord.globalDisabledIds` (Server, Admin-Key,
-`next_session`) und `runtimeSuppression.wakeWord` (Session, `live`, Schreib-
-autorität bleibt `trigger_suppression.set`).
+`next_session`), `wakeWord.inferenceBackend` (Server, Admin-Key,
+`next_session`, zulässig `auto`/`onnx`/`tflite` über die generische
+`constraints.allowedValues`-Prüfung), `wakeWord.globalDisabledIds` (Server,
+Admin-Key, `next_session`) und `runtimeSuppression.wakeWord` (Session, `live`,
+Schreibautorität bleibt `trigger_suppression.set`).
+
+`wakeWord.inferenceBackend` wählt das **eine gemeinsame** Inference Backend
+einer Live-Engine für alle ausgewählten Wake Words. `auto` bevorzugt ONNX unter
+Windows und TFLite/LiteRT unter Linux und fällt für die gesamte Auswahl auf das
+jeweils andere Backend zurück; eine explizite Wahl wechselt nie still.
 
 Die öffentliche Verwaltung läuft über `GET/PATCH /api/v2/settings/server`
 (`PATCH` admin-geschützt, optimistische Concurrency) und das Schema über

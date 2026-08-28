@@ -1,4 +1,4 @@
-# AP-SRV-060 – Umsetzungsvergleich (Stand C2)
+# AP-SRV-060 – Umsetzungsvergleich (Stand C3)
 
 Soll-/Ist-Prüfung des verbindlichen Auftrags
 `runs/01_IMPLEMENTATION/2026-08-27_PROMPT.md` gegen den tatsächlich in diesem
@@ -29,6 +29,51 @@ C2-Stand korrigiert. Die vollständige Root-Korrektur ist in
 Ergebnis nach C2: **34 VOLLSTÄNDIG, 4 TEILWEISE, 0 NICHT.** Alle vier
 Teilbewertungen hängen an genau einer Ursache – fehlende reale positive
 Wake-Word-Aufnahmen – und sind als `EVIDENCE_BLOCKED` gekennzeichnet.
+
+## Fortschreibung nach Root FAIL / C3
+
+Root hat C2 mit den Findings **F11–F15** abgelehnt und zusätzlich die
+Detection-Semantik verbindlich präzisiert. Der Vergleich oben war damit an
+zwei Stellen zu positiv (F4, F6 hatten die falsche Lesart festgeschrieben);
+außerdem sind mit C3 neue Requirementblöcke hinzugekommen. Die vollständige
+Root-Korrektur ist in `runs/03_ROOT_CORRECTION/2026-08-28_REPORT.md`
+beschrieben.
+
+| Root-Finding | betroffener Requirementblock | Bewertung nach C2 | Bewertung nach C3 |
+|---|---|---|---|
+| F11 ein Wake-Attempt mischte Settingsrevisionen | C3 §13 | fälschlich VOLLSTÄNDIG (F2) | VOLLSTÄNDIG (`WakeAttemptPolicy`, Barriertest) |
+| F12 Runtime-/Loadability-Authority | C3 §14 | fälschlich VOLLSTÄNDIG (F3) | VOLLSTÄNDIG (per-Backend-Health, `runtime_unavailable`, Common-Backend-Gate) |
+| F13 genau ein logisches `wakeword.detected` | C3 §15 | fälschlich VOLLSTÄNDIG (F7) | VOLLSTÄNDIG (`LogicalWakeEventLedger`, Faulttests A–D) |
+| F14 echte state-changing Refresh-Races | C3 §16 | fälschlich VOLLSTÄNDIG (F10) | VOLLSTÄNDIG (A→B, 20/20, ohne Sleeps) |
+| F15 Contract-/Dokumentationskorrektur | C3 §17 | fälschlich VOLLSTÄNDIG | VOLLSTÄNDIG (Detection-Semantik korrigiert, zurückgezogene Aussagen markiert) |
+
+Neu bewertete C3-Requirementblöcke:
+
+| C3-Block | Stand | Nachweis |
+|---|---|---|
+| §5 Wake-Hit-Modell (Schwelle, Mindestframezahl, Qualifikation, Finalisierung) | VOLLSTÄNDIG | `WakeHitTrackerTests` (11 Matrixfälle + Prompt-Beispielfolge) |
+| §6 Multi-Wake-Word-Arbitration, First-finalized-wins, Tie-Breaker | VOLLSTÄNDIG | `test_7…`, `test_8…`, `test_9…`, `test_10…` |
+| §7 operationaler Nullpunkt / Pre-Roll | VOLLSTÄNDIG | `OperationalZeroPointTests`, Recordingpfad-Tests |
+| §8 Prediction-Frames statt Recorderchunks | VOLLSTÄNDIG | `PredictionFrameTests` (20/40 ms, gecachter Score) |
+| §9 Settings-Plane vollständig verdrahtet | VOLLSTÄNDIG | `C3SettingsPlaneTests`, `test_schema_is_deterministic_and_complete` |
+| §10 Dual Backend, ein gemeinsames Backend je Engine | VOLLSTÄNDIG | `F12BackendPolicyTests`, `F12CatalogAdmissionTests` |
+| §11 Catalog Loadability bei Load und Refresh | VOLLSTÄNDIG | `C3CatalogLoadabilityTests` |
+| §12 dünner OpenWakeWord-Adapter, kein Fork | VOLLSTÄNDIG | `openwakeword_engine.py`, `WakeDetectorVadTests` |
+| §19 VAD-Architekturgate | VOLLSTÄNDIG | `WakeDetectorVadTests`, Lifecycle-Tests |
+| §20 Gain-Gate, Originalaudio unverändert | VOLLSTÄNDIG | `DetectorGainTests` (bytegenau, sättigend) |
+| §18 empirische Kalibrierung | **TEILWEISE** | `EVIDENCE_BLOCKED` (WW-18/WW-19) |
+| §10 `.tflite`-Artefakte im ausgelieferten Bundle | **TEILWEISE** | Kette implementiert und getestet; Artefakte sind ein Deploymentschritt, keine Runtime-Downloads |
+
+Damit korrigiert C3 zwei frühere Bewertungen ausdrücklich nach unten und
+anschließend wieder nach oben:
+
+* **F4/§18 Audiogrenze:** C2 bewertete sie als „TEILWEISE / EVIDENCE_BLOCKED",
+  weil die Wake-Endgrenze als unbekannte Größe galt. Root hat den operationalen
+  Nullpunkt seither als Produktentscheidung definiert; die **Grenze selbst** ist
+  damit **VOLLSTÄNDIG**, `EVIDENCE_BLOCKED` bleibt nur die Kalibrierung.
+* **F6/§16 Entprellung:** die C2-Lösung (implizites Entprellfenster) beruhte auf
+  der falschen Lesart „ein Scoreframe ist ein Wake Word". Sie ist
+  zurückgezogen; die Gruppierung leistet jetzt der `WakeHitTracker` ohne Timer.
 
 | # | Requirement | Stand | Code-Nachweis | Test-/Evidence-Nachweis | Abweichung / EVIDENCE_PENDING |
 |---|---|---|---|---|---|
@@ -105,17 +150,25 @@ Wake-Word-Aufnahmen – und sind als `EVIDENCE_BLOCKED` gekennzeichnet.
 | SET-13b `GET /api/v2/wake-words` | VOLLSTÄNDIG | HTTP-Contract-Tests |
 | FIND-011 Mehrfachsignalpfad | VOLLSTÄNDIG | `test_wakeword_recording_path.py` |
 
-## Zusammenfassung (Stand C2)
+## Zusammenfassung (Stand C3)
 
-Von 39 geprüften Requirementblöcken sind 35 **VOLLSTÄNDIG** und 4
-**TEILWEISE**. Alle vier Teilbewertungen betreffen denselben, im Auftrag
-ausdrücklich vorgesehenen Fall: die von realer positiver Wake-Word-Sprache
-abhängigen Entscheidungen (`WW-18`, `WW-19`, die reale Wake-Endgrenze und der
-Bedarf einer Mehrfach-Chunk-Regel). Sie sind seit C2 durchgängig als
-`EVIDENCE_BLOCKED` gekennzeichnet – auch im Produkt selbst, über
-`constraints.calibration = "pending"` und `boundaryMeasured = false`. Kein
-Requirement ist **NICHT** umgesetzt, und keine unbewiesene Kalibrierentscheidung
-wird als finaler Contract ausgegeben.
+Von den geprüften Requirementblöcken ist keiner **NICHT** umgesetzt.
+**TEILWEISE** bleiben genau zwei Sachverhalte:
 
-Die zehn Root-Findings F1–F10 sind geschlossen und jeweils durch einen
+1. die **empirische Kalibrierung** (`WW-18`, `WW-19`) – abhängig von realer
+   positiver Wake-Word-Sprache, im Produkt über
+   `constraints.calibration = "pending"` gekennzeichnet;
+2. die **`.tflite`-Artefakte** des ausgelieferten Bundles – die Dual-Backend-
+   Kette ist implementiert und gegen echte Zweiformat-Bundles getestet, das
+   Nachliefern der Artefakte ist ein Deployment-/Assetschritt ohne
+   Runtime-Downloads.
+
+Ausdrücklich **nicht** mehr teilweise ist die algorithmische Detection- und
+Boundary-Semantik: Trefferregion, Qualifikation, Finalisierung, Exactly-once
+Event, operationaler Nullpunkt und Pre-Roll-Mathematik sind vollständig
+implementiert und getestet. Die Audiogrenze weist sich nicht mehr als Schätzung
+aus, sondern als definierte Produktentscheidung (`boundaryBasis =
+operational_zero_point`, `boundaryDefined = true`).
+
+Die fünfzehn Root-Findings F1–F15 sind geschlossen und jeweils durch einen
 RED-first nachgewiesenen Regressiontest abgesichert.

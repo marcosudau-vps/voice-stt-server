@@ -1,67 +1,87 @@
 """AP-SRV-060 wake-word catalog authority.
 
 This module is the single source of truth for *which wake words this build
-offers*. It owns exactly five things and deliberately nothing else:
+offers, and under which inference backend they can really be loaded*.
 
 ``models.json``
     The bundled manifest under ``VoiceSTT/assets/wakeword_models/`` is the
     canonical catalog authority of the v2 path. A file that merely happens to
     lie next to it never becomes public build capability; unreferenced files
     are reported as diagnostics only.
+
 two clearly separated admission paths (Root F1)
     :func:`normalize_wake_word_token` is the only normalisation in the
     product, and it serves **human configuration only**: config values resolve
     against canonical ids, display names and *explicit* aliases - never
-    against a heuristic, and the frozen contract forbids stripping "Hey", so
-    ``jarvis`` resolves to ``hey_jarvis`` only because the manifest lists it
-    as an alias. That is :meth:`WakeWordCatalogSnapshot.resolve` /
+    against a heuristic. That is :meth:`WakeWordCatalogSnapshot.resolve` /
     :meth:`resolve_human_selection`.
 
     The **v2 wire** is different: ``requestedSession.wakeWordIds`` carries
-    canonical ids, full stop. :meth:`admit_selection` accepts nothing else -
-    an alias or a display name on the wire rejects the whole session. Mixing
-    the two would let a client depend on a tolerance the wire contract does
-    not grant.
+    canonical ids, full stop. :meth:`admit_selection` accepts nothing else.
 
-loadability (Root F3)
-    Availability answers "is this wake word part of the build and are its
-    files there". Admission answers the stricter question "can these exact
-    classifiers actually be loaded", by probing the selected artifacts with
-    the real inference runtime before a session is accepted. The probe result
-    is memoised per artifact identity, and only the *selected* artifacts are
-    ever probed - selected-only stays intact.
-one snapshot
+loadability at load and refresh (Root F3, corrected by Root F12)
+    A model is never ``available=true`` just because a file exists. At the
+    initial catalog load and at **every** ``POST /api/v2/wake-words/refresh``
+    the authority validates the manifest, the canonical ids/aliases, the
+    declared artifact integrity, *both* declared artifact formats, the runtime
+    availability, the shared pipeline assets and the **real probe loadability**
+    of every declared classifier artifact, and records per-backend health.
+
+    C2 skipped the real ONNX probe when ONNXRuntime did not import, which made
+    "no runtime" look like "healthy". C3 treats an absent runtime as an
+    unhealthy backend (``runtime_unavailable``) - never as a passed probe.
+
+dual backend (C3 section 10)
+    Health is per backend; admission is per *selection*. A live engine holds
+    one upstream model and therefore one inference framework, so a selection is
+    admitted only when a single common backend is healthy for **all** of its
+    wake words. The choice itself lives in :mod:`VoiceSTT.core.wake_backend`.
+
+one snapshot / one authority
     :class:`WakeWordCatalogSnapshot` is immutable and carries the public
-    projection, the internal artifact projection, availability and the
-    resolver index of one consistent catalog state.
-one authority
+    projection, the internal artifact projection, availability and the resolver
+    index of one consistent catalog state.
     :class:`WakeWordCatalogAuthority` is server-wide and thread-safe. It keeps
     the last-known-good snapshot, swaps atomically and only on complete
     success, and owns ``catalogRevision``.
+
 ``catalogRevision``
     Separate from ``settingsRevision`` and raised only when the *visible*
     catalog projection actually changed. Every public entry carries the
     revision of the snapshot it came from (Root F9), and every refresh returns
-    an immutable snapshot so a caller never has to read the authority twice
-    and can never mix two states (Root F10). Any visible change notifies the
-    subscriber, not only an availability change (Root F8).
+    an immutable snapshot so a caller never has to read the authority twice and
+    can never mix two states (Root F10).
 
-Public payloads never contain filesystem paths, ``source`` markers, internal
-``paths`` maps, runtime objects or secrets. The artifact projection that does
-carry paths is internal and is only handed to the loader.
+public semantics (C3 section 11.1)
+    A model that cannot be loaded does **not** disappear from the public
+    catalog. It stays queryable with ``available=false`` and a machine-readable,
+    non-secret ``unavailableReason``; only genuinely available ids appear in
+    ``availableWakeWordIds``. Public payloads never contain filesystem paths,
+    ``source`` markers, internal ``paths`` maps, runtime objects or secrets.
 """
 
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import os
 import re
 import threading
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
+
+from .wake_backend import (
+    BACKEND_AUTO,
+    BACKEND_ONNX,
+    BACKEND_TFLITE,
+    INFERENCE_BACKENDS,
+    REASON_BACKEND_UNAVAILABLE,
+    REASON_NO_COMMON_BACKEND,
+    select_common_backend,
+)
 
 
 #: Override for the bundled asset root. Deployments and tests may point this at
@@ -70,15 +90,24 @@ WAKEWORD_ASSET_ROOT_ENV = "VOICESTT_WAKEWORD_ASSET_ROOT"
 
 MANIFEST_NAME = "models.json"
 
-#: The one framework the bundled build ships. tflite artifacts are not part of
-#: the bundle, so the v2 catalog resolves ONNX only.
-BUNDLED_FRAMEWORK = "onnx"
+#: Historical name of the single bundled framework. Kept so external readers of
+#: the constant do not break; the catalog itself is backend-plural now.
+BUNDLED_FRAMEWORK = BACKEND_ONNX
+
+#: File suffix of one backend's artifacts, used only for diagnostics of files
+#: that are not declared in the manifest.
+BACKEND_SUFFIX = {BACKEND_ONNX: ".onnx", BACKEND_TFLITE: ".tflite"}
 
 REASON_GLOBALLY_DISABLED = "globally_disabled"
 REASON_ARTIFACT_MISSING = "artifact_missing"
 REASON_PIPELINE_UNAVAILABLE = "pipeline_unavailable"
 #: The artifact exists but the real inference runtime refuses to load it.
 REASON_ARTIFACT_UNLOADABLE = "artifact_unloadable"
+#: The artifact on disk does not match the integrity data of the manifest.
+REASON_ARTIFACT_INTEGRITY = "artifact_integrity_mismatch"
+#: No inference runtime for that backend is installed, so nothing can be
+#: probed. Root F12: this is *not* a passed probe.
+REASON_RUNTIME_UNAVAILABLE = "runtime_unavailable"
 #: A wire value that is not a canonical id - an alias, a display name or any
 #: other tolerated human spelling. Tolerance is a config feature, not a wire
 #: feature (Root F1).
@@ -91,6 +120,9 @@ CODE_UNAVAILABLE = "wake_word_unavailable"
 
 REASON_UNKNOWN = "unknown"
 
+#: Deterministic order in which an entry's unavailability reason is reported.
+_REASON_BACKEND_ORDER = INFERENCE_BACKENDS
+
 _SEPARATORS = re.compile(r"[\s._\-]+")
 
 #: Distinguishes "argument not given" from an explicit ``None``.
@@ -101,20 +133,10 @@ class WakeWordArtifactError(RuntimeError):
     """One artifact that the real inference runtime refuses to load."""
 
 
-def _artifact_identity(path: Any):
-    """Identity of an artifact file for the memoised loadability probe."""
-    candidate = Path(path)
-    try:
-        stat = candidate.stat()
-        return (str(candidate), stat.st_size, stat.st_mtime_ns)
-    except OSError:
-        return (str(candidate), None, None)
-
-
 class WakeWordManifestError(ValueError):
     """A manifest that cannot become a catalog.
 
-    Raised for schema violations, unusable artifacts declarations and, most
+    Raised for schema violations, unusable artifact declarations and, most
     importantly, for id/alias collisions. A collision is a catalog error and is
     never resolved heuristically, by ordering or by file name.
     """
@@ -124,10 +146,8 @@ def normalize_wake_word_token(value: Any) -> str:
     """The one tolerant normalisation for human-edited wake-word names.
 
     Unicode-normalise, trim the outside, casefold, and fold every run of
-    separators between word parts into a single ``_``. ``hey_jarvis``,
-    ``Hey Jarvis``, ``HEY-JARVIS``, ``hey.jarvis`` and ``hey__jarvis``
-    therefore all normalise to the same token. Nothing is added or removed
-    beyond that: no word is stripped, no prefix is guessed.
+    separators between word parts into a single ``_``. Nothing is added or
+    removed beyond that: no word is stripped, no prefix is guessed.
     """
     text = "" if value is None else str(value)
     text = unicodedata.normalize("NFKC", text).strip()
@@ -136,15 +156,31 @@ def normalize_wake_word_token(value: Any) -> str:
     return text.casefold()
 
 
+def _sha256_of(path: Path) -> Optional[str]:
+    try:
+        digest = hashlib.sha256()
+        with open(path, "rb") as handle:
+            for block in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(block)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
 @dataclass(frozen=True)
 class WakeWordArtifact:
-    """One classifier artifact of one wake word, in one framework."""
+    """One classifier artifact of one wake word, in one inference backend."""
 
-    framework: str
+    backend: str
     file_name: str
     path: Path
-    sha256: str
-    byte_size: int
+    sha256: str = ""
+    byte_size: int = 0
+
+    @property
+    def framework(self) -> str:
+        """Historical name of :attr:`backend`."""
+        return self.backend
 
     @property
     def model_key(self) -> str:
@@ -160,57 +196,127 @@ class WakeWordArtifact:
 
 @dataclass(frozen=True)
 class WakeWordPipeline:
-    """The shared feature/pipeline models of one framework.
+    """The shared feature/pipeline models, per inference backend.
 
-    Ownership: these two artifacts belong to the *catalog*, not to a single
-    wake word. The real OpenWakeWord API takes them per model instance, so
-    every session-scoped instance receives the same two paths; they are never
-    duplicated per selected classifier and never loaded twice per instance.
+    Ownership: these artifacts belong to the *catalog*, not to a single wake
+    word. The real OpenWakeWord API takes them per model instance, so every
+    session-scoped instance receives the same two paths of its backend; they
+    are never duplicated per selected classifier.
     """
 
-    framework: str
-    melspectrogram_path: Optional[Path]
-    embedding_path: Optional[Path]
+    paths: Mapping[str, Tuple[Optional[Path], Optional[Path]]]
+
+    @property
+    def backends(self) -> Tuple[str, ...]:
+        return tuple(
+            backend for backend in INFERENCE_BACKENDS if backend in self.paths
+        )
+
+    @property
+    def framework(self) -> str:
+        """Historical single-framework accessor: the first declared backend."""
+        backends = self.backends
+        return backends[0] if backends else BACKEND_ONNX
+
+    def artifacts(self, backend: str) -> Tuple[Optional[Path], Optional[Path]]:
+        return self.paths.get(backend, (None, None))
+
+    def files_present(self, backend: str) -> bool:
+        melspec, embedding = self.artifacts(backend)
+        return bool(
+            melspec and melspec.is_file() and embedding and embedding.is_file()
+        )
+
+    def available_for(self, backend: str) -> bool:
+        return self.files_present(backend)
 
     @property
     def available(self) -> bool:
-        return bool(
-            self.melspectrogram_path
-            and self.melspectrogram_path.is_file()
-            and self.embedding_path
-            and self.embedding_path.is_file()
-        )
+        """Whether at least one backend's pipeline files are present."""
+        return any(self.files_present(backend) for backend in self.backends)
 
-    def loader_kwargs(self) -> Dict[str, str]:
+    def loader_kwargs(self, backend: str) -> Dict[str, str]:
         """The kwargs the real OpenWakeWord model constructor expects."""
-        if not self.available:
+        if not self.files_present(backend):
             return {}
+        melspec, embedding = self.artifacts(backend)
         return {
-            "melspec_model_path": str(self.melspectrogram_path),
-            "embedding_model_path": str(self.embedding_path),
+            "melspec_model_path": str(melspec),
+            "embedding_model_path": str(embedding),
         }
 
 
 @dataclass(frozen=True)
+class BackendHealth:
+    """Whether one wake word can really be loaded under one backend."""
+
+    backend: str
+    available: bool
+    reason: Optional[str] = None
+
+    def public_dict(self) -> Dict[str, Any]:
+        payload: Dict[str, Any] = {"available": bool(self.available)}
+        if not self.available and self.reason:
+            payload["unavailableReason"] = self.reason
+        return payload
+
+
+@dataclass(frozen=True)
 class WakeWordEntry:
-    """One catalog entry with its resolved availability."""
+    """One catalog entry with its per-backend health and its availability."""
 
     id: str
     display_name: str
     aliases: Tuple[str, ...]
     artifact_version: str
-    artifact: WakeWordArtifact
-    available: bool
+    artifacts: Mapping[str, WakeWordArtifact]
+    backend_health: Mapping[str, BackendHealth] = None
+    available: bool = False
     unavailable_reason: Optional[str] = None
+
+    @property
+    def declared_backends(self) -> Tuple[str, ...]:
+        return tuple(
+            backend for backend in INFERENCE_BACKENDS if backend in self.artifacts
+        )
+
+    @property
+    def healthy_backends(self) -> Tuple[str, ...]:
+        health = self.backend_health or {}
+        return tuple(
+            backend for backend in INFERENCE_BACKENDS
+            if backend in health and health[backend].available
+        )
+
+    @property
+    def artifact(self) -> Optional[WakeWordArtifact]:
+        """The first declared artifact. Historical single-backend accessor."""
+        for backend in self.declared_backends:
+            return self.artifacts[backend]
+        return None
+
+    def artifact_for(self, backend: str) -> Optional[WakeWordArtifact]:
+        return self.artifacts.get(backend)
 
     def public_dict(self) -> Dict[str, Any]:
         """The public catalog projection. Never carries a path or a source."""
+        health = self.backend_health or {}
         payload: Dict[str, Any] = {
             "id": self.id,
             "displayName": self.display_name,
             "aliases": list(self.aliases),
             "artifactVersion": self.artifact_version,
             "available": bool(self.available),
+            "backends": {
+                backend: (
+                    health[backend].public_dict() if backend in health
+                    else {
+                        "available": False,
+                        "unavailableReason": REASON_ARTIFACT_MISSING,
+                    }
+                )
+                for backend in INFERENCE_BACKENDS
+            },
         }
         if not self.available and self.unavailable_reason:
             payload["unavailableReason"] = self.unavailable_reason
@@ -219,11 +325,18 @@ class WakeWordEntry:
 
 @dataclass(frozen=True)
 class WakeWordSelection:
-    """The internal artifact projection of one admitted selection."""
+    """The internal artifact projection of one admitted selection.
+
+    ``backend`` is the **one** inference backend every entry of this selection
+    runs on. There is no per-model mixture inside a live engine.
+    """
 
     entries: Tuple[WakeWordEntry, ...]
     pipeline: WakeWordPipeline
     catalog_revision: int
+    backend: str = BACKEND_ONNX
+    fallback_used: bool = False
+    requested_backend: str = BACKEND_AUTO
 
     @property
     def wake_word_ids(self) -> Tuple[str, ...]:
@@ -232,17 +345,34 @@ class WakeWordSelection:
     @property
     def model_paths(self) -> Tuple[str, ...]:
         """Exactly the selected classifiers - selected-only initialisation."""
-        return tuple(str(entry.artifact.path) for entry in self.entries)
+        return tuple(
+            str(entry.artifacts[self.backend].path) for entry in self.entries
+        )
 
     @property
     def model_key_to_id(self) -> Dict[str, str]:
         """OpenWakeWord model key -> canonical id, for the detection layer."""
-        return {entry.artifact.model_key: entry.id for entry in self.entries}
+        return {
+            entry.artifacts[self.backend].model_key: entry.id
+            for entry in self.entries
+        }
 
     def loader_kwargs(self) -> Dict[str, Any]:
-        kwargs: Dict[str, Any] = {"wakeword_models": list(self.model_paths)}
-        kwargs.update(self.pipeline.loader_kwargs())
+        kwargs: Dict[str, Any] = {
+            "wakeword_models": list(self.model_paths),
+            "inference_framework": self.backend,
+        }
+        kwargs.update(self.pipeline.loader_kwargs(self.backend))
         return kwargs
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "wakeWordIds": list(self.wake_word_ids),
+            "backend": self.backend,
+            "requestedBackend": self.requested_backend,
+            "fallbackUsed": bool(self.fallback_used),
+            "catalogRevision": int(self.catalog_revision),
+        }
 
 
 @dataclass(frozen=True)
@@ -361,6 +491,8 @@ class WakeWordCatalogSnapshot:
 
         Root F9: every entry carries the revision of the snapshot it came from,
         so a client can never pair an entry with the wrong top-level revision.
+        C3 section 11.1: unloadable entries stay listed with ``available=false``
+        and a machine-readable reason.
         """
         payload = []
         for entry in self._entries:
@@ -408,7 +540,12 @@ class WakeWordCatalogSnapshot:
         return self._resolver_index.get(token)
 
     def admit_selection(
-        self, values: Sequence[Any], *, canonical_only: bool = True, prober=None
+        self,
+        values: Sequence[Any],
+        *,
+        canonical_only: bool = True,
+        requested_backend: Any = BACKEND_AUTO,
+        platform: Optional[str] = None,
     ) -> Tuple[Optional[WakeWordSelection], Tuple[SelectionError, ...]]:
         """Atomic admission of one requested selection.
 
@@ -421,10 +558,9 @@ class WakeWordCatalogSnapshot:
         already a canonical id is refused with ``reason=not_canonical``, even
         when the tolerant human resolver would have understood it.
 
-        ``prober`` is the loadability gate (Root F3). When it is given, every
-        *selected* classifier and the shared pipeline models are handed to it
-        before the selection is admitted; a raising prober rejects the whole
-        selection with ``reason=artifact_unloadable``.
+        The backend gate (Root F12) runs last: the selection is admitted only
+        when a single common backend is healthy for **every** selected wake
+        word under the requested backend policy.
         """
         errors: List[SelectionError] = []
         resolved: List[WakeWordEntry] = []
@@ -487,73 +623,105 @@ class WakeWordCatalogSnapshot:
                     "Wake-Word-ID ausgewählt sein."
                 ),
             ))
-        if not errors and prober is not None:
-            errors.extend(self._probe_loadable(resolved, prober))
         if errors:
             return None, tuple(errors)
+
+        backend_selection = select_common_backend(
+            requested_backend,
+            self.common_backends(resolved),
+            platform=platform,
+        )
+        if not backend_selection.admitted:
+            return None, (self._backend_error(resolved, backend_selection),)
+
         return (
             WakeWordSelection(
                 entries=tuple(resolved),
                 pipeline=self._pipeline,
                 catalog_revision=self._catalog_revision,
+                backend=backend_selection.backend,
+                fallback_used=backend_selection.fallback_used,
+                requested_backend=backend_selection.requested,
             ),
             (),
         )
 
-    def resolve_human_selection(self, values: Sequence[Any], *, prober=None):
-        """Tolerant admission for human configuration values only."""
-        return self.admit_selection(values, canonical_only=False, prober=prober)
-
-    def _probe_loadable(self, entries, prober) -> List[SelectionError]:
-        """Real loadability of exactly the selected artifacts (Root F3).
-
-        The selected classifiers are probed first so the most specific cause
-        wins: a corrupt classifier is reported as ``artifact_unloadable`` even
-        on a build whose shared pipeline is broken too. The pipeline is only
-        blamed when every selected classifier itself is fine.
-        """
-        errors: List[SelectionError] = []
+    def common_backends(self, entries: Sequence[WakeWordEntry]) -> Tuple[str, ...]:
+        """Backends healthy for **every** entry of one selection."""
+        if not entries:
+            return ()
+        common = set(INFERENCE_BACKENDS)
         for entry in entries:
-            try:
-                prober(str(entry.artifact.path))
-            except Exception:  # noqa: BLE001 - reason must not leak internals
-                errors.append(SelectionError(
-                    wake_word_id=entry.id,
-                    reason=REASON_ARTIFACT_UNLOADABLE,
-                    message=(
-                        f"Das Wake-Word-Artefakt von '{entry.id}' kann nicht "
-                        "geladen werden."
-                    ),
-                ))
-        if errors:
-            return errors
-        for artifact_path in (
-            self._pipeline.melspectrogram_path, self._pipeline.embedding_path
-        ):
-            try:
-                prober(str(artifact_path))
-            except Exception:  # noqa: BLE001 - reason must not leak internals
-                return [SelectionError(
-                    wake_word_id=entry.id,
-                    reason=REASON_PIPELINE_UNAVAILABLE,
-                    message=(
-                        "Die gemeinsamen Wake-Word-Pipelinemodelle können "
-                        "nicht geladen werden."
-                    ),
-                ) for entry in entries]
-        return errors
+            common &= set(entry.healthy_backends)
+            if not common:
+                break
+        return tuple(
+            backend for backend in INFERENCE_BACKENDS if backend in common
+        )
+
+    def _backend_error(self, entries, backend_selection) -> SelectionError:
+        wake_word_ids = ", ".join(entry.id for entry in entries)
+        if backend_selection.reason == REASON_BACKEND_UNAVAILABLE:
+            message = (
+                f"Das Inference-Backend '{backend_selection.requested}' ist "
+                f"für die gewählten Wake Words ({wake_word_ids}) nicht "
+                "verfügbar."
+            )
+        else:
+            message = (
+                "Für die gewählten Wake Words "
+                f"({wake_word_ids}) gibt es kein gemeinsames verfügbares "
+                "Inference-Backend."
+            )
+        return SelectionError(
+            wake_word_id=entries[0].id if entries else "",
+            reason=backend_selection.reason,
+            message=message,
+        )
+
+    def resolve_human_selection(self, values: Sequence[Any], **kwargs):
+        """Tolerant admission for human configuration values only."""
+        return self.admit_selection(values, canonical_only=False, **kwargs)
 
     # -- derived snapshots ---------------------------------------------------
 
-    def with_catalog_revision(self, revision: int) -> "WakeWordCatalogSnapshot":
+    def _derive(self, entries, *, revision=None, diagnostics=None):
         return WakeWordCatalogSnapshot(
-            catalog_revision=int(revision),
-            entries=self._entries,
+            catalog_revision=(
+                self._catalog_revision if revision is None else int(revision)
+            ),
+            entries=entries,
             pipeline=self._pipeline,
             resolver_index=self._resolver_index,
             manifest_path=self._manifest_path,
-            diagnostics=self._diagnostics,
+            diagnostics=(
+                self._diagnostics if diagnostics is None else diagnostics
+            ),
         )
+
+    def with_catalog_revision(self, revision: int) -> "WakeWordCatalogSnapshot":
+        return self._derive(self._entries, revision=revision)
+
+    def with_backend_health(self, probers: Mapping[str, Any]) -> "WakeWordCatalogSnapshot":
+        """The same catalog with per-backend health really resolved.
+
+        This is the C3 loadability gate. It runs at the initial load and at
+        every refresh, and it probes each declared classifier artifact and the
+        shared pipeline models of its backend with the real inference runtime.
+        """
+        entries = [
+            _entry_with_backend_health(entry, self._pipeline, probers)
+            for entry in self._entries
+        ]
+        diagnostics = dict(self._diagnostics)
+        diagnostics["probedBackends"] = sorted(
+            backend for backend in INFERENCE_BACKENDS if backend in (probers or {})
+        )
+        diagnostics["runtimeUnavailableBackends"] = sorted(
+            backend for backend in INFERENCE_BACKENDS
+            if (probers or {}).get(backend) is None
+        )
+        return self._derive(entries, diagnostics=diagnostics)
 
     def with_global_disabled(
         self, disabled_ids: Sequence[Any]
@@ -561,8 +729,8 @@ class WakeWordCatalogSnapshot:
         """The same catalog with the global disable projection applied.
 
         The global disable list is an AP-SRV-050 server setting; the catalog
-        only projects it into availability. Values are resolved through the
-        one resolver, so an admin may write ``Hey Jarvis`` as well.
+        only projects it into availability. Values are resolved through the one
+        resolver, so an admin may write ``Hey Jarvis`` as well.
         """
         disabled = set()
         for value in disabled_ids or ():
@@ -578,53 +746,113 @@ class WakeWordCatalogSnapshot:
         for entry in self._entries:
             if entry.id in disabled:
                 if entry.available or entry.unavailable_reason != REASON_GLOBALLY_DISABLED:
-                    entry = WakeWordEntry(
-                        id=entry.id,
-                        display_name=entry.display_name,
-                        aliases=entry.aliases,
-                        artifact_version=entry.artifact_version,
-                        artifact=entry.artifact,
+                    entry = _replace_entry(
+                        entry,
                         available=False,
                         unavailable_reason=REASON_GLOBALLY_DISABLED,
                     )
             elif entry.unavailable_reason == REASON_GLOBALLY_DISABLED:
-                entry = _entry_with_resolved_availability(entry, self._pipeline)
+                entry = _replace_entry(
+                    entry,
+                    available=bool(entry.healthy_backends),
+                    unavailable_reason=_entry_reason(entry),
+                )
             entries.append(entry)
         diagnostics = dict(self._diagnostics)
         diagnostics["globalDisabledIds"] = sorted(disabled)
-        return WakeWordCatalogSnapshot(
-            catalog_revision=self._catalog_revision,
-            entries=entries,
-            pipeline=self._pipeline,
-            resolver_index=self._resolver_index,
-            manifest_path=self._manifest_path,
-            diagnostics=diagnostics,
-        )
+        return self._derive(entries, diagnostics=diagnostics)
 
 
-def _entry_with_resolved_availability(
-    entry: WakeWordEntry, pipeline: WakeWordPipeline
-) -> WakeWordEntry:
-    available, reason = _artifact_availability(entry.artifact, pipeline)
-    return WakeWordEntry(
-        id=entry.id,
-        display_name=entry.display_name,
-        aliases=entry.aliases,
-        artifact_version=entry.artifact_version,
-        artifact=entry.artifact,
-        available=available,
-        unavailable_reason=reason,
-    )
+def _replace_entry(entry: WakeWordEntry, **changes) -> WakeWordEntry:
+    values = {
+        "id": entry.id,
+        "display_name": entry.display_name,
+        "aliases": entry.aliases,
+        "artifact_version": entry.artifact_version,
+        "artifacts": entry.artifacts,
+        "backend_health": entry.backend_health,
+        "available": entry.available,
+        "unavailable_reason": entry.unavailable_reason,
+    }
+    values.update(changes)
+    return WakeWordEntry(**values)
 
 
-def _artifact_availability(
-    artifact: WakeWordArtifact, pipeline: WakeWordPipeline
-) -> Tuple[bool, Optional[str]]:
+def _entry_reason(entry: WakeWordEntry) -> Optional[str]:
+    """The deterministic public reason of an unavailable entry."""
+    if entry.healthy_backends:
+        return None
+    health = entry.backend_health or {}
+    for backend in _REASON_BACKEND_ORDER:
+        record = health.get(backend)
+        if record is not None and record.reason:
+            return record.reason
+    return REASON_ARTIFACT_MISSING
+
+
+def probe_backend_health(
+    artifact: Optional[WakeWordArtifact],
+    pipeline: WakeWordPipeline,
+    backend: str,
+    probers: Mapping[str, Any],
+) -> BackendHealth:
+    """The real health of one artifact under one backend.
+
+    The order of the checks is deliberate, so the most specific cause wins:
+    declaration, file existence, declared integrity, the shared pipeline files,
+    runtime availability, the classifier probe, the pipeline probe.
+    """
+    if artifact is None:
+        return BackendHealth(backend, False, REASON_ARTIFACT_MISSING)
     if not artifact.path.is_file():
-        return False, REASON_ARTIFACT_MISSING
-    if not pipeline.available:
-        return False, REASON_PIPELINE_UNAVAILABLE
-    return True, None
+        return BackendHealth(backend, False, REASON_ARTIFACT_MISSING)
+    if artifact.sha256:
+        digest = _sha256_of(artifact.path)
+        if digest is not None and digest.lower() != artifact.sha256.strip().lower():
+            return BackendHealth(backend, False, REASON_ARTIFACT_INTEGRITY)
+    if artifact.byte_size:
+        try:
+            if artifact.path.stat().st_size != int(artifact.byte_size):
+                return BackendHealth(backend, False, REASON_ARTIFACT_INTEGRITY)
+        except OSError:
+            return BackendHealth(backend, False, REASON_ARTIFACT_MISSING)
+    if not pipeline.files_present(backend):
+        return BackendHealth(backend, False, REASON_PIPELINE_UNAVAILABLE)
+    prober = (probers or {}).get(backend)
+    if prober is None:
+        # Root F12: an absent runtime is an unhealthy backend, never a passed
+        # probe. C2 skipped the probe here and reported the model as available.
+        return BackendHealth(backend, False, REASON_RUNTIME_UNAVAILABLE)
+    try:
+        prober(str(artifact.path))
+    except Exception:  # noqa: BLE001 - reason must not leak internals
+        return BackendHealth(backend, False, REASON_ARTIFACT_UNLOADABLE)
+    for path in pipeline.artifacts(backend):
+        try:
+            prober(str(path))
+        except Exception:  # noqa: BLE001 - reason must not leak internals
+            return BackendHealth(backend, False, REASON_PIPELINE_UNAVAILABLE)
+    return BackendHealth(backend, True, None)
+
+
+def _entry_with_backend_health(
+    entry: WakeWordEntry,
+    pipeline: WakeWordPipeline,
+    probers: Mapping[str, Any],
+) -> WakeWordEntry:
+    health = {
+        backend: probe_backend_health(
+            entry.artifacts.get(backend), pipeline, backend, probers
+        )
+        for backend in entry.declared_backends
+    }
+    candidate = _replace_entry(entry, backend_health=health)
+    available = bool(candidate.healthy_backends)
+    return _replace_entry(
+        candidate,
+        available=available,
+        unavailable_reason=None if available else _entry_reason(candidate),
+    )
 
 
 # -- manifest loading ----------------------------------------------------------
@@ -652,7 +880,9 @@ def load_snapshot(asset_root: Optional[Path] = None) -> WakeWordCatalogSnapshot:
     """Reads and fully validates one manifest into a candidate snapshot.
 
     Every failure raises :class:`WakeWordManifestError`; the caller decides
-    whether that means "no catalog yet" or "keep the last known good one".
+    whether that means "no catalog yet" or "keep the last known good one". The
+    per-backend health is resolved afterwards by the authority, which owns the
+    probers.
     """
     root = Path(asset_root) if asset_root is not None else default_asset_root()
     manifest_path = root / MANIFEST_NAME
@@ -673,13 +903,18 @@ def load_snapshot(asset_root: Optional[Path] = None) -> WakeWordCatalogSnapshot:
     if revision < 1:
         raise WakeWordManifestError("catalogRevision must be >= 1")
 
-    declared_files = {entry.artifact.file_name for entry in entries}
-    if pipeline.melspectrogram_path is not None:
-        declared_files.add(pipeline.melspectrogram_path.name)
-    if pipeline.embedding_path is not None:
-        declared_files.add(pipeline.embedding_path.name)
+    declared_files = set()
+    for entry in entries:
+        for artifact in entry.artifacts.values():
+            declared_files.add(artifact.file_name)
+    for backend in pipeline.backends:
+        for path in pipeline.artifacts(backend):
+            if path is not None:
+                declared_files.add(path.name)
     unmanaged = sorted(
-        path.name for path in root.glob("*.onnx")
+        path.name
+        for suffix in BACKEND_SUFFIX.values()
+        for path in root.glob(f"*{suffix}")
         if path.name not in declared_files
     ) if root.is_dir() else []
 
@@ -692,6 +927,7 @@ def load_snapshot(asset_root: Optional[Path] = None) -> WakeWordCatalogSnapshot:
         diagnostics={
             "manifestVersion": payload.get("manifestVersion"),
             "assetRoot": str(root),
+            "declaredBackends": list(pipeline.backends),
             # Diagnostic only: a file that merely lies in the asset directory
             # is never public build capability.
             "unmanagedArtifacts": unmanaged,
@@ -703,24 +939,30 @@ def _parse_pipeline(payload: Mapping[str, Any], root: Path) -> WakeWordPipeline:
     pipeline_section = payload.get("pipeline")
     if not isinstance(pipeline_section, dict):
         raise WakeWordManifestError("wake-word manifest has no 'pipeline' section")
-    framework_section = pipeline_section.get(BUNDLED_FRAMEWORK)
-    if not isinstance(framework_section, dict):
-        raise WakeWordManifestError(
-            f"wake-word manifest has no '{BUNDLED_FRAMEWORK}' pipeline models"
-        )
-    paths = {}
-    for role in ("melspectrogram", "embedding"):
-        spec = framework_section.get(role)
-        if not isinstance(spec, dict) or not str(spec.get("file") or "").strip():
+    paths: Dict[str, Tuple[Optional[Path], Optional[Path]]] = {}
+    for backend in INFERENCE_BACKENDS:
+        framework_section = pipeline_section.get(backend)
+        if framework_section is None:
+            continue
+        if not isinstance(framework_section, dict):
             raise WakeWordManifestError(
-                f"wake-word manifest pipeline model '{role}' is missing"
+                f"wake-word manifest '{backend}' pipeline section is invalid"
             )
-        paths[role] = root / str(spec["file"]).strip()
-    return WakeWordPipeline(
-        framework=BUNDLED_FRAMEWORK,
-        melspectrogram_path=paths["melspectrogram"],
-        embedding_path=paths["embedding"],
-    )
+        roles = {}
+        for role in ("melspectrogram", "embedding"):
+            spec = framework_section.get(role)
+            if not isinstance(spec, dict) or not str(spec.get("file") or "").strip():
+                raise WakeWordManifestError(
+                    f"wake-word manifest pipeline model '{role}' is missing "
+                    f"for backend '{backend}'"
+                )
+            roles[role] = root / str(spec["file"]).strip()
+        paths[backend] = (roles["melspectrogram"], roles["embedding"])
+    if not paths:
+        raise WakeWordManifestError(
+            "wake-word manifest declares no inference backend pipeline"
+        )
+    return WakeWordPipeline(paths=paths)
 
 
 def _parse_entries(
@@ -779,24 +1021,32 @@ def _parse_entries(
                 f"wake word '{identifier}' has a non-string alias list"
             )
 
-        artifacts = raw.get("artifacts")
-        if not isinstance(artifacts, dict):
+        artifacts_raw = raw.get("artifacts")
+        if not isinstance(artifacts_raw, dict):
             raise WakeWordManifestError(
                 f"wake word '{identifier}' has no artifacts mapping"
             )
-        spec = artifacts.get(BUNDLED_FRAMEWORK)
-        if not isinstance(spec, dict) or not str(spec.get("file") or "").strip():
-            raise WakeWordManifestError(
-                f"wake word '{identifier}' has no {BUNDLED_FRAMEWORK} artifact"
+        artifacts: Dict[str, WakeWordArtifact] = {}
+        for backend in INFERENCE_BACKENDS:
+            spec = artifacts_raw.get(backend)
+            if spec is None:
+                continue
+            if not isinstance(spec, dict) or not str(spec.get("file") or "").strip():
+                raise WakeWordManifestError(
+                    f"wake word '{identifier}' has an invalid {backend} artifact"
+                )
+            file_name = str(spec["file"]).strip()
+            artifacts[backend] = WakeWordArtifact(
+                backend=backend,
+                file_name=file_name,
+                path=root / file_name,
+                sha256=str(spec.get("sha256") or ""),
+                byte_size=int(spec.get("bytes") or 0),
             )
-        file_name = str(spec["file"]).strip()
-        artifact = WakeWordArtifact(
-            framework=BUNDLED_FRAMEWORK,
-            file_name=file_name,
-            path=root / file_name,
-            sha256=str(spec.get("sha256") or ""),
-            byte_size=int(spec.get("bytes") or 0),
-        )
+        if not artifacts:
+            raise WakeWordManifestError(
+                f"wake word '{identifier}' declares no supported artifact"
+            )
 
         claim(normalize_wake_word_token(identifier), "id", identifier)
         claim(normalize_wake_word_token(display_name), "displayName", identifier)
@@ -807,40 +1057,51 @@ def _parse_entries(
             if token not in aliases:
                 aliases.append(token)
 
-        available, reason = _artifact_availability(artifact, pipeline)
         entries.append(WakeWordEntry(
             id=identifier,
             display_name=display_name,
             aliases=tuple(aliases),
             artifact_version=artifact_version,
-            artifact=artifact,
-            available=available,
-            unavailable_reason=reason,
+            artifacts=artifacts,
+            backend_health={},
+            available=False,
+            unavailable_reason=REASON_RUNTIME_UNAVAILABLE,
         ))
 
-    model_keys: Dict[str, str] = {}
-    for entry in entries:
-        key = entry.artifact.model_key
-        owner = model_keys.get(key)
-        if owner is not None:
-            raise WakeWordManifestError(
-                "wake-word catalog collision: artifact file stem "
-                f"'{key}' is shared by '{owner}' and '{entry.id}'"
-            )
-        model_keys[key] = entry.id
+    for backend in INFERENCE_BACKENDS:
+        model_keys: Dict[str, str] = {}
+        for entry in entries:
+            artifact = entry.artifacts.get(backend)
+            if artifact is None:
+                continue
+            owner = model_keys.get(artifact.model_key)
+            if owner is not None:
+                raise WakeWordManifestError(
+                    "wake-word catalog collision: artifact file stem "
+                    f"'{artifact.model_key}' is shared by '{owner}' and "
+                    f"'{entry.id}'"
+                )
+            model_keys[artifact.model_key] = entry.id
 
     return tuple(entries), resolver_index
 
 
-def default_artifact_prober():
-    """The real loadability probe of the shipped inference runtime.
+def default_artifact_probers() -> Dict[str, Any]:
+    """The real loadability probes of the shipped inference runtimes.
 
-    Creating an ``InferenceSession`` is exactly what OpenWakeWord does when it
-    loads a classifier, so a file that survives this probe is one the session
-    build can really use. Returns ``None`` when no runtime is importable; the
-    caller then admits without a probe rather than refusing every session on a
-    machine that cannot run wake words at all.
+    A backend whose runtime is not importable maps to ``None``: Root F12 -
+    "no runtime" must never look like "the probe passed". The catalog then
+    reports that backend as ``runtime_unavailable`` and the other one, if any,
+    carries the selection.
     """
+    return {
+        BACKEND_ONNX: _default_onnx_prober(),
+        BACKEND_TFLITE: _default_tflite_prober(),
+    }
+
+
+def _default_onnx_prober():
+    """Creating an ``InferenceSession`` is what OpenWakeWord itself does."""
     try:
         import onnxruntime as ort
     except Exception:  # noqa: BLE001 - no runtime, no probe
@@ -857,16 +1118,44 @@ def default_artifact_prober():
     return probe
 
 
+def _default_tflite_prober():
+    """Allocating an interpreter is what OpenWakeWord itself does."""
+    interpreter_factory = None
+    try:
+        from tflite_runtime.interpreter import Interpreter as interpreter_factory  # noqa: N813
+    except Exception:  # noqa: BLE001 - fall through to the full TensorFlow
+        try:
+            from tensorflow.lite.python.interpreter import (  # noqa: N813
+                Interpreter as interpreter_factory,
+            )
+        except Exception:  # noqa: BLE001 - no runtime, no probe
+            return None
+
+    def probe(path: str) -> None:
+        interpreter = interpreter_factory(model_path=str(path))
+        interpreter.allocate_tensors()
+
+    return probe
+
+
+#: Historical single-backend accessor. Kept so external readers do not break.
+def default_artifact_prober():
+    """The ONNX loadability probe, or ``None`` when no runtime is installed."""
+    return _default_onnx_prober()
+
+
 class WakeWordCatalogAuthority:
     """The one server-wide, thread-safe wake-word catalog authority.
 
     It owns the last-known-good snapshot and ``catalogRevision``. A refresh
-    builds a complete candidate first and swaps atomically only on total
-    success; a failing refresh leaves the running catalog untouched.
+    builds a complete candidate first - manifest, ids, integrity, both declared
+    formats, runtime availability, pipeline assets and the real probe of every
+    declared classifier - and swaps atomically only on total success; a failing
+    refresh leaves the running catalog untouched.
 
     Everything that can change the catalog runs under one lock, so a refresh
     and a global-disable change are linearised and every result describes one
-    single snapshot (Root F10). The revision is raised only when the visible
+    single snapshot (Root F10/F14). The revision is raised only when the visible
     projection changed, and *every* such change notifies the subscriber, not
     just an availability change (Root F8).
     """
@@ -880,6 +1169,7 @@ class WakeWordCatalogAuthority:
         on_catalog_changed=None,
         on_availability_changed=None,
         artifact_prober=_UNSET,
+        artifact_probers=_UNSET,
     ):
         self._asset_root = Path(asset_root) if asset_root is not None else None
         self._loader = loader or load_snapshot
@@ -888,13 +1178,7 @@ class WakeWordCatalogAuthority:
         self._global_disabled = tuple(global_disabled_ids or ())
         self._snapshot: Optional[WakeWordCatalogSnapshot] = None
         self._load_error: Optional[str] = None
-        self._artifact_prober = (
-            default_artifact_prober() if artifact_prober is _UNSET
-            else artifact_prober
-        )
-        #: artifact identity -> None (ok) or the failure text. Keeps the
-        #: admission probe cheap without ever caching a live model instance.
-        self._probe_cache: Dict[Any, Optional[str]] = {}
+        self._probers = _resolve_probers(artifact_prober, artifact_probers)
         self._reload_locked(initial=True)
 
     # -- state ---------------------------------------------------------------
@@ -959,58 +1243,65 @@ class WakeWordCatalogAuthority:
             ),
         ),))
 
-    def admit_selection(self, values: Sequence[Any]):
-        """The v2 wire admission: canonical ids only, plus the load probe."""
+    def admit_selection(
+        self,
+        values: Sequence[Any],
+        *,
+        requested_backend: Any = BACKEND_AUTO,
+        platform: Optional[str] = None,
+    ):
+        """The v2 wire admission: canonical ids only, plus the backend gate."""
         snapshot = self.snapshot()
         if snapshot is None:
             return self._unavailable_catalog_error()
-        return snapshot.admit_selection(values, prober=self._memoised_prober())
+        return snapshot.admit_selection(
+            values, requested_backend=requested_backend, platform=platform
+        )
 
-    def resolve_human_selection(self, values: Sequence[Any]):
+    def resolve_human_selection(
+        self,
+        values: Sequence[Any],
+        *,
+        requested_backend: Any = BACKEND_AUTO,
+        platform: Optional[str] = None,
+    ):
         """The tolerant admission for human configuration values."""
         snapshot = self.snapshot()
         if snapshot is None:
             return self._unavailable_catalog_error()
         return snapshot.resolve_human_selection(
-            values, prober=self._memoised_prober()
+            values, requested_backend=requested_backend, platform=platform
         )
 
     def set_artifact_prober(self, prober) -> None:
-        """Replaces the loadability probe and drops the memoised results."""
+        """Replaces the loadability probe of every backend and re-resolves."""
         with self._lock:
-            self._artifact_prober = prober
-            self._probe_cache.clear()
+            self._probers = {backend: prober for backend in INFERENCE_BACKENDS}
+            self._reload_locked(initial=False)
+
+    def set_artifact_probers(self, probers) -> None:
+        """Replaces the per-backend loadability probes and re-resolves."""
+        with self._lock:
+            self._probers = _resolve_probers(_UNSET, probers)
+            self._reload_locked(initial=False)
 
     def set_loader_for_tests(self, loader) -> None:
         """Replaces the manifest loader. Fault injection seam for tests."""
         with self._lock:
             self._loader = loader
 
-    def _memoised_prober(self):
-        """A prober that probes each artifact identity at most once."""
-        prober = self._artifact_prober
-        if prober is None:
-            return None
-
-        def memoised(path: str) -> None:
-            key = _artifact_identity(path)
-            with self._lock:
-                if key in self._probe_cache:
-                    failure = self._probe_cache[key]
-                    if failure is not None:
-                        raise WakeWordArtifactError(failure)
-                    return
-            try:
-                prober(path)
-            except Exception as exc:  # noqa: BLE001 - classified by the caller
-                failure = f"{type(exc).__name__}: {exc}"
-                with self._lock:
-                    self._probe_cache[key] = failure
-                raise WakeWordArtifactError(failure) from exc
-            with self._lock:
-                self._probe_cache[key] = None
-
-        return memoised
+    def backend_health(self) -> Dict[str, Dict[str, Any]]:
+        """Per wake word, per backend health. Diagnostics, never a payload."""
+        snapshot = self.snapshot()
+        if snapshot is None:
+            return {}
+        return {
+            entry.id: {
+                backend: record.public_dict()
+                for backend, record in (entry.backend_health or {}).items()
+            }
+            for entry in snapshot.entries
+        }
 
     # -- mutation ------------------------------------------------------------
 
@@ -1075,9 +1366,9 @@ class WakeWordCatalogAuthority:
             )
 
         self._load_error = None
-        # Artifacts may have been replaced on disk, so a cached probe verdict
-        # must not survive a reload.
-        self._probe_cache.clear()
+        # Loadability is resolved on every load and on every refresh, never
+        # once at start-up and never only for a selected subset.
+        candidate = candidate.with_backend_health(self._probers)
         candidate = candidate.with_global_disabled(self._global_disabled)
         return self._commit_locked(candidate, initial=initial)
 
@@ -1136,3 +1427,20 @@ class WakeWordCatalogAuthority:
             except Exception:  # noqa: BLE001 - a subscriber must not break the swap
                 pass
         return result
+
+
+def _resolve_probers(artifact_prober, artifact_probers) -> Dict[str, Any]:
+    """Normalises the two constructor spellings into one per-backend map.
+
+    ``artifact_probers`` is the C3 form. ``artifact_prober`` is the historical
+    single-callable form and is applied to every backend, which keeps existing
+    callers and tests working without introducing a second probe authority.
+    """
+    if artifact_probers is not _UNSET:
+        probers = dict(artifact_probers or {})
+        return {
+            backend: probers.get(backend) for backend in INFERENCE_BACKENDS
+        }
+    if artifact_prober is not _UNSET:
+        return {backend: artifact_prober for backend in INFERENCE_BACKENDS}
+    return default_artifact_probers()

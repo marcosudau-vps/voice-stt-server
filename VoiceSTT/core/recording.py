@@ -29,13 +29,32 @@ from .wake_audio_boundary import (
     resolve_wake_audio_boundary,
     trim_frames_to_boundary,
 )
-from .wake_detection import receptive_field_ms
-from .wakeword import collect_wake_candidates, process_wakeword
+from .wakeword import process_wakeword
 
 logger = logging.getLogger("voicestt")
 
 INT16_MAX_ABS_VALUE = 32768.0
 BYTES_PER_SAMPLE = 2
+
+
+def _wake_history_start_sample(recorder, stream_sample_position):
+    """The oldest stream sample the session still holds as audio history.
+
+    The pre-roll may only reach back as far as audio that really still exists,
+    so the clamp is derived from the retained pre-recording buffer rather than
+    from a classifier receptive field (AP-SRV-060 C3, section 7).
+    """
+    buffer = getattr(recorder, "audio_buffer", None)
+    retained = 0
+    try:
+        for frame in buffer or ():
+            retained += len(frame) // BYTES_PER_SAMPLE
+    except TypeError:  # pragma: no cover - fakes may not be iterable
+        retained = 0
+    retained += sum(
+        len(frame) // BYTES_PER_SAMPLE for frame in (getattr(recorder, "frames", None) or ())
+    )
+    return max(0, int(stream_sample_position) - retained)
 
 
 def _wake_detection_step(recorder, data, frame_index, stream_sample_position):
@@ -45,54 +64,52 @@ def _wake_detection_step(recorder, data, frame_index, stream_sample_position):
     an activation, and ``None`` in every other case - including a refused
     admission, which must leave no latch and no domain event behind.
 
+    The chunk goes through the one :class:`OpenWakeWordEngine`, which turns it
+    into the *genuinely new* prediction frames, and through the
+    :class:`~VoiceSTT.core.wake_detection.WakeHitTracker`, which groups those
+    frames into at most one finalized hit. A recorder chunk is therefore never
+    a detection unit; a contiguous hit region is.
+
     The admission callback runs **synchronously** on purpose: it *is* the
     admission decision, so it must not be deferred onto a callback thread. It
-    receives the raw candidate and the boundary that hit would establish, and
+    receives the finalized hit and the boundary that hit establishes, and
     answers with an
     :class:`~VoiceSTT.core.wake_detection.AcceptedWakeDetection` or ``None``.
-    Accepting and re-arming stay with the admission authority; this function
-    only interprets the answer.
     """
     evaluator = getattr(recorder, "wake_detection_evaluator", None)
     if evaluator is None:
         return None
 
-    chunk_samples = len(data) // BYTES_PER_SAMPLE
-    candidates = collect_wake_candidates(
-        recorder,
-        data,
-        sample_position=int(stream_sample_position) - chunk_samples,
-        frame_index=frame_index,
-        detector_generation=evaluator.generation,
-    )
-    candidate = evaluator.offer(candidates)
-    if candidate is None:
+    if getattr(evaluator, "engine", None) is not None:
+        hits = evaluator.process(data)
+    else:  # pragma: no cover - a session without an engine has no v2 path
+        hits = ()
+    if not hits:
         return None
+    hit = hits[0]
 
-    frames = getattr(recorder, "wake_word_input_frames", None) or {}
-    # AP-SRV-060 C2 / Root F2: the pre-roll comes from the policy the evaluator
-    # latched for *this* admission, not from a value copied once at session
-    # build time. The recorder attribute stays as a diagnostic mirror.
-    pre_roll_ms = getattr(evaluator, "pre_roll_ms", None)
-    if pre_roll_ms is None:
-        pre_roll_ms = getattr(recorder, "wake_word_pre_roll_ms", 0)
+    # AP-SRV-060 C3 / Root F11: the pre-roll comes from the very snapshot this
+    # hit region was scored with - never from a value re-read after the fact.
+    pre_roll_ms = hit.policy.pre_roll_ms
     recorder.wake_word_pre_roll_ms = pre_roll_ms
     boundary = resolve_wake_audio_boundary(
-        detection_sample_position=candidate.sample_position,
-        receptive_field_ms=receptive_field_ms(frames.get(candidate.model_key)),
+        operational_zero_point_sample=hit.operational_zero_point_sample,
         pre_roll_ms=pre_roll_ms,
         sample_rate=recorder.sample_rate,
+        history_start_sample=_wake_history_start_sample(
+            recorder, stream_sample_position
+        ),
     )
     callback = recorder.on_wakeword_detected
     if callback is None:
-        # No admission authority installed: a raw candidate can never become a
+        # No admission authority installed: a finalized hit can never become a
         # fachliche Detection on its own.
-        evaluator.refuse(candidate)
+        evaluator.refuse(hit)
         return None
-    detection = callback(candidate, boundary)
+    detection = callback(hit, boundary)
     if detection is None:
-        # Refused admission: no latch, no event, only detector re-arm - which
-        # the admission authority already performed.
+        # Refused admission: no latch, no event, no logical event - the
+        # admission authority already recorded the refusal.
         return None
 
     recorder.accepted_wake_detection = detection

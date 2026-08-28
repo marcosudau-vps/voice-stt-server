@@ -39,8 +39,17 @@ class CatalogHttpContractTests(unittest.TestCase):
                 self.assertIsInstance(entry["artifactVersion"], str)
                 self.assertIsInstance(entry["available"], bool)
                 allowed = {"id", "displayName", "aliases", "artifactVersion",
-                           "available", "unavailableReason", "catalogRevision"}
+                           "available", "unavailableReason", "backends",
+                           "catalogRevision"}
                 self.assertLessEqual(set(entry), allowed)
+                # AP-SRV-060 C3: per-backend health is public and carries only
+                # availability plus a machine-readable reason - never a path.
+                self.assertEqual(set(entry["backends"]), {"onnx", "tflite"})
+                for health in entry["backends"].values():
+                    self.assertIsInstance(health["available"], bool)
+                    self.assertLessEqual(
+                        set(health), {"available", "unavailableReason"}
+                    )
                 # Root F9: the entry carries the revision it came from.
                 self.assertEqual(
                     entry["catalogRevision"], payload["catalogRevision"]

@@ -3,6 +3,11 @@
 The helpers build a *real* bundle on disk - manifest plus artifact files - so
 the tests exercise the production loader, the production resolver and the
 production availability rules instead of a hand-written stand-in.
+
+Since AP-SRV-060 C3 a bundle may declare more than one inference backend. The
+``backends`` argument writes the artifacts and the pipeline models of every
+named backend, so a test can build an ONNX-only bundle (the historical case),
+a TFLite-only bundle or a dual-format bundle without hand-writing a manifest.
 """
 
 from __future__ import annotations
@@ -14,7 +19,17 @@ from pathlib import Path
 from VoiceSTT.core.wakeword_catalog import WakeWordCatalogAuthority
 
 
-PIPELINE_FILES = ("melspectrogram.onnx", "embedding_model.onnx")
+#: File suffix of one inference backend's artifacts.
+BACKEND_SUFFIX = {"onnx": ".onnx", "tflite": ".tflite"}
+
+PIPELINE_STEMS = ("melspectrogram", "embedding_model")
+
+PIPELINE_FILES = tuple(f"{stem}.onnx" for stem in PIPELINE_STEMS)
+
+
+def backend_file_name(file_name: str, backend: str) -> str:
+    """The artifact file name of ``file_name``'s wake word in ``backend``."""
+    return Path(file_name).stem + BACKEND_SUFFIX[backend]
 
 
 def write_artifact(root: Path, name: str, payload: bytes = b"onnx-test-artifact") -> Path:
@@ -33,38 +48,56 @@ def artifact_spec(root: Path, name: str) -> dict:
     }
 
 
-def build_bundle(root, entries, *, catalog_revision=1, with_pipeline=True):
+def build_bundle(
+    root,
+    entries,
+    *,
+    catalog_revision=1,
+    with_pipeline=True,
+    backends=("onnx",),
+):
     """Writes a manifest bundle and returns the asset root.
 
     ``entries`` is a sequence of ``(id, displayName, aliases, file_name)``.
+    ``backends`` names the inference backends the bundle declares; the file
+    name of a non-ONNX artifact is derived from the ONNX file stem.
     """
     root = Path(root)
     root.mkdir(parents=True, exist_ok=True)
-    if with_pipeline:
-        for name in PIPELINE_FILES:
-            write_artifact(root, name)
-        pipeline = {
-            "onnx": {
-                "melspectrogram": artifact_spec(root, "melspectrogram.onnx"),
-                "embedding": artifact_spec(root, "embedding_model.onnx"),
-            }
+    backends = tuple(backends)
+
+    pipeline = {}
+    for backend in backends:
+        names = {
+            stem: stem + BACKEND_SUFFIX[backend] for stem in PIPELINE_STEMS
         }
-    else:
-        pipeline = {"onnx": {
-            "melspectrogram": {"file": "melspectrogram.onnx"},
-            "embedding": {"file": "embedding_model.onnx"},
-        }}
+        if with_pipeline:
+            for name in names.values():
+                write_artifact(root, name)
+            pipeline[backend] = {
+                "melspectrogram": artifact_spec(root, names["melspectrogram"]),
+                "embedding": artifact_spec(root, names["embedding_model"]),
+            }
+        else:
+            pipeline[backend] = {
+                "melspectrogram": {"file": names["melspectrogram"]},
+                "embedding": {"file": names["embedding_model"]},
+            }
 
     wake_words = []
     for identifier, display_name, aliases, file_name in entries:
-        if not (root / file_name).is_file():
-            write_artifact(root, file_name)
+        artifacts = {}
+        for backend in backends:
+            name = backend_file_name(file_name, backend)
+            if not (root / name).is_file():
+                write_artifact(root, name)
+            artifacts[backend] = artifact_spec(root, name)
         wake_words.append({
             "id": identifier,
             "displayName": display_name,
             "aliases": list(aliases),
             "artifactVersion": "1",
-            "artifacts": {"onnx": artifact_spec(root, file_name)},
+            "artifacts": artifacts,
         })
 
     manifest = {
@@ -92,10 +125,13 @@ def build_authority(root, entries=DEFAULT_ENTRIES, **kwargs):
 
     The bundle contains placeholder bytes rather than real ONNX models, so the
     default loadability probe is replaced with a permissive one. Tests that
-    care about the probe itself (Root F3) pass their own ``artifact_prober``.
+    care about the probe itself (Root F3/F12) pass their own ``artifact_prober``
+    or ``artifact_probers``.
     """
-    asset_root = build_bundle(root, entries)
-    kwargs.setdefault("artifact_prober", lambda path: None)
+    backends = kwargs.pop("backends", ("onnx",))
+    asset_root = build_bundle(root, entries, backends=backends)
+    if "artifact_probers" not in kwargs:
+        kwargs.setdefault("artifact_prober", lambda path: None)
     return WakeWordCatalogAuthority(asset_root=asset_root, **kwargs)
 
 

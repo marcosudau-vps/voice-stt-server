@@ -1,4 +1,11 @@
-"""AP-SRV-060: the wake/user-speech audio boundary replaces the fixed cut."""
+"""AP-SRV-060: the wake/user-speech audio boundary replaces the fixed cut.
+
+C1/C2 anchored the boundary on the classifier's *decision sample* and
+called the wake end an estimate blocked on external annotation. AP-SRV-060
+C3 replaced that with the defined operational zero point - the trailing
+edge of the winning qualified hit region - and clamps the pre-roll against
+the audio history that really still exists.
+"""
 
 import unittest
 
@@ -39,70 +46,57 @@ class MillisecondConversionTests(unittest.TestCase):
 
 
 class BoundaryTests(unittest.TestCase):
-    def test_zero_pre_roll_releases_exactly_at_the_wake_end(self):
+    def test_zero_pre_roll_releases_exactly_at_the_operational_zero_point(self):
         boundary = resolve_wake_audio_boundary(
-            detection_sample_position=32000,
-            receptive_field_ms=1960,
+            operational_zero_point_sample=32000,
             pre_roll_ms=0,
             sample_rate=SAMPLE_RATE,
         )
-        self.assertEqual(boundary.estimated_wake_end_sample, 32000)
+        self.assertEqual(boundary.operational_zero_point_sample, 32000)
         self.assertEqual(boundary.release_sample, 32000)
         self.assertEqual(boundary.released_pre_roll_samples, 0)
-        # The wake end is an estimate until WW-19 is measured.
-        self.assertFalse(boundary.boundary_measured)
+        # The zero point is a defined product boundary, not an estimate.
+        self.assertTrue(boundary.boundary_defined)
 
-    def test_the_receptive_field_start_is_the_measured_window(self):
+    def test_pre_roll_moves_the_release_back_by_the_configured_span(self):
         boundary = resolve_wake_audio_boundary(
-            detection_sample_position=32000,
-            receptive_field_ms=1960,
-            sample_rate=SAMPLE_RATE,
-        )
-        self.assertEqual(
-            boundary.receptive_field_start_sample, 32000 - 31360
-        )
-
-    def test_pre_roll_moves_the_release_back_but_never_past_the_window(self):
-        boundary = resolve_wake_audio_boundary(
-            detection_sample_position=32000,
-            receptive_field_ms=1960,
+            operational_zero_point_sample=32000,
             pre_roll_ms=500,
             sample_rate=SAMPLE_RATE,
         )
         self.assertEqual(boundary.release_sample, 32000 - 8000)
+        self.assertFalse(boundary.pre_roll_clamped)
 
+    def test_pre_roll_never_reaches_past_the_retained_audio_history(self):
         clamped = resolve_wake_audio_boundary(
-            detection_sample_position=32000,
-            receptive_field_ms=1960,
+            operational_zero_point_sample=32000,
             pre_roll_ms=5000,
             sample_rate=SAMPLE_RATE,
+            history_start_sample=20000,
         )
-        # Never reaches back before the classifier's own view started.
-        self.assertEqual(
-            clamped.release_sample, clamped.receptive_field_start_sample
-        )
+        self.assertEqual(clamped.release_sample, 20000)
+        self.assertEqual(clamped.released_pre_roll_samples, 12000)
+        self.assertTrue(clamped.pre_roll_clamped)
 
-    def test_the_detector_history_start_clamps_the_boundary(self):
+    def test_the_history_start_clamps_the_boundary(self):
         boundary = resolve_wake_audio_boundary(
-            detection_sample_position=5000,
-            receptive_field_ms=1960,
+            operational_zero_point_sample=5000,
             sample_rate=SAMPLE_RATE,
-            detector_history_start_sample=4000,
+            history_start_sample=4000,
         )
-        self.assertEqual(boundary.receptive_field_start_sample, 4000)
+        self.assertEqual(boundary.history_start_sample, 4000)
+        self.assertEqual(boundary.release_sample, 5000)
 
     def test_the_projection_is_json_safe_and_complete(self):
         payload = resolve_wake_audio_boundary(
-            detection_sample_position=32000,
-            receptive_field_ms=1960,
+            operational_zero_point_sample=32000,
             pre_roll_ms=250,
             sample_rate=SAMPLE_RATE,
         ).to_dict()
         self.assertEqual(set(payload), {
-            "sampleRate", "detectionSample", "receptiveFieldStartSample",
-            "estimatedWakeEndSample", "releaseSample", "preRollSamples",
-            "releasedPreRollSamples", "receptiveFieldMs", "boundaryBasis",
-            "boundaryMeasured",
+            "sampleRate", "operationalZeroPointSample", "historyStartSample",
+            "releaseSample", "preRollSamples", "releasedPreRollSamples",
+            "preRollClamped", "boundaryBasis", "boundaryDefined",
         })
 
 
@@ -149,8 +143,7 @@ class TrimTests(unittest.TestCase):
         frames = frames_of(wake_samples, first_word_samples, rest_samples)
 
         boundary = resolve_wake_audio_boundary(
-            detection_sample_position=wake_samples,
-            receptive_field_ms=1000,
+            operational_zero_point_sample=wake_samples,
             pre_roll_ms=0,
             sample_rate=SAMPLE_RATE,
         )

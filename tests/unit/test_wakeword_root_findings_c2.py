@@ -4,8 +4,24 @@ Every test in this file was written RED-first against the C1 semantics: it
 reproduces the defect Root described before the fix and pins the corrected
 behaviour afterwards. The RED/GREEN matrix is in
 ``docs/.archiv/.../runs/02_ROOT_CORRECTION/2026-08-28_REPORT.md``.
+
+AP-SRV-060 C3 kept every one of these findings closed but replaced three
+mechanisms they were originally written against, so the affected cases were
+re-expressed here against the corrected contract:
+
+* detection works on contiguous hit regions of prediction frames rather than
+  per-chunk raw candidates, so the F2/F6/F7 cases drive
+  :meth:`WakeDetectionEvaluator.observe_scores` and hand the admission a
+  finalized :class:`~VoiceSTT.core.wake_detection.WakeHit`;
+* the audio boundary rests on the defined operational zero point instead of an
+  estimated wake end (F4);
+* loadability is resolved per backend at catalog load and refresh instead of
+  per selection at admission time (F3).
+
+The historical C1/C2 run artifacts under ``docs/.archiv/`` are untouched.
 """
 
+import json
 import tempfile
 import threading
 import types
@@ -18,7 +34,9 @@ from api_fastapi_server.wake_admission import WakeAdmissionCoordinator
 from VoiceSTT.core import wake_audio_boundary as boundary_module
 from VoiceSTT.core.wake_detection import (
     RawWakeCandidate,
+    WakeAttemptPolicy,
     WakeDetectionEvaluator,
+    WakeHit,
     WakeRuntimePolicy,
 )
 from VoiceSTT.core.wakeword_catalog import WakeWordCatalogAuthority
@@ -44,6 +62,7 @@ def wake_hello(ids=(BUNDLED_WAKE_WORD,), **kwargs):
 
 def candidate(identifier=BUNDLED_WAKE_WORD, score=0.91, generation=0,
               sample_position=32000, model_key=None):
+    """One raw observation. Diagnostics only, never a domain event."""
     return RawWakeCandidate(
         canonical_wake_word_id=identifier,
         raw_score=score,
@@ -52,6 +71,48 @@ def candidate(identifier=BUNDLED_WAKE_WORD, score=0.91, generation=0,
         detector_generation=generation,
         model_key=model_key or identifier,
     )
+
+
+def wake_hit(identifier=BUNDLED_WAKE_WORD, score=0.91, *, zero_point=32000,
+             policy=None):
+    """One finalized hit region, as the C3 tracker hands it to the admission."""
+    return WakeHit(
+        canonical_wake_word_id=identifier,
+        peak_score=score,
+        start_frame_index=0,
+        start_sample=1280,
+        qualification_frame_index=0,
+        qualification_sample=1280,
+        finalization_frame_index=1,
+        operational_zero_point_sample=zero_point,
+        prediction_frame_count=1,
+        policy=policy or WakeAttemptPolicy(sensitivity=0.5),
+    )
+
+
+class Utterances:
+    """Drives whole spoken wake words through one evaluator.
+
+    One utterance is a run of prediction frames at or above the threshold
+    followed by one frame below it - exactly the contiguous hit region the C3
+    tracker groups into a single logical detection.
+    """
+
+    def __init__(self, evaluator, identifier=BUNDLED_WAKE_WORD):
+        self.evaluator = evaluator
+        self.identifier = identifier
+        self.end_sample = 0
+
+    def speak(self, score=0.91, frames=1, identifier=None):
+        wake_word_id = identifier or self.identifier
+        finalized = None
+        for value in [score] * frames + [0.0]:
+            self.end_sample += 1280
+            offered = self.evaluator.observe_scores(
+                {wake_word_id: value}, end_sample=self.end_sample
+            )
+            finalized = offered or finalized
+        return finalized
 
 
 class BundleTestCase(unittest.TestCase):
@@ -165,6 +226,7 @@ class F2RuntimeBindingTests(unittest.TestCase):
         self.evaluator = WakeDetectionEvaluator(
             policy_supplier=lambda: self.policies[-1]
         )
+        self.utterances = Utterances(self.evaluator)
 
     def patch(self, **changes):
         current = self.policies[-1]
@@ -176,16 +238,16 @@ class F2RuntimeBindingTests(unittest.TestCase):
         ))
 
     def test_a_sensitivity_patch_reaches_the_next_activation(self):
-        # A: 0.5 -> a 0.6 hit is offered.
-        self.assertIsNotNone(self.evaluator.offer([candidate(score=0.6)]))
-        # B: 0.9 -> the same 0.6 hit is no longer a candidate.
+        # A: 0.5 -> a 0.6 utterance finalizes into a hit.
+        self.assertIsNotNone(self.utterances.speak(score=0.6))
+        # B: 0.9 -> the same 0.6 utterance never reaches the threshold.
         self.patch(sensitivity=0.9)
-        self.assertIsNone(self.evaluator.offer([candidate(score=0.6)]))
+        self.assertIsNone(self.utterances.speak(score=0.6))
         self.assertEqual(self.evaluator.threshold, 0.9)
-        self.assertIsNotNone(self.evaluator.offer([candidate(score=0.95)]))
+        self.assertIsNotNone(self.utterances.speak(score=0.95))
 
     def test_a_running_activation_keeps_its_latched_policy(self):
-        offered = self.evaluator.offer([candidate(score=0.6)])
+        offered = self.utterances.speak(score=0.6)
         self.evaluator.accept(offered, activation_id="act-1")
         latched = self.evaluator.active_policy
 
@@ -198,17 +260,16 @@ class F2RuntimeBindingTests(unittest.TestCase):
 
         # The next activation really uses the patched values.
         self.evaluator.release_latch(activation_id="act-1")
-        self.assertIsNone(self.evaluator.offer([candidate(score=0.6)]))
+        self.assertIsNone(self.utterances.speak(score=0.6))
         self.assertEqual(self.evaluator.threshold, 0.9)
         self.assertEqual(self.evaluator.active_policy.cooldown_ms, 1500)
         self.assertEqual(self.evaluator.active_policy.pre_roll_ms, 250)
 
     def test_a_pre_roll_patch_changes_the_real_boundary_of_the_next_activation(self):
-        offered = self.evaluator.offer([candidate()])
+        offered = self.utterances.speak()
         first = boundary_module.resolve_wake_audio_boundary(
-            detection_sample_position=offered.sample_position,
-            receptive_field_ms=1960,
-            pre_roll_ms=self.evaluator.active_policy.pre_roll_ms,
+            operational_zero_point_sample=offered.operational_zero_point_sample,
+            pre_roll_ms=offered.policy.pre_roll_ms,
             sample_rate=16000,
         )
         self.assertEqual(first.pre_roll_samples, 0)
@@ -217,19 +278,18 @@ class F2RuntimeBindingTests(unittest.TestCase):
         self.patch(pre_roll_ms=100)
         self.evaluator.release_latch(activation_id="act-1")
 
-        offered = self.evaluator.offer([candidate()])
+        offered = self.utterances.speak()
         second = boundary_module.resolve_wake_audio_boundary(
-            detection_sample_position=offered.sample_position,
-            receptive_field_ms=1960,
-            pre_roll_ms=self.evaluator.active_policy.pre_roll_ms,
+            operational_zero_point_sample=offered.operational_zero_point_sample,
+            pre_roll_ms=offered.policy.pre_roll_ms,
             sample_rate=16000,
         )
         self.assertEqual(second.pre_roll_samples, 1600)
 
-    def test_a_cooldown_patch_changes_the_real_rearm_of_the_next_activation(self):
+    def test_a_cooldown_patch_changes_the_real_cooldown_of_the_next_attempt(self):
         self.assertEqual(self.evaluator.cooldown_ms, 0)
         self.patch(cooldown_ms=750)
-        self.evaluator.offer([candidate()])
+        self.utterances.speak()
         self.assertEqual(self.evaluator.cooldown_ms, 750)
 
 
@@ -267,8 +327,8 @@ class F2SessionBindingTests(unittest.TestCase):
                 ack = session.ack(sent["commandId"])
                 self.assertTrue(ack["accepted"], ack)
 
-                # Idle: the very next admission must use the new values.
-                evaluator.offer([candidate(score=0.99)])
+                # Idle: the very next attempt must use the new values.
+                evaluator.observe_scores({BUNDLED_WAKE_WORD: 0.99})
                 self.assertNotEqual(evaluator.threshold, before)
                 self.assertEqual(evaluator.threshold, 0.87)
                 self.assertEqual(evaluator.active_policy.pre_roll_ms, 120)
@@ -307,37 +367,68 @@ class F3UnloadableAdmissionTests(BundleTestCase):
         self.assertIsNone(selection)
         self.assertEqual([e.wake_word_id for e in errors], ["alexa"])
 
-    def test_only_selected_artifacts_are_probed(self):
+    def test_every_declared_artifact_is_probed_at_catalog_load(self):
+        """AP-SRV-060 C3 corrected F3: loadability belongs to load/refresh.
+
+        C2 probed only the *selected* artifacts, at admission time, which left
+        the public catalog claiming availability for models nobody had tried to
+        load. C3 resolves per-backend health for every declared artifact when
+        the catalog is loaded and on every refresh. That does not weaken
+        selected-only runtime loading: a running session still keeps only its
+        selected classifiers in the live engine.
+        """
         root = build_bundle(self.tmp / "bundle", ENTRIES)
         probed = []
         authority = WakeWordCatalogAuthority(
             asset_root=root, artifact_prober=probed.append
         )
-        selection, errors = authority.admit_selection(["hey_jarvis"])
-        self.assertEqual(errors, ())
-        self.assertIsNotNone(selection)
         names = sorted(Path(path).name for path in probed)
         self.assertIn("jarvis_v2.onnx", names)
-        self.assertNotIn("alexa.onnx", names)
+        self.assertIn("alexa.onnx", names)
+        selection, errors = authority.admit_selection(["hey_jarvis"])
+        self.assertEqual(errors, ())
+        self.assertEqual(selection.wake_word_ids, ("hey_jarvis",))
+        # Selected-only runtime loading: exactly one classifier is handed to
+        # the live engine, whatever the catalog probed.
+        self.assertEqual(len(selection.model_paths), 1)
 
-    def test_a_probe_result_is_memoised_per_artifact(self):
+    def test_an_admission_never_reprobes_an_already_resolved_artifact(self):
         root = build_bundle(self.tmp / "bundle", ENTRIES)
         probed = []
         authority = WakeWordCatalogAuthority(
             asset_root=root, artifact_prober=probed.append
         )
+        probed.clear()
         for _ in range(5):
             authority.admit_selection(["hey_jarvis"])
-        classifier = [p for p in probed if Path(p).name == "jarvis_v2.onnx"]
-        self.assertEqual(len(classifier), 1)
+        self.assertEqual(probed, [])
 
     def test_a_real_corrupt_onnx_is_refused_by_the_default_prober(self):
+        """The bundle declares no integrity data, so the probe is the gate."""
         root = build_bundle(self.tmp / "bundle", ENTRIES)
+        manifest = json.loads((root / "models.json").read_text(encoding="utf-8"))
+        for entry in manifest["wakeWords"]:
+            entry["artifacts"]["onnx"].pop("sha256", None)
+            entry["artifacts"]["onnx"].pop("bytes", None)
+        (root / "models.json").write_text(
+            json.dumps(manifest, indent=2), encoding="utf-8", newline="\n"
+        )
         (root / "jarvis_v2.onnx").write_bytes(b"this is not an onnx model")
         authority = WakeWordCatalogAuthority(asset_root=root)
         selection, errors = authority.admit_selection(["hey_jarvis"])
         self.assertIsNone(selection)
         self.assertEqual(errors[0].reason, "artifact_unloadable")
+
+    def test_a_tampered_artifact_is_refused_before_the_probe(self):
+        """C3 additionally validates the integrity data the manifest declares."""
+        root = build_bundle(self.tmp / "bundle", ENTRIES)
+        (root / "jarvis_v2.onnx").write_bytes(b"this is not an onnx model")
+        authority = WakeWordCatalogAuthority(
+            asset_root=root, artifact_prober=lambda path: None
+        )
+        selection, errors = authority.admit_selection(["hey_jarvis"])
+        self.assertIsNone(selection)
+        self.assertEqual(errors[0].reason, "artifact_integrity_mismatch")
 
 
 class F3UnloadableSessionTests(unittest.TestCase):
@@ -370,28 +461,38 @@ class F3UnloadableSessionTests(unittest.TestCase):
         self.assertEqual(GateAwareRecorder.instances, [])
 
 
-# -- F4: the detection sample is an estimate, not a proven boundary -------------
+# -- F4: the audio boundary names what it really is ----------------------------
 
 class F4BoundaryHonestyTests(unittest.TestCase):
-    def test_the_boundary_is_labelled_as_an_unmeasured_estimate(self):
+    """C2 called the wake end an estimate; C3 defined the zero point instead.
+
+    F4's substance - the boundary must not claim more than it knows - is kept.
+    What changed is what there is to know: Root defined the operational zero
+    point as the trailing edge of the winning qualified hit region, a
+    deliberate server-side product decision that does not have to be discovered
+    by external audio annotation. What stays open is the *empirical
+    calibration* (WW-18/WW-19), and the settings schema still says so.
+    """
+
+    def test_the_boundary_names_the_operational_zero_point(self):
         result = boundary_module.resolve_wake_audio_boundary(
-            detection_sample_position=32000,
-            receptive_field_ms=1960,
+            operational_zero_point_sample=32000,
             pre_roll_ms=0,
             sample_rate=16000,
         )
         payload = result.to_dict()
-        self.assertEqual(payload["boundaryBasis"], "detection_sample_estimate")
-        self.assertFalse(payload["boundaryMeasured"])
-        self.assertIn("estimatedWakeEndSample", payload)
+        self.assertEqual(payload["boundaryBasis"], "operational_zero_point")
+        self.assertTrue(payload["boundaryDefined"])
+        self.assertEqual(payload["operationalZeroPointSample"], 32000)
 
-    def test_no_field_claims_a_proven_acoustic_wake_end(self):
+    def test_no_field_claims_an_estimated_or_annotated_wake_end(self):
         result = boundary_module.resolve_wake_audio_boundary(
-            detection_sample_position=32000, receptive_field_ms=1960
+            operational_zero_point_sample=32000
         )
+        self.assertFalse(hasattr(result, "estimated_wake_end_sample"))
         self.assertFalse(hasattr(result, "wake_end_sample"))
-        self.assertTrue(hasattr(result, "estimated_wake_end_sample"))
-        self.assertTrue(hasattr(result, "detection_sample"))
+        self.assertTrue(hasattr(result, "operational_zero_point_sample"))
+        self.assertNotIn("estimatedWakeEndSample", result.to_dict())
 
 
 # -- F5: the calibration keys are published as provisional ---------------------
@@ -422,81 +523,82 @@ class F5ProvisionalCalibrationTests(unittest.TestCase):
                 )
 
 
-# -- F6: re-arm must not survive the safe input close --------------------------
+# -- F6: no implicit blocking window survives the safe input close -------------
 
 class F6RearmTests(unittest.TestCase):
-    """RED against C1: ``release_latch`` left ``blocked_until`` in place."""
+    """RED against C1: ``release_latch`` left ``blocked_until`` in place.
 
-    def _evaluator(self, cooldown_ms=0):
+    C2 closed that with an implicit de-duplication window that was cleared at
+    the safe input close. C3 removed the implicit window altogether: grouping
+    one utterance into a single logical hit is the
+    :class:`~VoiceSTT.core.wake_detection.WakeHitTracker`'s job and needs no
+    timer, so the only blocking windows left are the latch and the operator's
+    own ``wakeWord.cooldownMs``. F6's guarantee therefore holds a fortiori and
+    is pinned here in its C3 form.
+    """
+
+    def _evaluator(self, cooldown_ms=0, clock=None):
         return WakeDetectionEvaluator(
             policy_supplier=lambda: WakeRuntimePolicy(
                 sensitivity=0.5, cooldown_ms=cooldown_ms, pre_roll_ms=0,
                 settings_revision=0,
             ),
-            rearm_ms=1960.0,
+            clock=clock,
         )
 
     def test_a_safe_input_close_fully_rearms_the_detector(self):
         evaluator = self._evaluator()
-        offered = evaluator.offer([candidate()])
+        utterances = Utterances(evaluator)
+        offered = utterances.speak()
         evaluator.accept(offered, activation_id="act-1")
 
         evaluator.release_latch(activation_id="act-1")
 
         # A clearly separate new utterance must be admissible immediately.
-        self.assertIsNotNone(evaluator.offer([candidate()]))
+        self.assertIsNotNone(utterances.speak())
 
-    def test_a_refused_hit_still_debounces_the_same_utterance(self):
+    def test_a_refused_hit_leaves_no_implicit_blocking_window(self):
         evaluator = self._evaluator()
-        offered = evaluator.offer([candidate()])
-        evaluator.refuse(offered)
-        self.assertIsNone(evaluator.offer([candidate()]))
+        utterances = Utterances(evaluator)
+        evaluator.refuse(utterances.speak())
+        # The refusal is not a fachliches Ereignis and, with cooldown 0, it
+        # blocks nothing: the next utterance is a new hit region.
+        self.assertIsNotNone(utterances.speak())
 
-    def test_a_refusal_debounce_is_cleared_by_a_safe_input_close(self):
+    def test_a_refusal_during_an_activation_is_cleared_by_the_close(self):
         evaluator = self._evaluator()
-        offered = evaluator.offer([candidate()])
+        utterances = Utterances(evaluator)
+        offered = utterances.speak()
         evaluator.accept(offered, activation_id="act-1")
-        evaluator.refuse(candidate())
+        evaluator.refuse(None)
         evaluator.release_latch(activation_id="act-1")
-        self.assertIsNotNone(evaluator.offer([candidate()]))
+        self.assertIsNotNone(utterances.speak())
 
     def test_an_explicitly_configured_cooldown_survives_by_design(self):
         clock = [0.0]
-        evaluator = WakeDetectionEvaluator(
-            policy_supplier=lambda: WakeRuntimePolicy(
-                sensitivity=0.5, cooldown_ms=2000, pre_roll_ms=0,
-                settings_revision=0,
-            ),
-            rearm_ms=1960.0,
-            clock=lambda: clock[0],
-        )
-        offered = evaluator.offer([candidate()])
+        evaluator = self._evaluator(cooldown_ms=2000, clock=lambda: clock[0])
+        utterances = Utterances(evaluator)
+        offered = utterances.speak()
         evaluator.accept(offered, activation_id="act-1")
         evaluator.release_latch(activation_id="act-1")
 
         # The configured cooldown is deliberate post-close semantics ...
-        self.assertIsNone(evaluator.offer([candidate()]))
+        self.assertIsNone(utterances.speak())
         clock[0] += 2.0
         # ... and it expires exactly after the configured duration.
-        self.assertIsNotNone(evaluator.offer([candidate()]))
+        self.assertIsNotNone(utterances.speak())
 
-    def test_the_implicit_rearm_never_outlives_the_close_even_with_cooldown(self):
+    def test_only_the_configured_cooldown_blocks_after_the_close(self):
         clock = [0.0]
-        evaluator = WakeDetectionEvaluator(
-            policy_supplier=lambda: WakeRuntimePolicy(
-                sensitivity=0.5, cooldown_ms=10, pre_roll_ms=0,
-                settings_revision=0,
-            ),
-            rearm_ms=60000.0,
-            clock=lambda: clock[0],
-        )
-        offered = evaluator.offer([candidate()])
+        evaluator = self._evaluator(cooldown_ms=10, clock=lambda: clock[0])
+        utterances = Utterances(evaluator)
+        offered = utterances.speak()
         evaluator.accept(offered, activation_id="act-1")
         evaluator.release_latch(activation_id="act-1")
         clock[0] += 0.011
-        # Only the 10 ms configured cooldown may still apply, never the 60 s
-        # receptive-field de-duplication window.
-        self.assertIsNotNone(evaluator.offer([candidate()]))
+        # Only the 10 ms configured cooldown may ever apply - there is no
+        # implicit receptive-field window left to outlive it.
+        self.assertIsNotNone(utterances.speak())
 
 
 # -- F7: commit/fault boundary --------------------------------------------------
@@ -549,7 +651,7 @@ class F7FaultBoundaryTests(unittest.TestCase):
                 controller.activations[-1] if controller.activations else None
             ),
         )
-        detection = coordinator.admit(candidate())
+        detection = coordinator.admit(wake_hit())
 
         self.assertIsNotNone(detection)
         self.assertEqual(detection.activation_id, "act-1")
@@ -567,7 +669,7 @@ class F7FaultBoundaryTests(unittest.TestCase):
                 controller.activations[-1] if controller.activations else None
             ),
         )
-        self.assertIsNone(coordinator.admit(candidate()))
+        self.assertIsNone(coordinator.admit(wake_hit()))
         self.assertFalse(evaluator.latched)
 
     def test_a_pre_commit_failure_leaves_no_activation_and_no_latch(self):
@@ -579,7 +681,7 @@ class F7FaultBoundaryTests(unittest.TestCase):
             raise AssertionError("unreachable")
 
         coordinator, evaluator = self._coordinator(activate, published.append)
-        self.assertIsNone(coordinator.admit(candidate()))
+        self.assertIsNone(coordinator.admit(wake_hit()))
         self.assertEqual(controller.activations, [])
         self.assertFalse(evaluator.latched)
         self.assertEqual(published, [])
@@ -597,7 +699,7 @@ class F7FaultBoundaryTests(unittest.TestCase):
             )
 
         coordinator, evaluator = self._coordinator(activate, published.append)
-        detection = coordinator.admit(candidate())
+        detection = coordinator.admit(wake_hit())
 
         self.assertIsNotNone(detection)
         self.assertEqual(detection.activation_id, "act-1")
@@ -617,7 +719,7 @@ class F7FaultBoundaryTests(unittest.TestCase):
             raise RuntimeError("transport is gone")
 
         coordinator, evaluator = self._coordinator(activate, publish)
-        detection = coordinator.admit(candidate())
+        detection = coordinator.admit(wake_hit())
 
         self.assertIsNotNone(detection)
         self.assertTrue(evaluator.latched)
@@ -635,7 +737,7 @@ class F7FaultBoundaryTests(unittest.TestCase):
             )
 
         coordinator, evaluator = self._coordinator(activate, published.append)
-        self.assertIsNone(coordinator.admit(candidate()))
+        self.assertIsNone(coordinator.admit(wake_hit()))
         self.assertFalse(evaluator.latched)
         self.assertEqual(published, [])
 
@@ -671,7 +773,7 @@ class F7FaultBoundaryTests(unittest.TestCase):
         def admitter():
             barrier.wait(timeout=5)
             with lock:
-                results.append(coordinator.admit(candidate()))
+                results.append(coordinator.admit(wake_hit()))
 
         def closer():
             barrier.wait(timeout=5)
@@ -719,7 +821,7 @@ class F7SessionFaultTests(unittest.TestCase):
 
                 domain._publish_collected_events = exploding
                 try:
-                    detection = domain._on_wakeword_detected(candidate())
+                    detection = domain._on_wakeword_detected(wake_hit())
                 finally:
                     domain._publish_collected_events = original
 

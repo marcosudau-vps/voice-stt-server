@@ -67,9 +67,8 @@ from api_fastapi_server.wake_admission import (
 )
 from VoiceSTT.core import wakeword_catalog as wakeword_catalog_module
 from VoiceSTT.core.wake_detection import (
+    WakeAttemptPolicy,
     WakeDetectionEvaluator,
-    WakeRuntimePolicy,
-    selection_receptive_field_ms,
 )
 from VoiceSTT_server.operations import (
     AuditLogManager,
@@ -751,7 +750,9 @@ def resolve_session_wake_word_config(base_settings, request, registry):
         settings.wakeword_backend = "openwakeword"
         settings.wake_words = ",".join(selection.wake_word_ids)
         settings.openwakeword_model_paths = ",".join(selection.model_paths)
-        settings.openwakeword_inference_framework = selection.pipeline.framework
+        # AP-SRV-060 C3: the admission already chose the one common
+        # inference backend for the whole selection.
+        settings.openwakeword_inference_framework = selection.backend
         return settings, ResolvedSessionWakeWordConfig(
             requested_enabled=True,
             effective_enabled=True,
@@ -2866,52 +2867,92 @@ class RecorderBackedRealtimeSession:
     # -- AP-SRV-060 wake detection runtime -----------------------------------
 
     def _install_wake_word_runtime(self):
-        """Binds detector hygiene and the admission coordinator to the recorder.
+        """Binds the wake gate and the admission coordinator to the recorder.
 
         Only a session that actually holds an admitted catalog selection gets
-        the v2 detection path. The de-duplication window is the *measured*
-        receptive field of the models the real backend loaded; sensitivity,
-        cooldown and pre-roll come from the one AP-SRV-050 settings authority
-        through :meth:`_wake_runtime_policy`, which the evaluator re-reads at
-        every admission (Root F2).
+        the v2 detection path. The evaluator drives the one
+        :class:`~VoiceSTT.core.openwakeword_engine.OpenWakeWordEngine` the
+        recorder built, and every wake value comes from the one AP-SRV-050
+        settings authority through :meth:`_wake_attempt_policy`. That snapshot
+        is frozen for the duration of one hit region, so a patch that lands
+        mid-utterance applies to the next attempt (Root F11).
         """
         selection = getattr(self.session_config, "wake_word_selection", None)
         if selection is None or self._activation is None:
             return
-        measured = getattr(self.recorder, "wake_word_input_frames", None) or {}
         evaluator = WakeDetectionEvaluator(
-            policy_supplier=self._wake_runtime_policy,
-            rearm_ms=selection_receptive_field_ms(measured),
+            policy_supplier=self._wake_attempt_policy,
+            engine=getattr(self.recorder, "wake_engine", None),
         )
         self.recorder.wake_detection_evaluator = evaluator
         self.recorder.wake_word_pre_roll_ms = evaluator.pre_roll_ms
         self._wake_admission = WakeAdmissionCoordinator(
             evaluator=evaluator,
             activate=self._activate_from_wake_candidate,
-            publish=self._publish_accepted_wake_detection,
+            deliver=self._deliver_wake_detected_event,
             committed_probe=self._open_wake_activation_id,
         )
 
-    def _wake_runtime_policy(self):
-        """The current wake runtime policy from the one settings authority.
+    def _wake_effective_settings(self):
+        """One atomic read of the session's effective wake settings."""
+        state = getattr(self, "settings_state", None)
+        if state is None:
+            return None
+        try:
+            return state.activation_admission_settings()
+        except Exception:  # noqa: BLE001 - defensive projection
+            return None
 
-        Read live, never cached here: the evaluator latches it for the running
-        activation and picks the new values up for the next one, which is
-        exactly what ``applyPolicy = next_activation`` means. There is no
-        second settings registry and no second copy of these values.
+    def _wake_engine_options(self):
+        """The ``next_session`` wake engine values of this session.
+
+        ``detectorGain`` is a ``next_activation`` value and is re-read per
+        attempt; it is passed here only as the engine's starting value so a
+        session that never patches still amplifies correctly.
         """
-        defaults = WakeRuntimePolicy(
+        options = {
+            "detector_gain": 1.0,
+            "noise_suppression_enabled": False,
+            "vad_threshold": 0.0,
+        }
+        bundle = self._wake_effective_settings()
+        if bundle is None:
+            return options
+        effective = bundle.effective_settings
+        gain = effective.get(settings_control_module.WAKE_WORD_DETECTOR_GAIN)
+        if isinstance(gain, (int, float)) and not isinstance(gain, bool):
+            options["detector_gain"] = float(gain)
+        suppression = effective.get(
+            settings_control_module.WAKE_WORD_NOISE_SUPPRESSION
+        )
+        if isinstance(suppression, bool):
+            options["noise_suppression_enabled"] = suppression
+        threshold = effective.get(
+            settings_control_module.WAKE_WORD_VAD_THRESHOLD
+        )
+        if isinstance(threshold, (int, float)) and not isinstance(threshold, bool):
+            options["vad_threshold"] = float(threshold)
+        return options
+
+    def _wake_attempt_policy(self):
+        """The current wake attempt snapshot from the one settings authority.
+
+        Read live, never cached here: the tracker freezes it at the first
+        prediction frame of a new hit region and picks the new values up for
+        the next attempt, which is exactly what
+        ``applyPolicy = next_activation`` means. There is no second settings
+        registry and no second copy of these values.
+        """
+        defaults = WakeAttemptPolicy(
             sensitivity=float(self.settings.wake_words_sensitivity or 0.5),
+            min_consecutive_prediction_frames=1,
+            detector_gain=1.0,
             cooldown_ms=0,
             pre_roll_ms=0,
             settings_revision=0,
         )
-        state = getattr(self, "settings_state", None)
-        if state is None:
-            return defaults
-        try:
-            bundle = state.activation_admission_settings()
-        except Exception:  # noqa: BLE001 - defensive projection
+        bundle = self._wake_effective_settings()
+        if bundle is None:
             return defaults
         effective = bundle.effective_settings
 
@@ -2921,10 +2962,16 @@ class RecorderBackedRealtimeSession:
                 return fallback
             return cast(value)
 
-        return WakeRuntimePolicy(
+        return WakeAttemptPolicy(
             sensitivity=number(
                 settings_control_module.WAKE_WORD_SENSITIVITY,
                 defaults.sensitivity, float,
+            ),
+            min_consecutive_prediction_frames=number(
+                settings_control_module.WAKE_WORD_MIN_PREDICTION_FRAMES, 1, int
+            ),
+            detector_gain=number(
+                settings_control_module.WAKE_WORD_DETECTOR_GAIN, 1.0, float
             ),
             cooldown_ms=number(
                 settings_control_module.WAKE_WORD_COOLDOWN_MS, 0, int
@@ -2934,6 +2981,9 @@ class RecorderBackedRealtimeSession:
             ),
             settings_revision=int(bundle.settings_revision),
         )
+
+    #: Historical name of :meth:`_wake_attempt_policy`.
+    _wake_runtime_policy = _wake_attempt_policy
 
     def _open_wake_activation_id(self):
         """The open wake activation the controller really shows, if any.
@@ -3026,8 +3076,15 @@ class RecorderBackedRealtimeSession:
             error=post_commit_error,
         )
 
-    def _publish_accepted_wake_detection(self, detection):
-        """Exactly one ``wakeword.detected`` per accepted utterance."""
+    def _deliver_wake_detected_event(self, logical_event, detection):
+        """Transport of the one logical ``wakeword.detected`` (Root F13).
+
+        The logical event was already minted exactly once by the admission
+        ledger before this call, so a transport failure here can never leave an
+        accepted hit without an event and a retry can never duplicate one. The
+        payload is routed through the existing AP-SRV-040 lifecycle funnel;
+        there is no second event authority.
+        """
         event = self.timeline.mark_wakeword_detected()
         fields = detection.event_fields()
         self._publish_timeline_event(
@@ -3036,9 +3093,25 @@ class RecorderBackedRealtimeSession:
             wakeWordId=fields["wakeWordId"],
             score=fields["score"],
             activationId=fields["activationId"],
+            logicalEventId=logical_event.event_id,
         )
         self.publish_status("wakeword_detected")
         return event
+
+    def _publish_accepted_wake_detection(self, detection):
+        """Historical single-argument publish seam."""
+        from api_fastapi_server.wake_admission import LogicalWakeEvent
+
+        return self._deliver_wake_detected_event(
+            LogicalWakeEvent(
+                event_id="",
+                wake_word_id=detection.canonical_wake_word_id,
+                activation_id=detection.activation_id,
+                score=detection.score,
+                sequence=1,
+            ),
+            detection,
+        )
 
     def _release_wake_latch(self, activation_id=None):
         """Releases the wake latch at the safe input close of that activation."""
@@ -3147,6 +3220,9 @@ class RecorderBackedRealtimeSession:
             "wake_word_selection": getattr(
                 self.session_config, "wake_word_selection", None
             ),
+            # AP-SRV-060 C3: the next_session wake engine values of the
+            # one AP-SRV-050 settings plane.
+            "wake_word_engine_options": self._wake_engine_options(),
             "pre_recording_buffer_duration": self.settings.pre_recording_buffer_duration,
             "allowed_latency_limit": self.settings.audio_queue_size,
             "handle_buffer_overflow": True,
@@ -6492,6 +6568,21 @@ class VoiceSTTService:
         if not isinstance(values, (list, tuple)):
             return ()
         return tuple(str(value) for value in values)
+
+    def wake_word_inference_backend(self):
+        """The AP-SRV-050 ``wakeWord.inferenceBackend`` server value.
+
+        AP-SRV-060 C3 section 10: an admin/server setting, applied per session
+        admission. The catalog never owns it; it only receives it as the
+        requested backend policy of one admission, and there is no
+        wake-specific validation outside the settings registry.
+        """
+        try:
+            effective = self.settings_control.server_effective()
+        except Exception:  # noqa: BLE001 - never break an admission on a read
+            return "auto"
+        value = effective.get(settings_control_module.WAKE_WORD_INFERENCE_BACKEND)
+        return str(value or "auto")
 
     def _on_wake_word_catalog_changed(
         self, catalog_revision, available_wake_word_ids, availability_changed

@@ -4,26 +4,32 @@ Three independent measurements, all against the *real* OpenWakeWord backend and
 the artifacts this build actually ships:
 
 ``artifacts``
-    The measured receptive field of every bundled classifier. One embedding
+    The measured receptive field of every bundled classifier. One prediction
     frame advances the stream by 1280 samples (80 ms at 16 kHz) and the
     embedding model consumes 76 melspectrogram frames (760 ms), so a classifier
     with ``N`` input frames still sees the same utterance for
-    ``(N - 1) * 80 + 760`` ms. This is the value the mandatory de-duplication
-    window is derived from - it is measured, not chosen.
+    ``(N - 1) * 80 + 760`` ms. Since AP-SRV-060 C3 this is a *diagnostic*
+    measurement only: no setting range and no audio boundary is derived from it.
 
 ``resources``
     Init/startup time, RSS before/after, peak RSS and per-chunk detection
     latency for 1, 3 and the maximum selectable number of models.
 
 ``scores``
-    A full score/chunk trace of one or more WAV files, including every raw
-    candidate above the threshold, the accepted detection under the production
-    latch rule, duplicate spikes and the resulting wake boundary.
+    A full prediction-frame trace of one or more WAV files through the *real*
+    production rules of AP-SRV-060 C3: the one
+    :class:`~VoiceSTT.core.openwakeword_engine.OpenWakeWordEngine`, the
+    :class:`~VoiceSTT.core.wake_detection.WakeHitTracker` with its score
+    threshold and minimum consecutive prediction frames, the finalized hit
+    regions and the wake boundary each one establishes at its operational zero
+    point. ``--min-frames`` and ``--detector-gain`` sweep exactly the two knobs
+    the calibration is missing.
 
 Positive wake-word recordings are *not* part of the repository. Running
 ``scores`` against negative material characterises false positives only; the
-cooldown/pre-roll defaults that depend on real positive speech stay
-``EVIDENCE_PENDING`` and are deliberately not simulated.
+threshold, minimum-frame, cooldown, pre-roll and gain defaults that depend on
+real positive speech stay ``EVIDENCE_BLOCKED`` and are deliberately not
+simulated.
 
 Usage::
 
@@ -46,10 +52,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from VoiceSTT.core.openwakeword_engine import (  # noqa: E402
+    PREDICTION_FRAME_SAMPLES,
+    OpenWakeWordEngine,
+)
 from VoiceSTT.core.wake_audio_boundary import resolve_wake_audio_boundary  # noqa: E402
 from VoiceSTT.core.wake_detection import (  # noqa: E402
-    RawWakeCandidate,
-    WakeDetectionEvaluator,
+    WakeAttemptPolicy,
+    WakeHitTracker,
     receptive_field_ms,
     selection_receptive_field_ms,
 )
@@ -86,16 +96,13 @@ def rss_bytes():
         return None
 
 
-def load_backend(selection):
-    from openwakeword.model import Model
+def load_backend(selection, **engine_options):
+    """The one live wake engine of this measurement.
 
-    kwargs = selection.loader_kwargs()
-    return Model(
-        wakeword_models=list(kwargs["wakeword_models"]),
-        inference_framework="onnx",
-        melspec_model_path=kwargs["melspec_model_path"],
-        embedding_model_path=kwargs["embedding_model_path"],
-    )
+    It runs on the *common* backend the admission chose for the whole
+    selection - the harness never picks a framework of its own.
+    """
+    return OpenWakeWordEngine(selection=selection, **engine_options)
 
 
 def read_wav(path):
@@ -117,17 +124,22 @@ def command_artifacts(authority, _args):
     options.log_severity_level = 3
     rows = []
     for entry in authority.snapshot().entries:
+        artifact = entry.artifact_for("onnx")
+        if artifact is None:
+            continue
         session = ort.InferenceSession(
-            str(entry.artifact.path),
+            str(artifact.path),
             sess_options=options,
             providers=["CPUExecutionProvider"],
         )
         frames = session.get_inputs()[0].shape[1]
         rows.append({
             "id": entry.id,
-            "artifact": entry.artifact.file_name,
-            "bytes": entry.artifact.byte_size,
+            "artifact": artifact.file_name,
+            "bytes": artifact.byte_size,
             "inputFrames": frames,
+            "healthyBackends": list(entry.healthy_backends),
+            "inputFramesNote": "diagnostic only since C3",
             "receptiveFieldMs": receptive_field_ms(frames),
         })
     rows.sort(key=lambda row: row["id"])
@@ -149,24 +161,24 @@ def command_resources(authority, args):
     for size in sizes:
         if size > len(available):
             continue
-        selection, errors = authority.resolve_selection(available[:size])
+        selection, errors = authority.admit_selection(available[:size])
         if errors:
             raise SystemExit(f"selection failed: {[e.to_dict() for e in errors]}")
 
         before = rss_bytes()
         started = time.perf_counter()
-        model = load_backend(selection)
+        engine = load_backend(selection)
         init_seconds = time.perf_counter() - started
         after = rss_bytes()
 
         # Warm up, then measure per-chunk detection latency.
         for _ in range(args.warmup):
-            model.predict(_pcm(silence))
+            engine.process(silence)
         latencies = []
         peak = after or 0
         for _ in range(args.iterations):
             tick = time.perf_counter()
-            model.predict(_pcm(silence))
+            engine.process(silence)
             latencies.append((time.perf_counter() - tick) * 1000.0)
             current = rss_bytes()
             if current is not None:
@@ -176,6 +188,7 @@ def command_resources(authority, args):
         rows.append({
             "selectedModels": size,
             "wakeWordIds": list(selection.wake_word_ids),
+            "backend": selection.backend,
             "initSeconds": round(init_seconds, 4),
             "rssBeforeBytes": before,
             "rssAfterBytes": after,
@@ -188,11 +201,15 @@ def command_resources(authority, args):
                 latencies[int(len(latencies) * 0.95) - 1], 4
             ),
             "detectionLatencyMsMax": round(latencies[-1], 4),
-            "measuredRearmMs": selection_receptive_field_ms(model.model_inputs),
+            "measuredReceptiveFieldMs": selection_receptive_field_ms(
+                engine.input_frames
+            ),
             "chunkSamples": CHUNK_SAMPLES,
+            "predictionFrames": engine.frame_index,
             "iterations": args.iterations,
         })
-        del model
+        engine.close()
+        del engine
     return {
         "measurement": "resources",
         "environment": environment(),
@@ -207,105 +224,99 @@ def _pcm(data):
 
 
 def command_scores(authority, args):
-    """A full score/chunk trace of real audio through the production rules."""
+    """A full prediction-frame trace of real audio through the C3 rules."""
     if not args.audio:
         raise SystemExit("scores needs at least one --audio file")
     selected = args.wake_words or list(authority.available_ids())[:1]
-    selection, errors = authority.resolve_selection(selected)
+    selection, errors = authority.admit_selection(selected)
     if errors:
         raise SystemExit(f"selection failed: {[e.to_dict() for e in errors]}")
 
-    model = load_backend(selection)
-    key_to_id = selection.model_key_to_id
-    frames_by_key = dict(model.model_inputs)
+    policy = WakeAttemptPolicy(
+        sensitivity=args.threshold,
+        min_consecutive_prediction_frames=args.min_frames,
+        detector_gain=args.detector_gain,
+        cooldown_ms=args.cooldown_ms,
+        pre_roll_ms=args.pre_roll_ms,
+    )
 
     traces = []
     for audio_path in args.audio:
         data = read_wav(Path(audio_path))
-        evaluator = WakeDetectionEvaluator(
-            threshold=args.threshold,
-            rearm_ms=selection_receptive_field_ms(frames_by_key),
-            cooldown_ms=args.cooldown_ms,
+        engine = load_backend(
+            selection,
+            detector_gain=args.detector_gain,
+            noise_suppression_enabled=args.noise_suppression,
+            vad_threshold=args.vad_threshold,
         )
-        model.reset() if hasattr(model, "reset") else None
+        tracker = WakeHitTracker(policy_supplier=lambda: policy)
 
-        raw_hits = []
-        accepted = []
+        frames_above = 0
         max_scores = {}
-        position = 0
-        frame_index = 0
+        hits = []
+        prediction_frames = 0
         for offset in range(0, len(data) - CHUNK_SAMPLES * 2 + 1,
                             CHUNK_SAMPLES * 2):
             chunk = data[offset:offset + CHUNK_SAMPLES * 2]
-            model.predict(_pcm(chunk))
-            position += CHUNK_SAMPLES
-            frame_index += 1
-            candidates = []
-            for key, scores in model.prediction_buffer.items():
-                identifier = key_to_id.get(key)
-                if identifier is None or not scores:
+            for frame in engine.process(chunk):
+                prediction_frames += 1
+                for identifier, score in frame.scores.items():
+                    max_scores[identifier] = max(
+                        max_scores.get(identifier, 0.0), score
+                    )
+                    if score >= args.threshold:
+                        frames_above += 1
+                hit = tracker.observe(frame.scores, end_sample=frame.end_sample)
+                if hit is None:
                     continue
-                score = float(scores[-1])
-                max_scores[identifier] = max(max_scores.get(identifier, 0.0), score)
-                candidates.append(RawWakeCandidate(
-                    canonical_wake_word_id=identifier,
-                    raw_score=score,
-                    frame_index=frame_index,
-                    sample_position=position,
-                    detector_generation=evaluator.generation,
-                    model_key=key,
-                ))
-            above = [
-                item for item in candidates
-                if item.raw_score >= args.threshold
-            ]
-            for item in above:
-                raw_hits.append(item.diagnostics())
-            offered = evaluator.offer(candidates)
-            if offered is None:
-                continue
-            detection = evaluator.accept(offered, activation_id=f"cal-{len(accepted)}")
-            boundary = resolve_wake_audio_boundary(
-                detection_sample_position=offered.sample_position,
-                receptive_field_ms=receptive_field_ms(
-                    frames_by_key.get(offered.model_key)
-                ),
-                pre_roll_ms=args.pre_roll_ms,
-                sample_rate=SAMPLE_RATE,
-            )
-            accepted.append({
-                "wakeWordId": detection.canonical_wake_word_id,
-                "score": detection.score,
-                "frameIndex": offered.frame_index,
-                "samplePosition": offered.sample_position,
-                "detectionTimeSeconds": offered.sample_position / SAMPLE_RATE,
-                "boundary": boundary.to_dict(),
-            })
-            # The production latch would stay set until the safe input close;
-            # for a pure detector trace it is released immediately so every
-            # further spike of the same file stays visible as a duplicate.
-            evaluator.release_latch(activation_id=detection.activation_id)
+                boundary = resolve_wake_audio_boundary(
+                    operational_zero_point_sample=hit.operational_zero_point_sample,
+                    pre_roll_ms=args.pre_roll_ms,
+                    sample_rate=SAMPLE_RATE,
+                )
+                hits.append({
+                    "wakeWordId": hit.canonical_wake_word_id,
+                    "peakScore": round(hit.peak_score, 6),
+                    "startFrameIndex": hit.start_frame_index,
+                    "qualificationFrameIndex": hit.qualification_frame_index,
+                    "finalizationFrameIndex": hit.finalization_frame_index,
+                    "predictionFrameCount": hit.prediction_frame_count,
+                    "zeroPointSeconds": round(
+                        hit.operational_zero_point_sample / SAMPLE_RATE, 4
+                    ),
+                    "boundary": boundary.to_dict(),
+                })
 
         traces.append({
             "audio": str(audio_path),
             "durationSeconds": round(len(data) / 2 / SAMPLE_RATE, 3),
-            "chunks": frame_index,
+            "chunks": len(range(0, len(data) - CHUNK_SAMPLES * 2 + 1,
+                                CHUNK_SAMPLES * 2)),
+            "predictionFrames": prediction_frames,
             "maxScorePerWakeWord": {
                 key: round(value, 6) for key, value in sorted(max_scores.items())
             },
-            "rawCandidatesAboveThreshold": len(raw_hits),
-            "acceptedDetections": accepted,
-            "duplicateSpikes": max(0, len(raw_hits) - len(accepted)),
+            "predictionFramesAboveThreshold": frames_above,
+            # The whole point of the C3 model: many frames above the threshold
+            # are one logical hit, not many.
+            "finalizedWakeHits": hits,
+            "logicalHitCount": len(hits),
         })
+        engine.close()
 
     return {
         "measurement": "scores",
         "environment": environment(),
+        "backend": selection.backend,
         "threshold": args.threshold,
+        "minConsecutivePredictionFrames": args.min_frames,
+        "detectorGain": args.detector_gain,
+        "vadThreshold": args.vad_threshold,
+        "noiseSuppressionEnabled": bool(args.noise_suppression),
         "cooldownMs": args.cooldown_ms,
         "preRollMs": args.pre_roll_ms,
         "wakeWordIds": list(selection.wake_word_ids),
-        "measuredRearmMs": selection_receptive_field_ms(frames_by_key),
+        "predictionFrameSamples": PREDICTION_FRAME_SAMPLES,
         "traces": traces,
     }
 
@@ -324,6 +335,10 @@ def main(argv=None):
     parser.add_argument("--audio", action="append", default=[])
     parser.add_argument("--wake-words", action="append", default=[])
     parser.add_argument("--threshold", type=float, default=0.5)
+    parser.add_argument("--min-frames", type=int, default=1)
+    parser.add_argument("--detector-gain", type=float, default=1.0)
+    parser.add_argument("--vad-threshold", type=float, default=0.0)
+    parser.add_argument("--noise-suppression", action="store_true")
     parser.add_argument("--cooldown-ms", type=int, default=0)
     parser.add_argument("--pre-roll-ms", type=int, default=0)
     parser.add_argument("--iterations", type=int, default=200)

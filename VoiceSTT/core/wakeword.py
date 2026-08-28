@@ -28,6 +28,7 @@ from .openwakeword_catalog import (
     OPENWAKEWORD_MODEL_ROOT_ENV,
     OpenWakeWordCatalog,
 )
+from .openwakeword_engine import OpenWakeWordEngine
 from .wake_detection import RawWakeCandidate
 
 logger = logging.getLogger("voicestt")
@@ -143,6 +144,7 @@ def setup_wakeword_detection(
     load_porcupine_module=None,
     load_openwakeword_modules=None,
     wake_word_selection=None,
+    wake_word_engine_options=None,
 ):
     """
     Configures the selected wake-word backend on the recorder.
@@ -150,7 +152,14 @@ def setup_wakeword_detection(
     ``wake_word_selection`` is the AP-SRV-060 v2 path: an already admitted
     :class:`~VoiceSTT.core.wakeword_catalog.WakeWordSelection`. When it is
     given, *only* its classifiers are handed to OpenWakeWord - no catalog
-    scan, no default fallback, no extra model.
+    scan, no default fallback, no extra model - and they all run under the one
+    common inference backend the admission chose.
+
+    ``wake_word_engine_options`` carries the ``next_session`` wake values of
+    the AP-SRV-050 settings plane (``detectorGain``, ``noiseSuppressionEnabled``,
+    ``vadThreshold``). They configure the one
+    :class:`~VoiceSTT.core.openwakeword_engine.OpenWakeWordEngine`; there is no
+    second wake settings authority.
     """
     if not (
         recorder.use_wake_words
@@ -208,27 +217,47 @@ def setup_wakeword_detection(
                 load_openwakeword_modules = _load_openwakeword_modules
             _openwakeword, Model = load_openwakeword_modules()
             if wake_word_selection is not None:
-                # AP-SRV-060 selected-only initialisation: exactly the admitted
-                # classifiers plus the shared pipeline models the catalog owns.
-                loader_kwargs = wake_word_selection.loader_kwargs()
-                model_paths = list(loader_kwargs["wakeword_models"])
-                feature_paths = {
-                    key: value for key, value in loader_kwargs.items()
-                    if key != "wakeword_models"
-                }
+                # AP-SRV-060 C3: selected-only initialisation under exactly one
+                # common inference backend. The engine is the thin adapter that
+                # owns the single upstream model instance, the prediction-frame
+                # accounting and the detector-only gain.
+                options = dict(wake_word_engine_options or {})
+                engine = OpenWakeWordEngine(
+                    selection=wake_word_selection,
+                    model_factory=lambda **kwargs: Model(**kwargs),
+                    sample_rate=getattr(recorder, "sample_rate", 16000),
+                    detector_gain=float(options.get("detector_gain", 1.0)),
+                    noise_suppression_enabled=bool(
+                        options.get("noise_suppression_enabled", False)
+                    ),
+                    vad_threshold=float(options.get("vad_threshold", 0.0)),
+                )
+                recorder.wake_engine = engine
+                recorder.owwModel = engine.model
+                model_paths = list(wake_word_selection.model_paths)
+                logger.info(
+                    "Successfully loaded offline wakeword model(s) on backend "
+                    "%s: %s",
+                    engine.backend,
+                    model_paths,
+                )
             else:
                 model_paths, feature_paths = _resolve_openwakeword_paths(
                     openwakeword_model_paths,
                     wake_words,
                     openwakeword_inference_framework,
                 )
-            recorder.owwModel = Model(
-                wakeword_models=model_paths,
-                inference_framework=openwakeword_inference_framework,
-                device="cpu",
-                **feature_paths,
-            )
-            logger.info("Successfully loaded offline wakeword model(s): %s", model_paths)
+                recorder.wake_engine = None
+                recorder.owwModel = Model(
+                    wakeword_models=model_paths,
+                    inference_framework=openwakeword_inference_framework,
+                    device="cpu",
+                    **feature_paths,
+                )
+                logger.info(
+                    "Successfully loaded offline wakeword model(s): %s",
+                    model_paths,
+                )
             bind_wake_word_selection(recorder, wake_word_selection)
 
             recorder.oww_n_models = len(recorder.owwModel.models.keys())

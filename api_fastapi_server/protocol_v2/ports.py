@@ -116,11 +116,14 @@ class WakeWordPort:
             return []
         return list(catalog.available_ids())
 
-    def resolve_selection(self, wake_word_ids):
+    def resolve_selection(self, wake_word_ids, *, requested_backend=None,
+                          platform=None):
         """``(selection, errors)`` of one atomic **wire** admission.
 
-        Canonical ids only, and every selected artifact is really probed for
-        loadability before the session may be accepted.
+        Canonical ids only. Loadability per backend was already resolved by the
+        catalog at load/refresh time; the admission additionally requires one
+        *common* healthy backend for the whole selection (AP-SRV-060 C3 / Root
+        F12) and reports a missing one machine-readably.
         """
         catalog = self.catalog
         if catalog is None:
@@ -133,8 +136,25 @@ class WakeWordPort:
                     "verfügbar."
                 ),
             }]
-        selection, errors = catalog.admit_selection(wake_word_ids)
+        selection, errors = catalog.admit_selection(
+            wake_word_ids,
+            requested_backend=(
+                self.requested_backend() if requested_backend is None
+                else requested_backend
+            ),
+            platform=platform,
+        )
         return selection, [error.to_dict() for error in errors]
+
+    def requested_backend(self):
+        """The admin-managed ``wakeWord.inferenceBackend`` of this server."""
+        getter = getattr(self._service, "wake_word_inference_backend", None)
+        if callable(getter):
+            try:
+                return getter()
+            except Exception:  # noqa: BLE001 - defensive read
+                return "auto"
+        return getattr(self._service, "wakeword_inference_backend", "auto")
 
     def validate_selection(self, wake_word_ids):
         """Atomic admission of one requested selection.

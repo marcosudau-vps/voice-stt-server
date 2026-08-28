@@ -134,15 +134,20 @@ class WakeEventTests(unittest.TestCase):
 
     @staticmethod
     def _candidate(identifier=BUNDLED_WAKE_WORD, score=0.91):
-        from VoiceSTT.core.wake_detection import RawWakeCandidate
+        """One finalized hit region, as the C3 tracker hands it over."""
+        from VoiceSTT.core.wake_detection import WakeAttemptPolicy, WakeHit
 
-        return RawWakeCandidate(
+        return WakeHit(
             canonical_wake_word_id=identifier,
-            raw_score=score,
-            frame_index=1,
-            sample_position=32000,
-            detector_generation=0,
-            model_key=identifier,
+            peak_score=score,
+            start_frame_index=0,
+            start_sample=1280,
+            qualification_frame_index=0,
+            qualification_sample=1280,
+            finalization_frame_index=1,
+            operational_zero_point_sample=32000,
+            prediction_frame_count=1,
+            policy=WakeAttemptPolicy(sensitivity=0.5),
         )
 
     def test_an_accepted_hit_publishes_exactly_one_wakeword_detected(self):

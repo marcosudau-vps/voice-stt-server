@@ -76,24 +76,35 @@ ACTIVATION_WATCHDOG_WARNING = "activation.segmentWatchdogWarningMs"
 ACTIVATION_CLOSING_RECOVERY = "activation.closingRecoveryTimeoutMs"
 
 WAKE_WORD_SENSITIVITY = "wakeWord.sensitivity"
+WAKE_WORD_MIN_PREDICTION_FRAMES = "wakeWord.minConsecutivePredictionFrames"
 WAKE_WORD_SELECTION = "wakeWord.selection"
 WAKE_WORD_GLOBAL_DISABLED = "wakeWord.globalDisabledIds"
 WAKE_WORD_COOLDOWN_MS = "wakeWord.cooldownMs"
 WAKE_WORD_PRE_ROLL_MS = "wakeWord.preRollMs"
+WAKE_WORD_DETECTOR_GAIN = "wakeWord.detectorGain"
+WAKE_WORD_NOISE_SUPPRESSION = "wakeWord.noiseSuppressionEnabled"
+WAKE_WORD_VAD_THRESHOLD = "wakeWord.vadThreshold"
+WAKE_WORD_INFERENCE_BACKEND = "wakeWord.inferenceBackend"
 
-#: Measured properties of the bundled ONNX classifiers. OpenWakeWord advances
-#: one embedding frame per 1280 samples (80 ms at 16 kHz) and the embedding
-#: model looks at 76 melspectrogram frames (760 ms), so a classifier with ``N``
-#: input frames still sees the same utterance for ``(N - 1) * 80 + 760`` ms.
-#: Across the bundled build that span is 1960 ms at minimum (16 frames) and
-#: 3400 ms at maximum (34 frames); the measurement is in the AP-SRV-060
-#: evidence README.
+#: The accepted values of ``wakeWord.inferenceBackend``. ``auto`` prefers the
+#: backend the deployment platform is built around (ONNX on Windows,
+#: TFLite/LiteRT on Linux) and falls back to the other one for the whole
+#: selection; an explicit value never falls back.
+WAKE_WORD_BACKEND_VALUES = ["auto", "onnx", "tflite"]
+
+#: Measured properties of the bundled classifiers, kept as a *diagnostic*.
+#: OpenWakeWord advances one prediction frame per 1280 samples (80 ms at
+#: 16 kHz) and the embedding model looks at 76 melspectrogram frames (760 ms),
+#: so a classifier with ``N`` input frames still sees the same utterance for
+#: ``(N - 1) * 80 + 760`` ms - 1960 ms at minimum (16 frames) and 3400 ms at
+#: maximum (34 frames) across the bundled build.
 #:
-#: Root F5: a receptive field is **not** a calibrated operating range. These
-#: two numbers are used only as provisional input guard rails so a value cannot
-#: be absurd; they are explicitly not a recommendation, and the real
-#: cooldown/pre-roll range and default still require positive wake-word
-#: recordings (WW-18/WW-19, currently ``EVIDENCE_BLOCKED``).
+#: AP-SRV-060 C3 section 9.1: no wake setting range is derived from these
+#: numbers any more. A receptive field is not a calibrated operating range and
+#: it is not an audio-history bound either. ``wakeWord.preRollMs`` and
+#: ``wakeWord.cooldownMs`` therefore carry ``min 0`` and no artificial ceiling;
+#: the pre-roll is clamped at runtime against the audio history that really
+#: still exists (see :mod:`VoiceSTT.core.wake_audio_boundary`).
 WAKE_WORD_MIN_RECEPTIVE_FIELD_MS = 1960
 WAKE_WORD_MAX_RECEPTIVE_FIELD_MS = 3400
 
@@ -145,6 +156,7 @@ CODE_INVALID_PAYLOAD = "invalid_payload"
 CODE_WAKE_SELECTION_REQUIRED = "wake_word_selection_required"
 CODE_WAKE_WORD_UNAVAILABLE = "wake_word_unavailable"
 CODE_PERSISTENCE_FAILED = "persistence_failed"
+CODE_VALUE_NOT_ALLOWED = "value_not_allowed"
 
 
 # -- data structures -----------------------------------------------------------
@@ -156,7 +168,7 @@ class SettingDefinition:
     ``constraints`` is a JSON-safe dict. Known keys:
 
     * ``min`` / ``max`` - inclusive numeric range for ``int`` / ``float``;
-    * ``allowed`` - list of permitted values;
+    * ``allowed`` / ``allowedValues`` - list of permitted values;
     * ``minItems`` - minimum length for ``string_list``;
     * ``lessThanKeys`` - keys whose final candidate must be strictly greater.
 
@@ -404,13 +416,37 @@ def builtin_definitions() -> List[SettingDefinition]:
             writable=False,
         ),
         SettingDefinition(
+            key=WAKE_WORD_MIN_PREDICTION_FRAMES,
+            scope=SCOPE_SESSION,
+            auth=AUTH_SESSION,
+            type=TYPE_INT,
+            constraints={
+                "min": 1,
+                "unit": "predictionFrames",
+                "calibration": CALIBRATION_PENDING,
+                "calibrationTraceabilityIds": ["WW-18"],
+            },
+            default_value=1,
+            apply_policy=APPLY_NEXT_ACTIVATION,
+            description=(
+                "Mindestanzahl aufeinanderfolgender OpenWakeWord-"
+                "Prediction-Frames mit Score >= wakeWord.sensitivity, bevor "
+                "ein Trefferbereich qualifiziert. Gezaehlt werden nur echte "
+                "neue Prediction-Frames, keine Recorderchunks und kein intern "
+                "wiederholter Score. Default 1 ist ein neutraler Startwert, "
+                "KEINE Aussage, dass 1 empirisch optimal ist; die Kalibrierung "
+                "(WW-18) erfordert reale positive Wake-Word-Aufnahmen und ist "
+                "derzeit EVIDENCE_BLOCKED."
+            ),
+            has_server_default=True,
+        ),
+        SettingDefinition(
             key=WAKE_WORD_COOLDOWN_MS,
             scope=SCOPE_SESSION,
             auth=AUTH_SESSION,
             type=TYPE_INT,
             constraints={
                 "min": 0,
-                "max": WAKE_WORD_MAX_RECEPTIVE_FIELD_MS,
                 "unit": "ms",
                 "calibration": CALIBRATION_PENDING,
                 "calibrationTraceabilityIds": ["WW-18"],
@@ -418,14 +454,13 @@ def builtin_definitions() -> List[SettingDefinition]:
             default_value=0,
             apply_policy=APPLY_NEXT_ACTIVATION,
             description=(
-                "Explizit konfigurierter Wake-Word-Cooldown. Er wirkt "
-                "zusaetzlich zur impliziten Entprellung derselben Aeusserung "
+                "Expliziter Operator-Cooldown nach einem akzeptierten "
+                "Wake-Hit. Er ist NICHT die interne Gruppierung desselben "
+                "Trefferbereichs - die leistet der WakeHitTracker ohne Timer - "
                 "und bleibt bewusst auch nach dem sicheren Eingabeschluss "
                 "wirksam. Default 0 = kein zusaetzlicher Cooldown. ACHTUNG: "
-                "Bereich und Default sind vorlaeufige Eingabegrenzen, kein "
-                "kalibrierter Betriebsbereich; die Kalibrierung (WW-18) "
-                "erfordert reale positive Wake-Word-Aufnahmen und ist derzeit "
-                "EVIDENCE_BLOCKED."
+                "Der kalibrierte Betriebswert (WW-18) erfordert reale positive "
+                "Wake-Word-Aufnahmen und ist derzeit EVIDENCE_BLOCKED."
             ),
             has_server_default=True,
         ),
@@ -436,7 +471,6 @@ def builtin_definitions() -> List[SettingDefinition]:
             type=TYPE_INT,
             constraints={
                 "min": 0,
-                "max": WAKE_WORD_MIN_RECEPTIVE_FIELD_MS,
                 "unit": "ms",
                 "calibration": CALIBRATION_PENDING,
                 "calibrationTraceabilityIds": ["WW-19"],
@@ -444,14 +478,93 @@ def builtin_definitions() -> List[SettingDefinition]:
             default_value=0,
             apply_policy=APPLY_NEXT_ACTIVATION,
             description=(
-                "Nutzsprachen-Pre-Roll vor der geschaetzten Wake-Endgrenze. "
-                "0 ms ist vertraglich zulaessig und gibt das Audio am "
-                "geschaetzten Wake-Ende frei. ACHTUNG: Bereich und Default "
-                "sind vorlaeufige Eingabegrenzen, kein kalibrierter "
-                "Betriebsbereich; die Wake-Endgrenze selbst ist bislang eine "
-                "Schaetzung aus dem Detection-Sample. Die Kalibrierung "
-                "(WW-19) erfordert reale positive Wake-Word-Aufnahmen und ist "
-                "derzeit EVIDENCE_BLOCKED."
+                "Nutzsprachen-Pre-Roll vor dem operationalen Nullpunkt. Der "
+                "Nullpunkt ist die Trailing Edge des gewonnenen qualifizierten "
+                "Wake-Hits und eine bewusste serverseitige Produktdefinition. "
+                "0 ms gibt das Audio genau am Nullpunkt frei. Es gibt keine "
+                "aus dem Classifier-Receptive-Field abgeleitete Obergrenze; "
+                "die tatsaechliche Grenze ist die real vorgehaltene "
+                "Audiohistorie, gegen die zur Laufzeit geclampt wird. Der "
+                "kalibrierte Betriebswert (WW-19) erfordert reale positive "
+                "Wake-Word-Aufnahmen und ist derzeit EVIDENCE_BLOCKED."
+            ),
+            has_server_default=True,
+        ),
+        SettingDefinition(
+            key=WAKE_WORD_DETECTOR_GAIN,
+            scope=SCOPE_SESSION,
+            auth=AUTH_SESSION,
+            type=TYPE_FLOAT,
+            constraints={
+                "min": 0.0,
+                "max": 3.0,
+                "calibration": CALIBRATION_PENDING,
+                "calibrationTraceabilityIds": ["WW-18"],
+            },
+            default_value=1.0,
+            apply_policy=APPLY_NEXT_ACTIVATION,
+            description=(
+                "Linearer Gain ausschliesslich auf einer PCM-Kopie fuer die "
+                "Wake-Inferenz. Das Originalaudio fuer Aufnahme, "
+                "Transkription und Audiohistorie bleibt unveraendert; die "
+                "Kopie wird saettigend auf int16 geclippt."
+            ),
+            has_server_default=True,
+        ),
+        SettingDefinition(
+            key=WAKE_WORD_NOISE_SUPPRESSION,
+            scope=SCOPE_SESSION,
+            auth=AUTH_SESSION,
+            type=TYPE_BOOL,
+            constraints={},
+            default_value=False,
+            apply_policy=APPLY_NEXT_SESSION,
+            description=(
+                "Aktiviert die vorhandene OpenWakeWord/Speex-"
+                "Rauschunterdrueckung der Wake-Inferenz. Sie wirkt beim "
+                "Aufbau der Engine und damit auf neu aufgebaute Sessions."
+            ),
+            has_server_default=True,
+        ),
+        SettingDefinition(
+            key=WAKE_WORD_VAD_THRESHOLD,
+            scope=SCOPE_SESSION,
+            auth=AUTH_SESSION,
+            type=TYPE_FLOAT,
+            constraints={
+                "min": 0.0,
+                "max": 1.0,
+                "calibration": CALIBRATION_PENDING,
+                "calibrationTraceabilityIds": ["WW-18"],
+            },
+            default_value=0.0,
+            apply_policy=APPLY_NEXT_SESSION,
+            description=(
+                "Schwelle des OpenWakeWord-internen VAD-Gates vor der "
+                "Wake-Inferenz; 0.0 deaktiviert es. Das ist der dem Detector "
+                "vorgeschaltete Wake-VAD ausserhalb einer Activation und "
+                "eroeffnet keinen zweiten Betriebsstrang: innerhalb einer "
+                "Activation gilt weiterhin die bestehende Speech-/"
+                "Transkriptionslogik."
+            ),
+            has_server_default=True,
+        ),
+        SettingDefinition(
+            key=WAKE_WORD_INFERENCE_BACKEND,
+            scope=SCOPE_SERVER,
+            auth=AUTH_ADMIN,
+            type=TYPE_STRING,
+            constraints={"allowedValues": list(WAKE_WORD_BACKEND_VALUES)},
+            default_value="auto",
+            apply_policy=APPLY_NEXT_SESSION,
+            description=(
+                "Gemeinsames Inference-Backend der Wake-Engine. 'auto' "
+                "bevorzugt ONNX unter Windows und TFLite/LiteRT unter Linux "
+                "und faellt fuer die GESAMTE ausgewaehlte Wake-Word-Menge auf "
+                "das jeweils andere Backend zurueck. 'onnx' und 'tflite' "
+                "erlauben ausschliesslich dieses Backend - ohne stillen "
+                "Wechsel. Eine Live-Engine verwendet immer genau ein "
+                "gemeinsames Backend fuer alle ausgewaehlten Wake Words."
             ),
             has_server_default=True,
         ),
@@ -606,6 +719,18 @@ def _validate_constraints(defn: SettingDefinition, value: Any) -> Optional[Field
     allowed = constraints.get("allowed")
     if allowed is not None and value not in allowed:
         return _error(defn, CODE_INVALID_TYPE, f"{defn.key} ist kein zulässiger Wert.")
+    # AP-SRV-060 C3 section 9.2: a generic enum constraint of the shared
+    # settings validation. There is no wake-specific special validation outside
+    # the registry.
+    allowed_values = constraints.get("allowedValues")
+    if allowed_values is not None and value not in allowed_values:
+        return _error(
+            defn,
+            CODE_VALUE_NOT_ALLOWED,
+            f"{defn.key} muss einer der zulässigen Werte sein: "
+            + ", ".join(str(item) for item in allowed_values)
+            + ".",
+        )
     min_items = constraints.get("minItems")
     if min_items is not None and len(value) < min_items:
         return _error(defn, CODE_TOO_FEW_ITEMS, f"{defn.key} muss mindestens {min_items} Einträge besitzen.")

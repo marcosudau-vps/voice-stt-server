@@ -43,7 +43,8 @@ Folgepaketen zugeordnet:
   `effectiveSettings` und führt `settingsRevision` mit, lehnt einen
   `session_settings.patch` aber ausdrücklich ab
   (`REQUIRES_AP_SRV_050_BINDING`).
-- Wake-Word-Erkennung verwendet heute den letzten OpenWakeWord-Score gegen die
+- Wake-Word-Erkennung arbeitet seit AP-SRV-060 C3 auf zusammenhängenden
+  Trefferbereichen echter Prediction-Frames gegen die
   konfigurierte Sensitivität. Es existiert kein belastbarer Score-/Audio-
   Evidence-Harness für Cooldown, ausgewähltes Modell und die exakte
   Pre-Roll-Grenze; Katalog/Settings folgen in AP-SRV-050, Detection/Latch und
@@ -1170,6 +1171,11 @@ Serververwaltete Schlüssel (Details siehe `2026-08-27_PLAN.md` im Archiv):
 |---|---|---|---|
 | die sechs `activation.*`-Timings | session | session | next_activation |
 | `wakeWord.sensitivity` | session | session | next_activation |
+| `wakeWord.minConsecutivePredictionFrames` | session | session | next_activation |
+| `wakeWord.detectorGain` | session | session | next_activation |
+| `wakeWord.noiseSuppressionEnabled` | session | session | next_session |
+| `wakeWord.vadThreshold` | session | session | next_session |
+| `wakeWord.inferenceBackend` | server | admin | next_session |
 | `wakeWord.selection` | session | session | next_session |
 | `runtimeSuppression.manual` / `.wakeWord` | session | session | live (Metadata) |
 | `wakeWord.globalDisabledIds` | server | admin | next_session |
@@ -1413,18 +1419,75 @@ Sessionstartup. Die beiden gemeinsamen Pipelineassets (Melspektrogramm,
 Embedding) gehören dem Katalog und werden je Sessionmodellinstanz einmal
 übergeben, wie die reale OpenWakeWord-API es verlangt.
 
-### 14.6 Detection: Raw vs. Accepted
+### 14.6 Detection: Prediction Frames, Trefferbereiche, Accepted
+
+Die Regel „1 Wake Word = 1 `wakeword.detected`" ist **Exactly-once Eventing**
+für eine zusammengehörige Wake-Äußerung. Sie bedeutet nicht, dass ein einzelner
+Scoreframe bereits ein Wake Word wäre. Frühere Formulierungen aus C1/C2 – „keine
+Mehrfach-Chunk-Regel", „keine 5/10 Treffer", „zusätzliche Multi-Chunk-Regel nur
+nach Evidence" – waren eine Fehlinterpretation des Intended Contract und sind
+zurückgezogen.
+
+Gearbeitet wird auf echten OpenWakeWord-**Prediction-Frames**, nicht auf
+beliebigen Recorder-/Transportchunks. OpenWakeWord schiebt je 1280 Samples
+(80 ms bei 16 kHz) genau einen Prediction-Frame weiter und wiederholt bei einem
+kürzeren Chunk den zwischengespeicherten Score. Liefert der Recorder 20 ms oder
+40 ms, sammelt die Engine mehrere Chunks, bis genau ein neuer Prediction-Frame
+entsteht – und daraus wird genau ein Schritt im `WakeHitTracker`. Ein intern
+wiederholter Score wird nie doppelt gezählt.
+
+Je ausgewähltem Wake Word wird unabhängig ein zusammenhängender Trefferbereich
+verfolgt:
 
 ```text
-RawWakeCandidate      canonicalWakeWordId, rawScore, frame/sample position,
-                      detector generation                      (Diagnose)
-AcceptedWakeDetection canonicalWakeWordId, score, activationId,
-                      audio boundary                           (Domain)
+wakeWord.sensitivity                      Score-Schwelle
+wakeWord.minConsecutivePredictionFrames   Mindestanzahl aufeinanderfolgender
+                                          Frames >= Schwelle
+
+Score >= Schwelle             -> Trefferfolge waechst
+darunter vor der Mindestzahl  -> verwerfen, Zaehler zuruecksetzen,
+                                 kein Wake-Hit, kein Event
+Mindestzahl erreicht          -> QUALIFIZIERT (noch nicht die Entscheidung)
+erster Frame darunter danach  -> FINALISIERT an der Trailing Edge
 ```
 
-Mehrere gleichzeitig positive Modelle: höchster gültiger Score; bei exaktem
-Gleichstand gewinnt die lexikografisch kleinste kanonische ID. Rohscores
-bleiben Diagnose und werden nie Domain Event.
+Bei Schwelle `0.70` und Mindestzahl `10` ist die Folge
+`0.73 0.78 0.81 0.85 0.88 0.90 0.91 0.89 0.86 0.83 0.79 0.75 0.71 0.62`
+**ein** zusammenhängender Wake-Hit – nicht 13 Trigger und nicht 13 Events.
+
+**Multi-Wake-Word-Arbitration.** Primärregel ist First-come-first-served: der
+erste qualifizierte Wake-Hit, der finalisiert, gewinnt. Sind `Alexa` und
+`Alexander` beide qualifiziert und fällt der Alexa-Trefferbereich früher unter
+die Schwelle, gewinnt `Alexa`. Keine künstliche Nachwartezeit, kein „längeres
+Wort bevorzugen", kein nachträglicher Peak-Score-Wettbewerb. Nur für den
+theoretischen Gleichstand – mehrere qualifizierte Kandidaten finalisieren im
+selben Prediction-Frame – gilt deterministisch: (1) früher erreichte
+Qualifikation, (2) früherer Beginn der Trefferfolge, (3) lexikografisch
+kleinste kanonische Wake-Word-ID. Sobald der Gewinner feststeht, werden alle
+anderen Kandidaten dieser Entscheidung verworfen.
+
+```text
+Prediction Frame      canonicalWakeWordId -> Score                  (Diagnose)
+WakeHit               Trefferbereich: Start, Qualifikation,
+                      Finalisierung, Peak-Score, Frameanzahl        (Domain)
+AcceptedWakeDetection canonicalWakeWordId, score, activationId,
+                      audio boundary                                (Domain)
+```
+
+Rohscores bleiben Diagnose und werden nie Domain Event.
+
+### 14.6a Ein Versuch, eine Settingsrevision
+
+Ein logischer `WakeAttemptPolicy`-Snapshot enthält mindestens
+`settingsRevision`, `sensitivity`, `minConsecutivePredictionFrames`,
+`detectorGain`, `cooldownMs` und `preRollMs`. Er wird am Linearization Point
+eingefroren – dem ersten Prediction-Frame, der eine neue Trefferfolge beginnt,
+während keine andere läuft – und gilt ab dann unverändert für Scorevergleich,
+Trefferzähler, Qualifikation, Finalisierung, Pre-Roll, Cooldown-Entscheidung,
+`AcceptedWakeDetection` und die `effectiveSettings` der Activation. Ein Patch
+mitten in der Äußerung wirkt auf den **nächsten** Versuch; bricht die
+Trefferfolge vor der Qualifikation ab, wird der Versuch verworfen und der
+nächste nimmt die dann aktuelle Revision. Es gibt keine Mischrevision.
 
 ### 14.7 Wake Admission und Latch
 
@@ -1432,14 +1495,15 @@ Der Wake-Latch liegt nicht im `ActivationController`; AP-SRV-010/030 bleiben
 die quellenneutrale Activation Authority.
 
 ```text
-Raw Candidate -> Detection Evaluation -> Wake Admission Coordinator
-              -> ActivationController.activate(source="wake_word")
+Prediction Frames -> WakeHitTracker -> WakeDetectionEvaluator
+                  -> Wake Admission Coordinator
+                  -> ActivationController.activate(source="wake_word")
 ```
 
 Nur bei erfolgreicher Activation-Admission wird die Detection fachlich
 accepted, der Latch gesetzt, die akzeptierte `activationId` übernommen und
-genau ein `wakeword.detected` mit `activationId`, `wakeWordId`, `score` und
-`primarySource = wake_word` erzeugt. Bei `activation_locked`, Suppression oder
+genau ein **logisches** `wakeword.detected` mit `activationId`, `wakeWordId`,
+`score` und `primarySource = wake_word` gemintet. Bei `activation_locked`, Suppression oder
 anderer Ablehnung entsteht kein Event, kein neuer fachlicher Latch, keine
 zweite Activation und kein Source-Merge. Ein Wake Word während einer offenen
 Activation hat keinerlei direkte Trigger-, Finish-, Cancel- oder
@@ -1462,64 +1526,117 @@ dennoch, fragt der Coordinator die Activation-Autorität, ob eine
 Wake-Activation offen ist, und behandelt den Fall entsprechend – eine
 committete Activation ohne Latch kann so nicht entstehen.
 
-### 14.8 FIND-011, Cooldown und Rearm
+### 14.8 FIND-011, Exactly-once Eventing und Cooldown
 
 Der Mehrfachsignalpfad hatte zwei Ursachen: der Recorder führte die Detection
-nach gesetztem `wakeword_detected` ohne Guard weiter aus, und es gab keine
-Entprellung über die Dauer einer Äußerung. Beides ist behoben:
+nach gesetztem `wakeword_detected` ohne Guard weiter aus, und eine Äußerung
+wurde nicht als ein zusammenhängender Trefferbereich behandelt. Beides ist
+behoben:
 
 - der Detector läuft nicht weiter, solange ein Treffer gelatcht ist;
-- ein implizites **Entprellfenster** deckt das **gemessene** Empfangsfenster der
-  jeweils gewählten Modelle ab, damit derselbe akustische Treffer nicht zweimal
-  angeboten wird.
+- der `WakeHitTracker` gruppiert alle Prediction-Frames einer Äußerung zu genau
+  einem logischen Wake-Hit – ganz ohne Timer.
 
-OpenWakeWord schiebt je 1280 Samples (80 ms bei 16 kHz) einen Embeddingframe
-weiter, das Embeddingmodell sieht 76 Melspektrogrammframes (760 ms); ein
-Klassifikator mit `N` Eingangsframes sieht dieselbe Äußerung also noch
-`(N - 1) * 80 + 760` ms. Über den gebündelten Build sind das 1960 ms bis
-3400 ms. Eine willkürliche `2 aus 3`- oder `5/10`-Regel wird nicht eingeführt.
+**Exactly-once Eventing.** Das logische Minten und die Zustellung sind zwei
+getrennte Schritte:
 
-Entprellung und Cooldown sind ausdrücklich **zwei verschiedene Dinge**:
+| Schritt | Eigenschaft |
+|---|---|
+| logisches Mint | genau einmal je akzeptiertem Wake-Hit, rein in-memory, kann nicht am Netz scheitern, idempotent je `activationId` |
+| Transportzustellung | ausdrücklich fehlbar; erfolgreich, fehlgeschlagen oder über die bestehende Resync-/Replay-/Close-Semantik behandelt |
 
-| | Entprellfenster | `wakeWord.cooldownMs` |
-|---|---|---|
-| Herkunft | implizit, gemessenes Empfangsfenster | explizit konfiguriert |
-| Zweck | denselben akustischen Treffer nicht zweimal anbieten | bewusste Betreiberpause |
-| sicherer Eingabeschluss | **wird gelöscht** | bleibt bestehen |
+Root verlangt keine unfehlbaren Netzwerke, sondern dass ein akzeptierter
+Wake-Hit genau ein logisches Domain/v2-Event erzeugt. Ein Transportfehler kann
+deshalb nie einen akzeptierten Hit ohne Event zurücklassen, und ein Retry
+erzeugt nie ein Duplikat. Es gibt keine zweite Eventautorität.
 
-Das Entprellfenster schützte genau die Activation, die gerade geschlossen
-wurde; es am Eingabeschluss weiterleben zu lassen wäre eine versteckte zweite
-Vordergrundsperre, die das Activation-Lifecycle-Modell nicht kennt. Ein
-explizit konfigurierter Cooldown bleibt dagegen bewusst wirksam.
+**Cooldown.** `wakeWord.cooldownMs` ist der explizit konfigurierte
+Betreiber-Cooldown nach einem akzeptierten Wake-Hit. Er ist ausdrücklich nicht
+die interne Gruppierung desselben Trefferbereichs und bleibt bewusst auch nach
+dem sicheren Eingabeschluss wirksam – genau das hat ein Betreiber angefordert.
+Default ist `0`. Das implizite Entprellfenster aus C2 ist zurückgezogen; damit
+kann auch keine versteckte zweite Vordergrundsperre entstehen.
 
-### 14.9 Audiogrenze und Pre-Roll
+### 14.9 Operationaler Nullpunkt, Audiogrenze und Pre-Roll
 
-Getrennt werden Detection-Sample, Empfangsfenster, geschätzte Wake-Endgrenze,
-Sprachbeginn und freigegebenes Transkript-Audio. Nur die ersten beiden sind
-gemessen:
+Der operationale Audio-Nullpunkt ist definiert. Er ist **nicht** der erste
+Frame über der Schwelle, nicht der Frame, an dem die Mindestanzahl erreicht
+wurde, nicht das Receptive-Field-Ende und keine extern annotierte „wahre"
+phonemische Wake-Endgrenze. Er **ist** die **Trailing Edge** des gewonnenen
+qualifizierten Wake-Hits: der Übergang vom letzten Prediction-Frame
+`>= sensitivity` zum ersten darunter.
 
 ```text
-detectionSample            gemessene Position der akzeptierten Entscheidung
-receptiveFieldStartSample  detectionSample - gemessenes Empfangsfenster
-estimatedWakeEndSample     derzeit == detectionSample        (Schätzung)
-releaseSample              max(receptiveFieldStartSample,
-                               estimatedWakeEndSample - preRollMs)
+operationalZeroPointSample  Trailing Edge des gewonnenen Wake-Hits
+historyStartSample          aeltestes noch vorgehaltenes Sample
+releaseSample               max(historyStartSample,
+                                operationalZeroPointSample - preRollMs)
 ```
 
-Die Grenze hängt an einer realen Sampleposition statt an einer konfigurierten
-Dauer – das ist gegenüber dem pauschalen Legacy-Schnitt ein echter Fortschritt.
-Sie bleibt aber eine **Schätzung**: ein Klassifikator kann nicht entscheiden,
-bevor das Wake Word vorbei ist, sein Entscheidungspunkt liegt also am oder nach
-dem akustischen Ende – um wie viel er nachläuft, ist nicht gemessen. Jede
-Projektion sagt das über `boundaryBasis = detection_sample_estimate` und
-`boundaryMeasured = false`. Die reale akustische Wake-Endgrenze ist `WW-19` und
-erfordert reale positive Wake-Word-Aufnahmen; bis dahin gilt
-`EVIDENCE_BLOCKED`, und kein Wert hier darf als bewiesene akustische Grenze
-gelesen werden.
+Das ist eine bewusste serverseitige Produktdefinition und muss nicht erst durch
+externe Audioannotation erfunden werden. Jede Projektion sagt das über
+`boundaryBasis = operational_zero_point` und `boundaryDefined = true`.
 
-Bei `wakeWord.preRollMs = 0` beginnt das Transkript an der geschätzten
-Wake-Endgrenze. Die pauschale `wake_word_buffer_duration`-Abschneidung
-existiert nur noch im v1-Recorderpfad und entfällt mit AP-SRV-070.
+Bei `wakeWord.preRollMs = 0` beginnt das Transkript genau am Nullpunkt. Ein
+größerer Pre-Roll nimmt entsprechend viel gepuffertes Audio davor wieder mit und
+wird gegen die real vorhandene Audiohistorie geclampt (`preRollClamped`). Aus
+dem Classifier-Receptive-Field wird **keine** Obergrenze mehr abgeleitet.
+
+Offen bleibt die **empirische Kalibrierung**: Score-Schwelle, Mindestanzahl
+Prediction-Frames, Pre-Roll, Cooldown, Gain, VAD-/Noise-Suppression-Tuning und
+das False-Positive-/False-Negative-Verhalten. Das erfordert reale positive
+Wake-Word-Aufnahmen (`WW-18`/`WW-19`) und ist `EVIDENCE_BLOCKED`. Der Nullpunkt
+selbst gehört nicht zu dieser Lücke.
+
+Die pauschale `wake_word_buffer_duration`-Abschneidung existiert nur noch im
+v1-Recorderpfad und entfällt mit AP-SRV-070.
+
+### 14.9a Ein gemeinsames Inference Backend je Live-Engine
+
+Alle vorgesehenen Wake-Word-Modelle liegen als `.onnx` und `.tflite` vor. Eine
+Live-Engine hält genau eine Upstream-`openwakeword.Model`-Instanz und damit
+genau **ein** gemeinsames Backend für alle ausgewählten Wake Words; eine
+Mischung „Wake Word A -> ONNX, Wake Word B -> TFLite" gibt es nicht.
+
+| `wakeWord.inferenceBackend` | Windows | Linux |
+|---|---|---|
+| `auto` | ONNX bevorzugt, TFLite/LiteRT als gemeinsamer Fallback | TFLite/LiteRT bevorzugt, ONNX als gemeinsamer Fallback |
+| `onnx` | nur ONNX | nur ONNX |
+| `tflite` | nur TFLite/LiteRT | nur TFLite/LiteRT |
+
+Der Fallback gilt immer für die gesamte Auswahl. Bei expliziter Backendwahl gibt
+es keinen stillen Wechsel: ist das Backend für die volle Auswahl nicht gesund,
+wird die Session mit `reason = backend_unavailable` abgelehnt. Unter `auto` wird
+eine Auswahl ohne gemeinsames gesundes Backend mit
+`reason = no_common_backend` abgelehnt. Eine fehlende Runtime ist ein ungesundes
+Backend (`reason = runtime_unavailable`), niemals eine bestandene Probe;
+Runtimes sind Deploymentabhängigkeiten und werden nie im Requestpfad
+installiert.
+
+### 14.9b VAD-Architekturgate und Detector-Gain
+
+Es bleibt **ein** durchgehender serverautoritärer Lifecycle:
+
+```text
+ausserhalb Activation   Wake Detector, optional mit eigenem OpenWakeWord-VAD
+akzeptierter Wake-Hit   ActivationController uebernimmt
+innerhalb Activation    bestehende Speech-/Transkriptionslogik; die Wake-Quelle
+                        hat keine direkte Triggerwirkung
+```
+
+Ein wake-spezifischer, dem Detector vorgeschalteter VAD ist ausdrücklich
+zulässig und beabsichtigt. Was nicht entstehen darf, sind zwei parallele
+unabhängige Activation-Pipelines, eine Client-Wake-State-Machine neben der
+serverseitigen oder ein zweiter konkurrierender Trigger-Lifecycle.
+
+`wakeWord.detectorGain` wirkt ausschließlich auf einer PCM-Kopie für die
+Wake-Inferenz, mit sättigendem int16-Clipping:
+
+```text
+Original PCM
+├─ unveraendert -> Recording / STT / Audiohistorie
+└─ Kopie -> Gain -> OpenWakeWordEngine
+```
 
 ### 14.10 Settings-Bindung
 
@@ -1527,25 +1644,34 @@ AP-SRV-060 baut keine zweite Settingsregistry, Revision oder Persistenz. Es
 ergänzt in der AP-SRV-050-Registry:
 
 | Key | Scope | Auth | Bereich | Default | Apply | Kalibrierung |
-|---|---|---:|---:|---:|---|---|
-| `wakeWord.cooldownMs` | session | session | 0–3400 | 0 | `next_activation` | `pending` (WW-18) |
-| `wakeWord.preRollMs` | session | session | 0–1960 | 0 | `next_activation` | `pending` (WW-19) |
+|---|---|---|---|---|---|---|
+| `wakeWord.minConsecutivePredictionFrames` | session | session | >= 1 | 1 | `next_activation` | `pending` (WW-18) |
+| `wakeWord.cooldownMs` | session | session | >= 0 | 0 | `next_activation` | `pending` (WW-18) |
+| `wakeWord.preRollMs` | session | session | >= 0 | 0 | `next_activation` | `pending` (WW-19) |
+| `wakeWord.detectorGain` | session | session | 0.0–3.0 | 1.0 | `next_activation` | `pending` (WW-18) |
+| `wakeWord.noiseSuppressionEnabled` | session | session | bool | `false` | `next_session` | – |
+| `wakeWord.vadThreshold` | session | session | 0.0–1.0 | 0.0 | `next_session` | `pending` (WW-18) |
+| `wakeWord.inferenceBackend` | server | admin | `auto`/`onnx`/`tflite` | `auto` | `next_session` | – |
 
-Beide Schlüssel werden ausdrücklich als **vorläufig** veröffentlicht: das
+Die Kalibrierschlüssel werden ausdrücklich als **vorläufig** veröffentlicht: das
 Schema trägt `constraints.calibration = "pending"` und die abhängigen
-Traceability-IDs. Die Zahlen sind gemessene Empfangsfenster und dienen nur als
-Eingabegrenzen – ein Empfangsfenster ist kein kalibrierter Betriebsbereich, und
-`0` ist ein neutraler Default, keine Empfehlung. Realer Bereich und Default
-erfordern reale positive Wake-Word-Aufnahmen; `WW-18`/`WW-19` sind
-`EVIDENCE_BLOCKED`.
+Traceability-IDs. `0`/`1`/`1.0` sind neutrale Defaults, keine Empfehlungen; die
+kalibrierten Betriebswerte erfordern reale positive Wake-Word-Aufnahmen, und
+`WW-18`/`WW-19` sind `EVIDENCE_BLOCKED`. Aus dem Receptive Field wird kein
+Bereich mehr abgeleitet: die reale Pre-Roll-Grenze ist die vorgehaltene
+Audiohistorie und wird zur Laufzeit geclampt.
 
-**Reale Runtimebindung.** `wakeWord.sensitivity`, `wakeWord.cooldownMs` und
-`wakeWord.preRollMs` sind `next_activation` und wirken deshalb wirklich: der
-Evaluator liest bei jeder Admission eine unveränderliche `WakeRuntimePolicy`
-aus der einen AP-SRV-050-Settingsautorität und latcht sie für die Dauer der
-Activation. Eine laufende Activation behält ihre Werte, die nächste verwendet
-die gepatchten – Schwelle, Cooldown und Pre-Roll gleichermaßen. Es gibt dafür
-keine zweite Registry und keine zweite Kopie dieser Werte.
+`wakeWord.inferenceBackend` nutzt die generische
+`constraints.allowedValues`-Prüfung der gemeinsamen Settingsvalidierung; es gibt
+keine wake-spezifische Sondervalidierung außerhalb der Registry.
+
+**Reale Runtimebindung.** Alle `next_activation`-Wake-Werte wirken wirklich: der
+Tracker friert am ersten Prediction-Frame einer neuen Trefferfolge eine
+unveränderliche `WakeAttemptPolicy` aus der einen AP-SRV-050-Settingsautorität
+ein und hält sie für den gesamten Trefferbereich. Ein laufender Versuch behält
+seine Werte, der nächste verwendet die gepatchten – Schwelle, Mindestframezahl,
+Gain, Cooldown und Pre-Roll gleichermaßen. Es gibt dafür keine zweite Registry
+und keine zweite Kopie dieser Werte.
 
 ### 14.11 Grenze zu AP-SRV-070
 

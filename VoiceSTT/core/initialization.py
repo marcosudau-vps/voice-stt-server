@@ -72,6 +72,7 @@ def initialize_recorder(
         load_porcupine_module,
         load_openwakeword_modules,
         init_args.get("wake_word_selection"),
+        init_args.get("wake_word_engine_options"),
     )
     _initialize_voice_activity_detection(
         recorder,
@@ -222,6 +223,10 @@ def _assign_initial_attributes(recorder, init_args, normalize_wakeword_backend):
     # until then every value below stays neutral and the legacy path runs.
     recorder.wake_detection_evaluator = None
     recorder.wake_word_selection = None
+    # AP-SRV-060 C3: the one live wake engine of this recorder, or
+    # ``None`` on every legacy/manual session.
+    recorder.wake_engine = None
+    recorder.wake_detection_evaluator = None
     recorder.wake_word_model_key_to_id = {}
     recorder.wake_word_input_frames = {}
     recorder.wake_word_pre_roll_ms = 0
@@ -557,6 +562,7 @@ def _initialize_wakeword_detection(
     load_porcupine_module,
     load_openwakeword_modules,
     wake_word_selection=None,
+    wake_word_engine_options=None,
 ):
     """
     Initializes wake-word detection backends and callbacks.
@@ -572,6 +578,7 @@ def _initialize_wakeword_detection(
         load_porcupine_module=load_porcupine_module,
         load_openwakeword_modules=load_openwakeword_modules,
         wake_word_selection=wake_word_selection,
+        wake_word_engine_options=wake_word_engine_options,
     )
 
 

@@ -226,9 +226,11 @@ than crashing the session build later. Every problematic id is named:
 ```
 
 `reason` is one of `not_canonical`, `unknown`, `globally_disabled`,
-`artifact_missing`, `artifact_unloadable`, `pipeline_unavailable`. Audio,
-triggers and wake detection stay locked until the admission succeeded, and no
-partial session, no `sessionId` and no recorder exist for a refused one.
+`artifact_missing`, `artifact_integrity_mismatch`, `artifact_unloadable`,
+`pipeline_unavailable`, `runtime_unavailable`, `backend_unavailable`,
+`no_common_backend`. Audio, triggers and wake detection stay locked until the
+admission succeeded, and no partial session, no `sessionId` and no recorder
+exist for a refused one.
 
 After a successful admission **only the selected classifiers** are handed to
 OpenWakeWord. Other models contained in the build cost neither RAM nor session
@@ -236,128 +238,294 @@ startup time. The two shared pipeline models (melspectrogram, embedding) belong
 to the catalog and are passed once per session model instance, as the real
 OpenWakeWord API requires.
 
+### Catalog loadability
+
+Availability is resolved by the catalog authority, at the initial load and at
+every `POST /api/v2/wake-words/refresh`. A model is never `available: true`
+merely because a file exists next to the manifest. Each refresh validates, for
+every declared entry:
+
+1. manifest/schema validity;
+2. canonical ids, display names, aliases and their collisions;
+3. the declared artifact integrity (`sha256`/`bytes`), where the manifest
+   carries it;
+4. **both** declared artifact formats;
+5. runtime/provider availability per backend;
+6. the shared OpenWakeWord pipeline assets of that backend;
+7. a **real probe load** of every declared classifier artifact;
+8. the resulting per-backend health;
+9. one atomic, complete candidate snapshot;
+10. last-known-good on any refresh failure.
+
+Probing may instantiate a model briefly and release it again. That does not
+weaken selected-only runtime loading: selected-only means that a *running*
+session keeps only its actually selected classifiers in the live engine.
+
+A model that cannot be loaded does **not** disappear from the public catalog.
+It stays queryable with `available: false`, a machine-readable
+`unavailableReason` and its per-backend `backends` block; only genuinely
+available ids appear in `availableWakeWordIds`. No local paths, secrets or
+loader internals are ever published.
+
+### Dual inference backend
+
+Every wake-word model of this build is meant to exist as `.onnx` **and**
+`.tflite`. There is no per-model mixture inside one live engine: a session
+runs **one** upstream `openwakeword.Model` and therefore exactly one common
+inference backend for all of its selected wake words.
+
+`wakeWord.inferenceBackend` (server, admin) selects the policy:
+
+| value | Windows | Linux |
+| --- | --- | --- |
+| `auto` | ONNX preferred, TFLite/LiteRT as the common fallback | TFLite/LiteRT preferred, ONNX as the common fallback |
+| `onnx` | ONNX only | ONNX only |
+| `tflite` | TFLite/LiteRT only | TFLite/LiteRT only |
+
+The fallback is always for the **whole** selection, never per model. An
+explicitly requested backend never switches silently: if it is not healthy for
+the full selection the session is rejected with `reason: backend_unavailable`.
+Under `auto`, a selection whose models are individually healthy but share no
+single backend is rejected with `reason: no_common_backend`.
+
+A missing inference runtime is an unhealthy backend
+(`reason: runtime_unavailable`), never a passed probe. Runtimes are deployment
+dependencies; nothing is installed in the request path.
+
 ## Detection, latch and events
 
-Raw detector observations and accepted detections are strictly separated:
+### What "1 wake word = 1 `wakeword.detected`" means
 
-- a **raw candidate** carries the canonical id, the raw score, its frame and
-  sample position and the detector generation - it is diagnostics and never a
-  domain event;
-- an **accepted detection** carries the canonical id, the score, the
-  `activationId` that this very hit opened and the audio boundary it
-  established.
+It is an **exactly-once eventing** rule for one spoken wake-word utterance. It
+never meant that a single score frame is already a wake word. OpenWakeWord
+emits a score per selected classifier on every prediction frame, and a spoken
+wake word produces a whole *run* of frames above the threshold; those frames
+are one logical hit and produce at most one domain event.
 
-Several models above the threshold in the same chunk: the highest valid score
-wins; on an exact tie the lexicographically smallest canonical id wins.
+Earlier formulations in the C1/C2 documentation - "no multi-chunk rule", "no
+5-of-10 hits", "an additional multi-chunk rule only with evidence" - read the
+rule the other way round. They are withdrawn and replaced by the model below.
 
-A candidate becomes an activation only through the normal, source-neutral
+### Prediction frames, not recorder chunks
+
+Detection works on real OpenWakeWord **prediction frames**, not on arbitrary
+recorder or transport chunks. Upstream buffers audio internally and advances one
+prediction per 1280 samples (80 ms at 16 kHz); a shorter chunk re-appends the
+previous score. A recorder that delivers 20 ms or 40 ms therefore feeds several
+chunks into the engine before exactly one new prediction frame - and one single
+step of the hit tracker - comes out. A repeated or cached score is never counted
+twice.
+
+### The hit model
+
+Two configurable, shared criteria:
+
+| setting | meaning |
+| --- | --- |
+| `wakeWord.sensitivity` | the score threshold |
+| `wakeWord.minConsecutivePredictionFrames` | how many consecutive prediction frames must reach that threshold |
+
+Per selected wake word one contiguous run is tracked independently:
+
+```text
+score >= threshold        -> the run grows
+below before the minimum  -> run discarded, counter reset, no hit, no event
+minimum reached           -> the candidate is QUALIFIED (not yet the decision)
+first frame below after
+qualification             -> FINALIZED; its trailing edge closes the run
+```
+
+With a threshold of `0.70` and a minimum of `10` frames, the sequence
+
+```text
+0.73 0.78 0.81 0.85 0.88 0.90 0.91 0.89 0.86 0.83 0.79 0.75 0.71 0.62
+```
+
+is **one** contiguous hit - not 13 triggers and not 13 events.
+
+### Multi-wake-word arbitration
+
+Several wake words may be selected at once. The primary rule is
+first-come-first-served: **the first qualified hit that finalizes wins.** If
+both `alexa` and `alexander` qualify but the `alexa` run drops below the
+threshold first, `alexa` wins. There is no artificial waiting period, no
+"prefer the longer word" and no retrospective peak-score contest.
+
+Only a theoretical tie - several qualified candidates finalizing in the *same*
+prediction frame - needs a deterministic chain:
+
+1. the earlier qualification wins;
+2. on an equal qualification, the earlier run start wins;
+3. on a full tie, the lexicographically smallest canonical id wins.
+
+Once the winner is determined, exactly that hit is offered and every other
+candidate of that decision is discarded.
+
+### Raw observations versus accepted detections
+
+- a **raw candidate/score** carries the canonical id, the raw score, its frame
+  and sample position - it is diagnostics and never a domain event;
+- an **accepted detection** carries the canonical id, the peak score of its hit
+  region, the `activationId` that this very hit opened and the audio boundary
+  it established.
+
+A finalized hit becomes an activation only through the normal, source-neutral
 activation admission:
 
 ```text
-raw candidate -> detection evaluation -> wake admission -> activation
+prediction frames -> hit region -> wake admission -> activation
 ```
 
 Only if that admission succeeds does the server latch the detection, adopt the
-accepted `activationId` and publish exactly one `wakeword.detected`. If the
-activation is locked, suppressed or otherwise refused, there is **no** event, no
-latch, no second activation and no source merge. A wake word spoken during an
-open activation has no trigger, finish, cancel or refresh effect; its audio is
-ordinary activation audio.
+accepted `activationId` and mint exactly one logical `wakeword.detected`. If
+the activation is locked, suppressed or otherwise refused, there is **no**
+event, no latch, no second activation and no source merge. A wake word spoken
+during an open activation has no trigger, finish, cancel or refresh effect; its
+audio is ordinary activation audio.
 
 The latch is released at the safe input close of the same activation - not at
 VAD end, not at segment end, not when a final inference starts or ends, and not
 when a cooldown expires.
 
-### Duplicates, de-duplication and cooldown (FIND-011)
+### Exactly-once eventing
 
-One spoken wake word produces exactly one detection. Two things guarantee that:
+Minting the logical event and delivering it are two separate steps:
 
-- the recorder no longer runs the detector for the following chunks while a hit
-  is latched;
-- an implicit **de-duplication window** covers the *measured* receptive field of
-  the models actually selected, so the same acoustic hit is not offered twice.
+| step | property |
+| --- | --- |
+| logical mint | exactly once per accepted hit, in-memory, cannot fail on a network, idempotent per `activationId` |
+| transport delivery | explicitly fallible; may succeed, fail, or be picked up by the existing resync/replay/close semantics |
 
-OpenWakeWord advances one embedding frame per 1280 samples (80 ms at 16 kHz) and
-its embedding model consumes 76 melspectrogram frames (760 ms), so a classifier
-with `N` input frames still sees the same utterance for `(N - 1) * 80 + 760` ms.
-Across the bundled build that is 1960 ms at minimum and 3400 ms at maximum. No
-arbitrary "2 of 3" or "5 hits" rule is applied.
+A transport failure therefore never leaves an accepted hit with zero logical
+events, and a retry never produces a duplicate. There is no second event
+authority.
 
-De-duplication and cooldown are **not** the same thing:
+### One attempt, one settings revision
 
-| | de-duplication window | `wakeWord.cooldownMs` |
-| --- | --- | --- |
-| origin | implicit, measured receptive field | explicitly configured |
-| purpose | never offer one acoustic hit twice | deliberate operator pause |
-| safe input close | **cleared** | kept |
+Every value one wake attempt uses - `settingsRevision`, `sensitivity`,
+`minConsecutivePredictionFrames`, `detectorGain`, `cooldownMs`, `preRollMs` -
+is frozen as one snapshot at the prediction frame that starts a new run while
+no other run is active. That snapshot governs the score comparison, the frame
+counter, qualification, finalization, the pre-roll, the cooldown decision, the
+accepted detection and the activation's effective settings. A patch landing
+mid-utterance applies to the *next* attempt; a run that breaks before
+qualification is discarded and the next one picks up the current revision.
 
-The de-duplication window is cleared at the safe input close of the activation
-it guarded. After that close a new, clearly separate utterance is admissible
-immediately - the window must never become a hidden second foreground lock. A
-configured cooldown is different: it is a deliberate post-close pause and keeps
-running, which is exactly what an operator asked for. Its default is `0`.
+### Cooldown
+
+`wakeWord.cooldownMs` is an explicitly configured operator pause after an
+accepted hit. It is **not** the grouping of one hit region - the tracker does
+that without any timer - and it deliberately keeps running past the safe input
+close, which is what an operator asked for. Its default is `0`.
+
+The recorder additionally does not run the detector at all while a hit is
+latched (FIND-011).
 
 ## Audio boundary and pre-roll
 
 The transcript must not contain the wake word, and the first user word must not
-be cut. Five things are kept apart, and only the first two are measured:
+be cut. The anchor is the **operational audio zero point**, a deliberate
+server-side product definition.
 
-| | status |
-| --- | --- |
-| detection sample | **measured** - where the classifier decided |
-| model receptive field | **measured** - what that classifier had in view |
-| estimated wake end | **estimated** - currently equated with the detection sample |
-| speech start | not derived here at all |
-| release boundary | computed from the above |
+The zero point is **not**:
+
+- the first prediction frame above the threshold;
+- the frame at which the minimum run length was reached;
+- the end of a classifier receptive field;
+- an externally annotated "true" phonemic wake-word end.
+
+It **is** the **Trailing Edge** of the winning qualified hit region: the
+transition from the last prediction frame with `score >= sensitivity` to the
+first one below it.
 
 ```text
-detectionSample            measured position of the accepted decision
-receptiveFieldStartSample  detectionSample - measured receptive field
-estimatedWakeEndSample     currently == detectionSample   (estimate)
-releaseSample              max(receptiveFieldStartSample,
-                               estimatedWakeEndSample - preRollMs)
+operationalZeroPointSample  trailing edge of the winning qualified hit
+historyStartSample          oldest sample the session still holds
+releaseSample               max(historyStartSample,
+                                operationalZeroPointSample - preRollMs)
 ```
 
-The boundary is anchored to a **real sample position** instead of a configured
-duration, which is a genuine improvement over the legacy fixed cut. It is
-nevertheless an *estimate*: a classifier cannot decide before the wake word is
-over, so its decision point is at or after the acoustic end - but by how much it
-lags has not been measured. Every projection says so through `boundaryBasis`
-(`detection_sample_estimate`) and `boundaryMeasured` (`false`). Establishing the
-real acoustic wake end is WW-19 and needs real positive wake-word recordings;
-until then it is **`EVIDENCE_BLOCKED`** and no value here may be read as a
-proven acoustic boundary.
+`wakeWord.preRollMs = 0` releases the audio exactly at the zero point, so the
+wake word is excluded and the following user speech is preserved. A larger
+pre-roll moves the release back and is clamped against the audio history that
+really still exists - `preRollClamped` says when that happened. No upper bound
+is derived from a classifier receptive field.
 
-With `wakeWord.preRollMs = 0` the transcript starts at the estimated wake end.
-A larger pre-roll moves the release back but never past the start of the
-classifier's own view.
+Every projection carries `boundaryBasis: "operational_zero_point"` and
+`boundaryDefined: true`. The zero point itself is therefore defined, not
+pending. What is still open is the **empirical calibration** - which threshold,
+which minimum run length, which pre-roll, which cooldown, which gain are the
+right operating points, and how they behave against false positives and false
+negatives. That needs real positive wake-word recordings (WW-18/WW-19) and is
+reported as **`EVIDENCE_BLOCKED`**.
 
 The legacy `wake_word_buffer_duration` fixed-duration cut still exists for the
 v1 recorder path and is removed with AP-SRV-070.
 
 ## Session settings
 
+All wake values live in the one AP-SRV-050 settings plane under the
+`wakeWord.*` namespace. There is no second wake-word settings management and no
+fifth apply policy.
+
 | Key | Scope | Auth | Range | Default | Apply |
 | --- | --- | --- | --- | --- | --- |
 | `wakeWord.selection` | session | session | ids | `[]` | `next_session` |
 | `wakeWord.sensitivity` | session | session | 0.0-1.0 | 0.5 | `next_activation` |
-| `wakeWord.cooldownMs` | session | session | 0-3400 | 0 | `next_activation` |
-| `wakeWord.preRollMs` | session | session | 0-1960 | 0 | `next_activation` |
+| `wakeWord.minConsecutivePredictionFrames` | session | session | >= 1 | 1 | `next_activation` |
+| `wakeWord.preRollMs` | session | session | >= 0 | 0 | `next_activation` |
+| `wakeWord.cooldownMs` | session | session | >= 0 | 0 | `next_activation` |
+| `wakeWord.detectorGain` | session | session | 0.0-3.0 | 1.0 | `next_activation` |
+| `wakeWord.noiseSuppressionEnabled` | session | session | bool | `false` | `next_session` |
+| `wakeWord.vadThreshold` | session | session | 0.0-1.0 | 0.0 | `next_session` |
+| `wakeWord.inferenceBackend` | server | admin | `auto`/`onnx`/`tflite` | `auto` | `next_session` |
 | `wakeWord.globalDisabledIds` | server | admin | ids | `[]` | `next_session` |
 | `runtimeSuppression.wakeWord` | session | session | bool | `false` | `live` |
 
-`wakeWord.cooldownMs` is an explicitly configured pause **next to** the
-implicit de-duplication window, not a replacement for it; `0` means "no
-configured cooldown".
+`wakeWord.minConsecutivePredictionFrames` counts only genuinely new prediction
+frames. Its default `1` is a neutral, compatibility-near starting value - it is
+**not** a claim that 1 is empirically optimal.
 
-**Both keys are published as provisional.** Their schema entries carry
-`constraints.calibration: "pending"` and the traceability ids they depend on.
-The numeric bounds are measured receptive fields used as input guard rails so a
-value cannot be absurd - a receptive field is *not* a calibrated operating
-range, and `0` is a neutral default, not a recommendation. The real range and
-default require positive wake-word recordings; `WW-18` and `WW-19` are
+`wakeWord.cooldownMs` is the explicitly configured operator pause after an
+accepted hit; it is not the internal grouping of one hit region. Neither it nor
+`wakeWord.preRollMs` carries an upper bound derived from a receptive field: the
+pre-roll's real limit is the retained audio history, applied as a runtime clamp.
+
+`wakeWord.detectorGain` is applied to a **copy** of the PCM that only the wake
+inference sees, with saturating int16 clipping:
+
+```text
+Original PCM
+├─ unchanged -> recording / STT / audio history
+└─ copy -> gain -> OpenWakeWordEngine
+```
+
+`wakeWord.vadThreshold` uses the OpenWakeWord-internal VAD gate ahead of the
+wake inference; `0.0` disables it. `wakeWord.noiseSuppressionEnabled` uses the
+existing OpenWakeWord/Speex support.
+
+**The calibration keys are published as provisional.** Their schema entries
+carry `constraints.calibration: "pending"` and the traceability ids they depend
+on. `0`/`1`/`1.0` are neutral defaults, not recommendations. The calibrated
+operating values require positive wake-word recordings; `WW-18` and `WW-19` are
 **`EVIDENCE_BLOCKED`**, and a client must not present these values as a
 calibrated contract.
+
+## VAD lifecycle
+
+There is one continuous server-authoritative lifecycle, not two:
+
+```text
+outside an activation   wake detector, optionally with its own OpenWakeWord VAD
+accepted wake hit       ActivationController takes over
+inside an activation    the existing speech/transcription pipeline runs, and
+                        the wake source has no direct trigger effect
+```
+
+A wake-specific detector-side VAD ahead of the activation is explicitly allowed
+and intended. What must never exist is a second, independent activation
+pipeline: no client wake state machine next to the server one, and no competing
+second trigger lifecycle.
 
 ## Legacy path (until AP-SRV-070)
 

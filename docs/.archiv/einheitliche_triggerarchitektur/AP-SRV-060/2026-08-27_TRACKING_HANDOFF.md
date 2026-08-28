@@ -11,8 +11,32 @@ den Root-Findings falsch waren:
 - `next_activation` für die Wake-Settings gilt erst jetzt als umgesetzt, weil
   die reale Runtimebindung erst in C2 existiert und nachgewiesen ist (F2);
 - `WW-18`/`WW-19` sind nicht `EVIDENCE_PENDING`, sondern **`EVIDENCE_BLOCKED`**
-  – reale positive Aufnahmen existieren im lokalen Umfeld nachweislich nicht;
-- die Wake-Endgrenze ist eine ausgewiesene Schätzung, kein gemessener Wert (F4).
+  – reale positive Aufnahmen existieren im lokalen Umfeld nachweislich nicht.
+
+**Fortschreibung nach Root FAIL / C3.** C2 wurde von Root mit den Findings
+F11–F15 abgelehnt. Zusätzlich wurde die Detection-Semantik verbindlich
+präzisiert. Für das zentrale Tracking sind daraus vier Punkte neu:
+
+- „1 Wake Word = 1 `wakeword.detected`" ist **Exactly-once Eventing** für eine
+  zusammengehörige Wake-Äußerung, nicht „ein Scoreframe ist ein Wake Word".
+  Die früheren Formulierungen „keine Mehrfach-Chunk-Regel", „keine 5/10
+  Treffer" und „zusätzliche Multi-Chunk-Regel nur nach Evidence" sind
+  **zurückgezogen** und dürfen im Tracking nicht als Norm fortgeschrieben
+  werden;
+- die Wake-Erkennung arbeitet auf zusammenhängenden Trefferbereichen echter
+  OpenWakeWord-Prediction-Frames mit `wakeWord.sensitivity` und
+  `wakeWord.minConsecutivePredictionFrames`; Arbitration ist
+  First-come-first-served (erster finalisierender qualifizierter Hit gewinnt);
+- die Wake-Audiogrenze ist **keine Schätzung mehr**: der operationale
+  Nullpunkt ist als Trailing Edge des gewonnenen qualifizierten Wake-Hits
+  definiert (`boundaryBasis = operational_zero_point`). `WW-19` bleibt offen,
+  aber nur noch für die **empirische Kalibrierung**, nicht für den Nullpunkt
+  selbst;
+- neu im Produktvertrag: Dual Inference Backend mit genau einem gemeinsamen
+  Backend je Live-Engine (`wakeWord.inferenceBackend`, betriebssystemabhängige
+  Präferenz, gemeinsamer Fallback, kein stiller Wechsel bei expliziter Wahl)
+  sowie die Wake-Settings `minConsecutivePredictionFrames`, `detectorGain`,
+  `noiseSuppressionEnabled` und `vadThreshold`.
 
 Der Server-AP hat weder Clientproduktcode noch zentrale normative
 Koordinationsdateien verändert. Dieses Dokument beschreibt vollständig, was
@@ -189,8 +213,12 @@ AP-SRV-060-SHA als Umsetzungsnachweis je ID.
   damit keine versteckte zweite Vordergrundsperre entsteht;
 - offener Restanteil ausdrücklich benennen: die „False-Positive Policy“ ist
   weiterhin messdatenabhängig. Die Negativmessung (63.99 s reale Sprache,
-  0 Rohkandidaten ≥ 0.5, Maximalscore 0.000992) zeigt keinen Bedarf für eine
-  `2 aus 3`-Regel, ersetzt aber keine Positivmessung;
+  0 Rohkandidaten ≥ 0.5, Maximalscore 0.000992) ersetzt keine Positivmessung.
+  **Nicht** fortschreiben, dass daraus „kein Bedarf für eine Mehrfach-Chunk-
+  Regel“ folge: seit C3 ist die Mindestanzahl aufeinanderfolgender
+  Prediction-Frames fester Produktbestandteil
+  (`wakeWord.minConsecutivePredictionFrames`); offen ist nur ihr kalibrierter
+  Wert;
 - Vermerk, dass der v1-Pfad die alte Semantik bis AP-SRV-070 behält.
 
 **Welche SHA/Testwerte erst Root einsetzen darf:** kanonische AP-SRV-060-SHA
@@ -212,15 +240,23 @@ Artefakte.
 - als konkret benötigtes Artefakt aufnehmen: **reale positive
   Wake-Word-Audioaufnahmen** (16 kHz, mono, 16 Bit PCM, gesprochenes Wake Word
   plus unmittelbar folgende Nutzsprache, bekannte akustische Wake-Endgrenze)
-  für `WW-18`/`WW-19`. Ohne sie bleiben Cooldown- und Pre-Roll-Default bei `0`,
-  die reale Wake-Endgrenze eine Schätzung und der Bedarf einer
-  Mehrfach-Chunk-Regel unbeantwortet. Der Status ist `EVIDENCE_BLOCKED`, nicht
-  nur `PENDING`: die Suche im lokalen Umfeld ist abgeschlossen und negativ
-  (C2-Evidence §8);
+  für `WW-18`/`WW-19`. Ohne sie bleiben die kalibrierten Werte für
+  Score-Schwelle, Mindestanzahl Prediction-Frames, Pre-Roll, Cooldown und Gain
+  sowie das False-Positive-/False-Negative-Verhalten unbeantwortet. Der Status
+  ist `EVIDENCE_BLOCKED`, nicht nur `PENDING`: die Suche im lokalen Umfeld ist
+  abgeschlossen und negativ (C2-Evidence §8). Die **algorithmische** Semantik
+  ist seit C3 nicht mehr Teil dieser Lücke;
+- zusätzlich als Deploymentvoraussetzung aufnehmen: die `.tflite`-Artefakte des
+  Wake-Word-Bundles. Die Dual-Backend-Kette ist seit C3 implementiert und
+  getestet, der ausgelieferte Bundle enthält aber nur `.onnx`; Downloads zur
+  Laufzeit sind ausgeschlossen;
 - Werkzeug für die Nachholung ist bereits im Server vorhanden und
   reproduzierbar:
   `python tools/wakeword_calibration.py scores --audio <datei.wav>`
-  (sowie `artifacts` und `resources`);
+  (sowie `artifacts` und `resources`). Seit C3 fährt `scores` die echten
+  C3-Regeln – Prediction-Frames, `--threshold`, `--min-frames`,
+  `--detector-gain`, `--vad-threshold`, `--noise-suppression` – und meldet
+  finalisierte Trefferbereiche statt Einzelspitzen;
 - Umgebungsvoraussetzung notieren: `openwakeword>=0.6.0` muss in der
   verwendeten Python-Umgebung tatsächlich installiert sein;
 - Hinweis, dass die Wake-Word-Buildassets jetzt im Repository liegen
@@ -241,8 +277,8 @@ als neuer Wiedereinstiegsstand.
 | `…\STATUS.md` | JA | AP-SRV-060 abgenommen, Kalibrierrest offen halten |
 | `…\VERLAUF.md` | JA | C1-Einreichung, Review, Kanonisierung |
 | `…\NACHVERFOLGUNG\AUSFUEHRUNGSSTATUS.md` | JA | AP-SRV-060 abgenommen, AP-SRV-070 freigegeben |
-| `…\NACHVERFOLGUNG\TRACEABILITY.md` | JA | WW-01…WW-19, WIRE-02/04, SET-13b (WW-18/WW-19 bleiben EVIDENCE_BLOCKED) |
-| `…\NACHVERFOLGUNG\FUNDE.md` | JA | FIND-011 behoben, False-Positive-Policy bleibt messdatenabhängig |
-| `…\NACHVERFOLGUNG\WIEDEREINSTIEG.md` | JA | AP-SRV-070; benötigte Positivaudios benennen |
+| `…\NACHVERFOLGUNG\TRACEABILITY.md` | JA | WW-01…WW-19, WIRE-02/04, SET-13b (WW-18/WW-19 bleiben EVIDENCE_BLOCKED, nur noch für die empirische Kalibrierung) |
+| `…\NACHVERFOLGUNG\FUNDE.md` | JA | FIND-011 behoben, False-Positive-Policy bleibt messdatenabhängig; die zurückgezogenen Multi-Chunk-Aussagen nicht fortschreiben |
+| `…\NACHVERFOLGUNG\WIEDEREINSTIEG.md` | JA | AP-SRV-070; benötigte Positivaudios und die `.tflite`-Bundleartefakte benennen |
 
 Keine dieser Dateien wurde von AP-SRV-060 verändert.

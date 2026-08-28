@@ -135,6 +135,7 @@ class AudioRecorderPublicApiTests(unittest.TestCase):
             ),
             # AP-SRV-060: the admitted catalog selection of a v2 session.
             ("wake_word_selection", None, empty),
+            ("wake_word_engine_options", None, empty),
             ("on_wakeword_detected", None, empty),
             ("on_wakeword_timeout", None, empty),
             ("on_wakeword_detection_start", None, empty),

@@ -400,10 +400,31 @@ Key lesbar:
 
 Jeder Eintrag trägt die `catalogRevision` des Snapshots, aus dem er stammt;
 Top-Level- und Eintragsrevision stammen immer aus einem Zustand. Ein nicht
-verfügbarer Eintrag trägt zusätzlich `unavailableReason` (`globally_disabled`,
-`artifact_missing`, `artifact_unloadable`, `pipeline_unavailable`). Die Payload
-enthält niemals Dateipfade oder interne Artefaktmaps. `catalogRevision` ist von
-`settingsRevision` getrennt und steigt nur bei sichtbarer Änderung.
+verfügbarer Eintrag verschwindet **nicht** aus dem Katalog: er bleibt mit
+`available = false` und einem maschinenlesbaren `unavailableReason` abfragbar
+(`globally_disabled`, `artifact_missing`, `artifact_integrity_mismatch`,
+`artifact_unloadable`, `pipeline_unavailable`, `runtime_unavailable`). Nur
+tatsächlich verfügbare IDs erscheinen in `availableWakeWordIds`.
+
+Zusätzlich trägt jeder Eintrag einen `backends`-Block mit der Gesundheit je
+Inference Backend:
+
+```json
+"backends": {
+  "onnx":   {"available": true},
+  "tflite": {"available": false, "unavailableReason": "runtime_unavailable"}
+}
+```
+
+Die Payload enthält niemals Dateipfade, interne Artefaktmaps oder
+Loaderinterna. `catalogRevision` ist von `settingsRevision` getrennt und steigt
+nur bei sichtbarer Änderung.
+
+Eine Session läuft immer auf **einem gemeinsamen** Backend für alle
+ausgewählten Wake Words. Fehlt für die gesamte Auswahl ein gemeinsames gesundes
+Backend, wird die Session mit `reason = no_common_backend` abgelehnt; bei einer
+explizit konfigurierten Backendwahl mit `reason = backend_unavailable` und ohne
+stillen Wechsel.
 
 **Der `hello`-Handschlag akzeptiert ausschließlich kanonische `id`-Werte.**
 Anzeigenamen und Aliase sind Oberflächeninformation: ein Client löst die

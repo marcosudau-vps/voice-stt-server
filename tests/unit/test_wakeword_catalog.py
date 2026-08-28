@@ -67,8 +67,15 @@ class CatalogTestCase(unittest.TestCase):
         for entry in payload["wakeWords"]:
             self.assertEqual(
                 set(entry), {"id", "displayName", "aliases", "artifactVersion",
-                             "available", "catalogRevision"}
+                             "available", "backends", "catalogRevision"}
             )
+            # AP-SRV-060 C3: per-backend health is public, but it carries only
+            # availability and a machine-readable reason - never a path.
+            self.assertEqual(set(entry["backends"]), {"onnx", "tflite"})
+            for health in entry["backends"].values():
+                self.assertLessEqual(
+                    set(health), {"available", "unavailableReason"}
+                )
             self.assertEqual(
                 entry["catalogRevision"], payload["catalogRevision"]
             )

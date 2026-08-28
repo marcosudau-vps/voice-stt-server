@@ -5,27 +5,24 @@ and AP-SRV-030 stay the one source-neutral activation authority: they know
 ``manual`` and ``wake_word`` only as equal trigger sources and must not learn a
 wake-specific state. The path is therefore::
 
-    RawWakeCandidate
-      -> WakeDetectionEvaluator (detector hygiene)
-      -> WakeAdmissionCoordinator (this module)
+    prediction frames
+      -> WakeHitTracker            (threshold, minimum run, trailing edge)
+      -> WakeDetectionEvaluator    (latch, operator cooldown)
+      -> WakeAdmissionCoordinator  (this module)
       -> ActivationController.activate(source="wake_word")
 
 Only when the activation admission actually succeeds does the coordinator
 
-* declare the detection fachlich accepted;
+* declare the hit fachlich accepted;
 * set the wake latch;
 * adopt the accepted ``activationId``;
-* report exactly one ``wakeword.detected``.
+* **mint exactly one logical** ``wakeword.detected``.
 
 On ``activation_locked``, on runtime suppression or on any other refusal there
 is no event, no new latch, no second activation and no source merge. A wake
 word spoken while an activation is already open therefore has no trigger,
 finish, cancel or refresh effect at all - its audio is ordinary activation
 audio.
-
-The latch is released at the *safe input close* of the same activation - not at
-VAD end, not at segment end, not when a final inference starts or ends, and not
-when a cooldown expires.
 
 The commit boundary (Root F7)
 -----------------------------
@@ -37,27 +34,43 @@ is the single, explicit commit point of the whole admission:
   activation", and the coordinator answers ``None``;
 * **after** the commit an activation really exists in the source-neutral
   activation authority. From that instant a failure may no longer be turned
-  back into a refusal, because that would leave an open activation with no
-  latch, no accepted detection and no event. Post-commit errors are carried in
-  ``WakeActivationOutcome.error``, reported, and the admission still completes.
+  back into a refusal.
 
 A raised exception is deliberately *not* trusted to mean "nothing happened".
 Before treating it as a refusal the coordinator asks ``committed_probe`` what
-the activation authority actually shows. If an activation is open, the commit
-did happen and the admission completes as a post-commit failure - the crash
-window Root described cannot leave an open activation without a latch.
+the activation authority actually shows.
 
-The same rule applies to the ``wakeword.detected`` publication: a transport
-failure after the latch was set must not unlatch it or invent a second
-activation.
+Exactly-once logical eventing (Root F13)
+-----------------------------------------
+
+C2 could keep an activation and a latch while the publish callback threw, which
+left a state with an accepted detection, an activation and a latch but **zero**
+logical ``wakeword.detected`` events.
+
+C3 separates the two steps that C2 fused:
+
+logical mint
+    :class:`LogicalWakeEventLedger` reserves exactly one logical event per
+    accepted wake hit. It is pure in-memory bookkeeping under the coordinator's
+    lock, it cannot fail on a network, and it is idempotent per activation, so
+    a retry can never mint a second event;
+transport delivery
+    a separate, explicitly fallible step. It may succeed, fail, or be picked up
+    later by the existing resync/replay/close semantics of AP-SRV-040. Root does
+    not ask for infallible networks - it asks that the *logical* event exists
+    exactly once.
+
+There is no second event authority here: the minted record is handed to the one
+existing lifecycle event funnel of the session.
 """
 
 from __future__ import annotations
 
 import logging
 import threading
-from dataclasses import dataclass
-from typing import Any, Optional
+import uuid
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
 
 LOGGER = logging.getLogger("voicestt")
 
@@ -81,10 +94,9 @@ def _as_outcome(value: Any) -> WakeActivationOutcome:
         return value
     if value is None:
         return WakeActivationOutcome.refused()
-    committed = bool(getattr(value, "committed", None))
     if hasattr(value, "committed"):
         return WakeActivationOutcome(
-            committed=committed,
+            committed=bool(getattr(value, "committed", None)),
             activation_id=getattr(value, "activation_id", None),
             error=getattr(value, "error", None),
         )
@@ -92,50 +104,158 @@ def _as_outcome(value: Any) -> WakeActivationOutcome:
     return WakeActivationOutcome(committed=True, activation_id=str(value))
 
 
-class WakeAdmissionCoordinator:
-    """Turns one offered raw candidate into at most one accepted detection."""
+@dataclass
+class LogicalWakeEvent:
+    """One minted logical ``wakeword.detected``.
 
-    def __init__(self, *, evaluator, activate, publish=None,
-                 committed_probe=None):
-        #: The session's detector hygiene (threshold/tie/re-arm/latch state).
+    ``delivered`` describes the *transport*, never the logical existence: an
+    undelivered event still happened exactly once and must never be minted a
+    second time.
+    """
+
+    event_id: str
+    wake_word_id: str
+    activation_id: str
+    score: float
+    sequence: int
+    delivered: bool = False
+    delivery_attempts: int = 0
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "eventId": self.event_id,
+            "wakeWordId": self.wake_word_id,
+            "activationId": self.activation_id,
+            "score": float(self.score),
+            "sequence": int(self.sequence),
+            "delivered": bool(self.delivered),
+            "deliveryAttempts": int(self.delivery_attempts),
+        }
+
+
+class LogicalWakeEventLedger:
+    """The exactly-once mint of logical wake events for one session.
+
+    Minting is keyed on the accepted ``activationId``: one accepted wake hit
+    opens exactly one activation, so a second mint for the same activation is a
+    duplicate by definition and returns the existing record instead.
+    """
+
+    def __init__(self):
+        self._lock = threading.RLock()
+        self._events: List[LogicalWakeEvent] = []
+        self._by_activation: Dict[str, LogicalWakeEvent] = {}
+
+    @property
+    def events(self) -> Tuple[LogicalWakeEvent, ...]:
+        with self._lock:
+            return tuple(self._events)
+
+    def count(self, activation_id: Optional[str] = None) -> int:
+        """How many logical events exist, in total or for one activation."""
+        with self._lock:
+            if activation_id is None:
+                return len(self._events)
+            return 1 if str(activation_id) in self._by_activation else 0
+
+    def get(self, activation_id: str) -> Optional[LogicalWakeEvent]:
+        with self._lock:
+            return self._by_activation.get(str(activation_id))
+
+    def mint(self, detection) -> LogicalWakeEvent:
+        """Reserves the one logical event of one accepted wake hit."""
+        activation_id = str(detection.activation_id)
+        with self._lock:
+            existing = self._by_activation.get(activation_id)
+            if existing is not None:
+                return existing
+            event = LogicalWakeEvent(
+                event_id=str(uuid.uuid4()),
+                wake_word_id=str(detection.canonical_wake_word_id),
+                activation_id=activation_id,
+                score=float(detection.score),
+                sequence=len(self._events) + 1,
+            )
+            self._events.append(event)
+            self._by_activation[activation_id] = event
+            return event
+
+    def mark_delivered(self, event: LogicalWakeEvent) -> None:
+        with self._lock:
+            event.delivered = True
+
+    def mark_delivery_attempt(self, event: LogicalWakeEvent) -> None:
+        with self._lock:
+            event.delivery_attempts += 1
+
+    def undelivered(self) -> Tuple[LogicalWakeEvent, ...]:
+        with self._lock:
+            return tuple(event for event in self._events if not event.delivered)
+
+    def diagnostics(self) -> Dict[str, Any]:
+        with self._lock:
+            return {
+                "logicalEventCount": len(self._events),
+                "undeliveredCount": sum(
+                    1 for event in self._events if not event.delivered
+                ),
+                "events": [event.to_dict() for event in self._events],
+            }
+
+
+class WakeAdmissionCoordinator:
+    """Turns one finalized wake hit into at most one accepted detection."""
+
+    def __init__(self, *, evaluator, activate, deliver=None, publish=None,
+                 committed_probe=None, ledger=None):
+        #: The session's wake gate (tracker, latch, operator cooldown).
         self._evaluator = evaluator
-        #: ``activate(candidate, boundary) -> WakeActivationOutcome``. The
-        #: caller performs the real ``ActivationController.activate`` under the
-        #: session lock; this module never touches activation state itself. The
-        #: callable must not raise after its commit point - it reports a
-        #: post-commit problem through ``WakeActivationOutcome.error``.
+        #: ``activate(hit, boundary) -> WakeActivationOutcome``. The caller
+        #: performs the real ``ActivationController.activate`` under the session
+        #: lock; this module never touches activation state itself.
         self._activate = activate
-        #: ``publish(AcceptedWakeDetection)`` - the single ``wakeword.detected``
-        #: emission, routed through the existing lifecycle event funnel.
-        self._publish = publish
+        #: ``deliver(LogicalWakeEvent, AcceptedWakeDetection)`` - the fallible
+        #: transport step, routed through the existing lifecycle event funnel.
+        #: ``publish(detection)`` is the historical single-argument form.
+        if deliver is None and publish is not None:
+            deliver = lambda event, detection: publish(detection)  # noqa: E731
+        self._deliver = deliver
         #: ``committed_probe() -> activation_id or None``. Asked only when
         #: ``activate`` raised, to find out whether the commit happened anyway.
         self._committed_probe = committed_probe
+        self._ledger = ledger if ledger is not None else LogicalWakeEventLedger()
         self._lock = threading.RLock()
         self._accepted = None
+        self._minted: Optional[LogicalWakeEvent] = None
 
     @property
     def evaluator(self):
         return self._evaluator
 
     @property
+    def ledger(self) -> LogicalWakeEventLedger:
+        return self._ledger
+
+    @property
     def accepted_detection(self):
         with self._lock:
             return self._accepted
 
-    def admit(self, candidate, boundary=None):
-        """Runs one candidate through the activation admission.
+    def logical_event_count(self, activation_id: Optional[str] = None) -> int:
+        return self._ledger.count(activation_id)
 
-        Returns the :class:`AcceptedWakeDetection`, or ``None`` when the
-        admission refused it. ``None`` deliberately leaves *no* trace in the
-        domain: the detector is only re-armed so the same utterance is not
-        offered again chunk after chunk.
+    def admit(self, hit, boundary=None):
+        """Runs one finalized wake hit through the activation admission.
+
+        Returns the ``AcceptedWakeDetection``, or ``None`` when the admission
+        refused it. ``None`` deliberately leaves *no* trace in the domain: no
+        latch, no activation, no logical event.
         """
-        if candidate is None:
+        if hit is None:
             return None
         with self._lock:
             try:
-                outcome = _as_outcome(self._activate(candidate, boundary))
+                outcome = _as_outcome(self._activate(hit, boundary))
             except Exception as exc:  # noqa: BLE001
                 # Never assume a raise means "nothing happened": ask the
                 # activation authority what it really shows.
@@ -157,7 +277,7 @@ class WakeAdmissionCoordinator:
                     outcome = WakeActivationOutcome.refused()
 
             if not outcome.committed or not outcome.activation_id:
-                self._evaluator.refuse(candidate)
+                self._evaluator.refuse(hit)
                 self._accepted = None
                 return None
 
@@ -172,23 +292,51 @@ class WakeAdmissionCoordinator:
                 )
 
             detection = self._evaluator.accept(
-                candidate,
+                hit,
                 activation_id=outcome.activation_id,
                 boundary=boundary,
             )
             self._accepted = detection
-            if self._publish is not None:
-                try:
-                    self._publish(detection)
-                except Exception:  # noqa: BLE001
-                    # The detection happened and the latch belongs to a real
-                    # activation; a transport failure must not undo either.
-                    LOGGER.exception(
-                        "wakeword.detected konnte für %s nicht veröffentlicht "
-                        "werden; Activation und Latch bleiben bestehen",
-                        outcome.activation_id,
-                    )
+            # --- exactly-once logical mint --------------------------------
+            # This happens before any fallible transport and cannot fail, so an
+            # accepted hit can never end up with zero logical events.
+            event = self._ledger.mint(detection)
+            self._minted = event
+            self._attempt_delivery(event, detection)
             return detection
+
+    def _attempt_delivery(self, event: LogicalWakeEvent, detection) -> bool:
+        """One fallible transport attempt of an already minted event."""
+        if self._deliver is None:
+            return False
+        self._ledger.mark_delivery_attempt(event)
+        try:
+            self._deliver(event, detection)
+        except Exception:  # noqa: BLE001
+            # The logical event happened and the latch belongs to a real
+            # activation; a transport failure must not undo either, and it must
+            # not mint a second event on the retry.
+            LOGGER.exception(
+                "wakeword.detected konnte für %s nicht zugestellt werden; "
+                "Activation, Latch und das logische Event bleiben bestehen",
+                event.activation_id,
+            )
+            return False
+        self._ledger.mark_delivered(event)
+        return True
+
+    def redeliver(self) -> bool:
+        """Retries the transport of the already minted event.
+
+        Returns ``True`` when this call delivered the event. It never mints,
+        and an already delivered event is a no-op rather than a duplicate.
+        """
+        with self._lock:
+            event = self._minted
+            detection = self._accepted
+            if event is None or event.delivered:
+                return False
+            return self._attempt_delivery(event, detection)
 
     def _probe_committed(self) -> Optional[str]:
         """The activation the authority really shows, if any."""
@@ -205,28 +353,28 @@ class WakeAdmissionCoordinator:
     def release(self, activation_id: Optional[str] = None) -> bool:
         """Releases the latch at the safe input close of that activation.
 
-        Root F6: the implicit de-duplication window goes with it. A close
-        without a latched detection (a refused hit) still clears that window,
-        so an old refusal can never keep blocking a new legitimate utterance.
+        The minted logical events stay in the ledger: closing a session does
+        not un-happen an event that already existed, and it must not open the
+        door to a second one for the same wake hit.
         """
         with self._lock:
             released = self._evaluator.release_latch(activation_id=activation_id)
             if released:
                 self._accepted = None
-            else:
-                self._evaluator.clear_dedupe_window()
             return released
 
     def reset(self) -> int:
         """Starts a new detector generation; older callbacks become stale."""
         with self._lock:
             self._accepted = None
+            self._minted = None
             return self._evaluator.new_generation()
 
     def diagnostics(self) -> dict:
         with self._lock:
-            payload: dict[str, Any] = {"evaluator": self._evaluator.diagnostics()}
+            payload: Dict[str, Any] = {"evaluator": self._evaluator.diagnostics()}
             payload["acceptedDetection"] = (
                 self._accepted.event_fields() if self._accepted is not None else None
             )
+            payload["logicalEvents"] = self._ledger.diagnostics()
             return payload
