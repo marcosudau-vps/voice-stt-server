@@ -100,8 +100,17 @@ catalog then keeps its last known good state.
 
 ### IDs, display names, aliases and normalisation
 
-Every wake word has one canonical, lower-case snake-case id. Human-edited
-values are resolved by exactly one resolver, which
+Every wake word has one canonical, lower-case snake-case id.
+
+**The v2 wire carries canonical ids only.** `requestedSession.wakeWordIds` is
+not a place for aliases or display names: a value that is not already a
+canonical id rejects the whole session with `reason: not_canonical`. A UI
+resolves what the user typed against `GET /api/v2/wake-words` and then sends
+the `id`.
+
+The tolerant resolver below therefore serves **human configuration only** -
+`wakeWord.selection` in the settings control plane, config files and admin
+input. It is exactly one resolver, which
 
 1. Unicode-normalises (NFKC),
 2. trims the outside,
@@ -116,10 +125,11 @@ hey_jarvis   Hey Jarvis   HEY-JARVIS   hey.jarvis   hey__jarvis
 ```
 
 The frozen contract forbids heuristically dropping "Hey". `jarvis` resolves to
-`hey_jarvis` **only** because the manifest lists `jarvis` as an explicit alias.
-A wake word without an alias has no short form. After normalisation, ids,
-display names and aliases must be collision-free; a collision is a catalog
-error and is never resolved by ordering, file name or best match.
+`hey_jarvis` **only** because the manifest lists `jarvis` as an explicit alias,
+and **only in configuration** - the same value on the wire is rejected. A wake
+word without an alias has no short form. After normalisation, ids, display
+names and aliases must be collision-free; a collision is a catalog error and is
+never resolved by ordering, file name or best match.
 
 ### Global disable
 
@@ -146,15 +156,18 @@ Publicly readable, no key required:
       "displayName": "Hey Jarvis",
       "aliases": ["jarvis"],
       "artifactVersion": "1",
-      "available": true
+      "available": true,
+      "catalogRevision": 1
     }
   ]
 }
 ```
 
-An unavailable entry additionally carries `unavailableReason`
-(`globally_disabled`, `artifact_missing` or `pipeline_unavailable`). The payload
-never contains filesystem paths, source markers or internal artifact maps.
+Every entry carries the `catalogRevision` of the snapshot it came from, so an
+entry can never be paired with the wrong top-level revision. An unavailable
+entry additionally carries `unavailableReason` (`globally_disabled`,
+`artifact_missing` or `pipeline_unavailable`). The payload never contains
+filesystem paths, source markers or internal artifact maps.
 
 `catalogRevision` is separate from `settingsRevision` and rises only when the
 publicly visible catalog actually changed.
@@ -171,10 +184,17 @@ schema, ids, aliases, collisions and files, and swaps atomically only on total
 success. On any failure the last known good catalog stays in place unchanged
 and the response reports `ok: false` with a reason (HTTP 422).
 
-`catalogRevision` rises only on a visible change; an availability change emits
-`wakeword.availability_changed` on every live v2 session. A refresh never
-touches an already admitted session or the models it has initialised - it takes
-effect for new session admissions.
+`catalogRevision` rises only on a visible change, and **every** such change -
+a new or removed id, a renamed display name, a new alias, a new
+`artifactVersion` - emits `wakeword.availability_changed` on every live v2
+session with the new revision and the current `availableWakeWordIds`. The event
+is the catalog-change seam of the frozen contract, so it is deliberately
+broader than its name. A refresh never touches an already admitted session or
+the models it has initialised - it takes effect for new session admissions.
+
+The whole refresh, including the projection of the global disable list, happens
+as one atomic catalog operation, and the HTTP response is rendered from exactly
+the snapshot that operation committed.
 
 ## Session admission and selected-only initialisation
 
@@ -187,9 +207,13 @@ A v2 session declares its wake words in the `hello` handshake:
 }
 ```
 
-Admission is **atomic**. A single unknown, globally disabled or unloadable id
-rejects the whole selection with `session.rejected`; there is no partial load,
-no default fallback and no silent removal. Every problematic id is named:
+Admission is **atomic**. A single non-canonical, unknown, globally disabled,
+missing or unloadable id rejects the whole selection with `session.rejected`;
+there is no partial load, no default fallback and no silent removal. Before a
+session is accepted the server really loads-probes exactly the selected
+classifiers and the shared pipeline models with the inference runtime, so a
+file that exists but is corrupt is refused *before* `hello.accepted` rather
+than crashing the session build later. Every problematic id is named:
 
 ```json
 {
@@ -201,9 +225,10 @@ no default fallback and no silent removal. Every problematic id is named:
 }
 ```
 
-`reason` is one of `unknown`, `globally_disabled`, `artifact_missing`,
-`pipeline_unavailable`. Audio, triggers and wake detection stay locked until the
-admission succeeded.
+`reason` is one of `not_canonical`, `unknown`, `globally_disabled`,
+`artifact_missing`, `artifact_unloadable`, `pipeline_unavailable`. Audio,
+triggers and wake detection stay locked until the admission succeeded, and no
+partial session, no `sessionId` and no recorder exist for a refused one.
 
 After a successful admission **only the selected classifiers** are handed to
 OpenWakeWord. Other models contained in the build cost neither RAM nor session
@@ -243,14 +268,14 @@ The latch is released at the safe input close of the same activation - not at
 VAD end, not at segment end, not when a final inference starts or ends, and not
 when a cooldown expires.
 
-### Duplicates and re-arm (FIND-011)
+### Duplicates, de-duplication and cooldown (FIND-011)
 
 One spoken wake word produces exactly one detection. Two things guarantee that:
 
 - the recorder no longer runs the detector for the following chunks while a hit
   is latched;
-- the detector re-arms only after the *measured* receptive field of the models
-  actually selected.
+- an implicit **de-duplication window** covers the *measured* receptive field of
+  the models actually selected, so the same acoustic hit is not offered twice.
 
 OpenWakeWord advances one embedding frame per 1280 samples (80 ms at 16 kHz) and
 its embedding model consumes 76 melspectrogram frames (760 ms), so a classifier
@@ -258,24 +283,54 @@ with `N` input frames still sees the same utterance for `(N - 1) * 80 + 760` ms.
 Across the bundled build that is 1960 ms at minimum and 3400 ms at maximum. No
 arbitrary "2 of 3" or "5 hits" rule is applied.
 
+De-duplication and cooldown are **not** the same thing:
+
+| | de-duplication window | `wakeWord.cooldownMs` |
+| --- | --- | --- |
+| origin | implicit, measured receptive field | explicitly configured |
+| purpose | never offer one acoustic hit twice | deliberate operator pause |
+| safe input close | **cleared** | kept |
+
+The de-duplication window is cleared at the safe input close of the activation
+it guarded. After that close a new, clearly separate utterance is admissible
+immediately - the window must never become a hidden second foreground lock. A
+configured cooldown is different: it is a deliberate post-close pause and keeps
+running, which is exactly what an operator asked for. Its default is `0`.
+
 ## Audio boundary and pre-roll
 
 The transcript must not contain the wake word, and the first user word must not
-be cut. Five things are kept apart: detector history, wake-word audio, the wake
-end boundary, the user-speech pre-roll and the released transcript audio.
+be cut. Five things are kept apart, and only the first two are measured:
 
-The boundary is anchored to the **real sample position** of the accepted
-detection, not to a configured duration:
+| | status |
+| --- | --- |
+| detection sample | **measured** - where the classifier decided |
+| model receptive field | **measured** - what that classifier had in view |
+| estimated wake end | **estimated** - currently equated with the detection sample |
+| speech start | not derived here at all |
+| release boundary | computed from the above |
 
 ```text
-wake end     = sample position of the accepted detection
-wake start   = wake end - measured receptive field
-release      = max(wake start, wake end - preRollMs)
+detectionSample            measured position of the accepted decision
+receptiveFieldStartSample  detectionSample - measured receptive field
+estimatedWakeEndSample     currently == detectionSample   (estimate)
+releaseSample              max(receptiveFieldStartSample,
+                               estimatedWakeEndSample - preRollMs)
 ```
 
-With `wakeWord.preRollMs = 0` the transcript starts exactly at the wake end: the
-wake word is excluded and the following user speech is fully preserved. A larger
-pre-roll moves the release back but never past the wake start.
+The boundary is anchored to a **real sample position** instead of a configured
+duration, which is a genuine improvement over the legacy fixed cut. It is
+nevertheless an *estimate*: a classifier cannot decide before the wake word is
+over, so its decision point is at or after the acoustic end - but by how much it
+lags has not been measured. Every projection says so through `boundaryBasis`
+(`detection_sample_estimate`) and `boundaryMeasured` (`false`). Establishing the
+real acoustic wake end is WW-19 and needs real positive wake-word recordings;
+until then it is **`EVIDENCE_BLOCKED`** and no value here may be read as a
+proven acoustic boundary.
+
+With `wakeWord.preRollMs = 0` the transcript starts at the estimated wake end.
+A larger pre-roll moves the release back but never past the start of the
+classifier's own view.
 
 The legacy `wake_word_buffer_duration` fixed-duration cut still exists for the
 v1 recorder path and is removed with AP-SRV-070.
@@ -291,10 +346,18 @@ v1 recorder path and is removed with AP-SRV-070.
 | `wakeWord.globalDisabledIds` | server | admin | ids | `[]` | `next_session` |
 | `runtimeSuppression.wakeWord` | session | session | bool | `false` | `live` |
 
-`wakeWord.cooldownMs` is an operator addition **on top of** the measured
-artifact window, not a replacement for it; `0` means "no extra cooldown". Both
-ranges are measured properties of the bundled classifiers. A different default
-derived from real recorded wake-word speech is still open (`WW-18`/`WW-19`).
+`wakeWord.cooldownMs` is an explicitly configured pause **next to** the
+implicit de-duplication window, not a replacement for it; `0` means "no
+configured cooldown".
+
+**Both keys are published as provisional.** Their schema entries carry
+`constraints.calibration: "pending"` and the traceability ids they depend on.
+The numeric bounds are measured receptive fields used as input guard rails so a
+value cannot be absurd - a receptive field is *not* a calibrated operating
+range, and `0` is a neutral default, not a recommendation. The real range and
+default require positive wake-word recordings; `WW-18` and `WW-19` are
+**`EVIDENCE_BLOCKED`**, and a client must not present these values as a
+calibrated contract.
 
 ## Legacy path (until AP-SRV-070)
 

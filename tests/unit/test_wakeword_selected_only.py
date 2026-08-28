@@ -68,10 +68,12 @@ class SelectedOnlyLoaderTests(unittest.TestCase):
         self._tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tempdir.cleanup)
         self.root = build_bundle(Path(self._tempdir.name) / "bundle", ENTRIES)
-        self.authority = WakeWordCatalogAuthority(asset_root=self.root)
+        self.authority = WakeWordCatalogAuthority(
+            asset_root=self.root, artifact_prober=lambda path: None
+        )
 
     def _setup(self, requested):
-        selection, errors = self.authority.resolve_selection(requested)
+        selection, errors = self.authority.resolve_human_selection(requested)
         self.assertEqual(errors, ())
         recorder = Recorder()
         wakeword_module.setup_wakeword_detection(
@@ -183,7 +185,9 @@ class SessionConfigTests(unittest.TestCase):
         self._tempdir = tempfile.TemporaryDirectory()
         self.addCleanup(self._tempdir.cleanup)
         root = build_bundle(Path(self._tempdir.name) / "bundle", ENTRIES)
-        self.authority = WakeWordCatalogAuthority(asset_root=root)
+        self.authority = WakeWordCatalogAuthority(
+            asset_root=root, artifact_prober=lambda path: None
+        )
 
     def test_an_admitted_selection_configures_exactly_its_artifacts(self):
         from api_fastapi_server.server import (
@@ -192,7 +196,9 @@ class SessionConfigTests(unittest.TestCase):
             resolve_session_wake_word_config,
         )
 
-        selection, errors = self.authority.resolve_selection(["jarvis", "alexa"])
+        selection, errors = self.authority.admit_selection(
+            ["hey_jarvis", "alexa"]
+        )
         self.assertEqual(errors, ())
         settings, config = resolve_session_wake_word_config(
             ServerSettings(),
@@ -219,7 +225,7 @@ class SessionConfigTests(unittest.TestCase):
             resolve_session_wake_word_config,
         )
 
-        selection, _errors = self.authority.resolve_selection(["alexa"])
+        selection, _errors = self.authority.admit_selection(["alexa"])
         _settings, config = resolve_session_wake_word_config(
             ServerSettings(),
             SessionWakeWordRequest(enabled=True, selection=selection),

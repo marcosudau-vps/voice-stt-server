@@ -1061,6 +1061,11 @@ class PortTests(unittest.TestCase):
             self.assertEqual(errors[0]["code"], "wake_word_unavailable")
             self.assertEqual(errors[0]["reason"], "unknown")
             self.assertEqual(errors[0]["wakeWordId"], "nope")
+            # The wire is canonical-only; an alias is refused here (Root F1).
+            self.assertEqual(
+                port.validate_selection(["jarvis"])[0]["reason"],
+                "not_canonical",
+            )
             # One problematic id rejects the whole selection - no partial load.
             selection, _errors = port.resolve_selection(["hey_jarvis", "nope"])
             self.assertIsNone(selection)

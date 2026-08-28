@@ -1309,9 +1309,17 @@ Filesystem-Auto-Discovery ist ausschließlich Diagnose: eine Modelldatei, die
 nur zufällig im Assetordner liegt, wird als `unmanagedArtifacts` gemeldet und
 wird nie öffentliche Build-Capability.
 
-### 14.2 Genau ein Resolver
+### 14.2 Zwei getrennte Admissionpfade
 
-`normalize_wake_word_token()` ist die einzige Normalisierung im Produkt:
+Der v2-Wire trägt **ausschließlich kanonische IDs**.
+`requestedSession.wakeWordIds` ist kein Ort für Aliase oder Anzeigenamen: ein
+nicht kanonischer Wert lehnt die gesamte Session mit
+`reason = not_canonical` ab. Eine Oberfläche löst die Nutzereingabe gegen
+`GET /api/v2/wake-words` auf und sendet danach die `id`.
+
+Die tolerante Auflösung bleibt vollständig erhalten – aber **nur für
+menschliche Konfiguration** (`wakeWord.selection`, Configdateien, Admineingabe).
+`normalize_wake_word_token()` ist dafür die einzige Normalisierung im Produkt:
 Unicode-NFKC, außen trimmen, casefold, Trennzeichenläufe (`_`, `-`, `.`,
 Leerraum) zu genau einem `_`. Aufgelöst wird ausschließlich gegen kanonische
 IDs, Anzeigenamen und **explizite** Aliase.
@@ -1322,9 +1330,10 @@ hey_jarvis   Hey Jarvis   HEY-JARVIS   hey.jarvis   hey__jarvis
 
 Der Frozen Contract verbietet heuristisches Entfernen von „Hey“: `jarvis` löst
 nur deshalb auf `hey_jarvis` auf, weil das Manifest `jarvis` als expliziten
-Alias führt. Nach Normalisierung müssen ID↔ID, Alias↔Alias und Alias↔ID
-kollisionsfrei sein; eine Kollision ist ein Katalogfehler und wird nie über
-Reihenfolge, Dateiname oder Best Match aufgelöst.
+Alias führt – und nur in der Konfiguration, nicht auf dem Wire. Nach
+Normalisierung müssen ID↔ID, Alias↔Alias und Alias↔ID kollisionsfrei sein;
+eine Kollision ist ein Katalogfehler und wird nie über Reihenfolge, Dateiname
+oder Best Match aufgelöst.
 
 ### 14.3 Eine Catalog Authority
 
@@ -1348,30 +1357,54 @@ POST /api/v2/wake-words/refresh   X-Admin-Key, additive Adminaktion
 
 Die öffentliche Payload trägt `protocolVersion`, `catalogRevision` und
 `wakeWords[]` mit `id`, `displayName`, `aliases`, `artifactVersion`,
-`available` und optional `unavailableReason`
-(`globally_disabled`, `artifact_missing`, `pipeline_unavailable`). Sie enthält
-niemals absolute/lokale Pfade, `source`, interne `paths`, Runtimeobjekte oder
-Secrets.
+`available`, der Snapshotrevision des Eintrags (`catalogRevision`) und optional
+`unavailableReason` (`globally_disabled`, `artifact_missing`,
+`artifact_unloadable`, `pipeline_unavailable`). Weil jeder Eintrag seine eigene
+Revision trägt, kann ein Client Eintrag und Top-Level-Revision nie falsch
+paaren. Sie enthält niemals absolute/lokale Pfade, `source`, interne `paths`,
+Runtimeobjekte oder Secrets.
 
 Der Refresh nutzt dieselbe bestehende Admin-Guard wie die v2-Serversettings; es
 gibt keine zweite Authimplementierung. Er liest Manifest und Artefakte neu,
 baut einen vollständigen Candidate, validiert Schema, IDs, Aliase, Kollisionen
-und Dateien und wechselt **nur bei Gesamterfolg** atomar. Bei einem Fehler
-bleibt der letzte gültige Katalog unverändert (HTTP 422). Bei einer sichtbaren
-Änderung steigt `catalogRevision`; bei einer Availability-Änderung wird
-`wakeword.availability_changed` über die bestehende AP-SRV-040-Eventautorität
-ausgegeben. Ein Refresh verändert keine bereits aufgebaute Session und keine
-dort initialisierten Modelle – er wirkt auf neue Sessionadmissions.
+und Dateien, projiziert die globale Disableliste **in derselben atomaren
+Operation** und wechselt nur bei Gesamterfolg. Bei einem Fehler bleibt der
+letzte gültige Katalog unverändert (HTTP 422).
+
+Das Ergebnis trägt den committeten Snapshot; die HTTP-Antwort wird
+ausschließlich daraus gerendert und liest die Autorität nie ein zweites Mal.
+Revision, Einträge und Availability einer Antwort stammen deshalb immer aus
+genau einem Zustand.
+
+Bei einer sichtbaren Änderung steigt `catalogRevision`, und **jede** solche
+Änderung – auch eine reine Metadatenänderung wie ein neuer Anzeigename, ein
+neuer Alias oder eine neue `artifactVersion` – gibt
+`wakeword.availability_changed` mit der neuen Revision und den aktuellen
+`availableWakeWordIds` über die bestehende AP-SRV-040-Eventautorität aus. Das
+Event ist die im Frozen Contract vorgesehene Catalog-Change-Seam und damit
+bewusst breiter als sein Name. Ein Refresh verändert keine bereits aufgebaute
+Session und keine dort initialisierten Modelle – er wirkt auf neue
+Sessionadmissions.
 
 ### 14.5 Atomare Sessionadmission und selected-only
 
-Bei `trigger.wakeWord=true` muss die Auswahl nicht leer sein, jede ID kanonisch
-bekannt, nicht global deaktiviert, das Artifact ladbar und die Pipelineassets
-vorhanden sein. Ein einziger Problemfall lehnt die **gesamte** Auswahl ab: kein
-Partial Load, kein Default-Fallback, kein stilles Entfernen.
-`session.rejected.errors[]` nennt jede problematische ID maschinenlesbar mit
-`field`, `code = wake_word_unavailable`, additivem `reason` und `wakeWordId`.
-Vor erfolgreicher Admission bleiben Audio, Trigger und Wake Detection gesperrt.
+Bei `trigger.wakeWord=true` muss die Auswahl nicht leer sein, jede ID eine
+kanonische bekannte ID, nicht global deaktiviert, das Artifact real ladbar und
+die Pipelineassets vorhanden sein. Ein einziger Problemfall lehnt die
+**gesamte** Auswahl ab: kein Partial Load, kein Default-Fallback, kein stilles
+Entfernen. `session.rejected.errors[]` nennt jede problematische ID
+maschinenlesbar mit `field`, `code = wake_word_unavailable`, additivem `reason`
+(`not_canonical`, `unknown`, `globally_disabled`, `artifact_missing`,
+`artifact_unloadable`, `pipeline_unavailable`) und `wakeWordId`.
+
+„Ladbar“ ist dabei keine Dateiexistenzprüfung: vor `hello.accepted` werden
+genau die ausgewählten Klassifikatoren und die gemeinsamen Pipelinemodelle mit
+der realen Inferenzruntime probeweise geöffnet. Eine vorhandene, aber korrupte
+Datei scheitert damit an der Admission statt später am Sessionaufbau. Die
+Probe ist je Artefaktidentität memoisiert und berührt ausschließlich die
+ausgewählten Modelle – selected-only bleibt vollständig erhalten. Vor
+erfolgreicher Admission bleiben Audio, Trigger und Wake Detection gesperrt; für
+eine abgelehnte Session entsteht weder `sessionId` noch Recorder.
 
 Nach der Admission erhält OpenWakeWord ausschließlich die ausgewählten
 Klassifikatoren; der v1-Namensauflösungspfad mit seinen Fallbacks wird dabei
@@ -1415,6 +1448,20 @@ Refresh-Wirkung.
 Der Latch wird am sicheren Eingabeschluss derselben Activation gelöst – nicht
 bei VAD-Ende, Segmentende, Start/Ende der Final-Inferenz oder Cooldownablauf.
 
+#### Commit-Grenze der Wake-Admission
+
+`ActivationController.activate` ist der Commitpunkt der Admission. Alles davor
+– Guards, Settingsauflösung, eine geworfene Ausnahme – bedeutet „keine
+Activation“ und wird als Refusal beantwortet. Alles danach – Anwendung der
+Entscheidung, Eventsammlung, Eventpublikation, Publikation von
+`wakeword.detected` – kann die Activation nicht mehr rückgängig machen und darf
+deshalb **nie** in ein Refusal umgedeutet werden; solche Fehler werden als
+Post-Commit-Fehler geführt, geloggt und die Admission wird vollständig
+abgeschlossen (Latch, akzeptierte Detection, Event). Wirft der Admissionpfad
+dennoch, fragt der Coordinator die Activation-Autorität, ob eine
+Wake-Activation offen ist, und behandelt den Fall entsprechend – eine
+committete Activation ohne Latch kann so nicht entstehen.
+
 ### 14.8 FIND-011, Cooldown und Rearm
 
 Der Mehrfachsignalpfad hatte zwei Ursachen: der Recorder führte die Detection
@@ -1422,50 +1469,83 @@ nach gesetztem `wakeword_detected` ohne Guard weiter aus, und es gab keine
 Entprellung über die Dauer einer Äußerung. Beides ist behoben:
 
 - der Detector läuft nicht weiter, solange ein Treffer gelatcht ist;
-- der Rearm folgt dem **gemessenen** Empfangsfenster der jeweils gewählten
-  Modelle.
+- ein implizites **Entprellfenster** deckt das **gemessene** Empfangsfenster der
+  jeweils gewählten Modelle ab, damit derselbe akustische Treffer nicht zweimal
+  angeboten wird.
 
 OpenWakeWord schiebt je 1280 Samples (80 ms bei 16 kHz) einen Embeddingframe
 weiter, das Embeddingmodell sieht 76 Melspektrogrammframes (760 ms); ein
 Klassifikator mit `N` Eingangsframes sieht dieselbe Äußerung also noch
 `(N - 1) * 80 + 760` ms. Über den gebündelten Build sind das 1960 ms bis
-3400 ms. `wakeWord.cooldownMs` ist ein *zusätzlicher* Betreiberwert oberhalb
-dieser gemessenen Grenze, kein Ersatz. Eine willkürliche `2 aus 3`- oder
-`5/10`-Regel wird nicht eingeführt.
+3400 ms. Eine willkürliche `2 aus 3`- oder `5/10`-Regel wird nicht eingeführt.
+
+Entprellung und Cooldown sind ausdrücklich **zwei verschiedene Dinge**:
+
+| | Entprellfenster | `wakeWord.cooldownMs` |
+|---|---|---|
+| Herkunft | implizit, gemessenes Empfangsfenster | explizit konfiguriert |
+| Zweck | denselben akustischen Treffer nicht zweimal anbieten | bewusste Betreiberpause |
+| sicherer Eingabeschluss | **wird gelöscht** | bleibt bestehen |
+
+Das Entprellfenster schützte genau die Activation, die gerade geschlossen
+wurde; es am Eingabeschluss weiterleben zu lassen wäre eine versteckte zweite
+Vordergrundsperre, die das Activation-Lifecycle-Modell nicht kennt. Ein
+explizit konfigurierter Cooldown bleibt dagegen bewusst wirksam.
 
 ### 14.9 Audiogrenze und Pre-Roll
 
-Getrennt werden Detector-History, Wake-Word-Audio, Wake-Endgrenze,
-Nutzsprachen-Pre-Roll und freigegebenes Transkript-Audio. Die Grenze hängt an
-der realen Sampleposition der akzeptierten Detection, nicht an einer
-konfigurierten Dauer:
+Getrennt werden Detection-Sample, Empfangsfenster, geschätzte Wake-Endgrenze,
+Sprachbeginn und freigegebenes Transkript-Audio. Nur die ersten beiden sind
+gemessen:
 
 ```text
-wakeEnd    = Sampleposition der akzeptierten Detection
-wakeStart  = wakeEnd - gemessenes Empfangsfenster
-release    = max(wakeStart, wakeEnd - preRollMs)
+detectionSample            gemessene Position der akzeptierten Entscheidung
+receptiveFieldStartSample  detectionSample - gemessenes Empfangsfenster
+estimatedWakeEndSample     derzeit == detectionSample        (Schätzung)
+releaseSample              max(receptiveFieldStartSample,
+                               estimatedWakeEndSample - preRollMs)
 ```
 
-Bei `wakeWord.preRollMs = 0` beginnt das Transkript exakt an der Wake-Endgrenze:
-das Wake Word fehlt, das erste Nutzerwort bleibt vollständig erhalten. Die
-pauschale `wake_word_buffer_duration`-Abschneidung existiert nur noch im
-v1-Recorderpfad und entfällt mit AP-SRV-070.
+Die Grenze hängt an einer realen Sampleposition statt an einer konfigurierten
+Dauer – das ist gegenüber dem pauschalen Legacy-Schnitt ein echter Fortschritt.
+Sie bleibt aber eine **Schätzung**: ein Klassifikator kann nicht entscheiden,
+bevor das Wake Word vorbei ist, sein Entscheidungspunkt liegt also am oder nach
+dem akustischen Ende – um wie viel er nachläuft, ist nicht gemessen. Jede
+Projektion sagt das über `boundaryBasis = detection_sample_estimate` und
+`boundaryMeasured = false`. Die reale akustische Wake-Endgrenze ist `WW-19` und
+erfordert reale positive Wake-Word-Aufnahmen; bis dahin gilt
+`EVIDENCE_BLOCKED`, und kein Wert hier darf als bewiesene akustische Grenze
+gelesen werden.
+
+Bei `wakeWord.preRollMs = 0` beginnt das Transkript an der geschätzten
+Wake-Endgrenze. Die pauschale `wake_word_buffer_duration`-Abschneidung
+existiert nur noch im v1-Recorderpfad und entfällt mit AP-SRV-070.
 
 ### 14.10 Settings-Bindung
 
 AP-SRV-060 baut keine zweite Settingsregistry, Revision oder Persistenz. Es
 ergänzt in der AP-SRV-050-Registry:
 
-| Key | Scope | Auth | Bereich | Default | Apply |
-|---|---|---:|---:|---:|---|
-| `wakeWord.cooldownMs` | session | session | 0–3400 | 0 | `next_activation` |
-| `wakeWord.preRollMs` | session | session | 0–1960 | 0 | `next_activation` |
+| Key | Scope | Auth | Bereich | Default | Apply | Kalibrierung |
+|---|---|---:|---:|---:|---|---|
+| `wakeWord.cooldownMs` | session | session | 0–3400 | 0 | `next_activation` | `pending` (WW-18) |
+| `wakeWord.preRollMs` | session | session | 0–1960 | 0 | `next_activation` | `pending` (WW-19) |
 
-Beide Bereiche sind gemessene Artefakteigenschaften des Builds. Beide Defaults
-sind `0`, weil die verbindliche Entprellung bereits aus der gemessenen
-Artefaktgrenze plus Latch folgt und `0 ms` Pre-Roll vertraglich zulässig ist.
-Ein von realer positiver Wake-Word-Sprache abhängiger anderer Default bleibt
-`EVIDENCE_PENDING` (WW-18/WW-19).
+Beide Schlüssel werden ausdrücklich als **vorläufig** veröffentlicht: das
+Schema trägt `constraints.calibration = "pending"` und die abhängigen
+Traceability-IDs. Die Zahlen sind gemessene Empfangsfenster und dienen nur als
+Eingabegrenzen – ein Empfangsfenster ist kein kalibrierter Betriebsbereich, und
+`0` ist ein neutraler Default, keine Empfehlung. Realer Bereich und Default
+erfordern reale positive Wake-Word-Aufnahmen; `WW-18`/`WW-19` sind
+`EVIDENCE_BLOCKED`.
+
+**Reale Runtimebindung.** `wakeWord.sensitivity`, `wakeWord.cooldownMs` und
+`wakeWord.preRollMs` sind `next_activation` und wirken deshalb wirklich: der
+Evaluator liest bei jeder Admission eine unveränderliche `WakeRuntimePolicy`
+aus der einen AP-SRV-050-Settingsautorität und latcht sie für die Dauer der
+Activation. Eine laufende Activation behält ihre Werte, die nächste verwendet
+die gepatchten – Schwelle, Cooldown und Pre-Roll gleichermaßen. Es gibt dafür
+keine zweite Registry und keine zweite Kopie dieser Werte.
 
 ### 14.11 Grenze zu AP-SRV-070
 

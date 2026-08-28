@@ -8,12 +8,28 @@ offers*. It owns exactly five things and deliberately nothing else:
     canonical catalog authority of the v2 path. A file that merely happens to
     lie next to it never becomes public build capability; unreferenced files
     are reported as diagnostics only.
-one resolver
+two clearly separated admission paths (Root F1)
     :func:`normalize_wake_word_token` is the only normalisation in the
-    product. Human configuration values resolve against canonical ids,
-    display names and *explicit* aliases - never against a heuristic. The
-    frozen contract forbids stripping "Hey", so ``jarvis`` resolves to
-    ``hey_jarvis`` only because the manifest lists it as an alias.
+    product, and it serves **human configuration only**: config values resolve
+    against canonical ids, display names and *explicit* aliases - never
+    against a heuristic, and the frozen contract forbids stripping "Hey", so
+    ``jarvis`` resolves to ``hey_jarvis`` only because the manifest lists it
+    as an alias. That is :meth:`WakeWordCatalogSnapshot.resolve` /
+    :meth:`resolve_human_selection`.
+
+    The **v2 wire** is different: ``requestedSession.wakeWordIds`` carries
+    canonical ids, full stop. :meth:`admit_selection` accepts nothing else -
+    an alias or a display name on the wire rejects the whole session. Mixing
+    the two would let a client depend on a tolerance the wire contract does
+    not grant.
+
+loadability (Root F3)
+    Availability answers "is this wake word part of the build and are its
+    files there". Admission answers the stricter question "can these exact
+    classifiers actually be loaded", by probing the selected artifacts with
+    the real inference runtime before a session is accepted. The probe result
+    is memoised per artifact identity, and only the *selected* artifacts are
+    ever probed - selected-only stays intact.
 one snapshot
     :class:`WakeWordCatalogSnapshot` is immutable and carries the public
     projection, the internal artifact projection, availability and the
@@ -24,7 +40,11 @@ one authority
     success, and owns ``catalogRevision``.
 ``catalogRevision``
     Separate from ``settingsRevision`` and raised only when the *visible*
-    catalog projection actually changed.
+    catalog projection actually changed. Every public entry carries the
+    revision of the snapshot it came from (Root F9), and every refresh returns
+    an immutable snapshot so a caller never has to read the authority twice
+    and can never mix two states (Root F10). Any visible change notifies the
+    subscriber, not only an availability change (Root F8).
 
 Public payloads never contain filesystem paths, ``source`` markers, internal
 ``paths`` maps, runtime objects or secrets. The artifact projection that does
@@ -57,6 +77,12 @@ BUNDLED_FRAMEWORK = "onnx"
 REASON_GLOBALLY_DISABLED = "globally_disabled"
 REASON_ARTIFACT_MISSING = "artifact_missing"
 REASON_PIPELINE_UNAVAILABLE = "pipeline_unavailable"
+#: The artifact exists but the real inference runtime refuses to load it.
+REASON_ARTIFACT_UNLOADABLE = "artifact_unloadable"
+#: A wire value that is not a canonical id - an alias, a display name or any
+#: other tolerated human spelling. Tolerance is a config feature, not a wire
+#: feature (Root F1).
+REASON_NOT_CANONICAL = "not_canonical"
 
 #: The frozen wire code of every wake-selection admission problem. It stays a
 #: single code so the v2 ``session.rejected`` surface does not change; the
@@ -66,6 +92,23 @@ CODE_UNAVAILABLE = "wake_word_unavailable"
 REASON_UNKNOWN = "unknown"
 
 _SEPARATORS = re.compile(r"[\s._\-]+")
+
+#: Distinguishes "argument not given" from an explicit ``None``.
+_UNSET = object()
+
+
+class WakeWordArtifactError(RuntimeError):
+    """One artifact that the real inference runtime refuses to load."""
+
+
+def _artifact_identity(path: Any):
+    """Identity of an artifact file for the memoised loadability probe."""
+    candidate = Path(path)
+    try:
+        stat = candidate.stat()
+        return (str(candidate), stat.st_size, stat.st_mtime_ns)
+    except OSError:
+        return (str(candidate), None, None)
 
 
 class WakeWordManifestError(ValueError):
@@ -229,7 +272,12 @@ class SelectionError:
 
 @dataclass(frozen=True)
 class RefreshResult:
-    """The outcome of one catalog refresh or global-disable change."""
+    """The outcome of one catalog refresh or global-disable change.
+
+    Root F10: the result carries the immutable ``snapshot`` it describes, so an
+    HTTP handler renders revision, entries and availability from **one** state
+    and never reads the authority a second time.
+    """
 
     ok: bool
     changed: bool
@@ -237,6 +285,7 @@ class RefreshResult:
     availability_changed: bool = False
     available_wake_word_ids: Tuple[str, ...] = ()
     error: Optional[str] = None
+    snapshot: Optional["WakeWordCatalogSnapshot"] = None
 
     def to_dict(self) -> Dict[str, Any]:
         payload: Dict[str, Any] = {
@@ -248,6 +297,17 @@ class RefreshResult:
         }
         if self.error:
             payload["error"] = self.error
+        return payload
+
+    def public_payload(self, *, protocol_version: int = 2) -> Dict[str, Any]:
+        """One atomic public projection of exactly the snapshot described."""
+        payload = self.to_dict()
+        payload["protocolVersion"] = int(protocol_version)
+        snapshot = self.snapshot
+        payload["wakeWords"] = snapshot.public_catalog() if snapshot else []
+        if snapshot is not None:
+            payload["catalogRevision"] = snapshot.catalog_revision
+            payload["availableWakeWordIds"] = list(snapshot.available_ids())
         return payload
 
 
@@ -297,8 +357,17 @@ class WakeWordCatalogSnapshot:
     # -- projections ---------------------------------------------------------
 
     def public_catalog(self) -> List[Dict[str, Any]]:
-        """The public ``wakeWords[]`` projection, deterministically ordered."""
-        return [entry.public_dict() for entry in self._entries]
+        """The public ``wakeWords[]`` projection, deterministically ordered.
+
+        Root F9: every entry carries the revision of the snapshot it came from,
+        so a client can never pair an entry with the wrong top-level revision.
+        """
+        payload = []
+        for entry in self._entries:
+            item = entry.public_dict()
+            item["catalogRevision"] = self._catalog_revision
+            payload.append(item)
+        return payload
 
     def available_ids(self) -> Tuple[str, ...]:
         return tuple(entry.id for entry in self._entries if entry.available)
@@ -313,11 +382,13 @@ class WakeWordCatalogSnapshot:
     def visible_projection(self) -> Any:
         """What ``catalogRevision`` is allowed to react to.
 
-        Everything a client can observe, and nothing else. Two catalogs with
-        the same visible projection are the same revision, even if an internal
-        path or a diagnostic changed.
+        Everything a client can observe *except the revision itself*. Including
+        the per-entry revision here would make every catalog differ from every
+        other one and bump the revision on each refresh, so the comparison runs
+        on the revision-free entry projection.
         """
-        return json.dumps(self.public_catalog(), sort_keys=True, ensure_ascii=False)
+        entries = [entry.public_dict() for entry in self._entries]
+        return json.dumps(entries, sort_keys=True, ensure_ascii=False)
 
     # -- resolver ------------------------------------------------------------
 
@@ -336,8 +407,8 @@ class WakeWordCatalogSnapshot:
             return None
         return self._resolver_index.get(token)
 
-    def resolve_selection(
-        self, values: Sequence[Any]
+    def admit_selection(
+        self, values: Sequence[Any], *, canonical_only: bool = True, prober=None
     ) -> Tuple[Optional[WakeWordSelection], Tuple[SelectionError, ...]]:
         """Atomic admission of one requested selection.
 
@@ -345,23 +416,51 @@ class WakeWordCatalogSnapshot:
         partial load, no default fallback and no silent removal, and every
         problematic id is named. Duplicates in the request collapse onto one
         canonical entry without becoming an error.
+
+        ``canonical_only`` is the v2 wire mode (Root F1): a value that is not
+        already a canonical id is refused with ``reason=not_canonical``, even
+        when the tolerant human resolver would have understood it.
+
+        ``prober`` is the loadability gate (Root F3). When it is given, every
+        *selected* classifier and the shared pipeline models are handed to it
+        before the selection is admitted; a raising prober rejects the whole
+        selection with ``reason=artifact_unloadable``.
         """
         errors: List[SelectionError] = []
         resolved: List[WakeWordEntry] = []
         seen = set()
         for value in values:
             raw = "" if value is None else str(value)
-            identifier = self.resolve(raw)
-            if identifier is None:
-                errors.append(SelectionError(
-                    wake_word_id=raw,
-                    reason=REASON_UNKNOWN,
-                    message=(
-                        f"Das Wake Word '{raw}' ist in diesem Build nicht "
-                        "bekannt."
-                    ),
-                ))
-                continue
+            if canonical_only:
+                identifier = raw if raw in self._by_id else None
+                if identifier is None:
+                    tolerated = self.resolve(raw)
+                    errors.append(SelectionError(
+                        wake_word_id=raw,
+                        reason=(
+                            REASON_NOT_CANONICAL if tolerated is not None
+                            else REASON_UNKNOWN
+                        ),
+                        message=(
+                            f"'{raw}' ist keine kanonische Wake-Word-ID."
+                            if tolerated is not None else
+                            f"Das Wake Word '{raw}' ist in diesem Build nicht "
+                            "bekannt."
+                        ),
+                    ))
+                    continue
+            else:
+                identifier = self.resolve(raw)
+                if identifier is None:
+                    errors.append(SelectionError(
+                        wake_word_id=raw,
+                        reason=REASON_UNKNOWN,
+                        message=(
+                            f"Das Wake Word '{raw}' ist in diesem Build nicht "
+                            "bekannt."
+                        ),
+                    ))
+                    continue
             entry = self._by_id[identifier]
             if not entry.available:
                 errors.append(SelectionError(
@@ -388,6 +487,8 @@ class WakeWordCatalogSnapshot:
                     "Wake-Word-ID ausgewählt sein."
                 ),
             ))
+        if not errors and prober is not None:
+            errors.extend(self._probe_loadable(resolved, prober))
         if errors:
             return None, tuple(errors)
         return (
@@ -398,6 +499,49 @@ class WakeWordCatalogSnapshot:
             ),
             (),
         )
+
+    def resolve_human_selection(self, values: Sequence[Any], *, prober=None):
+        """Tolerant admission for human configuration values only."""
+        return self.admit_selection(values, canonical_only=False, prober=prober)
+
+    def _probe_loadable(self, entries, prober) -> List[SelectionError]:
+        """Real loadability of exactly the selected artifacts (Root F3).
+
+        The selected classifiers are probed first so the most specific cause
+        wins: a corrupt classifier is reported as ``artifact_unloadable`` even
+        on a build whose shared pipeline is broken too. The pipeline is only
+        blamed when every selected classifier itself is fine.
+        """
+        errors: List[SelectionError] = []
+        for entry in entries:
+            try:
+                prober(str(entry.artifact.path))
+            except Exception:  # noqa: BLE001 - reason must not leak internals
+                errors.append(SelectionError(
+                    wake_word_id=entry.id,
+                    reason=REASON_ARTIFACT_UNLOADABLE,
+                    message=(
+                        f"Das Wake-Word-Artefakt von '{entry.id}' kann nicht "
+                        "geladen werden."
+                    ),
+                ))
+        if errors:
+            return errors
+        for artifact_path in (
+            self._pipeline.melspectrogram_path, self._pipeline.embedding_path
+        ):
+            try:
+                prober(str(artifact_path))
+            except Exception:  # noqa: BLE001 - reason must not leak internals
+                return [SelectionError(
+                    wake_word_id=entry.id,
+                    reason=REASON_PIPELINE_UNAVAILABLE,
+                    message=(
+                        "Die gemeinsamen Wake-Word-Pipelinemodelle können "
+                        "nicht geladen werden."
+                    ),
+                ) for entry in entries]
+        return errors
 
     # -- derived snapshots ---------------------------------------------------
 
@@ -688,15 +832,43 @@ def _parse_entries(
     return tuple(entries), resolver_index
 
 
+def default_artifact_prober():
+    """The real loadability probe of the shipped inference runtime.
+
+    Creating an ``InferenceSession`` is exactly what OpenWakeWord does when it
+    loads a classifier, so a file that survives this probe is one the session
+    build can really use. Returns ``None`` when no runtime is importable; the
+    caller then admits without a probe rather than refusing every session on a
+    machine that cannot run wake words at all.
+    """
+    try:
+        import onnxruntime as ort
+    except Exception:  # noqa: BLE001 - no runtime, no probe
+        return None
+
+    options = ort.SessionOptions()
+    options.log_severity_level = 3
+
+    def probe(path: str) -> None:
+        ort.InferenceSession(
+            str(path), sess_options=options, providers=["CPUExecutionProvider"]
+        )
+
+    return probe
+
+
 class WakeWordCatalogAuthority:
     """The one server-wide, thread-safe wake-word catalog authority.
 
     It owns the last-known-good snapshot and ``catalogRevision``. A refresh
     builds a complete candidate first and swaps atomically only on total
-    success; a failing refresh leaves the running catalog untouched. The
-    revision is raised only when the *visible* projection changed, and any
-    availability change is announced through the injected callback, which the
-    server binds to the existing AP-SRV-040 event authority.
+    success; a failing refresh leaves the running catalog untouched.
+
+    Everything that can change the catalog runs under one lock, so a refresh
+    and a global-disable change are linearised and every result describes one
+    single snapshot (Root F10). The revision is raised only when the visible
+    projection changed, and *every* such change notifies the subscriber, not
+    just an availability change (Root F8).
     """
 
     def __init__(
@@ -705,15 +877,24 @@ class WakeWordCatalogAuthority:
         asset_root: Optional[Path] = None,
         loader=None,
         global_disabled_ids: Sequence[Any] = (),
+        on_catalog_changed=None,
         on_availability_changed=None,
+        artifact_prober=_UNSET,
     ):
         self._asset_root = Path(asset_root) if asset_root is not None else None
         self._loader = loader or load_snapshot
         self._lock = threading.RLock()
-        self._on_availability_changed = on_availability_changed
+        self._on_catalog_changed = on_catalog_changed or on_availability_changed
         self._global_disabled = tuple(global_disabled_ids or ())
         self._snapshot: Optional[WakeWordCatalogSnapshot] = None
         self._load_error: Optional[str] = None
+        self._artifact_prober = (
+            default_artifact_prober() if artifact_prober is _UNSET
+            else artifact_prober
+        )
+        #: artifact identity -> None (ok) or the failure text. Keeps the
+        #: admission probe cheap without ever caching a live model instance.
+        self._probe_cache: Dict[Any, Optional[str]] = {}
         self._reload_locked(initial=True)
 
     # -- state ---------------------------------------------------------------
@@ -744,37 +925,105 @@ class WakeWordCatalogAuthority:
         return snapshot.capabilities()
 
     def public_payload(self, *, protocol_version: int = 2) -> Dict[str, Any]:
-        """The ``GET /api/v2/wake-words`` body (SET-13b)."""
+        """The ``GET /api/v2/wake-words`` body (SET-13b).
+
+        Read from one snapshot, so the top-level revision, the per-entry
+        revisions and availability always describe the same state.
+        """
         snapshot = self.snapshot()
+        if snapshot is None:
+            return {
+                "protocolVersion": int(protocol_version),
+                "catalogRevision": 0,
+                "wakeWords": [],
+            }
         return {
             "protocolVersion": int(protocol_version),
-            "catalogRevision": snapshot.catalog_revision if snapshot else 0,
-            "wakeWords": snapshot.public_catalog() if snapshot else [],
+            "catalogRevision": snapshot.catalog_revision,
+            "wakeWords": snapshot.public_catalog(),
         }
 
     def resolve(self, value: Any) -> Optional[str]:
+        """The tolerant human-config resolver. Never used for the v2 wire."""
         snapshot = self.snapshot()
         return snapshot.resolve(value) if snapshot else None
 
-    def resolve_selection(self, values: Sequence[Any]):
-        """Atomic admission against the current snapshot."""
+    # -- admission -----------------------------------------------------------
+
+    def _unavailable_catalog_error(self):
+        return (None, (SelectionError(
+            wake_word_id="",
+            reason="catalog_unavailable",
+            message=(
+                "Der Wake-Word-Katalog ist auf diesem Server nicht verfügbar."
+            ),
+        ),))
+
+    def admit_selection(self, values: Sequence[Any]):
+        """The v2 wire admission: canonical ids only, plus the load probe."""
         snapshot = self.snapshot()
         if snapshot is None:
-            return None, (SelectionError(
-                wake_word_id="",
-                reason="catalog_unavailable",
-                message=(
-                    "Der Wake-Word-Katalog ist auf diesem Server nicht "
-                    "verfügbar."
-                ),
-            ),)
-        return snapshot.resolve_selection(values)
+            return self._unavailable_catalog_error()
+        return snapshot.admit_selection(values, prober=self._memoised_prober())
+
+    def resolve_human_selection(self, values: Sequence[Any]):
+        """The tolerant admission for human configuration values."""
+        snapshot = self.snapshot()
+        if snapshot is None:
+            return self._unavailable_catalog_error()
+        return snapshot.resolve_human_selection(
+            values, prober=self._memoised_prober()
+        )
+
+    def set_artifact_prober(self, prober) -> None:
+        """Replaces the loadability probe and drops the memoised results."""
+        with self._lock:
+            self._artifact_prober = prober
+            self._probe_cache.clear()
+
+    def set_loader_for_tests(self, loader) -> None:
+        """Replaces the manifest loader. Fault injection seam for tests."""
+        with self._lock:
+            self._loader = loader
+
+    def _memoised_prober(self):
+        """A prober that probes each artifact identity at most once."""
+        prober = self._artifact_prober
+        if prober is None:
+            return None
+
+        def memoised(path: str) -> None:
+            key = _artifact_identity(path)
+            with self._lock:
+                if key in self._probe_cache:
+                    failure = self._probe_cache[key]
+                    if failure is not None:
+                        raise WakeWordArtifactError(failure)
+                    return
+            try:
+                prober(path)
+            except Exception as exc:  # noqa: BLE001 - classified by the caller
+                failure = f"{type(exc).__name__}: {exc}"
+                with self._lock:
+                    self._probe_cache[key] = failure
+                raise WakeWordArtifactError(failure) from exc
+            with self._lock:
+                self._probe_cache[key] = None
+
+        return memoised
 
     # -- mutation ------------------------------------------------------------
 
-    def refresh(self) -> RefreshResult:
-        """Re-reads manifest and artifacts and swaps atomically on success."""
+    def refresh(self, *, global_disabled_ids: Any = _UNSET) -> RefreshResult:
+        """Re-reads manifest and artifacts and swaps atomically on success.
+
+        ``global_disabled_ids`` is applied inside the very same locked
+        operation, so a refresh and a disable change can never interleave into
+        two half-applied states (Root F10).
+        """
         with self._lock:
+            if global_disabled_ids is not _UNSET:
+                self._global_disabled = tuple(global_disabled_ids or ())
             return self._reload_locked(initial=False)
 
     def set_global_disabled(self, disabled_ids: Sequence[Any]) -> RefreshResult:
@@ -809,6 +1058,7 @@ class WakeWordCatalogAuthority:
                 catalog_revision=self._snapshot.catalog_revision,
                 available_wake_word_ids=self._snapshot.available_ids(),
                 error=str(exc),
+                snapshot=self._snapshot,
             )
         except Exception as exc:  # noqa: BLE001 - a refresh must never crash the server
             self._load_error = f"{type(exc).__name__}: {exc}"
@@ -817,10 +1067,17 @@ class WakeWordCatalogAuthority:
                 ok=False,
                 changed=False,
                 catalog_revision=revision,
+                available_wake_word_ids=(
+                    self._snapshot.available_ids() if self._snapshot else ()
+                ),
                 error=self._load_error,
+                snapshot=self._snapshot,
             )
 
         self._load_error = None
+        # Artifacts may have been replaced on disk, so a cached probe verdict
+        # must not survive a reload.
+        self._probe_cache.clear()
         candidate = candidate.with_global_disabled(self._global_disabled)
         return self._commit_locked(candidate, initial=initial)
 
@@ -836,20 +1093,21 @@ class WakeWordCatalogAuthority:
                 catalog_revision=candidate.catalog_revision,
                 availability_changed=not initial,
                 available_wake_word_ids=candidate.available_ids(),
+                snapshot=candidate,
             )
 
         changed = candidate.visible_projection() != current.visible_projection()
         if not changed:
             # No *visible* change: the revision must not move. The candidate is
             # still adopted so internal paths and diagnostics stay current.
-            self._snapshot = candidate.with_catalog_revision(
-                current.catalog_revision
-            )
+            committed = candidate.with_catalog_revision(current.catalog_revision)
+            self._snapshot = committed
             return RefreshResult(
                 ok=True,
                 changed=False,
-                catalog_revision=current.catalog_revision,
-                available_wake_word_ids=current.available_ids(),
+                catalog_revision=committed.catalog_revision,
+                available_wake_word_ids=committed.available_ids(),
+                snapshot=committed,
             )
 
         revision = current.catalog_revision + 1
@@ -860,13 +1118,21 @@ class WakeWordCatalogAuthority:
             ok=True,
             changed=True,
             catalog_revision=revision,
-            availability_changed=True,
+            availability_changed=availability_changed,
             available_wake_word_ids=committed.available_ids(),
+            snapshot=committed,
         )
-        callback = self._on_availability_changed
+        # Root F8: every *visible* change is announced, not only an
+        # availability change. A client that only learns about new/removed ids
+        # would otherwise silently miss a revision it can observe elsewhere.
+        callback = self._on_catalog_changed
         if callback is not None:
             try:
-                callback(revision, list(committed.available_ids()), availability_changed)
+                callback(
+                    revision,
+                    list(committed.available_ids()),
+                    availability_changed,
+                )
             except Exception:  # noqa: BLE001 - a subscriber must not break the swap
                 pass
         return result

@@ -39,8 +39,12 @@ class CatalogHttpContractTests(unittest.TestCase):
                 self.assertIsInstance(entry["artifactVersion"], str)
                 self.assertIsInstance(entry["available"], bool)
                 allowed = {"id", "displayName", "aliases", "artifactVersion",
-                           "available", "unavailableReason"}
+                           "available", "unavailableReason", "catalogRevision"}
                 self.assertLessEqual(set(entry), allowed)
+                # Root F9: the entry carries the revision it came from.
+                self.assertEqual(
+                    entry["catalogRevision"], payload["catalogRevision"]
+                )
 
     def test_the_payload_never_exposes_internal_paths(self):
         with TestClient(self.app) as client:
@@ -102,7 +106,7 @@ class CatalogRefreshTests(unittest.TestCase):
                 def __getattr__(self, name):
                     return getattr(self._real, name)
 
-                def refresh(self):
+                def refresh(self, **kwargs):
                     from VoiceSTT.core.wakeword_catalog import RefreshResult
 
                     return RefreshResult(
@@ -111,6 +115,7 @@ class CatalogRefreshTests(unittest.TestCase):
                         catalog_revision=self._real.catalog_revision,
                         available_wake_word_ids=self._real.available_ids(),
                         error="unreadable wake-word manifest",
+                        snapshot=self._real.snapshot(),
                     )
 
                 def set_global_disabled(self, values):
@@ -175,7 +180,7 @@ class GlobalDisableProjectionTests(unittest.TestCase):
                 },
             )
             service = self.app.state.voicestt_service
-            selection, errors = service.wakeword_catalog.resolve_selection(
+            selection, errors = service.wakeword_catalog.admit_selection(
                 ["hey_jarvis"]
             )
 

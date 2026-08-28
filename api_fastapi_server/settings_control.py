@@ -81,15 +81,26 @@ WAKE_WORD_GLOBAL_DISABLED = "wakeWord.globalDisabledIds"
 WAKE_WORD_COOLDOWN_MS = "wakeWord.cooldownMs"
 WAKE_WORD_PRE_ROLL_MS = "wakeWord.preRollMs"
 
-#: Measured properties of the bundled ONNX classifiers, not invented numbers.
-#: OpenWakeWord advances one embedding frame per 1280 samples (80 ms at 16 kHz)
-#: and the embedding model looks at 76 melspectrogram frames (760 ms), so a
-#: classifier with ``N`` input frames still sees the same utterance for
-#: ``(N - 1) * 80 + 760`` ms. Across the bundled build that span is 1960 ms at
-#: minimum (16 frames) and 3400 ms at maximum (34 frames). The measurement is
-#: recorded in the AP-SRV-060 evidence README.
+#: Measured properties of the bundled ONNX classifiers. OpenWakeWord advances
+#: one embedding frame per 1280 samples (80 ms at 16 kHz) and the embedding
+#: model looks at 76 melspectrogram frames (760 ms), so a classifier with ``N``
+#: input frames still sees the same utterance for ``(N - 1) * 80 + 760`` ms.
+#: Across the bundled build that span is 1960 ms at minimum (16 frames) and
+#: 3400 ms at maximum (34 frames); the measurement is in the AP-SRV-060
+#: evidence README.
+#:
+#: Root F5: a receptive field is **not** a calibrated operating range. These
+#: two numbers are used only as provisional input guard rails so a value cannot
+#: be absurd; they are explicitly not a recommendation, and the real
+#: cooldown/pre-roll range and default still require positive wake-word
+#: recordings (WW-18/WW-19, currently ``EVIDENCE_BLOCKED``).
 WAKE_WORD_MIN_RECEPTIVE_FIELD_MS = 1960
 WAKE_WORD_MAX_RECEPTIVE_FIELD_MS = 3400
+
+#: Marks a published setting whose range/default is a provisional guard rail
+#: rather than a calibrated contract. A client must not present such a value as
+#: a recommended operating point.
+CALIBRATION_PENDING = "pending"
 
 RUNTIME_SUPPRESSION_MANUAL = "runtimeSuppression.manual"
 RUNTIME_SUPPRESSION_WAKE_WORD = "runtimeSuppression.wakeWord"
@@ -401,14 +412,20 @@ def builtin_definitions() -> List[SettingDefinition]:
                 "min": 0,
                 "max": WAKE_WORD_MAX_RECEPTIVE_FIELD_MS,
                 "unit": "ms",
+                "calibration": CALIBRATION_PENDING,
+                "calibrationTraceabilityIds": ["WW-18"],
             },
             default_value=0,
             apply_policy=APPLY_NEXT_ACTIVATION,
             description=(
-                "Zusaetzlicher Wake-Word-Cooldown oberhalb des gemessenen "
-                "Klassifikator-Empfangsfensters der jeweils gewaehlten "
-                "Modelle. Default 0: die verbindliche Entprellung folgt "
-                "bereits aus der gemessenen Artefaktgrenze und dem Latch."
+                "Explizit konfigurierter Wake-Word-Cooldown. Er wirkt "
+                "zusaetzlich zur impliziten Entprellung derselben Aeusserung "
+                "und bleibt bewusst auch nach dem sicheren Eingabeschluss "
+                "wirksam. Default 0 = kein zusaetzlicher Cooldown. ACHTUNG: "
+                "Bereich und Default sind vorlaeufige Eingabegrenzen, kein "
+                "kalibrierter Betriebsbereich; die Kalibrierung (WW-18) "
+                "erfordert reale positive Wake-Word-Aufnahmen und ist derzeit "
+                "EVIDENCE_BLOCKED."
             ),
             has_server_default=True,
         ),
@@ -421,14 +438,20 @@ def builtin_definitions() -> List[SettingDefinition]:
                 "min": 0,
                 "max": WAKE_WORD_MIN_RECEPTIVE_FIELD_MS,
                 "unit": "ms",
+                "calibration": CALIBRATION_PENDING,
+                "calibrationTraceabilityIds": ["WW-19"],
             },
             default_value=0,
             apply_policy=APPLY_NEXT_ACTIVATION,
             description=(
-                "Nutzsprachen-Pre-Roll vor der Wake-Endgrenze. 0 ms ist "
-                "vertraglich zulaessig und gibt das Audio exakt am Ende des "
-                "Wake Words frei; die Obergrenze ist das gemessene kleinste "
-                "Klassifikator-Empfangsfenster des Builds."
+                "Nutzsprachen-Pre-Roll vor der geschaetzten Wake-Endgrenze. "
+                "0 ms ist vertraglich zulaessig und gibt das Audio am "
+                "geschaetzten Wake-Ende frei. ACHTUNG: Bereich und Default "
+                "sind vorlaeufige Eingabegrenzen, kein kalibrierter "
+                "Betriebsbereich; die Wake-Endgrenze selbst ist bislang eine "
+                "Schaetzung aus dem Detection-Sample. Die Kalibrierung "
+                "(WW-19) erfordert reale positive Wake-Word-Aufnahmen und ist "
+                "derzeit EVIDENCE_BLOCKED."
             ),
             has_server_default=True,
         ),

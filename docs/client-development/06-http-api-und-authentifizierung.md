@@ -391,28 +391,37 @@ Key lesbar:
       "displayName": "Hey Jarvis",
       "aliases": ["jarvis"],
       "artifactVersion": "1",
-      "available": true
+      "available": true,
+      "catalogRevision": 1
     }
   ]
 }
 ```
 
-Ein nicht verfügbarer Eintrag trägt zusätzlich `unavailableReason`
-(`globally_disabled`, `artifact_missing`, `pipeline_unavailable`). Die Payload
+Jeder Eintrag trägt die `catalogRevision` des Snapshots, aus dem er stammt;
+Top-Level- und Eintragsrevision stammen immer aus einem Zustand. Ein nicht
+verfügbarer Eintrag trägt zusätzlich `unavailableReason` (`globally_disabled`,
+`artifact_missing`, `artifact_unloadable`, `pipeline_unavailable`). Die Payload
 enthält niemals Dateipfade oder interne Artefaktmaps. `catalogRevision` ist von
 `settingsRevision` getrennt und steigt nur bei sichtbarer Änderung.
 
-Ein Client wählt im `hello` ausschließlich kanonische `id`-Werte. Anzeigenamen
-und Aliase dienen der Oberfläche; der Server löst sie über genau einen Resolver
-auf (Unicode-Trim, case-insensitive, vereinheitlichte Trennzeichen, nur
-explizite Aliase).
+**Der `hello`-Handschlag akzeptiert ausschließlich kanonische `id`-Werte.**
+Anzeigenamen und Aliase sind Oberflächeninformation: ein Client löst die
+Nutzereingabe selbst gegen diesen Katalog auf und sendet danach die `id`. Wird
+trotzdem ein Alias oder Anzeigename in `requestedSession.wakeWordIds`
+übertragen, lehnt der Server die gesamte Session mit
+`code = wake_word_unavailable` und `reason = not_canonical` ab. Die tolerante
+Auflösung (Unicode-Trim, case-insensitive, vereinheitlichte Trennzeichen, nur
+explizite Aliase) bleibt der serverseitigen *Konfiguration* vorbehalten.
 
 `POST /api/v2/wake-words/refresh` ist eine Adminaktion hinter derselben Guard
 wie `PATCH /api/v2/settings/server`. Sie lädt den Katalog neu und wechselt nur
 bei vollständigem Erfolg; ein Fehler liefert HTTP 422 und lässt den laufenden
-Katalog unverändert. Der Refresh wirkt auf neue Sessions, nie auf eine bereits
-aufgebaute. Bei einer Availability-Änderung erhalten laufende v2-Sessions
-`wakeword.availability_changed`.
+Katalog unverändert. Die Antwort stammt vollständig aus dem committeten
+Snapshot. Der Refresh wirkt auf neue Sessions, nie auf eine bereits aufgebaute.
+Bei **jeder** sichtbaren Katalogänderung – auch einer reinen Metadatenänderung –
+erhalten laufende v2-Sessions `wakeword.availability_changed` mit der neuen
+Revision.
 
 `GET /api/wake-word` unten bleibt der Adminvertrag des v1-Pfades.
 

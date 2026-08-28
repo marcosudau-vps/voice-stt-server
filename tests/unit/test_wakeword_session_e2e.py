@@ -42,15 +42,26 @@ class AdmissionTests(unittest.TestCase):
         )
         self.assertIn(BUNDLED_WAKE_WORD, capabilities["availableWakeWordIds"])
 
-    def test_an_alias_is_admitted_through_the_one_resolver(self):
+    def test_an_alias_is_rejected_on_the_wire(self):
+        """Root F1: the wire carries canonical ids, aliases are config-only."""
         with TestClient(self.app) as client:
-            with V2Session(client, hello=wake_hello(("jarvis",))) as session:
-                self.assertIsNotNone(session.session_id)
+            with V2Session(
+                client, hello=wake_hello(("jarvis",)), expect_accept=False
+            ) as session:
+                payload = session.drain(schema.SESSION_REJECTED, timeout=15.0)
+        self.assertEqual(
+            [error["reason"] for error in payload["errors"]], ["not_canonical"]
+        )
 
-    def test_a_human_written_display_name_is_admitted(self):
+    def test_a_human_written_display_name_is_rejected_on_the_wire(self):
         with TestClient(self.app) as client:
-            with V2Session(client, hello=wake_hello(("Hey Jarvis",))) as session:
-                self.assertIsNotNone(session.session_id)
+            with V2Session(
+                client, hello=wake_hello(("Hey Jarvis",)), expect_accept=False
+            ) as session:
+                payload = session.drain(schema.SESSION_REJECTED, timeout=15.0)
+        self.assertEqual(
+            [error["reason"] for error in payload["errors"]], ["not_canonical"]
+        )
 
     def test_one_unknown_id_rejects_the_whole_selection(self):
         with TestClient(self.app) as client:
@@ -279,7 +290,7 @@ class CatalogRefreshRaceTests(unittest.TestCase):
 
                 def admitter():
                     barrier.wait(timeout=10)
-                    selection, errors = service.wakeword_catalog.resolve_selection(
+                    selection, errors = service.wakeword_catalog.admit_selection(
                         [BUNDLED_WAKE_WORD]
                     )
                     outcome["selection"] = selection

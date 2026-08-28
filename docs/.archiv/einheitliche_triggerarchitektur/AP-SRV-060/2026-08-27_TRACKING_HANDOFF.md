@@ -2,6 +2,18 @@
 
 **Status:** vorbereitet, **nicht** ausgeführt.
 
+**Fortschreibung nach Root FAIL / C2.** C1 wurde von Root mit den Findings
+F1–F10 abgelehnt. Die unten korrigierten Stellen betreffen Annahmen, die nach
+den Root-Findings falsch waren:
+
+- der v2-Wire nimmt **ausschließlich kanonische IDs**; die tolerante Auflösung
+  ist Konfigurationsfeature (F1);
+- `next_activation` für die Wake-Settings gilt erst jetzt als umgesetzt, weil
+  die reale Runtimebindung erst in C2 existiert und nachgewiesen ist (F2);
+- `WW-18`/`WW-19` sind nicht `EVIDENCE_PENDING`, sondern **`EVIDENCE_BLOCKED`**
+  – reale positive Aufnahmen existieren im lokalen Umfeld nachweislich nicht;
+- die Wake-Endgrenze ist eine ausgewiesene Schätzung, kein gemessener Wert (F4).
+
 Der Server-AP hat weder Clientproduktcode noch zentrale normative
 Koordinationsdateien verändert. Dieses Dokument beschreibt vollständig, was
 nach einem Root-PASS in den zentralen Trackingdateien nachgezogen werden muss,
@@ -67,7 +79,9 @@ kanonischer Serverstand.
   eingereicht;
 - gemessene und damit belastbare Teilaussagen, die übernommen werden können:
   Empfangsfenster der gebündelten Klassifikatoren 1960–3400 ms; über 63.99 s
-  reales Negativmaterial kein einziger Rohkandidat oberhalb Schwelle 0.5.
+  reales Negativmaterial kein einziger Rohkandidat oberhalb Schwelle 0.5;
+- ausdrücklich **nicht** übernehmen: diese Empfangsfenster sind kein
+  kalibrierter Cooldown-/Pre-Roll-Betriebsbereich (Root F5).
 
 **Welche SHA/Testwerte erst Root einsetzen darf:** kanonische AP-SRV-060-SHA;
 Root-bestätigte Testzahlen.
@@ -123,22 +137,22 @@ und Tree; die Distributed-Referenz des C1-Runs.
 | ID | Neuer Status | Begründung |
 |---|---|---|
 | `WW-01` | umgesetzt (SRV-060) | Build-Katalog, atomare Auswahl, selected-only |
-| `WW-02` | umgesetzt (SRV-060) | kanonische IDs, explizite Aliase, ein Resolver |
+| `WW-02` | umgesetzt (SRV-060) | kanonische IDs, explizite Aliase, ein Resolver. **Präzisierung nach Root F1:** die tolerante Auflösung gilt nur für menschliche Konfiguration; der v2-Wire trägt ausschließlich kanonische IDs |
 | `WW-03` | umgesetzt (SRV-050 + SRV-060) | gemeinsame Sensitivity wirkt in der Detection |
 | `WW-04` | **teilweise** umgesetzt | Latch und Exactly-once sind umgesetzt; der Bedarf einer zusätzlichen Mehrfach-Chunk-Regel bleibt messdatenabhängig offen |
 | `WW-05` | umgesetzt (SRV-060) | Wake Word während Activation ohne Wirkung |
 | `WW-08` | umgesetzt (SRV-060) | Wake Word nicht im Nutztranskript, erstes Nutzerwort erhalten |
 | `WW-09` | umgesetzt (SRV-060) | `GET /api/v2/wake-words` |
-| `WW-10` | umgesetzt (SRV-060) | Normalisierung und Kollisionsregel |
+| `WW-10` | umgesetzt (SRV-060) | Normalisierung und Kollisionsregel; ein Alias auf dem Wire wird mit `reason=not_canonical` abgelehnt (Root F1) |
 | `WW-11` | umgesetzt (SRV-060) | atomare Admission ohne Teilfallback |
 | `WW-12` | umgesetzt (SRV-060) | nur gewählte Modelle initialisiert |
 | `WW-13` | umgesetzt (SRV-060) | `wakeword.detected` mit ID, Score, `activationId` |
 | `WW-14` | **teilweise** umgesetzt | gemeinsame Sensitivity ja; Zusatzregel weiterhin messdatenabhängig |
-| `WW-15` | umgesetzt (SRV-060) | Cooldown/Pre-Roll serverautoritativ, `0 ms` zulässig |
+| `WW-15` | umgesetzt (SRV-060) | Cooldown/Pre-Roll serverautoritativ und real `next_activation`-wirksam (Root F2); `0 ms` zulässig. Bereich/Default bleiben als `calibration: pending` publiziert |
 | `WW-16` | umgesetzt (SRV-060) | Latch bis Eingabeschluss, kein Mehrfachereignis |
 | `WW-17` | umgesetzt (SRV-040 + SRV-060) | leere Auswahl nur bei `wakeWord=false` |
-| `WW-18` | **KALIBRIERUNG OFFEN** | Bereich gemessen (0–3400 ms), Default `0`; positiver Wake-Word-Audiobestand fehlt |
-| `WW-19` | **KALIBRIERUNG OFFEN** | Bereich gemessen (0–1960 ms), Default `0`; Grenztest mit realer Sprache fehlt |
+| `WW-18` | **EVIDENCE_BLOCKED** | vorläufige Eingabegrenze 0–3400 ms, Default `0`, im Schema als `calibration: pending` ausgewiesen; positiver Wake-Word-Audiobestand existiert nicht |
+| `WW-19` | **EVIDENCE_BLOCKED** | vorläufige Eingabegrenze 0–1960 ms, Default `0`; zusätzlich ist die Wake-Endgrenze selbst eine Schätzung (`boundaryMeasured = false`). Grenztest mit realer Sprache fehlt |
 | `WIRE-02` | serverseitig umgesetzt | atomare Validierung vor Audio-/Triggerfreigabe |
 | `WIRE-04` | serverseitig umgesetzt | `session.rejected` nennt jede problematische ID |
 | `SET-13b` | umgesetzt (SRV-060) | öffentlicher versionierter Katalog |
@@ -162,15 +176,17 @@ AP-SRV-060-SHA als Umsetzungsnachweis je ID.
 **Konkreter neuer Sachstand:**
 
 - Status von `CONFIRMED / FALSE-POSITIVE POLICY TO MEASURE` auf behoben im
-  kanonischen v2-Pfad ändern;
+  kanonischen v2-Pfad ändern (Codeanteil; die Policyfrage selbst bleibt offen);
 - Ursachenbestätigung: der fehlende Guard in
   `VoiceSTT/core/recording.py` ist geschlossen – die Detection läuft nicht
   weiter, solange ein Treffer gelatcht ist (Nachweis: 40 Chunks mit
   anhaltendem Score ergeben genau einen `predict`-Aufruf und genau eine
   Admission);
 - Ergänzung: die zweite Ursache (keine Entprellung über die Dauer einer
-  Äußerung) ist durch den aus dem **gemessenen** Empfangsfenster abgeleiteten
-  Rearm geschlossen;
+  Äußerung) ist durch das aus dem **gemessenen** Empfangsfenster abgeleitete
+  Entprellfenster geschlossen. Nach Root F6 ist dieses Fenster ausdrücklich
+  vom konfigurierten Cooldown getrennt und endet am sicheren Eingabeschluss,
+  damit keine versteckte zweite Vordergrundsperre entsteht;
 - offener Restanteil ausdrücklich benennen: die „False-Positive Policy“ ist
   weiterhin messdatenabhängig. Die Negativmessung (63.99 s reale Sprache,
   0 Rohkandidaten ≥ 0.5, Maximalscore 0.000992) zeigt keinen Bedarf für eine
@@ -194,10 +210,13 @@ Artefakte.
 - Wiedereinstieg nach AP-SRV-060 ist AP-SRV-070 auf der neuen kanonischen
   Serverbasis;
 - als konkret benötigtes Artefakt aufnehmen: **reale positive
-  Wake-Word-Audioaufnahmen** (16 kHz, mono, 16 Bit PCM) für die offene
-  Kalibrierung `WW-18`/`WW-19`. Ohne sie bleiben Cooldown- und
-  Pre-Roll-Default bei `0` und der Bedarf einer Mehrfach-Chunk-Regel
-  unbeantwortet;
+  Wake-Word-Audioaufnahmen** (16 kHz, mono, 16 Bit PCM, gesprochenes Wake Word
+  plus unmittelbar folgende Nutzsprache, bekannte akustische Wake-Endgrenze)
+  für `WW-18`/`WW-19`. Ohne sie bleiben Cooldown- und Pre-Roll-Default bei `0`,
+  die reale Wake-Endgrenze eine Schätzung und der Bedarf einer
+  Mehrfach-Chunk-Regel unbeantwortet. Der Status ist `EVIDENCE_BLOCKED`, nicht
+  nur `PENDING`: die Suche im lokalen Umfeld ist abgeschlossen und negativ
+  (C2-Evidence §8);
 - Werkzeug für die Nachholung ist bereits im Server vorhanden und
   reproduzierbar:
   `python tools/wakeword_calibration.py scores --audio <datei.wav>`
@@ -222,7 +241,7 @@ als neuer Wiedereinstiegsstand.
 | `…\STATUS.md` | JA | AP-SRV-060 abgenommen, Kalibrierrest offen halten |
 | `…\VERLAUF.md` | JA | C1-Einreichung, Review, Kanonisierung |
 | `…\NACHVERFOLGUNG\AUSFUEHRUNGSSTATUS.md` | JA | AP-SRV-060 abgenommen, AP-SRV-070 freigegeben |
-| `…\NACHVERFOLGUNG\TRACEABILITY.md` | JA | WW-01…WW-19, WIRE-02/04, SET-13b (zwei Punkte bleiben offen) |
+| `…\NACHVERFOLGUNG\TRACEABILITY.md` | JA | WW-01…WW-19, WIRE-02/04, SET-13b (WW-18/WW-19 bleiben EVIDENCE_BLOCKED) |
 | `…\NACHVERFOLGUNG\FUNDE.md` | JA | FIND-011 behoben, False-Positive-Policy bleibt messdatenabhängig |
 | `…\NACHVERFOLGUNG\WIEDEREINSTIEG.md` | JA | AP-SRV-070; benötigte Positivaudios benennen |
 

@@ -18,6 +18,12 @@ AP_SRV_060_BINDING
     ``wakeword.detected``. Since AP-SRV-060 the port reads the one server-wide
     :class:`~VoiceSTT.core.wakeword_catalog.WakeWordCatalogAuthority`; it holds
     no catalog, no revision and no resolver of its own.
+
+    The port is the **wire** side, so it admits canonical ids only. The
+    tolerant human resolver of the catalog is deliberately not reachable from
+    here: a client that sends an alias or a display name in
+    ``requestedSession.wakeWordIds`` is rejected, because the frozen wire
+    contract says those ids are canonical (Root F1).
 """
 
 REQUIRES_AP_SRV_050_BINDING = "REQUIRES_AP_SRV_050_BINDING"
@@ -111,26 +117,32 @@ class WakeWordPort:
         return list(catalog.available_ids())
 
     def resolve_selection(self, wake_word_ids):
-        """``(selection, errors)`` of one atomic admission."""
+        """``(selection, errors)`` of one atomic **wire** admission.
+
+        Canonical ids only, and every selected artifact is really probed for
+        loadability before the session may be accepted.
+        """
         catalog = self.catalog
         if catalog is None:
             return None, [{
                 "field": "requestedSession.wakeWordIds",
                 "code": "wake_word_unavailable",
+                "reason": "catalog_unavailable",
                 "message": (
                     "Der Wake-Word-Katalog ist auf diesem Server nicht "
                     "verfügbar."
                 ),
             }]
-        selection, errors = catalog.resolve_selection(wake_word_ids)
+        selection, errors = catalog.admit_selection(wake_word_ids)
         return selection, [error.to_dict() for error in errors]
 
     def validate_selection(self, wake_word_ids):
         """Atomic admission of one requested selection.
 
-        A single unknown, globally disabled or unloadable id rejects the whole
-        selection and every problematic id is named - there is no partial
-        catalog, no default fallback and no silent removal.
+        A single non-canonical, unknown, globally disabled, missing or
+        unloadable id rejects the whole selection and every problematic id is
+        named - there is no partial catalog, no default fallback and no silent
+        removal.
         """
         _selection, errors = self.resolve_selection(wake_word_ids)
         return errors

@@ -15,7 +15,10 @@ from unittest import mock
 
 from VoiceSTT.core.recording import run_recording_worker
 from VoiceSTT.core.wake_audio_boundary import WakeAudioBoundary
-from VoiceSTT.core.wake_detection import WakeDetectionEvaluator
+from VoiceSTT.core.wake_detection import (
+    WakeDetectionEvaluator,
+    WakeRuntimePolicy,
+)
 
 
 SAMPLE_RATE = 16000
@@ -80,7 +83,11 @@ def build_recorder(chunk_count, *, admission):
     recorder.wake_audio_boundary = None
     recorder.wake_stream_sample_position = 0
     recorder.wake_detection_evaluator = WakeDetectionEvaluator(
-        threshold=0.5, rearm_ms=0.0
+        policy_supplier=lambda: WakeRuntimePolicy(
+            sensitivity=0.5, cooldown_ms=0,
+            pre_roll_ms=recorder.wake_word_pre_roll_ms,
+        ),
+        rearm_ms=0.0,
     )
     return recorder
 
@@ -160,10 +167,13 @@ class Find011Tests(unittest.TestCase):
 
         boundary = recorder.wake_audio_boundary
         self.assertIsInstance(boundary, WakeAudioBoundary)
-        # First chunk, so the wake end is the end of that chunk.
-        self.assertEqual(boundary.wake_end_sample, CHUNK_SAMPLES)
-        self.assertEqual(boundary.release_sample, boundary.wake_end_sample)
+        # First chunk, so the detection sample is the end of that chunk.
+        self.assertEqual(boundary.detection_sample, CHUNK_SAMPLES)
+        self.assertEqual(
+            boundary.release_sample, boundary.estimated_wake_end_sample
+        )
         self.assertEqual(boundary.receptive_field_ms, 1960)
+        self.assertFalse(boundary.boundary_measured)
 
     def test_pre_roll_moves_the_release_without_reaching_past_the_wake_start(self):
         def admission(candidate, boundary):
@@ -178,10 +188,10 @@ class Find011Tests(unittest.TestCase):
         boundary = recorder.wake_audio_boundary
         self.assertEqual(boundary.pre_roll_samples, 160)
         self.assertEqual(
-            boundary.release_sample, boundary.wake_end_sample - 160
+            boundary.release_sample, boundary.estimated_wake_end_sample - 160
         )
         self.assertGreaterEqual(
-            boundary.release_sample, boundary.wake_start_sample
+            boundary.release_sample, boundary.receptive_field_start_sample
         )
 
     def test_a_latched_detector_is_not_released_by_the_legacy_timeout(self):

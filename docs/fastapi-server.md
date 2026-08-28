@@ -487,15 +487,23 @@ The server ships its wake-word models inside the package
 `models.json` in that directory is the canonical catalog authority: it declares
 canonical ids, display names, explicit aliases, artifact versions and the shared
 pipeline models. `GET /api/v2/wake-words` publishes that catalog with
-`catalogRevision`, `available` and an optional `unavailableReason`, and never
-exposes a filesystem path.
+`catalogRevision`, `available`, an optional `unavailableReason` and the entry's
+own `catalogRevision`, and never exposes a filesystem path.
 
 `POST /api/v2/wake-words/refresh` uses the same admin guard as
-`PATCH /api/v2/settings/server`. It rebuilds and fully validates a candidate and
-swaps atomically only on total success; a failed refresh answers HTTP 422 and
-leaves the running catalog untouched. It affects new session admissions only -
-a running session keeps the models it was admitted with. An availability change
-emits `wakeword.availability_changed` on every live v2 session.
+`PATCH /api/v2/settings/server`. It rebuilds and fully validates a candidate,
+applies the global disable projection in the same atomic operation and swaps
+only on total success; the response is rendered from exactly the committed
+snapshot. A failed refresh answers HTTP 422 and leaves the running catalog
+untouched. It affects new session admissions only - a running session keeps the
+models it was admitted with. *Every* visible catalog change - including a
+metadata-only one - emits `wakeword.availability_changed` with the new revision
+on every live v2 session.
+
+A v2 session selects wake words by **canonical id**; an alias or display name in
+the handshake is rejected. Before a session is accepted the server load-probes
+exactly the selected classifiers with the inference runtime, so a corrupt
+artifact is refused at admission instead of failing the session build.
 
 `VOICESTT_WAKEWORD_ASSET_ROOT` points the server at a bundle outside the
 package. See [Wake Words](wake-words.md) for the complete contract.

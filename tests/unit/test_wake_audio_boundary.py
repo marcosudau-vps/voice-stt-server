@@ -46,19 +46,23 @@ class BoundaryTests(unittest.TestCase):
             pre_roll_ms=0,
             sample_rate=SAMPLE_RATE,
         )
-        self.assertEqual(boundary.wake_end_sample, 32000)
+        self.assertEqual(boundary.estimated_wake_end_sample, 32000)
         self.assertEqual(boundary.release_sample, 32000)
         self.assertEqual(boundary.released_pre_roll_samples, 0)
+        # The wake end is an estimate until WW-19 is measured.
+        self.assertFalse(boundary.boundary_measured)
 
-    def test_the_wake_start_is_the_measured_receptive_field(self):
+    def test_the_receptive_field_start_is_the_measured_window(self):
         boundary = resolve_wake_audio_boundary(
             detection_sample_position=32000,
             receptive_field_ms=1960,
             sample_rate=SAMPLE_RATE,
         )
-        self.assertEqual(boundary.wake_start_sample, 32000 - 31360)
+        self.assertEqual(
+            boundary.receptive_field_start_sample, 32000 - 31360
+        )
 
-    def test_pre_roll_moves_the_release_back_but_never_past_the_wake_start(self):
+    def test_pre_roll_moves_the_release_back_but_never_past_the_window(self):
         boundary = resolve_wake_audio_boundary(
             detection_sample_position=32000,
             receptive_field_ms=1960,
@@ -73,8 +77,10 @@ class BoundaryTests(unittest.TestCase):
             pre_roll_ms=5000,
             sample_rate=SAMPLE_RATE,
         )
-        # Never reaches back before the wake word itself started.
-        self.assertEqual(clamped.release_sample, clamped.wake_start_sample)
+        # Never reaches back before the classifier's own view started.
+        self.assertEqual(
+            clamped.release_sample, clamped.receptive_field_start_sample
+        )
 
     def test_the_detector_history_start_clamps_the_boundary(self):
         boundary = resolve_wake_audio_boundary(
@@ -83,7 +89,7 @@ class BoundaryTests(unittest.TestCase):
             sample_rate=SAMPLE_RATE,
             detector_history_start_sample=4000,
         )
-        self.assertEqual(boundary.wake_start_sample, 4000)
+        self.assertEqual(boundary.receptive_field_start_sample, 4000)
 
     def test_the_projection_is_json_safe_and_complete(self):
         payload = resolve_wake_audio_boundary(
@@ -93,8 +99,10 @@ class BoundaryTests(unittest.TestCase):
             sample_rate=SAMPLE_RATE,
         ).to_dict()
         self.assertEqual(set(payload), {
-            "sampleRate", "wakeStartSample", "wakeEndSample", "releaseSample",
-            "preRollSamples", "releasedPreRollSamples", "receptiveFieldMs",
+            "sampleRate", "detectionSample", "receptiveFieldStartSample",
+            "estimatedWakeEndSample", "releaseSample", "preRollSamples",
+            "releasedPreRollSamples", "receptiveFieldMs", "boundaryBasis",
+            "boundaryMeasured",
         })
 
 

@@ -206,15 +206,21 @@ Die serverautoritative Settings-Control-Plane verwaltet als triggerrelevant
 | `wakeWord.cooldownMs` | int | 0 | 0–3400 |
 | `wakeWord.preRollMs` | int | 0 | 0–1960 |
 
-`wakeWord.cooldownMs` und `wakeWord.preRollMs` kommen aus AP-SRV-060. Beide
-Bereiche sind gemessene Eigenschaften der gebündelten ONNX-Klassifikatoren:
-OpenWakeWord schiebt je 1280 Samples (80 ms bei 16 kHz) einen Embeddingframe
-weiter und das Embeddingmodell sieht 76 Melspektrogrammframes (760 ms), ein
-Klassifikator mit `N` Eingangsframes also `(N - 1) * 80 + 760` ms. Über den
-Build sind das minimal 1960 ms und maximal 3400 ms. Der Cooldown ist ein
-*zusätzlicher* Betreiberwert oberhalb dieses gemessenen Fensters; `0` bedeutet
-kein zusätzlicher Cooldown. `0 ms` Pre-Roll ist vertraglich zulässig und gibt
-das Audio exakt an der Wake-Endgrenze frei.
+`wakeWord.cooldownMs` und `wakeWord.preRollMs` kommen aus AP-SRV-060 und sind
+**ausdrücklich vorläufig**: ihre Schemaeinträge tragen
+`constraints.calibration = "pending"` samt der abhängigen Traceability-IDs.
+
+Die Zahlen der Bereiche sind gemessene Eigenschaften der gebündelten
+ONNX-Klassifikatoren: OpenWakeWord schiebt je 1280 Samples (80 ms bei 16 kHz)
+einen Embeddingframe weiter und das Embeddingmodell sieht 76
+Melspektrogrammframes (760 ms), ein Klassifikator mit `N` Eingangsframes also
+`(N - 1) * 80 + 760` ms; über den Build minimal 1960 ms und maximal 3400 ms.
+Ein Empfangsfenster ist jedoch **kein kalibrierter Betriebsbereich** – die
+Werte dienen nur als vorläufige Eingabegrenzen, und `0` ist ein neutraler
+Default, keine Empfehlung. Der Cooldown ist ein explizit konfigurierter Wert
+*neben* der impliziten Entprellung derselben Äußerung; `0` bedeutet kein
+konfigurierter Cooldown. Der reale Bereich und Default erfordern reale positive
+Wake-Word-Aufnahmen: `WW-18` und `WW-19` sind derzeit `EVIDENCE_BLOCKED`.
 
 Weitere Wake-Word-Settings der Control Plane: `wakeWord.selection` (Session,
 `next_session`), `wakeWord.globalDisabledIds` (Server, Admin-Key,

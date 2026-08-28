@@ -70,10 +70,17 @@ def _wake_detection_step(recorder, data, frame_index, stream_sample_position):
         return None
 
     frames = getattr(recorder, "wake_word_input_frames", None) or {}
+    # AP-SRV-060 C2 / Root F2: the pre-roll comes from the policy the evaluator
+    # latched for *this* admission, not from a value copied once at session
+    # build time. The recorder attribute stays as a diagnostic mirror.
+    pre_roll_ms = getattr(evaluator, "pre_roll_ms", None)
+    if pre_roll_ms is None:
+        pre_roll_ms = getattr(recorder, "wake_word_pre_roll_ms", 0)
+    recorder.wake_word_pre_roll_ms = pre_roll_ms
     boundary = resolve_wake_audio_boundary(
         detection_sample_position=candidate.sample_position,
         receptive_field_ms=receptive_field_ms(frames.get(candidate.model_key)),
-        pre_roll_ms=getattr(recorder, "wake_word_pre_roll_ms", 0),
+        pre_roll_ms=pre_roll_ms,
         sample_rate=recorder.sample_rate,
     )
     callback = recorder.on_wakeword_detected

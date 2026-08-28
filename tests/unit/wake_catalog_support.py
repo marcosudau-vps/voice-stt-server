@@ -88,8 +88,14 @@ DEFAULT_ENTRIES = (
 
 
 def build_authority(root, entries=DEFAULT_ENTRIES, **kwargs):
-    """A real catalog authority over a freshly written test bundle."""
+    """A real catalog authority over a freshly written test bundle.
+
+    The bundle contains placeholder bytes rather than real ONNX models, so the
+    default loadability probe is replaced with a permissive one. Tests that
+    care about the probe itself (Root F3) pass their own ``artifact_prober``.
+    """
     asset_root = build_bundle(root, entries)
+    kwargs.setdefault("artifact_prober", lambda path: None)
     return WakeWordCatalogAuthority(asset_root=asset_root, **kwargs)
 
 

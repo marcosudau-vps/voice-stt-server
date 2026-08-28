@@ -7,6 +7,7 @@ from VoiceSTT.core.wake_detection import (
     EMBEDDING_WINDOW_MS,
     RawWakeCandidate,
     WakeDetectionEvaluator,
+    WakeRuntimePolicy,
     receptive_field_ms,
     select_candidate,
     selection_receptive_field_ms,
@@ -85,8 +86,12 @@ class SelectCandidateTests(unittest.TestCase):
 class EvaluatorTests(unittest.TestCase):
     def setUp(self):
         self.clock = FakeClock()
+        self.policy = WakeRuntimePolicy(
+            sensitivity=0.5, cooldown_ms=0, pre_roll_ms=0, settings_revision=0
+        )
         self.evaluator = WakeDetectionEvaluator(
-            threshold=0.5, rearm_ms=1960, cooldown_ms=0, clock=self.clock
+            policy_supplier=lambda: self.policy, rearm_ms=1960,
+            clock=self.clock,
         )
 
     def test_a_first_hit_is_offered(self):
@@ -103,19 +108,24 @@ class EvaluatorTests(unittest.TestCase):
                 self.evaluator.offer([candidate("hey_jarvis", 0.99)])
             )
 
-    def test_a_refused_admission_arms_rearm_but_never_the_latch(self):
+    def test_a_refused_admission_arms_dedupe_but_never_the_latch(self):
         first = self.evaluator.offer([candidate("hey_jarvis", 0.9)])
         self.evaluator.refuse(first)
         self.assertFalse(self.evaluator.latched)
         self.assertIsNone(self.evaluator.offer([candidate("hey_jarvis", 0.9)]))
-        self.clock.advance(self.evaluator.rearm_ms / 1000.0)
+        self.clock.advance(self.evaluator.dedupe_ms / 1000.0)
         self.assertIsNotNone(self.evaluator.offer([candidate("hey_jarvis", 0.9)]))
 
-    def test_the_configured_cooldown_extends_the_measured_window(self):
+    def test_dedupe_and_configured_cooldown_are_separate_windows(self):
         evaluator = WakeDetectionEvaluator(
-            threshold=0.5, rearm_ms=1000, cooldown_ms=500, clock=self.clock
+            policy_supplier=lambda: WakeRuntimePolicy(
+                sensitivity=0.5, cooldown_ms=500
+            ),
+            rearm_ms=1000,
+            clock=self.clock,
         )
-        self.assertEqual(evaluator.rearm_ms, 1500)
+        self.assertEqual(evaluator.dedupe_ms, 1000)
+        self.assertEqual(evaluator.cooldown_ms, 500)
 
     def test_the_latch_is_only_released_for_its_own_activation(self):
         first = self.evaluator.offer([candidate("hey_jarvis", 0.9)])
@@ -159,7 +169,8 @@ class EvaluatorTests(unittest.TestCase):
         self.evaluator.offer([candidate("hey_jarvis", 0.9)])
         diagnostics = self.evaluator.diagnostics()
         self.assertEqual(diagnostics["lastCandidate"]["rawScore"], 0.9)
-        self.assertEqual(diagnostics["effectiveRearmMs"], 1960)
+        self.assertEqual(diagnostics["dedupeMs"], 1960)
+        self.assertEqual(diagnostics["cooldownMs"], 0)
 
 
 if __name__ == "__main__":

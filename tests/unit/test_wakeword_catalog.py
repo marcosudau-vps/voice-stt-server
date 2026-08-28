@@ -47,6 +47,9 @@ class NormalisationTests(unittest.TestCase):
 class CatalogTestCase(unittest.TestCase):
     def _authority(self, entries=ENTRIES, **kwargs):
         root = build_bundle(self.tmp / "bundle", entries)
+        # The bundle holds placeholder bytes, so the real loadability probe is
+        # replaced here; Root F3 has its own dedicated tests for the probe.
+        kwargs.setdefault("artifact_prober", lambda path: None)
         return WakeWordCatalogAuthority(asset_root=root, **kwargs), root
 
     def setUp(self):
@@ -63,8 +66,11 @@ class CatalogTestCase(unittest.TestCase):
         self.assertEqual(payload["catalogRevision"], 1)
         for entry in payload["wakeWords"]:
             self.assertEqual(
-                set(entry), {"id", "displayName", "aliases",
-                             "artifactVersion", "available"}
+                set(entry), {"id", "displayName", "aliases", "artifactVersion",
+                             "available", "catalogRevision"}
+            )
+            self.assertEqual(
+                entry["catalogRevision"], payload["catalogRevision"]
             )
         text = json.dumps(payload)
         for forbidden in ("path", "paths", "source", ".onnx", str(self.tmp)):
@@ -156,7 +162,7 @@ class CatalogTestCase(unittest.TestCase):
 class SelectionAdmissionTests(CatalogTestCase):
     def test_one_bad_id_rejects_the_whole_selection(self):
         authority, _root = self._authority()
-        selection, errors = authority.resolve_selection(
+        selection, errors = authority.admit_selection(
             ["hey_jarvis", "nope", "alexa"]
         )
         self.assertIsNone(selection)
@@ -166,7 +172,7 @@ class SelectionAdmissionTests(CatalogTestCase):
 
     def test_every_problematic_id_is_named(self):
         authority, _root = self._authority()
-        _selection, errors = authority.resolve_selection(["nope", "also_nope"])
+        _selection, errors = authority.admit_selection(["nope", "also_nope"])
         self.assertEqual(
             sorted(error.wake_word_id for error in errors),
             ["also_nope", "nope"],
@@ -175,13 +181,14 @@ class SelectionAdmissionTests(CatalogTestCase):
     def test_a_globally_disabled_id_rejects_the_selection(self):
         authority, _root = self._authority()
         authority.set_global_disabled(["Hey Jarvis"])
-        selection, errors = authority.resolve_selection(["hey_jarvis"])
+        selection, errors = authority.admit_selection(["hey_jarvis"])
         self.assertIsNone(selection)
         self.assertEqual(errors[0].reason, "globally_disabled")
 
     def test_an_accepted_selection_loads_exactly_its_own_artifacts(self):
         authority, root = self._authority()
-        selection, errors = authority.resolve_selection(["jarvis", "alexa"])
+        # Canonical ids on the wire; the alias path is the human resolver.
+        selection, errors = authority.admit_selection(["hey_jarvis", "alexa"])
         self.assertEqual(errors, ())
         self.assertEqual(selection.wake_word_ids, ("hey_jarvis", "alexa"))
         kwargs = selection.loader_kwargs()
@@ -202,7 +209,15 @@ class SelectionAdmissionTests(CatalogTestCase):
 
     def test_duplicates_collapse_without_becoming_an_error(self):
         authority, _root = self._authority()
-        selection, errors = authority.resolve_selection(
+        selection, errors = authority.admit_selection(
+            ["hey_jarvis", "hey_jarvis"]
+        )
+        self.assertEqual(errors, ())
+        self.assertEqual(selection.wake_word_ids, ("hey_jarvis",))
+
+    def test_the_human_resolver_still_collapses_tolerated_spellings(self):
+        authority, _root = self._authority()
+        selection, errors = authority.resolve_human_selection(
             ["hey_jarvis", "Hey Jarvis", "jarvis"]
         )
         self.assertEqual(errors, ())
@@ -210,7 +225,7 @@ class SelectionAdmissionTests(CatalogTestCase):
 
     def test_an_empty_selection_is_refused(self):
         authority, _root = self._authority()
-        selection, errors = authority.resolve_selection([])
+        selection, errors = authority.admit_selection([])
         self.assertIsNone(selection)
         self.assertEqual(errors[0].code, "wake_word_selection_required")
 

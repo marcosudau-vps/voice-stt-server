@@ -61,10 +61,14 @@ from api_fastapi_server.segment_ledger import (
 from api_fastapi_server.protocol_v2 import schema as protocol_v2_schema
 from api_fastapi_server.protocol_v2.connection import ProtocolV2Connection
 from api_fastapi_server import settings_control as settings_control_module
-from api_fastapi_server.wake_admission import WakeAdmissionCoordinator
+from api_fastapi_server.wake_admission import (
+    WakeActivationOutcome,
+    WakeAdmissionCoordinator,
+)
 from VoiceSTT.core import wakeword_catalog as wakeword_catalog_module
 from VoiceSTT.core.wake_detection import (
     WakeDetectionEvaluator,
+    WakeRuntimePolicy,
     selection_receptive_field_ms,
 )
 from VoiceSTT_server.operations import (
@@ -2865,64 +2869,88 @@ class RecorderBackedRealtimeSession:
         """Binds detector hygiene and the admission coordinator to the recorder.
 
         Only a session that actually holds an admitted catalog selection gets
-        the v2 detection path. The threshold is the AP-SRV-050
-        ``wakeWord.sensitivity``; the mandatory re-arm window is the *measured*
-        receptive field of the models the real backend loaded, and
-        ``wakeWord.cooldownMs`` is the operator addition on top of it.
+        the v2 detection path. The de-duplication window is the *measured*
+        receptive field of the models the real backend loaded; sensitivity,
+        cooldown and pre-roll come from the one AP-SRV-050 settings authority
+        through :meth:`_wake_runtime_policy`, which the evaluator re-reads at
+        every admission (Root F2).
         """
         selection = getattr(self.session_config, "wake_word_selection", None)
         if selection is None or self._activation is None:
             return
-        values = self._wake_word_runtime_values()
         measured = getattr(self.recorder, "wake_word_input_frames", None) or {}
         evaluator = WakeDetectionEvaluator(
-            threshold=values["sensitivity"],
+            policy_supplier=self._wake_runtime_policy,
             rearm_ms=selection_receptive_field_ms(measured),
-            cooldown_ms=values["cooldownMs"],
         )
         self.recorder.wake_detection_evaluator = evaluator
-        self.recorder.wake_word_pre_roll_ms = values["preRollMs"]
+        self.recorder.wake_word_pre_roll_ms = evaluator.pre_roll_ms
         self._wake_admission = WakeAdmissionCoordinator(
             evaluator=evaluator,
             activate=self._activate_from_wake_candidate,
             publish=self._publish_accepted_wake_detection,
+            committed_probe=self._open_wake_activation_id,
         )
 
-    def _wake_word_runtime_values(self):
-        """Sensitivity, cooldown and pre-roll from the one settings authority."""
-        defaults = {
-            "sensitivity": float(self.settings.wake_words_sensitivity or 0.5),
-            "cooldownMs": 0,
-            "preRollMs": 0,
-        }
+    def _wake_runtime_policy(self):
+        """The current wake runtime policy from the one settings authority.
+
+        Read live, never cached here: the evaluator latches it for the running
+        activation and picks the new values up for the next one, which is
+        exactly what ``applyPolicy = next_activation`` means. There is no
+        second settings registry and no second copy of these values.
+        """
+        defaults = WakeRuntimePolicy(
+            sensitivity=float(self.settings.wake_words_sensitivity or 0.5),
+            cooldown_ms=0,
+            pre_roll_ms=0,
+            settings_revision=0,
+        )
         state = getattr(self, "settings_state", None)
         if state is None:
             return defaults
         try:
-            effective = state.effective_values()
+            bundle = state.activation_admission_settings()
         except Exception:  # noqa: BLE001 - defensive projection
             return defaults
-        sensitivity = effective.get(settings_control_module.WAKE_WORD_SENSITIVITY)
-        cooldown = effective.get(settings_control_module.WAKE_WORD_COOLDOWN_MS)
-        pre_roll = effective.get(settings_control_module.WAKE_WORD_PRE_ROLL_MS)
-        return {
-            "sensitivity": (
-                float(sensitivity)
-                if isinstance(sensitivity, (int, float))
-                and not isinstance(sensitivity, bool)
-                else defaults["sensitivity"]
+        effective = bundle.effective_settings
+
+        def number(key, fallback, cast):
+            value = effective.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return fallback
+            return cast(value)
+
+        return WakeRuntimePolicy(
+            sensitivity=number(
+                settings_control_module.WAKE_WORD_SENSITIVITY,
+                defaults.sensitivity, float,
             ),
-            "cooldownMs": (
-                int(cooldown)
-                if isinstance(cooldown, int) and not isinstance(cooldown, bool)
-                else defaults["cooldownMs"]
+            cooldown_ms=number(
+                settings_control_module.WAKE_WORD_COOLDOWN_MS, 0, int
             ),
-            "preRollMs": (
-                int(pre_roll)
-                if isinstance(pre_roll, int) and not isinstance(pre_roll, bool)
-                else defaults["preRollMs"]
+            pre_roll_ms=number(
+                settings_control_module.WAKE_WORD_PRE_ROLL_MS, 0, int
             ),
-        }
+            settings_revision=int(bundle.settings_revision),
+        )
+
+    def _open_wake_activation_id(self):
+        """The open wake activation the controller really shows, if any.
+
+        Root F7: consulted only when the admission path raised, so a crash can
+        never be mistaken for "no activation happened".
+        """
+        controller = self._activation
+        if controller is None:
+            return None
+        try:
+            snapshot = controller.snapshot() or {}
+        except Exception:  # noqa: BLE001 - defensive read
+            return None
+        if snapshot.get("primarySource") != "wake_word":
+            return None
+        return snapshot.get("activationId")
 
     def _activate_from_wake_candidate(self, candidate, boundary):
         """The activation admission of one wake candidate.
@@ -2932,32 +2960,71 @@ class RecorderBackedRealtimeSession:
         command, including the generic audio-availability gate and the runtime
         suppression mask. It never opens a recording on its own, and a refusal
         leaves no latch, no event and no second activation behind.
+
+        Root F7: ``ActivationController.activate`` is the commit point. Every
+        guard and every failure *before* it means "no activation" and is
+        reported as a refusal. Everything *after* it - decision application,
+        event collection, event publication - can no longer undo the
+        activation, so a failure there is reported as a post-commit error and
+        never turns into a refusal. This method therefore does not raise once
+        the commit happened.
         """
         published = []
-        activation_id = None
         with self.lock:
             if not self.streaming or self.status == "closed":
-                return None
+                return WakeActivationOutcome.refused()
             if self._wake_detection_epoch != self._lifecycle_epoch:
                 # A stale callback from an earlier stream is inert.
-                return None
+                return WakeActivationOutcome.refused()
             if self._activation is None or not self._audio_available:
-                return None
-            activation_settings, timing_policy = self._new_activation_inputs()
+                return WakeActivationOutcome.refused()
+            try:
+                activation_settings, timing_policy = self._new_activation_inputs()
+            except Exception as exc:  # noqa: BLE001 - still pre-commit
+                LOGGER.exception(
+                    "Activation-Settings konnten für %s nicht aufgelöst werden",
+                    self.session_id,
+                )
+                return WakeActivationOutcome(committed=False, error=exc)
+
+            # --- commit point -------------------------------------------------
             decision = self._activation.activate(
                 "wake_word",
                 activation_settings,
                 timing_policy=timing_policy,
             )
             if not decision.accepted:
-                return None
-            activation_id = self._apply_activation_decision_locked(
-                "activate", decision, published
-            )
+                return WakeActivationOutcome.refused()
+            committed_id = (decision.snapshot or {}).get("activationId")
+            post_commit_error = None
+            try:
+                activation_id = self._apply_activation_decision_locked(
+                    "activate", decision, published
+                )
+                committed_id = activation_id or committed_id
+            except Exception as exc:  # noqa: BLE001 - post-commit
+                post_commit_error = exc
+                LOGGER.exception(
+                    "Activation %s wurde übernommen, aber die Projektion ist "
+                    "fehlgeschlagen",
+                    committed_id,
+                )
             self._wakeword_voice_window = True
             self._wakeword_followup_generation += 1
-        self._publish_collected_events(published)
-        return activation_id
+
+        try:
+            self._publish_collected_events(published)
+        except Exception as exc:  # noqa: BLE001 - post-commit
+            post_commit_error = post_commit_error or exc
+            LOGGER.exception(
+                "Activationevents von %s konnten nicht veröffentlicht werden",
+                committed_id,
+            )
+        return WakeActivationOutcome(
+            committed=True,
+            activation_id=committed_id,
+            error=post_commit_error,
+        )
 
     def _publish_accepted_wake_detection(self, detection):
         """Exactly one ``wakeword.detected`` per accepted utterance."""
@@ -6401,7 +6468,7 @@ class VoiceSTTService:
         # deliberately separate from ``settingsRevision``.
         self.wakeword_catalog = wakeword_catalog_module.WakeWordCatalogAuthority(
             global_disabled_ids=self._configured_global_disabled_wake_words(),
-            on_availability_changed=self._on_wake_word_availability_changed,
+            on_catalog_changed=self._on_wake_word_catalog_changed,
         )
         self._log_access_tokens = {}
         self._log_access_lock = threading.RLock()
@@ -6426,17 +6493,23 @@ class VoiceSTTService:
             return ()
         return tuple(str(value) for value in values)
 
-    def _on_wake_word_availability_changed(
+    def _on_wake_word_catalog_changed(
         self, catalog_revision, available_wake_word_ids, availability_changed
     ):
-        """Announces a catalog change on every live v2 session.
+        """Announces a visible catalog change on every live v2 session.
+
+        Root F8: *every* change that raises ``catalogRevision`` is announced,
+        not only one that adds or removes ids. A renamed display name, a new
+        alias or a new ``artifactVersion`` is visible in
+        ``GET /api/v2/wake-words``, so a live client must be able to notice the
+        new revision too. ``availabilityChanged`` stays available as
+        diagnostics for the caller.
 
         It uses the existing AP-SRV-040 event authority through each session's
-        lifecycle funnel; there is no second event stream and no second
-        sequence.
+        lifecycle funnel; there is no second event stream, no second sequence
+        and no new event family - the frozen contract already designates this
+        event as the wake-catalog change seam.
         """
-        if not availability_changed:
-            return
         for session in self.sessions.all():
             try:
                 session.publish_wake_word_availability(
@@ -6453,14 +6526,18 @@ class VoiceSTTService:
     def refresh_wake_word_catalog(self):
         """Admin refresh: rebuild, validate, swap atomically or keep the old one.
 
+        Root F10: manifest reload and the global disable projection happen in
+        **one** locked catalog operation, and the returned result carries the
+        committed snapshot. Nothing downstream has to read the authority a
+        second time, so a response can never pair a revision from one state
+        with entries from another.
+
         A refresh never touches an already built session or the models it has
         already initialised; it only affects new session admissions.
         """
-        result = self.wakeword_catalog.refresh()
-        self.wakeword_catalog.set_global_disabled(
-            self._configured_global_disabled_wake_words()
+        return self.wakeword_catalog.refresh(
+            global_disabled_ids=self._configured_global_disabled_wake_words()
         )
-        return result
 
     def apply_wake_word_global_disable(self):
         """Re-projects the current server disable list onto the catalog."""
@@ -8318,11 +8395,11 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         if auth_error is not None:
             return auth_error
         result = service.refresh_wake_word_catalog()
-        payload = result.to_dict()
-        payload["protocolVersion"] = protocol_v2_schema.PROTOCOL_VERSION
-        payload["wakeWords"] = service.wakeword_catalog.public_payload(
-            protocol_version=protocol_v2_schema.PROTOCOL_VERSION,
-        )["wakeWords"]
+        # Root F10: revision, entries and availability all come from the one
+        # snapshot this refresh committed - the authority is never read again.
+        payload = result.public_payload(
+            protocol_version=protocol_v2_schema.PROTOCOL_VERSION
+        )
         # A failed refresh keeps the last known good catalog untouched and
         # says so; it never empties or half-replaces the running catalog.
         return JSONResponse(payload, status_code=200 if result.ok else 422)
