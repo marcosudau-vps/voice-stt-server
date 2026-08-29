@@ -2,7 +2,7 @@
   "manifestVersion": 2,
   "catalogRevision": 2,
   "generatedBy": "tools/sync_wakeword_assets.py",
-  "description": "Kanonische Wake-Word-Catalog-Authority des v2-Pfades. Der Abschnitt 'openwakeword_models' ist nur ein Legacyspiegel fuer den v1-Pfad bis AP-SRV-070.",
+  "description": "Kanonische Wake-Word-Catalog-Authority des v2-Pfades. AP-SRV-070 hat den früheren 'openwakeword_models'-Legacyspiegel für den v1-Pfad entfernt; dies ist die einzige Manifestquelle.",
   "pipeline": {
     "onnx": {
       "melspectrogram": {
@@ -480,69 +480,5 @@
         }
       }
     }
-  ],
-  "openwakeword_models": {
-    "path": ".",
-    "default_model": "alexa",
-    "pipeline_models": {
-      "melspectrogram_onnx": "melspectrogram.onnx",
-      "embedding_model_onnx": "embedding_model.onnx",
-      "melspectrogram_tflite": "melspectrogram.tflite",
-      "embedding_model_tflite": "embedding_model.tflite"
-    },
-    "onnx_models": {
-      "alexa": "alexa.onnx",
-      "alice": "Alice.onnx",
-      "computer": "Computer.onnx",
-      "hey_alfred": "Hey_Alfred.onnx",
-      "hey_billy": "Hey_Billy.onnx",
-      "hey_bro": "Hey_Bro.onnx",
-      "hey_glados": "hey_glados.onnx",
-      "hey_hermes": "Hey_Hermes.onnx",
-      "hey_jarvis": "jarvis_v2.onnx",
-      "hey_lucy": "Hey_Lucy.onnx",
-      "hey_luna": "Hey_luna.onnx",
-      "hey_max": "Hey_Max.onnx",
-      "hey_mira": "Hey_Mira.onnx",
-      "hey_mycroft": "hey_mycroft.onnx",
-      "hey_nabu": "hey_nabu.onnx",
-      "hey_nexus": "Hey_Nexus.onnx",
-      "hey_nova": "Hey_Nova.onnx",
-      "hey_oracle": "hey_oracle.onnx",
-      "hey_rhasspy": "hey_rhasspy.onnx",
-      "hey_rocky": "Hey_Rocky.onnx",
-      "ivy": "ivy.onnx",
-      "pico": "Pico.onnx",
-      "stop": "Stop.onnx",
-      "timer": "timer.onnx",
-      "weather": "weather.onnx"
-    },
-    "tflite_models": {
-      "alexa": "alexa.tflite",
-      "alice": "Alice.tflite",
-      "computer": "Computer.tflite",
-      "hey_alfred": "Hey_Alfred.tflite",
-      "hey_billy": "Hey_Billy.tflite",
-      "hey_bro": "Hey_Bro.tflite",
-      "hey_glados": "hey_glados.tflite",
-      "hey_hermes": "Hey_Hermes.tflite",
-      "hey_jarvis": "jarvis_v2.tflite",
-      "hey_lucy": "Hey_Lucy.tflite",
-      "hey_luna": "Hey_luna.tflite",
-      "hey_max": "Hey_Max.tflite",
-      "hey_mira": "Hey_Mira.tflite",
-      "hey_mycroft": "hey_mycroft.tflite",
-      "hey_nabu": "hey_nabu.tflite",
-      "hey_nexus": "Hey_Nexus.tflite",
-      "hey_nova": "Hey_Nova.tflite",
-      "hey_oracle": "hey_oracle.tflite",
-      "hey_rhasspy": "hey_rhasspy.tflite",
-      "hey_rocky": "Hey_Rocky.tflite",
-      "ivy": "ivy.tflite",
-      "pico": "Pico.tflite",
-      "stop": "Stop.tflite",
-      "timer": "timer.tflite",
-      "weather": "weather.tflite"
-    }
-  }
+  ]
 }

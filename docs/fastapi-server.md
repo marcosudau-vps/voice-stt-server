@@ -209,14 +209,15 @@ Faster-Whisper models can therefore be assigned independently to either the
 final or realtime lane. Server-side CPU memory policy remains the only optional
 capacity guard.
 
-`GET /api/wake-word` returns `availableModels.openwakeword`. Discovery first
-uses `models.json` from `VOICESTT_OPENWAKEWORD_MODEL_ROOT`, a configured model
-directory, or a directly configured manifest path. Logical IDs map to local
-ONNX/TFLite classifier files, `default_model` defines the fallback, and
-`pipeline_models` maps embedding and mel-spectrogram assets. Only files that
-exist are exposed; helper models such as embedding, mel-spectrogram, and Silero
-VAD are excluded from the selectable catalog. The current server admin and
-session contracts do not expose Porcupine.
+`GET /api/wake-word` returns `availableModels.openwakeword`, resolved against
+the one canonical wake-word manifest (`VoiceSTT/assets/wakeword_models/models.json`,
+overridable with `VOICESTT_WAKEWORD_ASSET_ROOT`) - the same catalog the v2
+`/api/v2/wake-words` surface uses. Logical IDs, display names and aliases map
+to local ONNX/TFLite classifier files; there is no default model to fall back
+to, so an unresolved id is rejected rather than substituted. Only files that
+pass the real loadability probe are exposed; helper models such as embedding,
+mel-spectrogram, and Silero VAD are excluded from the selectable catalog. The
+current server admin and session contracts do not expose Porcupine.
 
 ### Performance measurements
 

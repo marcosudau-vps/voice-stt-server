@@ -527,62 +527,35 @@ and intended. What must never exist is a second, independent activation
 pipeline: no client wake state machine next to the server one, and no competing
 second trigger lifecycle.
 
-## Legacy path (until AP-SRV-070)
+## Legacy path
 
 Everything below describes the v1/library path. It stays functional but is no
-longer the v2 catalog authority, and it is retired in AP-SRV-070.
+longer the v2 catalog authority. AP-SRV-070/W1B retired the parallel
+`openwakeword_catalog` scanner and its own `models.json` shape (search root,
+directory scan, `default_model`); the legacy path now resolves ids against the
+same one canonical manifest as the v2 path.
 
 ## Local model catalog (legacy)
 
-VoiceSTT never downloads Wake Word assets at runtime. It first looks for a
-`models.json` beside the configured model directory. Set the search root with:
+VoiceSTT never downloads Wake Word assets at runtime. It reads the same
+bundled `models.json` the v2 catalog uses (see
+["`models.json` is the authority"](#models-json-is-the-authority) above).
+Override the search root with:
 
 ```bash
-VOICESTT_OPENWAKEWORD_MODEL_ROOT=/models/openwakeword
+VOICESTT_WAKEWORD_ASSET_ROOT=/models/wakeword
 ```
 
-Relevant manifest structure:
+Wake Word ids are resolved against the manifest's canonical `id`, `displayName`
+and `aliases` (case-insensitive). There is no directory scan and no implicit
+default: an id that does not resolve, or an empty `wake_words` value with no
+explicit classifier path, raises rather than guessing a model.
 
-```json
-{
-  "openwakeword_models": {
-    "path": "/models/openwakeword/all_models",
-    "default_model": "alexa",
-    "pipeline_models": {
-      "embedding_model_onnx": "embedding_model.onnx",
-      "melspectrogram_onnx": "melspectrogram.onnx",
-      "embedding_model_tflite": "embedding_model.tflite",
-      "melspectrogram_tflite": "melspectrogram.tflite"
-    },
-    "onnx_models": {
-      "alexa": "alexa.onnx",
-      "hey_jarvis": "jarvis_v2.onnx"
-    },
-    "tflite_models": {
-      "alexa": "alexa.tflite"
-    }
-  }
-}
-```
-
-The dictionary keys are stable logical Wake Word IDs; the values are local
-filenames. Only entries whose files exist are exposed. Pipeline models and
-support files such as `silero_vad` are not selectable Wake Words.
-
-The manifest `path` is tried first. If that platform-specific path is not
-available in the running container or host, VoiceSTT also checks the configured
-model root and the manifest directory. This allows the same generated manifest
-to remain usable after a model directory is mounted at a different path.
-
-`openwakeword_model_paths` remains backward compatible. It may contain:
-
-- one or more comma-separated `.onnx` or `.tflite` classifier paths;
-- a directory containing models and optionally `models.json`;
-- the path to `models.json` itself.
-
-Without a usable manifest, VoiceSTT falls back to scanning local `.onnx` and
-`.tflite` files. A manifest is recommended because it provides exact logical
-IDs, the default model and pipeline-file mappings.
+`openwakeword_model_paths` remains backward compatible for one purpose only:
+one or more comma-separated `.onnx`/`.tflite` classifier files, used exactly as
+given. It no longer accepts a directory or a `models.json` path to scan - the
+shared pipeline (melspectrogram/embedding) models always come from the one
+canonical manifest, never from a directory next to the classifier.
 
 ## Python recorder (legacy)
 
@@ -594,7 +567,7 @@ from VoiceSTT import AudioToTextRecorder
 if __name__ == "__main__":
     recorder = AudioToTextRecorder(
         wakeword_backend="openwakeword",
-        openwakeword_model_paths="/models/openwakeword/alexa.onnx",
+        openwakeword_model_paths="/models/wakeword/alexa.onnx",
         wake_words="alexa",
         wake_words_sensitivity=0.35,
         wake_word_buffer_duration=1.0,
@@ -603,21 +576,17 @@ if __name__ == "__main__":
     recorder.shutdown()
 ```
 
-Using the manifest:
+Resolving by id against the manifest instead:
 
 ```python
 recorder = AudioToTextRecorder(
     wakeword_backend="openwakeword",
-    openwakeword_model_paths="/models/openwakeword/models.json",
     wake_words="hey_jarvis",
 )
 ```
 
-Model IDs are resolved case-insensitively. An empty `wake_words` value selects
-`default_model` when the manifest is used.
-
-Supported inference frameworks are `onnx` and `tflite`, selected with
-`openwakeword_inference_framework`.
+Model IDs are resolved case-insensitively. Supported inference frameworks are
+`onnx` and `tflite`, selected with `openwakeword_inference_framework`.
 
 ## FastAPI session-local configuration (legacy v1 endpoint)
 
@@ -684,7 +653,8 @@ Available callbacks:
 
 - Confirm that the manifest and every referenced classifier/pipeline file are
   readable inside the current host or container.
-- Check `default_model` against the logical keys, including spelling.
+- Check the requested id against the manifest's `id`, `displayName` and
+  `aliases`, including spelling; there is no default to fall back to.
 - Use the admin Wake Word catalog or WebSocket `sessionCapabilities` to see
   which models passed validation.
 - Raise sensitivity if false activations are common; lower it if detections are

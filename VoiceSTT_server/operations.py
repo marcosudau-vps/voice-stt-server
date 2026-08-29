@@ -9,12 +9,10 @@ from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from VoiceSTT.core.openwakeword_catalog import OpenWakeWordCatalog
 from VoiceSTT_server.event_logging import ChannelLogManager
 
 FASTER_MODEL_ROOT_ENV = "VOICESTT_FASTER_WHISPER_MODEL_ROOT"
 KROKO_MODEL_ROOT_ENV = "VOICESTT_KROKO_MODEL_ROOT"
-OPENWAKEWORD_MODEL_ROOT_ENV = "VOICESTT_OPENWAKEWORD_MODEL_ROOT"
 
 AUDIT_EVENT_MESSAGES_DE = {
     "authentication.failed": "Authentifizierung fehlgeschlagen",
@@ -242,35 +240,85 @@ class LocalModelRegistry:
 
 
 class WakeWordRegistry:
-    """Discover usable OpenWakeWord models without network access."""
+    """Legacy-shaped adapter over the one AP-SRV-060 wake-word catalog.
 
-    def __init__(self, openwakeword_root=None):
-        configured = openwakeword_root or os.getenv(OPENWAKEWORD_MODEL_ROOT_ENV, "")
-        self.openwakeword_root = Path(configured).expanduser() if configured else None
+    A thin, id-based lookup for the v1/legacy paths that still need a
+    ``(id, label, path, ...)`` shape instead of an admitted
+    :class:`~VoiceSTT.core.wakeword_catalog.WakeWordSelection`. It never scans
+    a directory and never picks an implicit default - both were properties of
+    the retired ``openwakeword_catalog`` scanner, not of the canonical
+    manifest. Resolution is always per requested id, so a caller can tell
+    exactly which of several requested ids failed.
+    """
 
-    def openwakeword_models(self, configured_paths=None, framework="onnx"):
-        return OpenWakeWordCatalog(
-            self.openwakeword_root,
-            configured_paths,
-        ).entries(framework, include_paths=True)
+    def __init__(self, catalog_authority=None):
+        self._catalog = catalog_authority
 
-    def resolve_openwakeword(self, model_ids, configured_paths=None, framework="onnx"):
-        return OpenWakeWordCatalog(
-            self.openwakeword_root,
-            configured_paths,
-        ).resolve(model_ids, framework)
+    def _snapshot(self):
+        return self._catalog.snapshot() if self._catalog is not None else None
 
-    def default_openwakeword(self, configured_paths=None, framework="onnx"):
-        catalog = OpenWakeWordCatalog(
-            self.openwakeword_root,
-            configured_paths,
-        )
-        resolved, missing = catalog.resolve(None, framework)
-        return (resolved[0] if resolved else None), missing
+    def openwakeword_models(self, framework="onnx"):
+        snapshot = self._snapshot()
+        if snapshot is None:
+            return []
+        preferred = str(framework or "onnx").strip().lower()
+        result = []
+        for entry in snapshot.entries:
+            if not entry.available:
+                continue
+            artifact = entry.artifact_for(preferred)
+            if artifact is None:
+                continue
+            result.append(self._entry_dict(entry, artifact, preferred))
+        return sorted(result, key=lambda item: item["label"].lower())
 
-    def catalog(self, configured_paths=None, framework="onnx"):
+    def resolve_openwakeword(self, model_ids, framework="onnx"):
+        if isinstance(model_ids, str):
+            requested = [
+                value.strip() for value in model_ids.split(",") if value.strip()
+            ]
+        else:
+            requested = [
+                str(value).strip() for value in (model_ids or ()) if str(value).strip()
+            ]
+        if not requested:
+            return [], []
+
+        snapshot = self._snapshot()
+        preferred = str(framework or "onnx").strip().lower()
+        resolved = []
+        missing = []
+        for token in requested:
+            canonical_id = snapshot.resolve(token) if snapshot else None
+            entry = snapshot.get(canonical_id) if canonical_id else None
+            artifact = (
+                entry.artifact_for(preferred)
+                if entry is not None and preferred in entry.healthy_backends
+                else None
+            )
+            if entry is None or not entry.available or artifact is None:
+                missing.append(token)
+            else:
+                resolved.append(self._entry_dict(entry, artifact, preferred))
+        return resolved, missing
+
+    def catalog(self, framework="onnx"):
+        return {"openwakeword": self.openwakeword_models(framework)}
+
+    @staticmethod
+    def _entry_dict(entry, artifact, preferred):
         return {
-            "openwakeword": self.openwakeword_models(configured_paths, framework),
+            "id": entry.id,
+            "label": entry.display_name,
+            "backend": "openwakeword",
+            "availableFormats": sorted(entry.declared_backends),
+            "default": False,
+            "source": "models.json",
+            "path": str(artifact.path),
+            "paths": {
+                backend: str(entry.artifacts[backend].path)
+                for backend in entry.declared_backends
+            },
         }
 
 

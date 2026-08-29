@@ -21,6 +21,7 @@ from VoiceSTT_server.event_logging import (
     apply_process_log_level,
 )
 from VoiceSTT.core.initialization import _configure_logger
+from .wake_catalog_support import build_authority
 
 
 def make_ctranslate_model(root, folder):
@@ -55,67 +56,79 @@ def test_local_model_registry_discovers_aliases_and_kroko(tmp_path):
     assert "small" in registry.aliases_for("faster-whisper", model.name)
 
 
-def test_wakeword_registry_discovers_models_and_ignores_support_files(tmp_path):
-    (tmp_path / "hey_jarvis_v0.1.onnx").write_bytes(b"wake")
-    (tmp_path / "hey_jarvis_v0.1.tflite").write_bytes(b"wake")
-    (tmp_path / "embedding_model.onnx").write_bytes(b"support")
-    (tmp_path / "melspectrogram.onnx").write_bytes(b"support")
-    registry = WakeWordRegistry(tmp_path)
+def test_wakeword_registry_lists_available_canonical_models(tmp_path):
+    authority = build_authority(
+        tmp_path,
+        entries=[("hey_jarvis", "Hey Jarvis", ("jarvis",), "hey_jarvis.onnx")],
+        backends=("onnx", "tflite"),
+    )
+    registry = WakeWordRegistry(authority)
 
     models = registry.openwakeword_models(framework="onnx")
 
     assert len(models) == 1
     assert models[0]["id"] == "hey_jarvis"
     assert models[0]["label"] == "Hey Jarvis"
-    assert models[0]["path"].endswith("hey_jarvis_v0.1.onnx")
+    assert models[0]["path"].endswith("hey_jarvis.onnx")
     assert models[0]["availableFormats"] == ["onnx", "tflite"]
 
 
-def test_wakeword_registry_prefers_models_json_and_resolves_default(tmp_path):
-    model_root = tmp_path / "all_models"
-    model_root.mkdir()
-    for filename in (
-        "alexa.onnx",
-        "jarvis_v2.onnx",
-        "embedding.custom.onnx",
-        "melspectrogram.custom.onnx",
-        "silero_vad.onnx",
-    ):
-        (model_root / filename).write_bytes(b"model")
-    (tmp_path / "models.json").write_text(json.dumps({
-        "openwakeword_models": {
-            "path": str(model_root),
-            "default_model": "alexa",
-            "pipeline_models": {
-                "embedding_model_onnx": "embedding.custom.onnx",
-                "melspectrogram_onnx": "melspectrogram.custom.onnx",
-            },
-            "onnx_models": {
-                "alexa": "alexa.onnx",
-                "hey_jarvis": "jarvis_v2.onnx",
-                "missing": "missing.onnx",
-                "silero_vad": "silero_vad.onnx",
-            },
-            "tflite_models": {},
-        }
-    }), encoding="utf-8")
+def test_wakeword_registry_resolves_canonical_ids_case_and_alias_tolerant(tmp_path):
+    authority = build_authority(
+        tmp_path,
+        entries=[
+            ("alexa", "Alexa", (), "alexa.onnx"),
+            ("hey_jarvis", "Hey Jarvis", ("jarvis",), "jarvis_v2.onnx"),
+        ],
+    )
+    registry = WakeWordRegistry(authority)
 
-    registry = WakeWordRegistry(tmp_path)
     models = registry.openwakeword_models(framework="onnx")
-    default, missing = registry.default_openwakeword(framework="onnx")
-    selected, unavailable = registry.resolve_openwakeword(
+    selected, missing = registry.resolve_openwakeword(
         ["HEY_JARVIS"],
         framework="onnx",
     )
 
     assert [model["id"] for model in models] == ["alexa", "hey_jarvis"]
-    assert models[0]["default"] is True
+    assert all(model["default"] is False for model in models)
     assert all(model["source"] == "models.json" for model in models)
-    assert default["id"] == "alexa"
     assert missing == []
     assert selected[0]["id"] == "hey_jarvis"
-    assert selected[0]["path"] == str((model_root / "jarvis_v2.onnx").resolve())
-    assert unavailable == []
+    assert selected[0]["path"].endswith("jarvis_v2.onnx")
+
+
+def test_wakeword_registry_resolve_without_ids_returns_nothing(tmp_path):
+    """AP-SRV-070: the retired legacy catalog's implicit 'default_model' is
+    gone; resolving with no explicit ids never guesses one (no silent
+    fallback, matching the v2 path's selected-only admission)."""
+    authority = build_authority(tmp_path)
+    registry = WakeWordRegistry(authority)
+
+    resolved, missing = registry.resolve_openwakeword(None, framework="onnx")
+
+    assert resolved == []
+    assert missing == []
+
+
+def test_wakeword_registry_reports_unknown_ids_as_missing(tmp_path):
+    authority = build_authority(tmp_path)
+    registry = WakeWordRegistry(authority)
+
+    resolved, missing = registry.resolve_openwakeword(
+        ["alexa", "not_a_real_wake_word"],
+        framework="onnx",
+    )
+
+    assert [entry["id"] for entry in resolved] == ["alexa"]
+    assert missing == ["not_a_real_wake_word"]
+
+
+def test_wakeword_registry_without_authority_stays_empty():
+    registry = WakeWordRegistry()
+
+    assert registry.openwakeword_models() == []
+    assert registry.resolve_openwakeword(["alexa"]) == ([], ["alexa"])
+    assert registry.catalog() == {"openwakeword": []}
 
 
 @dataclass

@@ -1,11 +1,9 @@
 import json
-import os
 import queue
 import threading
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
 
 import numpy as np
 
@@ -37,6 +35,7 @@ from api_fastapi_server.server import (
     settings_from_args,
 )
 from VoiceSTT_server.operations import WakeWordRegistry
+from .wake_catalog_support import build_authority
 
 
 class QueryParamsStub:
@@ -50,36 +49,15 @@ class QueryParamsStub:
 
 class FastAPIServerProtocolTests(unittest.TestCase):
     def _wakeword_registry(self, root):
-        models = root / "all_models"
-        models.mkdir()
-        for filename in (
-            "alexa.onnx",
-            "alexa.tflite",
-            "jarvis_v2.onnx",
-            "embedding_model.onnx",
-            "melspectrogram.onnx",
-            "embedding_model.tflite",
-            "melspectrogram.tflite",
-        ):
-            (models / filename).write_bytes(b"model")
-        (root / "models.json").write_text(json.dumps({
-            "openwakeword_models": {
-                "path": str(models),
-                "default_model": "alexa",
-                "pipeline_models": {
-                    "embedding_model_onnx": "embedding_model.onnx",
-                    "melspectrogram_onnx": "melspectrogram.onnx",
-                    "embedding_model_tflite": "embedding_model.tflite",
-                    "melspectrogram_tflite": "melspectrogram.tflite",
-                },
-                "onnx_models": {
-                    "alexa": "alexa.onnx",
-                    "hey_jarvis": "jarvis_v2.onnx",
-                },
-                "tflite_models": {"alexa": "alexa.tflite"},
-            }
-        }), encoding="utf-8")
-        return WakeWordRegistry(root)
+        authority = build_authority(
+            root,
+            entries=[
+                ("alexa", "Alexa", (), "alexa.onnx"),
+                ("hey_jarvis", "Hey Jarvis", ("jarvis",), "jarvis_v2.onnx"),
+            ],
+            backends=("onnx", "tflite"),
+        )
+        return WakeWordRegistry(authority)
 
     def test_audio_packet_round_trip(self):
         metadata = {
@@ -389,12 +367,13 @@ settings:
         self.assertEqual(base.wake_words, "hey_jarvis")
         self.assertFalse(contract.effective_enabled)
 
-    def test_session_wake_word_true_resolves_manifest_default_and_tuning_fallback(self):
+    def test_session_wake_word_true_resolves_named_model_and_tuning_fallback(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
             registry = self._wakeword_registry(Path(temp_dir))
             request = parse_session_wake_word_query(QueryParamsStub({
                 "wakeWordEnabled": "true",
                 "wakeWordBackend": "openwakeword",
+                "wakeWords": "alexa",
                 "wakeWordSensitivity": "invalid",
                 "wakeWordTimeout": "12.5",
             }))
@@ -419,11 +398,29 @@ settings:
         self.assertEqual(contract.fallbacks[0]["field"], "wakeWordSensitivity")
         self.assertTrue(contract.warnings)
 
+    def test_session_wake_word_true_without_words_or_baseline_is_rejected(self):
+        """AP-SRV-070/W1B: the retired catalog's implicit manifest default is
+        gone. Enabling wake words with nothing to select from - no baseline,
+        no requested id - is a hard rejection, not a guessed model."""
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
+            registry = self._wakeword_registry(Path(temp_dir))
+            request = parse_session_wake_word_query(QueryParamsStub({
+                "wakeWordEnabled": "true",
+            }))
+            with self.assertRaises(SessionConfigurationError) as ctx:
+                resolve_session_wake_word_config(
+                    ServerSettings(),
+                    request,
+                    registry,
+                )
+        self.assertEqual(ctx.exception.code, "wake_word_default_unavailable")
+
     def test_session_wake_word_true_can_select_tflite_framework(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
             registry = self._wakeword_registry(Path(temp_dir))
             request = parse_session_wake_word_query(QueryParamsStub({
                 "wakeWordEnabled": "true",
+                "wakeWords": "alexa",
                 "wakeWordInferenceFramework": "tflite",
             }))
             resolved, contract = resolve_session_wake_word_config(
@@ -441,23 +438,17 @@ settings:
         )
         self.assertEqual(contract.source, "session")
 
-    def test_service_populates_manifest_default_for_openwakeword_baseline(self):
-        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
-            root = Path(temp_dir)
-            self._wakeword_registry(root)
-            with patch.dict(
-                os.environ,
-                {"VOICESTT_OPENWAKEWORD_MODEL_ROOT": str(root)},
-            ):
-                service = VoiceSTTService(
-                    ServerSettings(wakeword_backend="openwakeword"),
-                    ConnectionManager(),
-                )
-
-        self.assertEqual(service.settings.wake_words, "alexa")
-        self.assertTrue(
-            service.settings.openwakeword_model_paths.endswith("alexa.onnx")
+    def test_service_does_not_guess_a_default_wakeword_at_startup(self):
+        """AP-SRV-070/W1B: no implicit manifest default remains. An
+        unconfigured ``openwakeword`` backend stays without wake words at
+        startup instead of silently picking one."""
+        service = VoiceSTTService(
+            ServerSettings(wakeword_backend="openwakeword"),
+            ConnectionManager(),
         )
+
+        self.assertEqual(service.settings.wake_words, "")
+        self.assertIsNone(service.settings.openwakeword_model_paths)
 
     def test_session_wake_word_true_resolves_named_manifest_models(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
@@ -478,7 +469,7 @@ settings:
             )
             self.assertEqual(contract.source, "session")
 
-            fallback_settings, fallback_contract = (
+            with self.assertRaises(SessionConfigurationError) as ctx:
                 resolve_session_wake_word_config(
                     ServerSettings(),
                     SessionWakeWordRequest(
@@ -487,11 +478,10 @@ settings:
                     ),
                     registry,
                 )
-            )
-            self.assertEqual(fallback_settings.wake_words, "alexa")
+            self.assertEqual(ctx.exception.code, "wake_word_fallback_unavailable")
             self.assertEqual(
-                fallback_contract.fallbacks[0]["source"],
-                "model_catalog",
+                ctx.exception.details.get("unavailableWakeWords"),
+                ["missing"],
             )
 
     def test_runtime_settings_update_distinguishes_safe_and_startup_only_fields(self):

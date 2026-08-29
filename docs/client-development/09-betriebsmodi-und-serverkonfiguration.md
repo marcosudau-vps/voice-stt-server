@@ -169,12 +169,14 @@ Die Auflösung folgt diesen Regeln:
 
 1. Ohne weitere Angaben wird ein bereits vollständiges serverweites
    OpenWakeWord-Profil übernommen.
-2. Ist keine verwendbare Baseline aktiv, wird `default_model` aus
-   `models.json` verwendet.
-3. Bei `wakeWordBackend=openwakeword` ohne `wakeWords` wird ebenfalls das
-   Manifest-Standardmodell verwendet.
+2. Ist keine verwendbare Baseline aktiv und werden keine `wakeWords`
+   angegeben, lehnt der Server ab (`wake_word_default_unavailable`). Seit
+   AP-SRV-070/W1B gibt es kein Manifest-Standardmodell mehr, auf das
+   zurückgefallen werden könnte.
+3. `wakeWordBackend=openwakeword` ohne `wakeWords` folgt derselben Regel 2.
 4. Angegebene Modell-IDs werden ohne Beachtung der Groß-/Kleinschreibung gegen
-   den serverseitigen Katalog aufgelöst.
+   den einen kanonischen Wake-Word-Katalog aufgelöst (dieselbe Manifestquelle
+   wie der v2-Pfad).
 5. Gültige Tuningwerte überschreiben die entsprechenden Baselinewerte.
 
 Ungültige optionale Werte erzeugen keinen Abbruch, solange ein vollständiges
@@ -182,7 +184,7 @@ Fallback-Profil gebildet werden kann:
 
 - ungültiges Backend: OpenWakeWord bzw. Baseline;
 - unbekanntes Wake Word: aktives OpenWakeWord-Baselineprofil, sonst
-  Manifest-Standardmodell;
+  Ablehnung (kein Manifest-Standardmodell mehr);
 - ungültiger Tuningwert: entsprechender Wert der Serverbaseline.
 
 Jeder Fallback wird in `sessionConfig.fallbacks` und
@@ -244,49 +246,46 @@ URL, sondern der Handshake ist die maßgebliche Bestätigung.
 
 ## `models.json` als Modellkatalog
 
-Beim Start beziehungsweise bei der Sessionauflösung sucht der Server zuerst
-nach `models.json`:
+Der v1-Pfad liest seit AP-SRV-070/W1B dieselbe eine kanonische
+`models.json` wie der v2-Katalog (`VoiceSTT/assets/wakeword_models/`, Override
+per `VOICESTT_WAKEWORD_ASSET_ROOT`). Es gibt keinen separaten Suchpfad, kein
+Verzeichnis-Scan-Fallback und keinen `openwakeword_model_paths`-Manifestpfad
+mehr; `openwakeword_model_paths` akzeptiert nur noch explizite, direkt
+verwendete `.onnx`/`.tflite`-Klassifikatordateien.
 
-- in `VOICESTT_OPENWAKEWORD_MODEL_ROOT`;
-- im Verzeichnis eines konfigurierten Modellpfads;
-- oder direkt unter einem als `openwakeword_model_paths` angegebenen
-  Manifestpfad.
-
-Eine Verzeichnisangabe ist ebenfalls zulässig. Fehlt ein verwendbares
-Manifest, bleibt als Kompatibilitätsfallback der lokale Scan nach `.onnx`- und
-`.tflite`-Dateien bestehen.
-
-Relevanter Ausschnitt:
+Relevanter Ausschnitt der kanonischen Struktur:
 
 ```json
 {
-  "openwakeword_models": {
-    "path": "/models/openwakeword/all_models",
-    "default_model": "alexa",
-    "pipeline_models": {
-      "embedding_model_onnx": "embedding_model.onnx",
-      "melspectrogram_onnx": "melspectrogram.onnx"
-    },
-    "onnx_models": {
-      "alexa": "alexa.onnx",
-      "hey_jarvis": "jarvis_v2.onnx"
-    },
-    "tflite_models": {
-      "alexa": "alexa.tflite"
+  "pipeline": {
+    "onnx": {
+      "melspectrogram": {"file": "melspectrogram.onnx", "sha256": "…", "bytes": 0},
+      "embedding": {"file": "embedding_model.onnx", "sha256": "…", "bytes": 0}
     }
-  }
+  },
+  "wakeWords": [
+    {
+      "id": "alexa",
+      "displayName": "Alexa",
+      "aliases": [],
+      "artifactVersion": "1",
+      "artifacts": {
+        "onnx": {"file": "alexa.onnx", "sha256": "…", "bytes": 0}
+      }
+    }
+  ]
 }
 ```
 
-Nur Einträge, deren Dateien tatsächlich existieren, werden veröffentlicht.
-Pipeline- und Supportmodelle wie `embedding_model`, `melspectrogram` und
-`silero_vad` erscheinen nicht als auswählbare Wake Words. Relative Pfade
-werden relativ zum Manifest aufgelöst; ein im Manifest deklarierter, aber in
-der aktuellen Umgebung nicht erreichbarer Basispfad fällt auf den
-konfigurierten Modellordner beziehungsweise den Manifestordner zurück.
+Modell-IDs werden ausschließlich gegen `id`, `displayName` und `aliases`
+aufgelöst, case-insensitiv. Nur Einträge, deren Artefakte die reale
+Ladbarkeitsprüfung bestehen, gelten als verfügbar; Pipeline- und
+Supportmodelle wie `embedding_model`, `melspectrogram` und `silero_vad`
+erscheinen nicht als auswählbare Wake Words.
 
-`default_model` muss auf eine vorhandene logische ID zeigen. Das Manifest wird
-zur Laufzeit ausschließlich gelesen; VoiceSTT lädt keine Modelle aus dem Netz.
+Es gibt kein `default_model` mehr. Eine Aktivierung ohne auflösbares Wake
+Word wird abgelehnt statt ein Modell zu erraten. Das Manifest wird zur
+Laufzeit ausschließlich gelesen; VoiceSTT lädt keine Modelle aus dem Netz.
 
 ## Serverbaseline und Admin-API
 

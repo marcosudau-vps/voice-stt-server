@@ -842,7 +842,6 @@ def resolve_session_wake_word_config(base_settings, request, registry):
         )
         resolved, missing = registry.resolve_openwakeword(
             requested_model_ids,
-            settings.openwakeword_model_paths,
             settings.openwakeword_inference_framework,
         )
         if requested_words and missing:
@@ -860,26 +859,6 @@ def resolve_session_wake_word_config(base_settings, request, registry):
                     base_settings.wake_words
                 )
                 fallback_source = "server"
-            else:
-                default_resolved, default_missing = (
-                    registry.resolve_openwakeword(
-                        None,
-                        settings.openwakeword_model_paths,
-                        settings.openwakeword_inference_framework,
-                    )
-                )
-                if default_resolved and not default_missing:
-                    settings.wakeword_backend = "openwakeword"
-                    settings.wake_words = ",".join(
-                        entry["id"] for entry in default_resolved
-                    )
-                    settings.openwakeword_model_paths = ",".join(
-                        entry["path"] for entry in default_resolved
-                    )
-                    inherited_words = tuple(
-                        entry["id"] for entry in default_resolved
-                    )
-                    fallback_source = "model_catalog"
             if fallback_source is None:
                 raise SessionConfigurationError(
                     "wake_word_fallback_unavailable",
@@ -6043,8 +6022,6 @@ class VoiceSTTService:
         self._last_model_activity_monotonic = time.monotonic()
         self._last_model_activity_at = datetime.datetime.now(datetime.timezone.utc)
         self.model_registry = LocalModelRegistry()
-        self.wakeword_registry = WakeWordRegistry()
-        self._apply_openwakeword_manifest_default()
         self.events = StructuredEventHub(settings)
         self.audit = AuditLogManager(settings, self.events)
         self.performance = PerformanceLogManager(settings, self.events)
@@ -6068,6 +6045,7 @@ class VoiceSTTService:
             global_disabled_ids=self._configured_global_disabled_wake_words(),
             on_catalog_changed=self._on_wake_word_catalog_changed,
         )
+        self.wakeword_registry = WakeWordRegistry(self.wakeword_catalog)
         self._log_access_tokens = {}
         self._log_access_lock = threading.RLock()
         self.ready_thread = None
@@ -6156,33 +6134,6 @@ class VoiceSTTService:
         """Re-projects the current server disable list onto the catalog."""
         return self.wakeword_catalog.set_global_disabled(
             self._configured_global_disabled_wake_words()
-        )
-
-    def _apply_openwakeword_manifest_default(self):
-        backend = (
-            str(self.settings.wakeword_backend or "")
-            .strip()
-            .lower()
-            .replace("-", "_")
-        )
-        if (
-            backend not in OPENWAKEWORD_SESSION_BACKENDS
-            or _split_wake_word_ids(self.settings.wake_words)
-        ):
-            return
-        resolved, missing = self.wakeword_registry.resolve_openwakeword(
-            None,
-            self.settings.openwakeword_model_paths,
-            self.settings.openwakeword_inference_framework,
-        )
-        if missing or not resolved:
-            return
-        self.settings.wakeword_backend = "openwakeword"
-        self.settings.wake_words = ",".join(
-            item["id"] for item in resolved
-        )
-        self.settings.openwakeword_model_paths = ",".join(
-            item["path"] for item in resolved
         )
 
     def _new_scheduler(self):
@@ -6602,12 +6553,10 @@ class VoiceSTTService:
 
     def session_capabilities(self):
         with self._settings_lock:
-            configured_paths = self.settings.openwakeword_model_paths
             inference_framework = (
                 self.settings.openwakeword_inference_framework
             )
         models = self.wakeword_registry.openwakeword_models(
-            configured_paths,
             inference_framework,
         )
         return {
@@ -7842,7 +7791,6 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         if auth_error is not None:
             return auth_error
         available_models = service.wakeword_registry.catalog(
-            settings.openwakeword_model_paths,
             settings.openwakeword_inference_framework,
         )
         return JSONResponse({
@@ -7876,13 +7824,8 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                     {"error": "backend muss openwakeword sein"},
                     status_code=400,
                 )
-            candidate_paths = payload.get(
-                "openwakewordModelPaths",
-                settings.openwakeword_model_paths,
-            )
             resolved, missing = service.wakeword_registry.resolve_openwakeword(
                 words or None,
-                candidate_paths,
                 settings.openwakeword_inference_framework,
             )
             if missing:

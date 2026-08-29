@@ -1673,8 +1673,16 @@ und keine zweite Kopie dieser Werte.
 
 ### 14.11 Grenze zu AP-SRV-070
 
-Die alten externen OpenWakeWord-Pfade (`VOICESTT_OPENWAKEWORD_MODEL_ROOT`,
-`openwakeword_model_paths`, die v1-Sessionauflösung mit Fallbackprofil und die
-pauschale `wake_word_buffer_duration`) bleiben als Legacykompatibilität
-bestehen, sind aber nicht mehr die v2-Catalog-Authority. Ihr Abbau gehört zu
-AP-SRV-070.
+AP-SRV-070/W1B hat den parallelen Legacy-Katalog (`openwakeword_catalog.py`,
+`VOICESTT_OPENWAKEWORD_MODEL_ROOT`, das `openwakeword_models`-Manifestspiegel
+und den impliziten Manifest-Default) entfernt: `WakeWordRegistry` und der
+v1-Pfad in `wakeword.py` lösen Ids jetzt ausschließlich gegen die eine
+kanonische `WakeWordCatalogAuthority`/`models.json` auf (Override per
+`VOICESTT_WAKEWORD_ASSET_ROOT`), ohne Verzeichnis-Scan und ohne stillen
+Default. Eine v1-Session ohne auflösbares Wake Word bekommt einen expliziten
+Fehler statt eines geratenen Ersatzmodells.
+
+`openwakeword_model_paths` bleibt als expliziter Direktpfad-Override bestehen
+(ein Aufrufer kann weiterhin exakte Klassifikatordateien angeben), ebenso die
+pauschale `wake_word_buffer_duration`; beide sind nicht Teil dieses
+Migrationsschritts und bleiben Legacykompatibilität für einen späteren Block.

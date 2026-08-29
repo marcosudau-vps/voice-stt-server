@@ -1,7 +1,7 @@
 """
 Internal wake-word backend setup and runtime helpers.
 
-Two paths live here side by side until AP-SRV-070 retires the legacy one:
+Two paths live here side by side:
 
 * the **v2 path** takes a
   :class:`~VoiceSTT.core.wakeword_catalog.WakeWordSelection` from the one
@@ -9,9 +9,13 @@ Two paths live here side by side until AP-SRV-070 retires the legacy one:
   the shared pipeline models, and reports structured
   :class:`~VoiceSTT.core.wake_detection.RawWakeCandidate` objects carrying the
   canonical wake-word id;
-* the **legacy path** keeps resolving comma separated names through
-  :class:`~VoiceSTT.core.openwakeword_catalog.OpenWakeWordCatalog` and still
-  answers with the historical integer index.
+* the **legacy path** (no admitted selection, e.g. a standalone
+  :class:`~VoiceSTT.audio_recorder.AudioToTextRecorder` caller or an
+  unconfigured v1 session) resolves comma separated names or explicit file
+  paths against the very same AP-SRV-060 manifest
+  (:mod:`VoiceSTT.core.wakeword_catalog`) and still answers with the
+  historical integer index. AP-SRV-070 retired the parallel
+  ``openwakeword_catalog`` scanner; there is now exactly one manifest.
 
 The v2 path never derives an id from a file name: OpenWakeWord names a loaded
 model by its file stem, and the catalog owns the stem-to-canonical-id map.
@@ -24,10 +28,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .openwakeword_catalog import (
-    OPENWAKEWORD_MODEL_ROOT_ENV,
-    OpenWakeWordCatalog,
-)
+from . import wakeword_catalog as wakeword_catalog_module
 from .openwakeword_engine import OpenWakeWordEngine
 from .wake_detection import RawWakeCandidate
 
@@ -46,43 +47,85 @@ def _resolve_openwakeword_paths(
     wake_words,
     inference_framework="onnx",
 ):
-    """Resolve classifier and feature models without performing network I/O."""
+    """Resolve classifier and feature models without performing network I/O.
 
-    explicit = [Path(value.strip()).expanduser() for value in (model_paths or "").split(",") if value.strip()]
-    catalog = OpenWakeWordCatalog(configured_paths=explicit)
+    ``model_paths`` may name explicit classifier files directly (used
+    verbatim, no catalog lookup); otherwise ``wake_words`` are resolved as
+    canonical ids/aliases/display names against the one AP-SRV-060 manifest.
+    There is no directory scan and no implicit default: an id that does not
+    resolve, or an empty selection, raises. The shared pipeline (melspec /
+    embedding) models always come from that same manifest, never from a
+    directory next to the classifier - they are catalog-owned, not
+    per-classifier (see :class:`~VoiceSTT.core.wakeword_catalog.WakeWordPipeline`).
+    """
+
+    explicit = [
+        Path(value.strip()).expanduser()
+        for value in (model_paths or "").split(",")
+        if value.strip()
+    ]
     explicit_classifiers = [
         path for path in explicit
         if path.suffix.lower() in {".onnx", ".tflite"}
     ]
+
+    try:
+        snapshot = wakeword_catalog_module.load_snapshot()
+    except wakeword_catalog_module.WakeWordManifestError as exc:
+        if not explicit_classifiers:
+            raise FileNotFoundError(
+                "OpenWakeWord model IDs are missing in offline mode: "
+                + str(exc)
+            ) from exc
+        snapshot = None
+
     if explicit_classifiers:
         classifiers = explicit_classifiers
     else:
-        resolved, missing = catalog.resolve(
-            wake_words,
-            preferred_framework=inference_framework,
-        )
-        if missing:
+        requested = [
+            value.strip()
+            for value in (wake_words or "").split(",")
+            if value.strip()
+        ]
+        classifiers = []
+        missing = []
+        for token in requested:
+            canonical_id = snapshot.resolve(token)
+            entry = snapshot.get(canonical_id) if canonical_id else None
+            artifact = entry.artifact_for(inference_framework) if entry else None
+            if artifact is None:
+                missing.append(token)
+            else:
+                classifiers.append(artifact.path)
+        if missing or not classifiers:
             raise FileNotFoundError(
                 "OpenWakeWord model IDs are missing in offline mode: "
-                + ", ".join(missing)
+                + ", ".join(missing or requested or ["<none requested>"])
             )
-        classifiers = [Path(entry["path"]) for entry in resolved]
 
-    missing = [str(path) for path in classifiers if not path.is_file()]
-    if not classifiers or missing:
-        detail = ", ".join(missing) if missing else str(catalog.model_root or "<unset>")
+    missing_files = [str(path) for path in classifiers if not path.is_file()]
+    if not classifiers or missing_files:
+        detail = ", ".join(missing_files) if missing_files else "<unset>"
         raise FileNotFoundError(
-            "OpenWakeWord model files are missing in offline mode: " + detail + ". Set "
-            + OPENWAKEWORD_MODEL_ROOT_ENV + " or pass openwakeword_model_paths."
+            "OpenWakeWord model files are missing in offline mode: " + detail
+            + ". Set " + wakeword_catalog_module.WAKEWORD_ASSET_ROOT_ENV
+            + " or pass openwakeword_model_paths."
         )
-    feature_paths = catalog.pipeline_paths(
-        inference_framework,
-        classifier_path=classifiers[0],
-    )
+
+    if snapshot is None:
+        try:
+            snapshot = wakeword_catalog_module.load_snapshot()
+        except wakeword_catalog_module.WakeWordManifestError as exc:
+            raise FileNotFoundError(
+                "OpenWakeWord feature models are missing in offline mode: "
+                + str(exc)
+            ) from exc
+
+    feature_paths = snapshot.pipeline.loader_kwargs(inference_framework)
     if len(feature_paths) != 2:
         raise FileNotFoundError(
             "OpenWakeWord feature models are missing in offline mode for "
-            + str(Path(classifiers[0]).parent)
+            "backend " + str(inference_framework)
         )
     return [str(path.resolve()) for path in classifiers], feature_paths
 

@@ -1,5 +1,4 @@
 import unittest
-import json
 import os
 import tempfile
 from pathlib import Path
@@ -8,6 +7,8 @@ from unittest.mock import patch
 
 try:
     from VoiceSTT.core import wakeword
+    from VoiceSTT.core import wakeword_catalog as wakeword_catalog_module
+    from .wake_catalog_support import build_bundle
 except ModuleNotFoundError as exc:
     wakeword = None
     IMPORT_ERROR = exc
@@ -56,94 +57,75 @@ class WakeWordTests(unittest.TestCase):
 
     def test_openwakeword_offline_resolver_requires_local_assets(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
-            with patch.dict(os.environ, {wakeword.OPENWAKEWORD_MODEL_ROOT_ENV: temp_dir}):
+            with patch.dict(
+                os.environ,
+                {wakeword_catalog_module.WAKEWORD_ASSET_ROOT_ENV: temp_dir},
+            ):
                 with self.assertRaisesRegex(FileNotFoundError, "offline mode"):
                     wakeword._resolve_openwakeword_paths(None, "hey_jarvis")
 
     def test_openwakeword_resolver_returns_classifier_and_feature_paths(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
-            root = Path(temp_dir)
-            for name in ("hey_jarvis_v0.1.onnx", "melspectrogram.onnx", "embedding_model.onnx"):
-                (root / name).write_bytes(b"model")
-            with patch.dict(os.environ, {wakeword.OPENWAKEWORD_MODEL_ROOT_ENV: temp_dir}):
+            root = build_bundle(
+                Path(temp_dir),
+                [("hey_jarvis", "Hey Jarvis", ("jarvis",), "hey_jarvis.onnx")],
+            )
+            with patch.dict(
+                os.environ,
+                {wakeword_catalog_module.WAKEWORD_ASSET_ROOT_ENV: str(root)},
+            ):
                 models, features = wakeword._resolve_openwakeword_paths(None, "hey_jarvis")
-        self.assertEqual([Path(value).name for value in models], ["hey_jarvis_v0.1.onnx"])
+        self.assertEqual([Path(value).name for value in models], ["hey_jarvis.onnx"])
         self.assertEqual(Path(features["melspec_model_path"]).name, "melspectrogram.onnx")
         self.assertEqual(Path(features["embedding_model_path"]).name, "embedding_model.onnx")
 
-    def test_openwakeword_resolver_uses_models_json_pipeline_mapping(self):
+    def test_openwakeword_resolver_resolves_alias_and_rejects_unknown_id(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
-            root = Path(temp_dir)
-            models = root / "all_models"
-            models.mkdir()
-            for filename in (
-                "jarvis_v2.onnx",
-                "mel.custom.onnx",
-                "embedding.custom.onnx",
-            ):
-                (models / filename).write_bytes(b"model")
-            (root / "models.json").write_text(json.dumps({
-                "openwakeword_models": {
-                    "path": str(models),
-                    "default_model": "hey_jarvis",
-                    "pipeline_models": {
-                        "melspectrogram_onnx": "mel.custom.onnx",
-                        "embedding_model_onnx": "embedding.custom.onnx",
-                    },
-                    "onnx_models": {
-                        "hey_jarvis": "jarvis_v2.onnx",
-                    },
-                    "tflite_models": {},
-                }
-            }), encoding="utf-8")
+            root = build_bundle(
+                Path(temp_dir),
+                [("hey_jarvis", "Hey Jarvis", ("jarvis",), "jarvis_v2.onnx")],
+            )
             with patch.dict(
                 os.environ,
-                {wakeword.OPENWAKEWORD_MODEL_ROOT_ENV: str(root)},
+                {wakeword_catalog_module.WAKEWORD_ASSET_ROOT_ENV: str(root)},
             ):
                 classifiers, features = wakeword._resolve_openwakeword_paths(
                     None,
-                    "hey_jarvis",
+                    "JARVIS",
+                    "onnx",
+                )
+                with self.assertRaisesRegex(FileNotFoundError, "offline mode"):
+                    wakeword._resolve_openwakeword_paths(None, "not_a_real_wake_word")
+
+        self.assertEqual(Path(classifiers[0]).name, "jarvis_v2.onnx")
+        self.assertEqual(Path(features["melspec_model_path"]).name, "melspectrogram.onnx")
+        self.assertEqual(
+            Path(features["embedding_model_path"]).name,
+            "embedding_model.onnx",
+        )
+
+    def test_openwakeword_resolver_accepts_explicit_classifier_file(self):
+        """AP-SRV-070: an explicit classifier path bypasses catalog lookup
+        for the classifier itself, but the shared pipeline models still come
+        from the one canonical manifest (never a directory-sibling scan)."""
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
+            root = build_bundle(
+                Path(temp_dir),
+                [("alexa", "Alexa", (), "alexa.onnx")],
+            )
+            explicit_classifier = root / "custom_wake.onnx"
+            explicit_classifier.write_bytes(b"model")
+            with patch.dict(
+                os.environ,
+                {wakeword_catalog_module.WAKEWORD_ASSET_ROOT_ENV: str(root)},
+            ):
+                classifiers, features = wakeword._resolve_openwakeword_paths(
+                    str(explicit_classifier),
+                    "",
                     "onnx",
                 )
 
-        self.assertEqual(Path(classifiers[0]).name, "jarvis_v2.onnx")
-        self.assertEqual(Path(features["melspec_model_path"]).name, "mel.custom.onnx")
-        self.assertEqual(
-            Path(features["embedding_model_path"]).name,
-            "embedding.custom.onnx",
-        )
-
-    def test_openwakeword_resolver_accepts_models_json_as_configured_path(self):
-        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
-            root = Path(temp_dir)
-            models = root / "models"
-            models.mkdir()
-            for filename in (
-                "alexa.onnx",
-                "melspectrogram.onnx",
-                "embedding_model.onnx",
-            ):
-                (models / filename).write_bytes(b"model")
-            manifest = root / "models.json"
-            manifest.write_text(json.dumps({
-                "openwakeword_models": {
-                    "path": str(models),
-                    "default_model": "alexa",
-                    "pipeline_models": {
-                        "melspectrogram_onnx": "melspectrogram.onnx",
-                        "embedding_model_onnx": "embedding_model.onnx",
-                    },
-                    "onnx_models": {"alexa": "alexa.onnx"},
-                    "tflite_models": {},
-                }
-            }), encoding="utf-8")
-            classifiers, features = wakeword._resolve_openwakeword_paths(
-                str(manifest),
-                "",
-                "onnx",
-            )
-
-        self.assertEqual(Path(classifiers[0]).name, "alexa.onnx")
+        self.assertEqual(Path(classifiers[0]).name, "custom_wake.onnx")
         self.assertEqual(
             Path(features["melspec_model_path"]).name,
             "melspectrogram.onnx",

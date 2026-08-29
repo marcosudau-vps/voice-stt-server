@@ -313,10 +313,6 @@ def test_admin_api_requires_key_and_typed_endpoints_persist(tmp_path, monkeypatc
         }),
         encoding="utf-8",
     )
-    wake_root = tmp_path / "wakewords"
-    wake_root.mkdir()
-    (wake_root / "hey_jarvis_v0.1.onnx").write_bytes(b"wake")
-    monkeypatch.setenv("VOICESTT_OPENWAKEWORD_MODEL_ROOT", str(wake_root))
     settings = ServerSettings(
         model_warmup=False,
         admin_api_key="admin-secret",
@@ -345,7 +341,9 @@ def test_admin_api_requires_key_and_typed_endpoints_persist(tmp_path, monkeypatc
         })
         assert wake.status_code == 200
         wake_config = client.get("/api/wake-word", headers=headers).json()
-        assert wake_config["availableModels"]["openwakeword"][0]["id"] == "hey_jarvis"
+        assert "hey_jarvis" in {
+            item["id"] for item in wake_config["availableModels"]["openwakeword"]
+        }
         assert set(wake_config["availableModels"]) == {"openwakeword"}
         logging_response = client.put("/api/logging", headers=headers, json={
             "enabled": True, "stdout": False, "transcriptMode": "none",

@@ -138,26 +138,12 @@ def build_manifest(source: pathlib.Path):
         "catalogRevision": 1,
         "generatedBy": "tools/sync_wakeword_assets.py",
         "description": (
-            "Kanonische Wake-Word-Catalog-Authority des v2-Pfades. Der "
-            "Abschnitt 'openwakeword_models' ist nur ein Legacyspiegel fuer "
-            "den v1-Pfad bis AP-SRV-070."
+            "Kanonische Wake-Word-Catalog-Authority des v2-Pfades. "
+            "AP-SRV-070 hat den früheren 'openwakeword_models'-Legacyspiegel "
+            "für den v1-Pfad entfernt; dies ist die einzige Manifestquelle."
         ),
         "pipeline": {BUNDLED_FRAMEWORK: pipeline_files},
         "wakeWords": wake_words,
-        # Legacy mirror: the AP-SRV-050 era OpenWakeWordCatalog still reads
-        # this shape. It is explicitly NOT the v2 authority.
-        "openwakeword_models": {
-            "path": ".",
-            "default_model": canonical_id(section.get("default_model") or ""),
-            "pipeline_models": {
-                "melspectrogram_onnx": pipeline["melspectrogram_onnx"],
-                "embedding_model_onnx": pipeline["embedding_model_onnx"],
-            },
-            "onnx_models": {
-                entry["id"]: entry["artifacts"][BUNDLED_FRAMEWORK]["file"]
-                for entry in wake_words
-            },
-        },
     }
     return manifest, files
 
