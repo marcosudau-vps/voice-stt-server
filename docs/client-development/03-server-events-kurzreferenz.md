@@ -75,7 +75,8 @@ und `recovered: true`. Ein verspäteter Close mit alter Activation-Identität
 wird verworfen und beendet keine neuere Activation.
 | `activation_drained` | Hintergrundledger der Activation ist terminal | `activationId`, `activationSequence`, `state`, `reason`, `acceptedSegmentCount`, `terminalSegmentCount` |
 | `watchdog_warning` | Vorwarnung vor dem Daueraufnahme-Ablauf | `activationId`, `activationSequence`, `segmentId`, `segmentSequence`, `phase`, `timerRevision`, `remainingSeconds` |
-| `wakeword_detected` | Weckwort erkannt; Sprache wird erwartet | `wakeWord` |
+| `wakeword_detected` | Weckwort erkannt; Sprache wird erwartet | `wakeWord` (v1) bzw. `activationId`, `wakeWordId`, `score` (Peak des Trefferbereichs), `primarySource` als `wakeword.detected` (v2); genau ein logisches Event je Wake-Äußerung |
+| `wakeword.availability_changed` | jede sichtbare Änderung des Wake-Word-Katalogs, auch reine Metadaten (nur v2) | `catalogRevision`, `availableWakeWordIds` |
 | `wakeword_timeout` | Nach erkanntem Weckwort kam nicht rechtzeitig Sprache | `wakeWord` |
 | `wakeword_followup_started` | Folgeäußerung ohne erneutes Weckwort möglich | `durationSeconds` |
 | `wakeword_followup_timeout` | Follow-up-Fenster ist abgelaufen | keine weiteren Pflichtfelder |

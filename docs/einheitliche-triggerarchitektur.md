@@ -43,7 +43,8 @@ Folgepaketen zugeordnet:
   `effectiveSettings` und führt `settingsRevision` mit, lehnt einen
   `session_settings.patch` aber ausdrücklich ab
   (`REQUIRES_AP_SRV_050_BINDING`).
-- Wake-Word-Erkennung verwendet heute den letzten OpenWakeWord-Score gegen die
+- Wake-Word-Erkennung arbeitet seit AP-SRV-060 C3 auf zusammenhängenden
+  Trefferbereichen echter Prediction-Frames gegen die
   konfigurierte Sensitivität. Es existiert kein belastbarer Score-/Audio-
   Evidence-Harness für Cooldown, ausgewähltes Modell und die exakte
   Pre-Roll-Grenze; Katalog/Settings folgen in AP-SRV-050, Detection/Latch und
@@ -1135,11 +1136,11 @@ REQUIRES_AP_SRV_050_BINDING  -> gebunden durch AP-SRV-050 (Settings-Control-Plan
   und session_settings.patch laufen durch die eine Session-Settingsautorität
   (SessionSettingsState) und den SettingsPort als Adapter.
 
-REQUIRES_AP_SRV_060_BINDING
-  wakeWordCapabilities, Wake-Word-Admission und wakeword.detected.
-  Das Eventmodell trägt bereits wakeWordId, score und
-  primarySource = wake_word; es wird keine anonyme Boolean-Wake-Semantik
-  festgeschrieben.
+AP_SRV_060_BINDING           -> gebunden durch AP-SRV-060 (Wake-Word-Katalog,
+  Detection und Audiogrenze, siehe Abschnitt 14). wakeWordCapabilities,
+  Wake-Word-Admission und wakeword.detected laufen durch die eine
+  WakeWordCatalogAuthority und den WakeWordPort als Adapter. Das Eventmodell
+  trägt wakeWordId, score und primarySource = wake_word.
 ```
 
 ### 12.10 Koexistenz mit v1
@@ -1170,6 +1171,11 @@ Serververwaltete Schlüssel (Details siehe `2026-08-27_PLAN.md` im Archiv):
 |---|---|---|---|
 | die sechs `activation.*`-Timings | session | session | next_activation |
 | `wakeWord.sensitivity` | session | session | next_activation |
+| `wakeWord.minConsecutivePredictionFrames` | session | session | next_activation |
+| `wakeWord.detectorGain` | session | session | next_activation |
+| `wakeWord.noiseSuppressionEnabled` | session | session | next_session |
+| `wakeWord.vadThreshold` | session | session | next_session |
+| `wakeWord.inferenceBackend` | server | admin | next_session |
 | `wakeWord.selection` | session | session | next_session |
 | `runtimeSuppression.manual` / `.wakeWord` | session | session | live (Metadata) |
 | `wakeWord.globalDisabledIds` | server | admin | next_session |
@@ -1280,3 +1286,397 @@ Sichten getrennt:
   aus dem Controller (`trigger_suppression.set` bleibt eine Autorität).
 - Snapshot-Lesen selbst bumpst weder `stateVersion` noch `settingsRevision`
   und erzeugt kein `settings.changed`.
+
+
+## 14. Wake-Word-Katalog, Detection und Audiogrenze (AP-SRV-060)
+
+AP-SRV-060 macht Wake Words zu einer versionierten Build-Capability des
+Servers. Die fachliche Grundlage liegt im Frozen Contract (Abschnitt
+„Wake-Word-Contract“); dieser Abschnitt beschreibt den tatsächlichen
+Serverstand.
+
+### 14.1 Build-Assets und Manifestautorität
+
+Die Wake-Word-Modelle liegen im Paket unter
+`VoiceSTT/assets/wakeword_models/`; `setup.py` und `MANIFEST.in` liefern sie in
+Wheel und sdist aus, und die Laufzeit löst sie über `importlib.resources` auf.
+Es gibt auf keinem Pfad einen Runtime-Download. `VOICESTT_WAKEWORD_ASSET_ROOT`
+zeigt auf ein abweichend ausgeliefertes Bundle.
+
+`models.json` in diesem Verzeichnis ist die kanonische Catalog Authority des
+v2-Pfades. Sie leitet je Eintrag eindeutig ab:
+
+```text
+id  displayName  aliases[]  artifactVersion  artifact files/formats
+pipeline/feature models
+```
+
+Filesystem-Auto-Discovery ist ausschließlich Diagnose: eine Modelldatei, die
+nur zufällig im Assetordner liegt, wird als `unmanagedArtifacts` gemeldet und
+wird nie öffentliche Build-Capability.
+
+### 14.2 Zwei getrennte Admissionpfade
+
+Der v2-Wire trägt **ausschließlich kanonische IDs**.
+`requestedSession.wakeWordIds` ist kein Ort für Aliase oder Anzeigenamen: ein
+nicht kanonischer Wert lehnt die gesamte Session mit
+`reason = not_canonical` ab. Eine Oberfläche löst die Nutzereingabe gegen
+`GET /api/v2/wake-words` auf und sendet danach die `id`.
+
+Die tolerante Auflösung bleibt vollständig erhalten – aber **nur für
+menschliche Konfiguration** (`wakeWord.selection`, Configdateien, Admineingabe).
+`normalize_wake_word_token()` ist dafür die einzige Normalisierung im Produkt:
+Unicode-NFKC, außen trimmen, casefold, Trennzeichenläufe (`_`, `-`, `.`,
+Leerraum) zu genau einem `_`. Aufgelöst wird ausschließlich gegen kanonische
+IDs, Anzeigenamen und **explizite** Aliase.
+
+```text
+hey_jarvis   Hey Jarvis   HEY-JARVIS   hey.jarvis   hey__jarvis
+```
+
+Der Frozen Contract verbietet heuristisches Entfernen von „Hey“: `jarvis` löst
+nur deshalb auf `hey_jarvis` auf, weil das Manifest `jarvis` als expliziten
+Alias führt – und nur in der Konfiguration, nicht auf dem Wire. Nach
+Normalisierung müssen ID↔ID, Alias↔Alias und Alias↔ID kollisionsfrei sein;
+eine Kollision ist ein Katalogfehler und wird nie über Reihenfolge, Dateiname
+oder Best Match aufgelöst.
+
+### 14.3 Eine Catalog Authority
+
+`VoiceSTT/core/wakeword_catalog.py::WakeWordCatalogAuthority` existiert genau
+einmal serverweit und ist threadsicher. Sie besitzt den last-known-good
+Manifest-Snapshot, die öffentliche Catalog-Projektion, die interne
+Artifact-/Loader-Projektion, den Resolver, die Availability, die globale
+Disable-Projektion und `catalogRevision`.
+
+`catalogRevision` ist von `settingsRevision` getrennt und steigt ausschließlich
+bei einer *sichtbaren* Änderung der öffentlichen Projektion.
+`protocol_v2/ports.py::WakeWordPort` bleibt ein dünner Adapter ohne eigenen
+Speicher; die dort früher konstante Revision existiert nicht mehr.
+
+### 14.4 Öffentliche Catalog-API und Hot Refresh
+
+```text
+GET  /api/v2/wake-words           öffentlich lesbar (SET-13b)
+POST /api/v2/wake-words/refresh   X-Admin-Key, additive Adminaktion
+```
+
+Die öffentliche Payload trägt `protocolVersion`, `catalogRevision` und
+`wakeWords[]` mit `id`, `displayName`, `aliases`, `artifactVersion`,
+`available`, der Snapshotrevision des Eintrags (`catalogRevision`) und optional
+`unavailableReason` (`globally_disabled`, `artifact_missing`,
+`artifact_unloadable`, `pipeline_unavailable`). Weil jeder Eintrag seine eigene
+Revision trägt, kann ein Client Eintrag und Top-Level-Revision nie falsch
+paaren. Sie enthält niemals absolute/lokale Pfade, `source`, interne `paths`,
+Runtimeobjekte oder Secrets.
+
+Der Refresh nutzt dieselbe bestehende Admin-Guard wie die v2-Serversettings; es
+gibt keine zweite Authimplementierung. Er liest Manifest und Artefakte neu,
+baut einen vollständigen Candidate, validiert Schema, IDs, Aliase, Kollisionen
+und Dateien, projiziert die globale Disableliste **in derselben atomaren
+Operation** und wechselt nur bei Gesamterfolg. Bei einem Fehler bleibt der
+letzte gültige Katalog unverändert (HTTP 422).
+
+Das Ergebnis trägt den committeten Snapshot; die HTTP-Antwort wird
+ausschließlich daraus gerendert und liest die Autorität nie ein zweites Mal.
+Revision, Einträge und Availability einer Antwort stammen deshalb immer aus
+genau einem Zustand.
+
+Bei einer sichtbaren Änderung steigt `catalogRevision`, und **jede** solche
+Änderung – auch eine reine Metadatenänderung wie ein neuer Anzeigename, ein
+neuer Alias oder eine neue `artifactVersion` – gibt
+`wakeword.availability_changed` mit der neuen Revision und den aktuellen
+`availableWakeWordIds` über die bestehende AP-SRV-040-Eventautorität aus. Das
+Event ist die im Frozen Contract vorgesehene Catalog-Change-Seam und damit
+bewusst breiter als sein Name. Ein Refresh verändert keine bereits aufgebaute
+Session und keine dort initialisierten Modelle – er wirkt auf neue
+Sessionadmissions.
+
+### 14.5 Atomare Sessionadmission und selected-only
+
+Bei `trigger.wakeWord=true` muss die Auswahl nicht leer sein, jede ID eine
+kanonische bekannte ID, nicht global deaktiviert, das Artifact real ladbar und
+die Pipelineassets vorhanden sein. Ein einziger Problemfall lehnt die
+**gesamte** Auswahl ab: kein Partial Load, kein Default-Fallback, kein stilles
+Entfernen. `session.rejected.errors[]` nennt jede problematische ID
+maschinenlesbar mit `field`, `code = wake_word_unavailable`, additivem `reason`
+(`not_canonical`, `unknown`, `globally_disabled`, `artifact_missing`,
+`artifact_unloadable`, `pipeline_unavailable`) und `wakeWordId`.
+
+„Ladbar“ ist dabei keine Dateiexistenzprüfung: vor `hello.accepted` werden
+genau die ausgewählten Klassifikatoren und die gemeinsamen Pipelinemodelle mit
+der realen Inferenzruntime probeweise geöffnet. Eine vorhandene, aber korrupte
+Datei scheitert damit an der Admission statt später am Sessionaufbau. Die
+Probe ist je Artefaktidentität memoisiert und berührt ausschließlich die
+ausgewählten Modelle – selected-only bleibt vollständig erhalten. Vor
+erfolgreicher Admission bleiben Audio, Trigger und Wake Detection gesperrt; für
+eine abgelehnte Session entsteht weder `sessionId` noch Recorder.
+
+Nach der Admission erhält OpenWakeWord ausschließlich die ausgewählten
+Klassifikatoren; der v1-Namensauflösungspfad mit seinen Fallbacks wird dabei
+bewusst umgangen. Weitere im Build enthaltene Modelle kosten weder RAM noch
+Sessionstartup. Die beiden gemeinsamen Pipelineassets (Melspektrogramm,
+Embedding) gehören dem Katalog und werden je Sessionmodellinstanz einmal
+übergeben, wie die reale OpenWakeWord-API es verlangt.
+
+### 14.6 Detection: Prediction Frames, Trefferbereiche, Accepted
+
+Die Regel „1 Wake Word = 1 `wakeword.detected`" ist **Exactly-once Eventing**
+für eine zusammengehörige Wake-Äußerung. Sie bedeutet nicht, dass ein einzelner
+Scoreframe bereits ein Wake Word wäre. Frühere Formulierungen aus C1/C2 – „keine
+Mehrfach-Chunk-Regel", „keine 5/10 Treffer", „zusätzliche Multi-Chunk-Regel nur
+nach Evidence" – waren eine Fehlinterpretation des Intended Contract und sind
+zurückgezogen.
+
+Gearbeitet wird auf echten OpenWakeWord-**Prediction-Frames**, nicht auf
+beliebigen Recorder-/Transportchunks. OpenWakeWord schiebt je 1280 Samples
+(80 ms bei 16 kHz) genau einen Prediction-Frame weiter und wiederholt bei einem
+kürzeren Chunk den zwischengespeicherten Score. Liefert der Recorder 20 ms oder
+40 ms, sammelt die Engine mehrere Chunks, bis genau ein neuer Prediction-Frame
+entsteht – und daraus wird genau ein Schritt im `WakeHitTracker`. Ein intern
+wiederholter Score wird nie doppelt gezählt.
+
+Je ausgewähltem Wake Word wird unabhängig ein zusammenhängender Trefferbereich
+verfolgt:
+
+```text
+wakeWord.sensitivity                      Score-Schwelle
+wakeWord.minConsecutivePredictionFrames   Mindestanzahl aufeinanderfolgender
+                                          Frames >= Schwelle
+
+Score >= Schwelle             -> Trefferfolge waechst
+darunter vor der Mindestzahl  -> verwerfen, Zaehler zuruecksetzen,
+                                 kein Wake-Hit, kein Event
+Mindestzahl erreicht          -> QUALIFIZIERT (noch nicht die Entscheidung)
+erster Frame darunter danach  -> FINALISIERT an der Trailing Edge
+```
+
+Bei Schwelle `0.70` und Mindestzahl `10` ist die Folge
+`0.73 0.78 0.81 0.85 0.88 0.90 0.91 0.89 0.86 0.83 0.79 0.75 0.71 0.62`
+**ein** zusammenhängender Wake-Hit – nicht 13 Trigger und nicht 13 Events.
+
+**Multi-Wake-Word-Arbitration.** Primärregel ist First-come-first-served: der
+erste qualifizierte Wake-Hit, der finalisiert, gewinnt. Sind `Alexa` und
+`Alexander` beide qualifiziert und fällt der Alexa-Trefferbereich früher unter
+die Schwelle, gewinnt `Alexa`. Keine künstliche Nachwartezeit, kein „längeres
+Wort bevorzugen", kein nachträglicher Peak-Score-Wettbewerb. Nur für den
+theoretischen Gleichstand – mehrere qualifizierte Kandidaten finalisieren im
+selben Prediction-Frame – gilt deterministisch: (1) früher erreichte
+Qualifikation, (2) früherer Beginn der Trefferfolge, (3) lexikografisch
+kleinste kanonische Wake-Word-ID. Sobald der Gewinner feststeht, werden alle
+anderen Kandidaten dieser Entscheidung verworfen.
+
+```text
+Prediction Frame      canonicalWakeWordId -> Score                  (Diagnose)
+WakeHit               Trefferbereich: Start, Qualifikation,
+                      Finalisierung, Peak-Score, Frameanzahl        (Domain)
+AcceptedWakeDetection canonicalWakeWordId, score, activationId,
+                      audio boundary                                (Domain)
+```
+
+Rohscores bleiben Diagnose und werden nie Domain Event.
+
+### 14.6a Ein Versuch, eine Settingsrevision
+
+Ein logischer `WakeAttemptPolicy`-Snapshot enthält mindestens
+`settingsRevision`, `sensitivity`, `minConsecutivePredictionFrames`,
+`detectorGain`, `cooldownMs` und `preRollMs`. Er wird am Linearization Point
+eingefroren – dem ersten Prediction-Frame, der eine neue Trefferfolge beginnt,
+während keine andere läuft – und gilt ab dann unverändert für Scorevergleich,
+Trefferzähler, Qualifikation, Finalisierung, Pre-Roll, Cooldown-Entscheidung,
+`AcceptedWakeDetection` und die `effectiveSettings` der Activation. Ein Patch
+mitten in der Äußerung wirkt auf den **nächsten** Versuch; bricht die
+Trefferfolge vor der Qualifikation ab, wird der Versuch verworfen und der
+nächste nimmt die dann aktuelle Revision. Es gibt keine Mischrevision.
+
+### 14.7 Wake Admission und Latch
+
+Der Wake-Latch liegt nicht im `ActivationController`; AP-SRV-010/030 bleiben
+die quellenneutrale Activation Authority.
+
+```text
+Prediction Frames -> WakeHitTracker -> WakeDetectionEvaluator
+                  -> Wake Admission Coordinator
+                  -> ActivationController.activate(source="wake_word")
+```
+
+Nur bei erfolgreicher Activation-Admission wird die Detection fachlich
+accepted, der Latch gesetzt, die akzeptierte `activationId` übernommen und
+genau ein **logisches** `wakeword.detected` mit `activationId`, `wakeWordId`,
+`score` und `primarySource = wake_word` gemintet. Bei `activation_locked`, Suppression oder
+anderer Ablehnung entsteht kein Event, kein neuer fachlicher Latch, keine
+zweite Activation und kein Source-Merge. Ein Wake Word während einer offenen
+Activation hat keinerlei direkte Trigger-, Finish-, Cancel- oder
+Refresh-Wirkung.
+
+Der Latch wird am sicheren Eingabeschluss derselben Activation gelöst – nicht
+bei VAD-Ende, Segmentende, Start/Ende der Final-Inferenz oder Cooldownablauf.
+
+#### Commit-Grenze der Wake-Admission
+
+`ActivationController.activate` ist der Commitpunkt der Admission. Alles davor
+– Guards, Settingsauflösung, eine geworfene Ausnahme – bedeutet „keine
+Activation“ und wird als Refusal beantwortet. Alles danach – Anwendung der
+Entscheidung, Eventsammlung, Eventpublikation, Publikation von
+`wakeword.detected` – kann die Activation nicht mehr rückgängig machen und darf
+deshalb **nie** in ein Refusal umgedeutet werden; solche Fehler werden als
+Post-Commit-Fehler geführt, geloggt und die Admission wird vollständig
+abgeschlossen (Latch, akzeptierte Detection, Event). Wirft der Admissionpfad
+dennoch, fragt der Coordinator die Activation-Autorität, ob eine
+Wake-Activation offen ist, und behandelt den Fall entsprechend – eine
+committete Activation ohne Latch kann so nicht entstehen.
+
+### 14.8 FIND-011, Exactly-once Eventing und Cooldown
+
+Der Mehrfachsignalpfad hatte zwei Ursachen: der Recorder führte die Detection
+nach gesetztem `wakeword_detected` ohne Guard weiter aus, und eine Äußerung
+wurde nicht als ein zusammenhängender Trefferbereich behandelt. Beides ist
+behoben:
+
+- der Detector läuft nicht weiter, solange ein Treffer gelatcht ist;
+- der `WakeHitTracker` gruppiert alle Prediction-Frames einer Äußerung zu genau
+  einem logischen Wake-Hit – ganz ohne Timer.
+
+**Exactly-once Eventing.** Das logische Minten und die Zustellung sind zwei
+getrennte Schritte:
+
+| Schritt | Eigenschaft |
+|---|---|
+| logisches Mint | genau einmal je akzeptiertem Wake-Hit, rein in-memory, kann nicht am Netz scheitern, idempotent je `activationId` |
+| Transportzustellung | ausdrücklich fehlbar; erfolgreich, fehlgeschlagen oder über die bestehende Resync-/Replay-/Close-Semantik behandelt |
+
+Root verlangt keine unfehlbaren Netzwerke, sondern dass ein akzeptierter
+Wake-Hit genau ein logisches Domain/v2-Event erzeugt. Ein Transportfehler kann
+deshalb nie einen akzeptierten Hit ohne Event zurücklassen, und ein Retry
+erzeugt nie ein Duplikat. Es gibt keine zweite Eventautorität.
+
+**Cooldown.** `wakeWord.cooldownMs` ist der explizit konfigurierte
+Betreiber-Cooldown nach einem akzeptierten Wake-Hit. Er ist ausdrücklich nicht
+die interne Gruppierung desselben Trefferbereichs und bleibt bewusst auch nach
+dem sicheren Eingabeschluss wirksam – genau das hat ein Betreiber angefordert.
+Default ist `0`. Das implizite Entprellfenster aus C2 ist zurückgezogen; damit
+kann auch keine versteckte zweite Vordergrundsperre entstehen.
+
+### 14.9 Operationaler Nullpunkt, Audiogrenze und Pre-Roll
+
+Der operationale Audio-Nullpunkt ist definiert. Er ist **nicht** der erste
+Frame über der Schwelle, nicht der Frame, an dem die Mindestanzahl erreicht
+wurde, nicht das Receptive-Field-Ende und keine extern annotierte „wahre"
+phonemische Wake-Endgrenze. Er **ist** die **Trailing Edge** des gewonnenen
+qualifizierten Wake-Hits: der Übergang vom letzten Prediction-Frame
+`>= sensitivity` zum ersten darunter.
+
+```text
+operationalZeroPointSample  Trailing Edge des gewonnenen Wake-Hits
+historyStartSample          aeltestes noch vorgehaltenes Sample
+releaseSample               max(historyStartSample,
+                                operationalZeroPointSample - preRollMs)
+```
+
+Das ist eine bewusste serverseitige Produktdefinition und muss nicht erst durch
+externe Audioannotation erfunden werden. Jede Projektion sagt das über
+`boundaryBasis = operational_zero_point` und `boundaryDefined = true`.
+
+Bei `wakeWord.preRollMs = 0` beginnt das Transkript genau am Nullpunkt. Ein
+größerer Pre-Roll nimmt entsprechend viel gepuffertes Audio davor wieder mit und
+wird gegen die real vorhandene Audiohistorie geclampt (`preRollClamped`). Aus
+dem Classifier-Receptive-Field wird **keine** Obergrenze mehr abgeleitet.
+
+Offen bleibt die **empirische Kalibrierung**: Score-Schwelle, Mindestanzahl
+Prediction-Frames, Pre-Roll, Cooldown, Gain, VAD-/Noise-Suppression-Tuning und
+das False-Positive-/False-Negative-Verhalten. Das erfordert reale positive
+Wake-Word-Aufnahmen (`WW-18`/`WW-19`) und ist `EVIDENCE_BLOCKED`. Der Nullpunkt
+selbst gehört nicht zu dieser Lücke.
+
+Die pauschale `wake_word_buffer_duration`-Abschneidung existiert nur noch im
+v1-Recorderpfad und entfällt mit AP-SRV-070.
+
+### 14.9a Ein gemeinsames Inference Backend je Live-Engine
+
+Alle vorgesehenen Wake-Word-Modelle liegen als `.onnx` und `.tflite` vor. Eine
+Live-Engine hält genau eine Upstream-`openwakeword.Model`-Instanz und damit
+genau **ein** gemeinsames Backend für alle ausgewählten Wake Words; eine
+Mischung „Wake Word A -> ONNX, Wake Word B -> TFLite" gibt es nicht.
+
+| `wakeWord.inferenceBackend` | Windows | Linux |
+|---|---|---|
+| `auto` | ONNX bevorzugt, TFLite/LiteRT als gemeinsamer Fallback | TFLite/LiteRT bevorzugt, ONNX als gemeinsamer Fallback |
+| `onnx` | nur ONNX | nur ONNX |
+| `tflite` | nur TFLite/LiteRT | nur TFLite/LiteRT |
+
+Der Fallback gilt immer für die gesamte Auswahl. Bei expliziter Backendwahl gibt
+es keinen stillen Wechsel: ist das Backend für die volle Auswahl nicht gesund,
+wird die Session mit `reason = backend_unavailable` abgelehnt. Unter `auto` wird
+eine Auswahl ohne gemeinsames gesundes Backend mit
+`reason = no_common_backend` abgelehnt. Eine fehlende Runtime ist ein ungesundes
+Backend (`reason = runtime_unavailable`), niemals eine bestandene Probe;
+Runtimes sind Deploymentabhängigkeiten und werden nie im Requestpfad
+installiert.
+
+### 14.9b VAD-Architekturgate und Detector-Gain
+
+Es bleibt **ein** durchgehender serverautoritärer Lifecycle:
+
+```text
+ausserhalb Activation   Wake Detector, optional mit eigenem OpenWakeWord-VAD
+akzeptierter Wake-Hit   ActivationController uebernimmt
+innerhalb Activation    bestehende Speech-/Transkriptionslogik; die Wake-Quelle
+                        hat keine direkte Triggerwirkung
+```
+
+Ein wake-spezifischer, dem Detector vorgeschalteter VAD ist ausdrücklich
+zulässig und beabsichtigt. Was nicht entstehen darf, sind zwei parallele
+unabhängige Activation-Pipelines, eine Client-Wake-State-Machine neben der
+serverseitigen oder ein zweiter konkurrierender Trigger-Lifecycle.
+
+`wakeWord.detectorGain` wirkt ausschließlich auf einer PCM-Kopie für die
+Wake-Inferenz, mit sättigendem int16-Clipping:
+
+```text
+Original PCM
+├─ unveraendert -> Recording / STT / Audiohistorie
+└─ Kopie -> Gain -> OpenWakeWordEngine
+```
+
+### 14.10 Settings-Bindung
+
+AP-SRV-060 baut keine zweite Settingsregistry, Revision oder Persistenz. Es
+ergänzt in der AP-SRV-050-Registry:
+
+| Key | Scope | Auth | Bereich | Default | Apply | Kalibrierung |
+|---|---|---|---|---|---|---|
+| `wakeWord.minConsecutivePredictionFrames` | session | session | >= 1 | 1 | `next_activation` | `pending` (WW-18) |
+| `wakeWord.cooldownMs` | session | session | >= 0 | 0 | `next_activation` | `pending` (WW-18) |
+| `wakeWord.preRollMs` | session | session | >= 0 | 0 | `next_activation` | `pending` (WW-19) |
+| `wakeWord.detectorGain` | session | session | 0.0–3.0 | 1.0 | `next_activation` | `pending` (WW-18) |
+| `wakeWord.noiseSuppressionEnabled` | session | session | bool | `false` | `next_session` | – |
+| `wakeWord.vadThreshold` | session | session | 0.0–1.0 | 0.0 | `next_session` | `pending` (WW-18) |
+| `wakeWord.inferenceBackend` | server | admin | `auto`/`onnx`/`tflite` | `auto` | `next_session` | – |
+
+Die Kalibrierschlüssel werden ausdrücklich als **vorläufig** veröffentlicht: das
+Schema trägt `constraints.calibration = "pending"` und die abhängigen
+Traceability-IDs. `0`/`1`/`1.0` sind neutrale Defaults, keine Empfehlungen; die
+kalibrierten Betriebswerte erfordern reale positive Wake-Word-Aufnahmen, und
+`WW-18`/`WW-19` sind `EVIDENCE_BLOCKED`. Aus dem Receptive Field wird kein
+Bereich mehr abgeleitet: die reale Pre-Roll-Grenze ist die vorgehaltene
+Audiohistorie und wird zur Laufzeit geclampt.
+
+`wakeWord.inferenceBackend` nutzt die generische
+`constraints.allowedValues`-Prüfung der gemeinsamen Settingsvalidierung; es gibt
+keine wake-spezifische Sondervalidierung außerhalb der Registry.
+
+**Reale Runtimebindung.** Alle `next_activation`-Wake-Werte wirken wirklich: der
+Tracker friert am ersten Prediction-Frame einer neuen Trefferfolge eine
+unveränderliche `WakeAttemptPolicy` aus der einen AP-SRV-050-Settingsautorität
+ein und hält sie für den gesamten Trefferbereich. Ein laufender Versuch behält
+seine Werte, der nächste verwendet die gepatchten – Schwelle, Mindestframezahl,
+Gain, Cooldown und Pre-Roll gleichermaßen. Es gibt dafür keine zweite Registry
+und keine zweite Kopie dieser Werte.
+
+### 14.11 Grenze zu AP-SRV-070
+
+Die alten externen OpenWakeWord-Pfade (`VOICESTT_OPENWAKEWORD_MODEL_ROOT`,
+`openwakeword_model_paths`, die v1-Sessionauflösung mit Fallbackprofil und die
+pauschale `wake_word_buffer_duration`) bleiben als Legacykompatibilität
+bestehen, sind aber nicht mehr die v2-Catalog-Authority. Ihr Abbau gehört zu
+AP-SRV-070.

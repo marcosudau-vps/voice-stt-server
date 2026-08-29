@@ -401,6 +401,43 @@ Weckwort erkannt, Sprache wird innerhalb von `wake_word_timeout` erwartet.
 `wakeWord.state` ist `wake_word_detected_waiting_for_voice` und enthält
 `detectedAt`.
 
+Auf dem v2-Pfad (`/ws/v2`) heißt das Ereignis `wakeword.detected` und trägt
+`activationId`, `wakeWordId`, `score` und `primarySource = wake_word`. Es
+entsteht **genau einmal** je akzeptierter Wake-Äußerung und nur, wenn dieselbe
+Erkennung tatsächlich eine Activation geöffnet hat.
+
+„Genau einmal" ist Exactly-once Eventing für eine zusammengehörige Äußerung,
+nicht „ein Scoreframe = ein Event": eine gesprochene Wake-Äußerung erzeugt einen
+zusammenhängenden Bereich von Prediction-Frames, den der Server zu genau einem
+logischen Wake-Hit gruppiert. `score` ist der Peak-Score dieses Bereichs.
+
+Das logische Event wird vor jeder Zustellung genau einmal reserviert; die
+Zustellung selbst ist davon getrennt und darf über die bestehende Resync-/
+Replay-/Close-Semantik nachgeholt werden. Ein Retry erzeugt deshalb nie ein
+Duplikat.
+
+Eine abgelehnte Erkennung (`activation_locked`, Suppression, fehlende
+Audioverfügbarkeit) erzeugt kein Ereignis. Rohscores unterhalb der akzeptierten
+Detection sind Diagnose und erscheinen nie auf der Wire.
+
+#### `wakeword.availability_changed` (nur v2)
+
+Der Wake-Word-Katalog des Servers hat sich sichtbar geändert – etwa durch
+`POST /api/v2/wake-words/refresh` oder eine geänderte globale Disableliste. Das
+Ereignis trägt `catalogRevision` und `availableWakeWordIds`.
+
+Es signalisiert **jede** sichtbare Katalogänderung, nicht nur eine geänderte
+Verfügbarkeit: auch ein neuer Anzeigename, ein neuer Alias oder eine neue
+`artifactVersion` erhöhen `catalogRevision` und lösen dieses Ereignis aus. Der
+Name ist historisch enger als die Semantik; das Ereignis ist die im Frozen
+Contract vorgesehene Catalog-Change-Seam. Ein Client, der Katalogdetails
+anzeigt, lädt darauf `GET /api/v2/wake-words` neu.
+
+Es beschreibt den Serverkatalog, nicht den Vordergrundzustand der Session, und
+ändert weder Phase noch laufende Modelle. Eine laufende Session behält die
+Modelle, mit denen sie zugelassen wurde; die neue Availability gilt für neue
+Sessions.
+
 #### `wakeword_timeout`
 
 Nach Erkennung begann nicht rechtzeitig eine gültige Aufnahme. `wakeWord`

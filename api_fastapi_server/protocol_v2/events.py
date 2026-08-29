@@ -66,6 +66,7 @@ LEGACY_EVENT_TYPES = {
     "final_transcript_failed": schema.EVENT_TRANSCRIPTION_FAILED,
     "watchdog_warning": schema.EVENT_WATCHDOG_WARNING,
     "wakeword_detected": schema.EVENT_WAKEWORD_DETECTED,
+    "wakeword_availability_changed": schema.EVENT_WAKEWORD_AVAILABILITY_CHANGED,
     # ``activation_drained`` fans out by its terminal state, see below.
     "activation_drained": None,
 }
@@ -84,6 +85,10 @@ _PHASE_ANNOUNCING = frozenset({
     schema.EVENT_ACTIVATION_INPUT_CLOSED,
     schema.EVENT_ACTIVATION_PHASE_CHANGED,
 })
+
+#: Catalog-level events. They describe the server's wake-word build, not one
+#: session's foreground phase, so they must never derive a phase change.
+_CATALOG_LEVEL = frozenset({schema.EVENT_WAKEWORD_AVAILABILITY_CHANGED})
 
 
 class EventProjector:
@@ -127,7 +132,8 @@ class EventProjector:
         )
         envelope.update(fields)
         events.append(envelope)
-        self._observe_phase(event_type, context)
+        if event_type not in _CATALOG_LEVEL:
+            self._observe_phase(event_type, context)
         return events
 
     def observed_phase(self):
@@ -137,7 +143,7 @@ class EventProjector:
     # -- phase handling ------------------------------------------------------
 
     def _phase_change_event(self, event_type, payload, context):
-        if event_type in _PHASE_ANNOUNCING:
+        if event_type in _PHASE_ANNOUNCING or event_type in _CATALOG_LEVEL:
             return None
         phase = context.phase
         if phase not in schema.INPUT_PHASES:
@@ -321,13 +327,26 @@ class EventProjector:
         return fields
 
     def _build_wakeword_detected(self, payload, context):
-        # REQUIRES_AP_SRV_060_BINDING: the canonical id and score are supplied
-        # by the detection admission; the wire model is already the final one.
+        # AP-SRV-060: the canonical id, the score and the activation the very
+        # same hit opened come from the wake admission coordinator. Raw scores
+        # never reach this projector - only accepted detections do.
         return {
             "activationId": payload.get("activationId") or context.activation_id,
             "wakeWordId": payload.get("wakeWordId") or payload.get("wakeWord"),
             "score": payload.get("score"),
             "primarySource": schema.WAKE_WORD_SOURCE,
+        }
+
+    def _build_wakeword_availability_changed(self, payload, context):
+        # Catalog level, not activation level: it carries the catalog revision
+        # and the currently available ids, never an activation id.
+        revision = payload.get("catalogRevision")
+        available = payload.get("availableWakeWordIds")
+        if revision is None or not isinstance(available, (list, tuple)):
+            return None
+        return {
+            "catalogRevision": int(revision),
+            "availableWakeWordIds": list(available),
         }
 
     # -- activation terminals ------------------------------------------------
@@ -381,6 +400,9 @@ _BUILDERS = {
     ),
     schema.EVENT_WATCHDOG_WARNING: EventProjector._build_watchdog_warning,
     schema.EVENT_WAKEWORD_DETECTED: EventProjector._build_wakeword_detected,
+    schema.EVENT_WAKEWORD_AVAILABILITY_CHANGED: (
+        EventProjector._build_wakeword_availability_changed
+    ),
 }
 
 

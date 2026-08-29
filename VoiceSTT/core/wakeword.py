@@ -1,5 +1,20 @@
 """
 Internal wake-word backend setup and runtime helpers.
+
+Two paths live here side by side until AP-SRV-070 retires the legacy one:
+
+* the **v2 path** takes a
+  :class:`~VoiceSTT.core.wakeword_catalog.WakeWordSelection` from the one
+  catalog authority, hands OpenWakeWord *exactly* the selected classifiers and
+  the shared pipeline models, and reports structured
+  :class:`~VoiceSTT.core.wake_detection.RawWakeCandidate` objects carrying the
+  canonical wake-word id;
+* the **legacy path** keeps resolving comma separated names through
+  :class:`~VoiceSTT.core.openwakeword_catalog.OpenWakeWordCatalog` and still
+  answers with the historical integer index.
+
+The v2 path never derives an id from a file name: OpenWakeWord names a loaded
+model by its file stem, and the catalog owns the stem-to-canonical-id map.
 """
 
 from importlib import import_module
@@ -13,6 +28,8 @@ from .openwakeword_catalog import (
     OPENWAKEWORD_MODEL_ROOT_ENV,
     OpenWakeWordCatalog,
 )
+from .openwakeword_engine import OpenWakeWordEngine
+from .wake_detection import RawWakeCandidate
 
 logger = logging.getLogger("voicestt")
 
@@ -126,9 +143,23 @@ def setup_wakeword_detection(
     openwakeword_inference_framework,
     load_porcupine_module=None,
     load_openwakeword_modules=None,
+    wake_word_selection=None,
+    wake_word_engine_options=None,
 ):
     """
     Configures the selected wake-word backend on the recorder.
+
+    ``wake_word_selection`` is the AP-SRV-060 v2 path: an already admitted
+    :class:`~VoiceSTT.core.wakeword_catalog.WakeWordSelection`. When it is
+    given, *only* its classifiers are handed to OpenWakeWord - no catalog
+    scan, no default fallback, no extra model - and they all run under the one
+    common inference backend the admission chose.
+
+    ``wake_word_engine_options`` carries the ``next_session`` wake values of
+    the AP-SRV-050 settings plane (``detectorGain``, ``noiseSuppressionEnabled``,
+    ``vadThreshold``). They configure the one
+    :class:`~VoiceSTT.core.openwakeword_engine.OpenWakeWordEngine`; there is no
+    second wake settings authority.
     """
     if not (
         recorder.use_wake_words
@@ -185,18 +216,49 @@ def setup_wakeword_detection(
             if load_openwakeword_modules is None:
                 load_openwakeword_modules = _load_openwakeword_modules
             _openwakeword, Model = load_openwakeword_modules()
-            model_paths, feature_paths = _resolve_openwakeword_paths(
-                openwakeword_model_paths,
-                wake_words,
-                openwakeword_inference_framework,
-            )
-            recorder.owwModel = Model(
-                wakeword_models=model_paths,
-                inference_framework=openwakeword_inference_framework,
-                device="cpu",
-                **feature_paths,
-            )
-            logger.info("Successfully loaded offline wakeword model(s): %s", model_paths)
+            if wake_word_selection is not None:
+                # AP-SRV-060 C3: selected-only initialisation under exactly one
+                # common inference backend. The engine is the thin adapter that
+                # owns the single upstream model instance, the prediction-frame
+                # accounting and the detector-only gain.
+                options = dict(wake_word_engine_options or {})
+                engine = OpenWakeWordEngine(
+                    selection=wake_word_selection,
+                    model_factory=lambda **kwargs: Model(**kwargs),
+                    sample_rate=getattr(recorder, "sample_rate", 16000),
+                    detector_gain=float(options.get("detector_gain", 1.0)),
+                    noise_suppression_enabled=bool(
+                        options.get("noise_suppression_enabled", False)
+                    ),
+                    vad_threshold=float(options.get("vad_threshold", 0.0)),
+                )
+                recorder.wake_engine = engine
+                recorder.owwModel = engine.model
+                model_paths = list(wake_word_selection.model_paths)
+                logger.info(
+                    "Successfully loaded offline wakeword model(s) on backend "
+                    "%s: %s",
+                    engine.backend,
+                    model_paths,
+                )
+            else:
+                model_paths, feature_paths = _resolve_openwakeword_paths(
+                    openwakeword_model_paths,
+                    wake_words,
+                    openwakeword_inference_framework,
+                )
+                recorder.wake_engine = None
+                recorder.owwModel = Model(
+                    wakeword_models=model_paths,
+                    inference_framework=openwakeword_inference_framework,
+                    device="cpu",
+                    **feature_paths,
+                )
+                logger.info(
+                    "Successfully loaded offline wakeword model(s): %s",
+                    model_paths,
+                )
+            bind_wake_word_selection(recorder, wake_word_selection)
 
             recorder.oww_n_models = len(recorder.owwModel.models.keys())
             if not recorder.oww_n_models:
@@ -228,9 +290,85 @@ def setup_wakeword_detection(
         )
 
 
+def bind_wake_word_selection(recorder, selection):
+    """Publishes the admitted selection's identity map onto the recorder.
+
+    The canonical ids and the measured classifier receptive fields come from
+    the catalog and the *real* loaded backend; nothing here is derived from a
+    file name or guessed.
+    """
+    recorder.wake_word_selection = selection
+    recorder.wake_word_model_key_to_id = (
+        dict(selection.model_key_to_id) if selection is not None else {}
+    )
+    recorder.wake_word_input_frames = {}
+    model = getattr(recorder, "owwModel", None)
+    inputs = getattr(model, "model_inputs", None)
+    if isinstance(inputs, dict):
+        recorder.wake_word_input_frames = {
+            key: value for key, value in inputs.items()
+        }
+    return recorder.wake_word_model_key_to_id
+
+
+def _canonical_wake_word_id(recorder, model_key):
+    """The canonical id of one loaded OpenWakeWord model key.
+
+    Returns ``None`` when the key is not part of the admitted selection, so a
+    stray model can never publish a domain id.
+    """
+    mapping = getattr(recorder, "wake_word_model_key_to_id", None) or {}
+    return mapping.get(model_key)
+
+
+def collect_wake_candidates(recorder, data, *, sample_position=0, frame_index=0,
+                            detector_generation=0):
+    """Every raw OpenWakeWord observation of one audio chunk.
+
+    Raw candidates are diagnostics. This function applies **no** threshold, no
+    latch and no de-duplication; those belong to
+    :class:`~VoiceSTT.core.wake_detection.WakeDetectionEvaluator`.
+    """
+    if recorder.wakeword_backend not in OPENWAKEWORD_BACKENDS:
+        return []
+    pcm = np.frombuffer(data, dtype=np.int16)
+    recorder.owwModel.predict(pcm)
+    candidates = []
+    buffer = getattr(recorder.owwModel, "prediction_buffer", {}) or {}
+    end_position = int(sample_position) + int(pcm.shape[0])
+    for model_key in buffer.keys():
+        scores = list(buffer[model_key])
+        if not scores:
+            continue
+        identifier = _canonical_wake_word_id(recorder, model_key)
+        if identifier is None:
+            # Not part of the admitted selection - diagnostics only, never a
+            # candidate, so an unexpected model cannot open an activation.
+            if recorder.debug_mode:
+                logger.info("wake words: ignoring unmapped model key %s", model_key)
+            continue
+        candidates.append(RawWakeCandidate(
+            canonical_wake_word_id=identifier,
+            raw_score=float(scores[-1]),
+            frame_index=int(frame_index),
+            sample_position=end_position,
+            detector_generation=int(detector_generation),
+            model_key=model_key,
+        ))
+    if recorder.debug_mode and candidates:
+        logger.info(
+            "wake words raw candidates: %s",
+            [candidate.diagnostics() for candidate in candidates],
+        )
+    return candidates
+
+
 def process_wakeword(recorder, data):
     """
     Processes one audio chunk through the configured wake-word backend.
+
+    Legacy integer-index API. The v2 path uses
+    :func:`collect_wake_candidates` instead and never sees an index.
     """
     if recorder.wakeword_backend in PORCUPINE_WAKEWORD_BACKENDS:
         pcm = struct.unpack_from(

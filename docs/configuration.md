@@ -115,6 +115,14 @@ recorder = AudioToTextRecorder(
 | `openwakeword_model_paths` | `None` | Comma-separated OpenWakeWord classifier paths, a model directory, or a `models.json` manifest path. |
 | `openwakeword_inference_framework` | `"onnx"` | OpenWakeWord inference framework: `"onnx"` or `"tflite"`. |
 
+Diese Parameter beschreiben den Recorder-/v1-Pfad. Der v2-Serverpfad verwendet
+seit AP-SRV-060 den gebündelten Build-Katalog unter
+`VoiceSTT/assets/wakeword_models/` und dessen `models.json` als Autorität; die
+Sessionauswahl läuft über kanonische IDs im `hello`-Handshake. Details in
+[Wake Words](wake-words.md). Ein abweichender Bundleort wird mit
+`VOICESTT_WAKEWORD_ASSET_ROOT` gesetzt; Runtime-Downloads gibt es auf keinem
+Pfad.
+
 ## Callback Parameters
 
 All callbacks are optional. By default they run in the recorder flow; set
@@ -195,6 +203,49 @@ Die serverautoritative Settings-Control-Plane verwaltet als triggerrelevant
 | `activation.segmentWatchdogWarningMs` | int | 30000 | >=5000, < wirksame Frist |
 | `activation.closingRecoveryTimeoutMs` | int | 5000 | 1000–30000 |
 | `wakeWord.sensitivity` | float | 0.5 | 0.0–1.0 |
+| `wakeWord.minConsecutivePredictionFrames` | int | 1 | >= 1 |
+| `wakeWord.cooldownMs` | int | 0 | >= 0 |
+| `wakeWord.preRollMs` | int | 0 | >= 0 |
+| `wakeWord.detectorGain` | float | 1.0 | 0.0–3.0 |
+| `wakeWord.noiseSuppressionEnabled` | bool | `false` | – |
+| `wakeWord.vadThreshold` | float | 0.0 | 0.0–1.0 |
+
+`wakeWord.sensitivity` ist die gemeinsame Score-Schwelle aller ausgewählten
+Wake Words, `wakeWord.minConsecutivePredictionFrames` die Mindestanzahl
+aufeinanderfolgender OpenWakeWord-Prediction-Frames mit Score >= Schwelle,
+bevor ein Trefferbereich qualifiziert. Gezählt werden ausschließlich echte neue
+Prediction-Frames – nicht Recorderchunks und kein intern wiederholter Score.
+
+`wakeWord.preRollMs` bezieht sich auf den operationalen Nullpunkt, die Trailing
+Edge des gewonnenen qualifizierten Wake-Hits. Aus dem Classifier-Receptive-Field
+wird **keine** Obergrenze mehr abgeleitet; die reale Grenze ist die vorgehaltene
+Audiohistorie und wird zur Laufzeit geclampt. `wakeWord.cooldownMs` ist der
+explizit konfigurierte Betreiber-Cooldown nach einem akzeptierten Wake-Hit und
+nicht die interne Gruppierung desselben Trefferbereichs.
+
+`wakeWord.detectorGain` wirkt nur auf einer PCM-Kopie für die Wake-Inferenz
+(sättigendes int16-Clipping); das Originalaudio für Aufnahme, Transkription und
+Audiohistorie bleibt unverändert. `wakeWord.vadThreshold` schaltet das
+OpenWakeWord-interne VAD-Gate vor der Wake-Inferenz (`0.0` = aus),
+`wakeWord.noiseSuppressionEnabled` die vorhandene Speex-Unterstützung.
+
+Die Kalibrierschlüssel sind **ausdrücklich vorläufig**: ihre Schemaeinträge
+tragen `constraints.calibration = "pending"` samt der abhängigen
+Traceability-IDs. `0`, `1` und `1.0` sind neutrale Defaults, keine Empfehlungen.
+Die kalibrierten Betriebswerte erfordern reale positive Wake-Word-Aufnahmen:
+`WW-18` und `WW-19` sind derzeit `EVIDENCE_BLOCKED`.
+
+Weitere Wake-Word-Settings der Control Plane: `wakeWord.selection` (Session,
+`next_session`), `wakeWord.inferenceBackend` (Server, Admin-Key,
+`next_session`, zulässig `auto`/`onnx`/`tflite` über die generische
+`constraints.allowedValues`-Prüfung), `wakeWord.globalDisabledIds` (Server,
+Admin-Key, `next_session`) und `runtimeSuppression.wakeWord` (Session, `live`,
+Schreibautorität bleibt `trigger_suppression.set`).
+
+`wakeWord.inferenceBackend` wählt das **eine gemeinsame** Inference Backend
+einer Live-Engine für alle ausgewählten Wake Words. `auto` bevorzugt ONNX unter
+Windows und TFLite/LiteRT unter Linux und fällt für die gesamte Auswahl auf das
+jeweils andere Backend zurück; eine explizite Wahl wechselt nie still.
 
 Die öffentliche Verwaltung läuft über `GET/PATCH /api/v2/settings/server`
 (`PATCH` admin-geschützt, optimistische Concurrency) und das Schema über

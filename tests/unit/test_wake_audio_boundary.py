@@ -1,0 +1,164 @@
+"""AP-SRV-060: the wake/user-speech audio boundary replaces the fixed cut.
+
+C1/C2 anchored the boundary on the classifier's *decision sample* and
+called the wake end an estimate blocked on external annotation. AP-SRV-060
+C3 replaced that with the defined operational zero point - the trailing
+edge of the winning qualified hit region - and clamps the pre-roll against
+the audio history that really still exists.
+"""
+
+import unittest
+
+from VoiceSTT.core.wake_audio_boundary import (
+    ms_to_samples,
+    resolve_wake_audio_boundary,
+    trim_frames_to_boundary,
+)
+
+
+SAMPLE_RATE = 16000
+
+
+def frames_of(*sample_counts):
+    """PCM frames whose bytes encode their own absolute sample index."""
+    frames = []
+    cursor = 0
+    for count in sample_counts:
+        frames.append(
+            b"".join(
+                (cursor + offset).to_bytes(2, "little", signed=False)
+                for offset in range(count)
+            )
+        )
+        cursor += count
+    return frames
+
+
+class MillisecondConversionTests(unittest.TestCase):
+    def test_zero_and_negative_values_are_no_samples(self):
+        for value in (0, -1, None, "nope"):
+            with self.subTest(value=value):
+                self.assertEqual(ms_to_samples(value, SAMPLE_RATE), 0)
+
+    def test_milliseconds_convert_at_the_stream_rate(self):
+        self.assertEqual(ms_to_samples(1000, SAMPLE_RATE), 16000)
+        self.assertEqual(ms_to_samples(80, SAMPLE_RATE), 1280)
+
+
+class BoundaryTests(unittest.TestCase):
+    def test_zero_pre_roll_releases_exactly_at_the_operational_zero_point(self):
+        boundary = resolve_wake_audio_boundary(
+            operational_zero_point_sample=32000,
+            pre_roll_ms=0,
+            sample_rate=SAMPLE_RATE,
+        )
+        self.assertEqual(boundary.operational_zero_point_sample, 32000)
+        self.assertEqual(boundary.release_sample, 32000)
+        self.assertEqual(boundary.released_pre_roll_samples, 0)
+        # The zero point is a defined product boundary, not an estimate.
+        self.assertTrue(boundary.boundary_defined)
+
+    def test_pre_roll_moves_the_release_back_by_the_configured_span(self):
+        boundary = resolve_wake_audio_boundary(
+            operational_zero_point_sample=32000,
+            pre_roll_ms=500,
+            sample_rate=SAMPLE_RATE,
+        )
+        self.assertEqual(boundary.release_sample, 32000 - 8000)
+        self.assertFalse(boundary.pre_roll_clamped)
+
+    def test_pre_roll_never_reaches_past_the_retained_audio_history(self):
+        clamped = resolve_wake_audio_boundary(
+            operational_zero_point_sample=32000,
+            pre_roll_ms=5000,
+            sample_rate=SAMPLE_RATE,
+            history_start_sample=20000,
+        )
+        self.assertEqual(clamped.release_sample, 20000)
+        self.assertEqual(clamped.released_pre_roll_samples, 12000)
+        self.assertTrue(clamped.pre_roll_clamped)
+
+    def test_the_history_start_clamps_the_boundary(self):
+        boundary = resolve_wake_audio_boundary(
+            operational_zero_point_sample=5000,
+            sample_rate=SAMPLE_RATE,
+            history_start_sample=4000,
+        )
+        self.assertEqual(boundary.history_start_sample, 4000)
+        self.assertEqual(boundary.release_sample, 5000)
+
+    def test_the_projection_is_json_safe_and_complete(self):
+        payload = resolve_wake_audio_boundary(
+            operational_zero_point_sample=32000,
+            pre_roll_ms=250,
+            sample_rate=SAMPLE_RATE,
+        ).to_dict()
+        self.assertEqual(set(payload), {
+            "sampleRate", "operationalZeroPointSample", "historyStartSample",
+            "releaseSample", "preRollSamples", "releasedPreRollSamples",
+            "preRollClamped", "boundaryBasis", "boundaryDefined",
+        })
+
+
+class TrimTests(unittest.TestCase):
+    def _samples(self, frames):
+        joined = b"".join(frames)
+        return [
+            int.from_bytes(joined[index:index + 2], "little", signed=False)
+            for index in range(0, len(joined), 2)
+        ]
+
+    def test_whole_frames_before_the_release_are_dropped(self):
+        frames = frames_of(100, 100, 100)
+        retained, removed = trim_frames_to_boundary(
+            frames, first_frame_start_sample=0, release_sample=200
+        )
+        self.assertEqual(removed, 200)
+        self.assertEqual(self._samples(retained)[0], 200)
+        self.assertEqual(len(self._samples(retained)), 100)
+
+    def test_a_partial_frame_is_cut_at_the_exact_sample(self):
+        frames = frames_of(100, 100)
+        retained, removed = trim_frames_to_boundary(
+            frames, first_frame_start_sample=0, release_sample=150
+        )
+        self.assertEqual(removed, 150)
+        samples = self._samples(retained)
+        self.assertEqual(samples[0], 150)
+        self.assertEqual(len(samples), 50)
+
+    def test_a_release_before_the_first_frame_keeps_everything(self):
+        frames = frames_of(100, 100)
+        retained, removed = trim_frames_to_boundary(
+            frames, first_frame_start_sample=500, release_sample=100
+        )
+        self.assertEqual(removed, 0)
+        self.assertEqual(len(self._samples(retained)), 200)
+
+    def test_the_wake_word_leaves_and_the_first_user_word_survives(self):
+        """``[wake word][first user word][rest]`` -> ``[first user word][rest]``."""
+        wake_samples = 16000          # 1000 ms of wake word
+        first_word_samples = 4000     # 250 ms first user word
+        rest_samples = 8000
+        frames = frames_of(wake_samples, first_word_samples, rest_samples)
+
+        boundary = resolve_wake_audio_boundary(
+            operational_zero_point_sample=wake_samples,
+            pre_roll_ms=0,
+            sample_rate=SAMPLE_RATE,
+        )
+        retained, removed = trim_frames_to_boundary(
+            frames,
+            first_frame_start_sample=0,
+            release_sample=boundary.release_sample,
+        )
+        samples = self._samples(retained)
+        self.assertEqual(removed, wake_samples)
+        # No wake-word sample survived ...
+        self.assertEqual(samples[0], wake_samples)
+        # ... and not a single sample of the first user word was cut.
+        self.assertEqual(len(samples), first_word_samples + rest_samples)
+
+
+if __name__ == "__main__":
+    unittest.main()

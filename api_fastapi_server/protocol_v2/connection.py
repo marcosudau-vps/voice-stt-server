@@ -233,14 +233,14 @@ class ProtocolV2Connection:
             self.request_close(result.refusal.close_code)
             return None
 
-        errors = handshake_layer.validate_requested_session(
+        errors, selection = handshake_layer.admit_requested_session(
             result.hello, self.wake_word_port
         )
         if errors:
             return self._reject_session("invalid_requested_session", errors)
 
         try:
-            session = self._admit(result.hello)
+            session = self._admit(result.hello, selection)
         except Exception as exc:  # noqa: BLE001 - classified below
             return self._admission_failure(exc)
 
@@ -254,7 +254,7 @@ class ProtocolV2Connection:
         self._activate_session(session, result)
         return session
 
-    def _admit(self, hello):
+    def _admit(self, hello, selection=None):
         from ..server import SessionActivationRequest, SessionWakeWordRequest
 
         wake_word_request = SessionWakeWordRequest(
@@ -264,6 +264,10 @@ class ProtocolV2Connection:
                 if hello.wake_word_ids
                 else ()
             ),
+            # AP-SRV-060: the already admitted catalog selection. Passing it in
+            # keeps the admission atomic - the session is built from exactly
+            # the artifacts that were validated, never re-resolved.
+            selection=selection,
         )
         activation_request = SessionActivationRequest(
             manual_enabled=bool(hello.manual_trigger),

@@ -1012,9 +1012,7 @@ class PortTests(unittest.TestCase):
         self.assertEqual(
             ports.SettingsPort.binding, "REQUIRES_AP_SRV_050_BINDING"
         )
-        self.assertEqual(
-            ports.WakeWordPort.binding, "REQUIRES_AP_SRV_060_BINDING"
-        )
+        self.assertEqual(ports.WakeWordPort.binding, "AP_SRV_060_BINDING")
 
     def test_a_patch_is_applied_and_a_stale_revision_conflicts(self):
         from api_fastapi_server.settings_control import (
@@ -1050,23 +1048,31 @@ class PortTests(unittest.TestCase):
         self.assertEqual(stale.errors[0].code, "stale_settings_revision")
 
     def test_wake_word_selection_is_atomic(self):
-        class FakeService:
-            def session_capabilities(self):
-                return {"wakeWord": {"availableWakeWords": [
-                    {"id": "hey_jarvis"}, {"id": "alexa"},
-                ]}}
+        import tempfile
+        from .wake_catalog_support import FakeCatalogService, build_authority
 
-        port = ports.WakeWordPort(FakeService())
-        self.assertEqual(port.available_ids(), ["alexa", "hey_jarvis"])
-        self.assertEqual(port.validate_selection(["hey_jarvis"]), [])
-        errors = port.validate_selection(["hey_jarvis", "nope"])
-        self.assertEqual(len(errors), 1)
-        self.assertEqual(errors[0]["code"], "wake_word_unavailable")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = FakeCatalogService(build_authority(temp_dir))
+            port = ports.WakeWordPort(service)
+            self.assertEqual(port.available_ids(), ["alexa", "hey_jarvis"])
+            self.assertEqual(port.validate_selection(["hey_jarvis"]), [])
+            errors = port.validate_selection(["hey_jarvis", "nope"])
+            self.assertEqual(len(errors), 1)
+            self.assertEqual(errors[0]["code"], "wake_word_unavailable")
+            self.assertEqual(errors[0]["reason"], "unknown")
+            self.assertEqual(errors[0]["wakeWordId"], "nope")
+            # The wire is canonical-only; an alias is refused here (Root F1).
+            self.assertEqual(
+                port.validate_selection(["jarvis"])[0]["reason"],
+                "not_canonical",
+            )
+            # One problematic id rejects the whole selection - no partial load.
+            selection, _errors = port.resolve_selection(["hey_jarvis", "nope"])
+            self.assertIsNone(selection)
 
     def test_capabilities_carry_a_catalog_revision(self):
         class EmptyService:
-            def session_capabilities(self):
-                return {}
+            wakeword_catalog = None
 
         capabilities = ports.WakeWordPort(EmptyService()).capabilities()
         self.assertIn("catalogRevision", capabilities)
