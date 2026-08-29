@@ -45,12 +45,6 @@ ACTIVATION_ACTIONS = (ACTIVATE, REFRESH, FINISH, CANCEL)
 #: Actions that address an already observed activation.
 CONTROL_ACTIONS = frozenset({REFRESH, FINISH, CANCEL})
 
-#: Deprecated v1 spelling of :data:`REFRESH`. It is accepted so that a client
-#: built against the AP-SRV-010 baseline keeps working, but it now carries the
-#: contract refresh semantics - the additive ``extensionSeconds`` behaviour is
-#: gone. The alias itself is removed with the legacy cut in AP-SRV-070.
-ACTION_ALIASES = {"extend": REFRESH}
-
 MANUAL_SOURCE = "manual"
 WAKE_WORD_SOURCE = "wake_word"
 ACTIVATION_SOURCES = (MANUAL_SOURCE, WAKE_WORD_SOURCE)
@@ -175,8 +169,7 @@ def _normalized_action(data):
     raw_action = data.get("action")
     if raw_action is not None and not isinstance(raw_action, str):
         return None
-    action = str(raw_action or "").strip().lower()
-    return ACTION_ALIASES.get(action, action)
+    return str(raw_action or "").strip().lower()
 
 
 def prepare_activation_command(data):

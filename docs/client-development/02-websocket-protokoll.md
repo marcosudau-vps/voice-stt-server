@@ -202,7 +202,6 @@ den Vertrag anbietet. Die Capability steht in `hello.sessionCapabilities` und
   "version": 2,
   "sources": ["manual", "wake_word"],
   "actions": ["activate", "refresh", "finish", "cancel"],
-  "deprecatedActionAliases": ["extend"],
   "commandType": "trigger",
   "ackType": "trigger_ack",
   "commandIdRequired": true,
@@ -211,7 +210,6 @@ den Vertrag anbietet. Die Capability steht in `hello.sessionCapabilities` und
   "activationIdValidated": true,
   "audioAvailabilityCommandType": "audio_availability",
   "audioAvailabilityAckType": "audio_availability_ack",
-  "retiredQueryParameters": ["extensionSeconds"],
   "activationEvents": ["activation.started", "activation.refreshed",
                        "activation.closed", "watchdog.warning"]
 }
@@ -227,9 +225,10 @@ gegen einen Legacyserver: nur `start`/`stop`, keine Triggerkommandos.
   "commandId": "6f1c..." }
 ```
 
-`action` ist eines von `activate`, `refresh`, `finish`, `cancel`. `extend`
-bleibt als veraltete Schreibweise für `refresh` zulässig und entfällt mit
-AP-SRV-070; es trägt seit AP-SRV-030 die nicht kumulative Refresh-Semantik.
+`action` ist eines von `activate`, `refresh`, `finish`, `cancel`. Die
+veraltete Schreibweise `extend` ist mit AP-SRV-070 entfallen: sie wird jetzt
+wie jede andere unbekannte Aktion mit `invalid_action` beantwortet. Ein Client,
+der sie noch sendet, muss auf `refresh` umgestellt werden.
 `source` ist `manual` oder `wake_word`. `commandId` ist ein nicht leerer String
 und wird vom Client erzeugt.
 

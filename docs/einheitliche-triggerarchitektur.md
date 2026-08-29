@@ -549,8 +549,8 @@ zur Settings-Control-Plane aus AP-SRV-050.
 
 **Entfallen mit AP-SRV-030:** `extensionSeconds`. Die additive Extend-Semantik
 ist kein gültiges Soll mehr. Ein alter Client, der den Parameter noch sendet,
-wird nicht abgelehnt — der Wert wird ignoriert. Die Capability nennt ihn unter
-`retiredQueryParameters`.
+wird nicht abgelehnt — der Wert wird ignoriert. Seit AP-SRV-070 nennt die
+Capability den Parameter auch nicht mehr.
 
 #### Modusauflösung
 
@@ -605,7 +605,6 @@ werden.
   "version": 2,
   "sources": ["manual", "wake_word"],
   "actions": ["activate", "refresh", "finish", "cancel"],
-  "deprecatedActionAliases": ["extend"],
   "commandType": "trigger",
   "ackType": "trigger_ack",
   "commandIdRequired": true,
@@ -620,7 +619,6 @@ werden.
                       "segmentWatchdogRefreshSeconds",
                       "segmentWatchdogWarningSeconds",
                       "closingRecoveryTimeoutSeconds"],
-  "retiredQueryParameters": ["extensionSeconds"],
   "activationEvents": ["activation.started", "activation.refreshed",
                        "activation.closed", "watchdog.warning"]
 }
@@ -642,8 +640,8 @@ funktioniert. Ein Client **muss** sie prüfen, bevor er `trigger` sendet.
 ```
 
 `action` ist eines von `activate`, `refresh`, `finish`, `cancel`.
-`extend` bleibt als veraltete Schreibweise für `refresh` zulässig und entfällt
-mit AP-SRV-070; es trägt die neue, nicht kumulative Semantik.
+Die veraltete Schreibweise `extend` ist mit AP-SRV-070 entfallen; sie wird wie
+jede andere unbekannte Aktion mit `invalid_action` beantwortet.
 `source` ist `manual` oder `wake_word`. `commandId` ist ein nicht leerer String.
 Bei `refresh`, `finish` und `cancel` darf zusätzlich die beobachtete
 `activationId` mitgesendet werden; sie wird gegen die laufende Activation

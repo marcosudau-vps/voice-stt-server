@@ -61,21 +61,25 @@ class ActivationCommandParsingTests(unittest.TestCase):
                 self.assertEqual(command.action, action)
                 self.assertEqual(command.activation_id, "a-7")
 
-    def test_the_deprecated_extend_alias_normalises_to_refresh(self):
-        aliased = parse_activation_command({
-            "commandId": "c-3",
-            "action": "extend",
-            "source": "manual",
-            "activationId": "a-1",
-        })
-        canonical = parse_activation_command({
-            "commandId": "c-3",
-            "action": "refresh",
-            "activationId": "a-1",
-        })
-        self.assertEqual(aliased.action, "refresh")
-        # The spelling must not turn a replay into a conflict.
-        self.assertEqual(aliased.payload_key, canonical.payload_key)
+    def test_the_deprecated_extend_alias_is_gone(self):
+        """AP-SRV-070: ``extend`` is no longer a spelling of ``refresh``.
+
+        The alias survived AP-SRV-030 only so that an AP-SRV-010 client kept
+        working. With the legacy cut the v1 parser has one vocabulary again,
+        the same four canonical actions v2 has always had, so the spelling is
+        an ordinary unknown action rather than a second name for a contract
+        action.
+        """
+        self._rejects(
+            {
+                "commandId": "c-3",
+                "action": "extend",
+                "source": "manual",
+                "activationId": "a-1",
+            },
+            "invalid_action",
+            "c-3",
+        )
 
     def test_activate_must_not_address_an_activation(self):
         self._rejects(
