@@ -16,3 +16,6 @@ Dockerfile text eol=lf
 *.onnx binary
 *.tflite binary
 *.data binary
+
+# Archived original assignments stay byte-identical to their source.
+docs/.archiv/einheitliche_triggerarchitektur/AP-SRV-060/runs/**/2026-*_PROMPT.md -text

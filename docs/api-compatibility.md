@@ -312,6 +312,41 @@ It constructs recorder instances, feeds external audio, reads `is_recording`,
 calls `text()`, `abort()`, and `shutdown()`, and injects scheduler-backed
 transcription executors.
 
+### Server REST Settings (AP-SRV-050)
+
+The v2 settings surface is additive and coexists with all existing endpoints:
+
+- `GET  /api/v2/wake-words` – public, versioned wake-word build catalog
+  (`protocolVersion`, `catalogRevision`, `wakeWords[]` with `id`,
+  `displayName`, `aliases`, `artifactVersion`, `available`, the entry's own
+  `catalogRevision` and an optional `unavailableReason`); never contains paths,
+  source markers or internal artifact maps. Top-level and per-entry revision
+  always come from one snapshot;
+- `POST /api/v2/wake-words/refresh` – admin-auth through the *same* guard as
+  `PATCH /api/v2/settings/server`; rebuilds and validates the catalog, applies
+  the global disable projection in the same atomic operation and swaps only on
+  total success. The response is rendered from exactly the committed snapshot.
+  A failed refresh answers HTTP 422, keeps the last known good catalog and
+  changes no revision;
+- the v2 wire admits **canonical wake-word ids only**. An alias or display name
+  in `requestedSession.wakeWordIds` is refused with
+  `code: wake_word_unavailable`, `reason: not_canonical`; tolerant resolution
+  stays a configuration feature;
+- `GET  /api/v2/settings/schema` – public, non-secret settings metadata;
+- `GET  /api/v2/settings/server` – public, non-secret server values + revision;
+- `PATCH /api/v2/settings/server` – admin-auth (`X-Admin-Key` alias or the
+  existing `x-voicestt-admin-key`/Bearer paths), optimistic concurrency via
+  `baseSettingsRevision`, atomic validation.
+
+The v1 config/runtime endpoints keep their semantics (legacy removal is
+AP-SRV-070). Errors reuse the frozen wire codes (`settings_revision_conflict`,
+`settings_rejected`) with deterministic `field`/`code`/`message` entries. A
+persistence failure of a server patch returns HTTP 500 with
+`result: internal_error` and code `persistence_failed`, leaving RAM and
+settings revision unchanged. No secret value is ever returned. On the v2 wire,
+`session.snapshot` additionally carries additive `requestedSettings` next to
+`effectiveSettings` and `settingsRevision`.
+
 ## Known Usage Patterns
 
 Tests, examples, and docs currently exercise these patterns:

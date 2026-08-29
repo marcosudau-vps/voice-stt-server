@@ -2,6 +2,11 @@ include requirements.txt
 include README.md
 include RELEASE_NOTES.md
 include LICENSE
+# AP-SRV-060 wake-word build assets: bundled models plus the canonical
+# catalog manifest. They are product assets, not runtime downloads.
+include VoiceSTT/assets/wakeword_models/models.json
+recursive-include VoiceSTT/assets/wakeword_models *.onnx
+recursive-include VoiceSTT/assets/wakeword_models *.tflite
 prune docs/development
 prune dev-log
 prune roadmap

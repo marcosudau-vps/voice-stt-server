@@ -168,6 +168,26 @@ class CloseContext:
     requested_by_action: str | None = None
 
 
+@dataclass(frozen=True)
+class ActivationTimingPolicy:
+    """Immutable timing snapshot one activation latches at admission (AP-SRV-050).
+
+    A settings patch that arrives while an activation is open must never mutate
+    the armed timers of that activation. New values are latched exactly once at
+    the next successful activation admission; until then this activation keeps
+    the policy it started with. Values are wall-clock-independent seconds for
+    the :class:`ActivationController`, exactly like the legacy constructor
+    defaults they replace.
+    """
+
+    initial_speech_timeout: float
+    followup_timeout: float
+    segment_watchdog_initial: float
+    segment_watchdog_refresh: float
+    segment_watchdog_warning: float
+    closing_recovery_timeout: float
+
+
 class ActivationController:
     """Thread-safe authority for one session's foreground activation."""
 
@@ -196,6 +216,10 @@ class ActivationController:
 
         self.manual_trigger_enabled = manual_trigger_enabled
         self.wake_word_trigger_enabled = wake_word_trigger_enabled
+        # Runtime suppression of the *configured* sources. It only gates the
+        # admission of a new activation; a running activation keeps its source
+        # and is never ended by a suppression change (contract 8.1).
+        self._suppressed = {MANUAL_SOURCE: False, WAKE_WORD_SOURCE: False}
         self.initial_speech_timeout = self._positive(
             "initial_speech_timeout", initial_speech_timeout
         )
@@ -225,6 +249,10 @@ class ActivationController:
         self._activation_id = None
         self._primary_source = None
         self._effective_settings = _freeze({})
+        #: The immutable timing policy the *current* activation latched at
+        #: admission. ``None`` keeps the legacy constructor defaults for paths
+        #: that do not resolve settings yet (AP-SRV-050 prompt 11).
+        self._timing_policy = None
         self._phase = IDLE
         self._deadline = None
         self._deadline_kind = None
@@ -241,6 +269,24 @@ class ActivationController:
             raise ValueError(f"{name} must be > 0")
         return number
 
+    def _timing_locked(self):
+        """The timing policy the running activation latched, or the legacy fallback.
+
+        Every timer site reads through this single seam: a settings patch can
+        therefore never retarget an already armed activation. New values are
+        only picked up at the next activation admission via ``timing_policy``.
+        """
+        if self._timing_policy is not None:
+            return self._timing_policy
+        return ActivationTimingPolicy(
+            initial_speech_timeout=self.initial_speech_timeout,
+            followup_timeout=self.followup_timeout,
+            segment_watchdog_initial=self.segment_watchdog_initial,
+            segment_watchdog_refresh=self.segment_watchdog_refresh,
+            segment_watchdog_warning=self.segment_watchdog_warning,
+            closing_recovery_timeout=self.closing_recovery_timeout,
+        )
+
     @property
     def manual_enabled(self):
         return self.manual_trigger_enabled
@@ -254,12 +300,56 @@ class ActivationController:
         with self._lock:
             return self._phase in OPEN_WINDOW_PHASES
 
-    def _source_enabled(self, source):
+    def _configured(self, source):
         if source == MANUAL_SOURCE:
-            return self.manual_trigger_enabled
+            return bool(self.manual_trigger_enabled)
         if source == WAKE_WORD_SOURCE:
-            return self.wake_word_trigger_enabled
+            return bool(self.wake_word_trigger_enabled)
         return False
+
+    def _source_enabled(self, source):
+        """The effective admission gate: configured and not suppressed."""
+        if not self._configured(source):
+            return False
+        return not self._suppressed.get(source, False)
+
+    def set_runtime_suppression(self, *, manual=None, wake_word=None):
+        """Live suppression mask for new admissions. Returns whether it moved.
+
+        Suppression never merges sources, never changes a running activation
+        and never ends one; it only decides whether the *next* trigger of that
+        source is admitted.
+        """
+        with self._lock:
+            changed = False
+            for source, value in (
+                (MANUAL_SOURCE, manual),
+                (WAKE_WORD_SOURCE, wake_word),
+            ):
+                if value is None:
+                    continue
+                value = bool(value)
+                if self._suppressed[source] != value:
+                    self._suppressed[source] = value
+                    changed = True
+            return changed
+
+    def trigger_state(self):
+        """The frozen ``configured``/``suppressed``/``effective`` projection."""
+        with self._lock:
+            configured = {
+                MANUAL_SOURCE: self._configured(MANUAL_SOURCE),
+                WAKE_WORD_SOURCE: self._configured(WAKE_WORD_SOURCE),
+            }
+            suppressed = dict(self._suppressed)
+            return {
+                "configured": configured,
+                "suppressed": suppressed,
+                "effective": {
+                    source: configured[source] and not suppressed[source]
+                    for source in configured
+                },
+            }
 
     # -- timer ownership -----------------------------------------------------
 
@@ -371,8 +461,15 @@ class ActivationController:
             return False
         return str(activation_id) != str(self._activation_id)
 
-    def activate(self, source, effective_settings=None, *, activation_id=None):
-        """Admits a new activation only while the foreground is idle."""
+    def activate(self, source, effective_settings=None, *, activation_id=None,
+                 timing_policy=None):
+        """Admits a new activation only while the foreground is idle.
+
+        ``timing_policy`` is the (immutable) :class:`ActivationTimingPolicy`
+        resolved by the session settings control at admission. It is latched
+        exactly once here; a later settings patch cannot change this
+        activation. ``None`` keeps the legacy constructor timing defaults.
+        """
         with self._lock:
             if source not in ACTIVATION_SOURCES:
                 return ActivationDecision(
@@ -396,13 +493,15 @@ class ActivationController:
             self._activation_sequence += 1
             self._primary_source = source
             self._effective_settings = _freeze(effective_settings or {})
+            self._timing_policy = timing_policy
             self._phase = WAITING_FIRST_SPEECH
             self._segment_count = 0
             self._close_context = None
             self._recovery_requested = False
+            timing = self._timing_locked()
             self._set_timer_locked(
                 INITIAL_SPEECH_DEADLINE,
-                self._clock() + self.initial_speech_timeout,
+                self._clock() + timing.initial_speech_timeout,
             )
             self._version += 1
             return ActivationDecision(
@@ -446,9 +545,10 @@ class ActivationController:
                 )
 
             now = self._clock()
+            timing = self._timing_locked()
             if self._phase == SEGMENT_ACTIVE:
                 current = self._deadline if self._deadline is not None else now
-                target = max(current, now + self.segment_watchdog_refresh)
+                target = max(current, now + timing.segment_watchdog_refresh)
                 if target <= current:
                     # An early refresh must not shorten a longer remaining
                     # deadline, and a no-op must not churn the armed timer.
@@ -458,11 +558,11 @@ class ActivationController:
                 self._set_timer_locked(
                     SEGMENT_WATCHDOG_DEADLINE,
                     target,
-                    warning_after=self.segment_watchdog_warning,
+                    warning_after=timing.segment_watchdog_warning,
                 )
             else:
                 self._set_timer_locked(
-                    FOLLOWUP_DEADLINE, now + self.followup_timeout
+                    FOLLOWUP_DEADLINE, now + timing.followup_timeout
                 )
             self._version += 1
             return ActivationDecision(
@@ -484,10 +584,11 @@ class ActivationController:
             self._phase = SEGMENT_ACTIVE
             self._segment_count += 1
             self._segment_token += 1
+            timing = self._timing_locked()
             self._set_timer_locked(
                 SEGMENT_WATCHDOG_DEADLINE,
-                self._clock() + self.segment_watchdog_initial,
-                warning_after=self.segment_watchdog_warning,
+                self._clock() + timing.segment_watchdog_initial,
+                warning_after=timing.segment_watchdog_warning,
             )
             self._version += 1
             return ActivationDecision(
@@ -506,7 +607,8 @@ class ActivationController:
                 )
             self._phase = FOLLOWUP_WAIT
             self._set_timer_locked(
-                FOLLOWUP_DEADLINE, self._clock() + self.followup_timeout
+                FOLLOWUP_DEADLINE,
+                self._clock() + self._timing_locked().followup_timeout,
             )
             self._version += 1
             return ActivationDecision(
@@ -591,7 +693,7 @@ class ActivationController:
         self._recovery_requested = False
         self._set_timer_locked(
             CLOSING_RECOVERY_DEADLINE,
-            self._clock() + self.closing_recovery_timeout,
+            self._clock() + self._timing_locked().closing_recovery_timeout,
         )
         self._version += 1
         snapshot = self._snapshot_locked()
@@ -735,6 +837,7 @@ class ActivationController:
         self._activation_id = None
         self._primary_source = None
         self._effective_settings = _freeze({})
+        self._timing_policy = None
         self._phase = IDLE
         self._clear_timer_locked()
         self._segment_count = 0

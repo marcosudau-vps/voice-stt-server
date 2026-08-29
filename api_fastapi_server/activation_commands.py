@@ -148,6 +148,12 @@ def _freeze_value(value):
     return ("other", type(value).__name__)
 
 
+#: Public alias for the type-stable freeze. AP-SRV-040 builds the strict v2
+#: replay key with the very same function, so a v1 and a v2 payload key are
+#: produced by one implementation instead of two that can drift apart.
+freeze_payload_value = _freeze_value
+
+
 def _raw_payload_key(data, *, control):
     """Deterministic replay key of a rejected payload.
 

@@ -43,12 +43,35 @@ def thaw_value(value):
     return deepcopy(value)
 
 
+def normalize_segment_id(value):
+    """The opaque segment identity, exactly as its owner created it.
+
+    The ledger used to coerce to ``int`` because the only owner was the v1
+    counter. A protocol v2 session creates canonical UUID segment ids at the
+    same authoritative source, so the ledger keeps whatever that source
+    produced and only refuses an empty identity. Integers and numeric strings
+    keep their historical ``int`` form, so v1 correlation is unchanged.
+    """
+    if value is None or isinstance(value, bool):
+        raise ValueError("segment_id must be a non-empty identity")
+    if isinstance(value, int):
+        return value
+    text = str(value)
+    if not text.strip():
+        raise ValueError("segment_id must be a non-empty identity")
+    try:
+        return int(text)
+    except ValueError:
+        return text
+
+
 @dataclass(frozen=True)
 class SegmentContext:
     session_id: str
     activation_id: str
     activation_sequence: int
-    segment_id: int
+    #: ``int`` for the v1 counter, canonical UUID ``str`` for protocol v2.
+    segment_id: object
     segment_sequence: int
     effective_settings: tuple
     request_id: str
@@ -225,7 +248,7 @@ class SegmentLedger:
                 session_id=self.session_id,
                 activation_id=activation.activation_id,
                 activation_sequence=activation.activation_sequence,
-                segment_id=int(segment_id),
+                segment_id=normalize_segment_id(segment_id),
                 segment_sequence=sequence,
                 effective_settings=activation.effective_settings,
                 request_id=self._request_id_factory(),
@@ -421,6 +444,10 @@ class SegmentLedger:
                         "activationId": record.activation_id,
                         "activationSequence": record.activation_sequence,
                         "inputClosed": record.input_closed,
+                        # Exported for the v2 snapshot: the reason is already
+                        # recorded by ``close_activation``; the projection only
+                        # needs to read it.
+                        "inputClosedReason": record.close_reason or None,
                         "acceptedSegmentCount": len(record.accepted_sequences),
                         "terminalSegmentCount": sum(
                             self._segments[sequence].terminal_state is not None
@@ -431,6 +458,19 @@ class SegmentLedger:
                     for record in self._activations.values()
                 ],
             }
+
+    def accepted_segment_count(self, activation_id):
+        """Accepted segments of one activation, or ``0`` when it is unknown.
+
+        Read before an activation is closed, so the exactly-once input-close
+        record can carry the count even when closing terminalises the
+        activation immediately and drops its record.
+        """
+        with self._lock:
+            record = self._activations.get(activation_id)
+            if record is None:
+                return 0
+            return len(record.accepted_sequences)
 
     def _matching_pending_locked(self, context):
         if (

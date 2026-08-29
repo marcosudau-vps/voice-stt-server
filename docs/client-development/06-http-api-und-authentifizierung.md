@@ -28,6 +28,11 @@ relevant.
 | `GET` | `/api/logs/transcriptions/{transcriptionId}` | Admin oder passender Sessiontoken | Historie einer Transkription |
 | `POST` | `/api/config/validate` | Admin | Kandidatenkonfiguration prüfen |
 | `POST` | `/api/config/reload` | Admin | persistierte Runtime-Konfiguration neu anwenden |
+| `GET` | `/api/v2/settings/schema` | keine | öffentliches Settingsschema der Control-Plane |
+| `GET` | `/api/v2/settings/server` | keine | nicht geheime Serverwerte + Serverrevision |
+| `PATCH` | `/api/v2/settings/server` | Admin | Serverdefaults atomar ändern (optimistische Concurrency; Persistenzfehler = 500 `internal_error`) |
+| `GET` | `/api/v2/wake-words` | keine | versionierter Wake-Word-Build-Katalog (`catalogRevision`, `available`) |
+| `POST` | `/api/v2/wake-words/refresh` | Admin | Katalog atomar neu laden; Fehler = 422 und last-known-good bleibt |
 | `GET` | `/v1/models` | OpenAI-Key* | geladene Modelle/Aliasse |
 | `POST` | `/v1/audio/transcriptions` | OpenAI-Key* | abgeschlossene Audiodatei transkribieren |
 | `WS` | `/ws/transcribe` | keine im Handler | kontinuierliches Live-Audio |
@@ -47,10 +52,12 @@ Bevorzugter Header:
 X-VoiceSTT-Admin-Key: <admin-key>
 ```
 
-Alternativ:
+Alternativ (derselbe Guard, AP-SRV-050 unterstützt zusätzlich den Frozen
+Header):
 
 ```http
 Authorization: Bearer <admin-key>
+X-Admin-Key: <admin-key>
 ```
 
 Wenn kein Admin-Key konfiguriert ist, erlaubt der Code Adminzugriffe nur von
@@ -368,6 +375,76 @@ oder HTTP-Anfrage Modelle automatisch wieder.
 
 `PUT /api/language` gilt für neue Requests und Sessions. Bestehende Sessions
 behalten ihre kopierte Recorderkonfiguration.
+
+### Wake-Word-Katalog (Protokoll v2)
+
+`GET /api/v2/wake-words` ist der maßgebliche Katalog für v2-Clients und ohne
+Key lesbar:
+
+```json
+{
+  "protocolVersion": 2,
+  "catalogRevision": 1,
+  "wakeWords": [
+    {
+      "id": "hey_jarvis",
+      "displayName": "Hey Jarvis",
+      "aliases": ["jarvis"],
+      "artifactVersion": "1",
+      "available": true,
+      "catalogRevision": 1
+    }
+  ]
+}
+```
+
+Jeder Eintrag trägt die `catalogRevision` des Snapshots, aus dem er stammt;
+Top-Level- und Eintragsrevision stammen immer aus einem Zustand. Ein nicht
+verfügbarer Eintrag verschwindet **nicht** aus dem Katalog: er bleibt mit
+`available = false` und einem maschinenlesbaren `unavailableReason` abfragbar
+(`globally_disabled`, `artifact_missing`, `artifact_integrity_mismatch`,
+`artifact_unloadable`, `pipeline_unavailable`, `runtime_unavailable`). Nur
+tatsächlich verfügbare IDs erscheinen in `availableWakeWordIds`.
+
+Zusätzlich trägt jeder Eintrag einen `backends`-Block mit der Gesundheit je
+Inference Backend:
+
+```json
+"backends": {
+  "onnx":   {"available": true},
+  "tflite": {"available": false, "unavailableReason": "runtime_unavailable"}
+}
+```
+
+Die Payload enthält niemals Dateipfade, interne Artefaktmaps oder
+Loaderinterna. `catalogRevision` ist von `settingsRevision` getrennt und steigt
+nur bei sichtbarer Änderung.
+
+Eine Session läuft immer auf **einem gemeinsamen** Backend für alle
+ausgewählten Wake Words. Fehlt für die gesamte Auswahl ein gemeinsames gesundes
+Backend, wird die Session mit `reason = no_common_backend` abgelehnt; bei einer
+explizit konfigurierten Backendwahl mit `reason = backend_unavailable` und ohne
+stillen Wechsel.
+
+**Der `hello`-Handschlag akzeptiert ausschließlich kanonische `id`-Werte.**
+Anzeigenamen und Aliase sind Oberflächeninformation: ein Client löst die
+Nutzereingabe selbst gegen diesen Katalog auf und sendet danach die `id`. Wird
+trotzdem ein Alias oder Anzeigename in `requestedSession.wakeWordIds`
+übertragen, lehnt der Server die gesamte Session mit
+`code = wake_word_unavailable` und `reason = not_canonical` ab. Die tolerante
+Auflösung (Unicode-Trim, case-insensitive, vereinheitlichte Trennzeichen, nur
+explizite Aliase) bleibt der serverseitigen *Konfiguration* vorbehalten.
+
+`POST /api/v2/wake-words/refresh` ist eine Adminaktion hinter derselben Guard
+wie `PATCH /api/v2/settings/server`. Sie lädt den Katalog neu und wechselt nur
+bei vollständigem Erfolg; ein Fehler liefert HTTP 422 und lässt den laufenden
+Katalog unverändert. Die Antwort stammt vollständig aus dem committeten
+Snapshot. Der Refresh wirkt auf neue Sessions, nie auf eine bereits aufgebaute.
+Bei **jeder** sichtbaren Katalogänderung – auch einer reinen Metadatenänderung –
+erhalten laufende v2-Sessions `wakeword.availability_changed` mit der neuen
+Revision.
+
+`GET /api/wake-word` unten bleibt der Adminvertrag des v1-Pfades.
 
 `GET /api/wake-word` liefert:
 

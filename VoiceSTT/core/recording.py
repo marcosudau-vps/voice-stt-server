@@ -24,11 +24,96 @@ from .voice_activity import (
     reset_silero_vad_state,
     selected_pre_recording_buffer_frames,
 )
+from .wake_audio_boundary import (
+    WakeAudioBoundary,
+    resolve_wake_audio_boundary,
+    trim_frames_to_boundary,
+)
 from .wakeword import process_wakeword
 
 logger = logging.getLogger("voicestt")
 
 INT16_MAX_ABS_VALUE = 32768.0
+BYTES_PER_SAMPLE = 2
+
+
+def _wake_history_start_sample(recorder, stream_sample_position):
+    """The oldest stream sample the session still holds as audio history.
+
+    The pre-roll may only reach back as far as audio that really still exists,
+    so the clamp is derived from the retained pre-recording buffer rather than
+    from a classifier receptive field (AP-SRV-060 C3, section 7).
+    """
+    buffer = getattr(recorder, "audio_buffer", None)
+    retained = 0
+    try:
+        for frame in buffer or ():
+            retained += len(frame) // BYTES_PER_SAMPLE
+    except TypeError:  # pragma: no cover - fakes may not be iterable
+        retained = 0
+    retained += sum(
+        len(frame) // BYTES_PER_SAMPLE for frame in (getattr(recorder, "frames", None) or ())
+    )
+    return max(0, int(stream_sample_position) - retained)
+
+
+def _wake_detection_step(recorder, data, frame_index, stream_sample_position):
+    """One AP-SRV-060 detection step, or ``None`` when the v2 path is off.
+
+    Returns the accepted :class:`WakeAudioBoundary` when the admission opened
+    an activation, and ``None`` in every other case - including a refused
+    admission, which must leave no latch and no domain event behind.
+
+    The chunk goes through the one :class:`OpenWakeWordEngine`, which turns it
+    into the *genuinely new* prediction frames, and through the
+    :class:`~VoiceSTT.core.wake_detection.WakeHitTracker`, which groups those
+    frames into at most one finalized hit. A recorder chunk is therefore never
+    a detection unit; a contiguous hit region is.
+
+    The admission callback runs **synchronously** on purpose: it *is* the
+    admission decision, so it must not be deferred onto a callback thread. It
+    receives the finalized hit and the boundary that hit establishes, and
+    answers with an
+    :class:`~VoiceSTT.core.wake_detection.AcceptedWakeDetection` or ``None``.
+    """
+    evaluator = getattr(recorder, "wake_detection_evaluator", None)
+    if evaluator is None:
+        return None
+
+    if getattr(evaluator, "engine", None) is not None:
+        hits = evaluator.process(data)
+    else:  # pragma: no cover - a session without an engine has no v2 path
+        hits = ()
+    if not hits:
+        return None
+    hit = hits[0]
+
+    # AP-SRV-060 C3 / Root F11: the pre-roll comes from the very snapshot this
+    # hit region was scored with - never from a value re-read after the fact.
+    pre_roll_ms = hit.policy.pre_roll_ms
+    recorder.wake_word_pre_roll_ms = pre_roll_ms
+    boundary = resolve_wake_audio_boundary(
+        operational_zero_point_sample=hit.operational_zero_point_sample,
+        pre_roll_ms=pre_roll_ms,
+        sample_rate=recorder.sample_rate,
+        history_start_sample=_wake_history_start_sample(
+            recorder, stream_sample_position
+        ),
+    )
+    callback = recorder.on_wakeword_detected
+    if callback is None:
+        # No admission authority installed: a finalized hit can never become a
+        # fachliche Detection on its own.
+        evaluator.refuse(hit)
+        return None
+    detection = callback(hit, boundary)
+    if detection is None:
+        # Refused admission: no latch, no event, no logical event - the
+        # admission authority already recorded the refusal.
+        return None
+
+    recorder.accepted_wake_detection = detection
+    return boundary
 
 
 def run_recording_worker(recorder):
@@ -50,6 +135,8 @@ def run_recording_worker(recorder):
         delay_was_passed = False
         wakeword_detected_time = None
         wakeword_samples_to_remove = None
+        wake_frame_index = 0
+        stream_sample_position = 0
         self.allowed_to_early_transcribe = True
 
         if self.use_extended_logging:
@@ -70,6 +157,12 @@ def run_recording_worker(recorder):
                 try:
                     data = self.audio_queue.get(timeout=0.01)
                     self.last_words_buffer.append(data)
+                    # Absolute stream cursor: the wake boundary is anchored to a
+                    # real sample position, never to a configured duration. It
+                    # is a worker-local counter and only mirrored onto the
+                    # recorder for diagnostics.
+                    stream_sample_position += len(data) // BYTES_PER_SAMPLE
+                    self.wake_stream_sample_position = stream_sample_position
                 except queue.Empty:
                     # if self.use_extended_logging:
                     #     logger.debug('Debug: Queue is empty, checking if still running')
@@ -177,11 +270,30 @@ def run_recording_worker(recorder):
 
                 if self.use_extended_logging:
                     logger.debug('Debug: Checking wake word conditions')
-                if self.use_wake_words and wake_word_activation_delay_passed:
+                # FIND-011: once a hit is latched, the detector is not run
+                # again for the following chunks of the same utterance. The
+                # missing guard here was the technical cause of the multiple
+                # detection signals per spoken wake word.
+                if (
+                    self.use_wake_words
+                    and wake_word_activation_delay_passed
+                    and not self.wakeword_detected
+                ):
+                    wake_boundary = None
+                    wakeword_index = -1
                     try:
                         if self.use_extended_logging:
                             logger.debug('Debug: Processing wakeword')
-                        wakeword_index = process_wakeword(self, data)
+                        if getattr(self, "wake_detection_evaluator", None) is not None:
+                            wake_frame_index += 1
+                            wake_boundary = _wake_detection_step(
+                                self,
+                                data,
+                                wake_frame_index,
+                                stream_sample_position,
+                            )
+                        else:
+                            wakeword_index = process_wakeword(self, data)
 
                     except struct.error:
                         logger.error("Error unpacking audio data "
@@ -194,7 +306,15 @@ def run_recording_worker(recorder):
 
                     if self.use_extended_logging:
                         logger.debug('Debug: Checking if wake word detected')
-                    if wakeword_index >= 0:
+                    if wake_boundary is not None:
+                        # AP-SRV-060: the boundary the accepted detection
+                        # established replaces the blanket fixed-duration cut.
+                        self.wake_word_detect_time = time.time()
+                        wakeword_detected_time = time.time()
+                        wakeword_samples_to_remove = None
+                        self.wake_audio_boundary = wake_boundary
+                        self.wakeword_detected = True
+                    elif wakeword_index >= 0:
                         if self.use_extended_logging:
                             logger.debug('Debug: Wake word detected, updating variables')
                         self.wake_word_detect_time = time.time()
@@ -261,10 +381,39 @@ def run_recording_worker(recorder):
             else:
                 if self.use_extended_logging:
                     logger.debug('Debug: Handling recording state')
-                if wakeword_samples_to_remove and wakeword_samples_to_remove > 0:
+                pending_boundary = getattr(self, "wake_audio_boundary", None)
+                # Typed check, not truthiness: the trim only runs for a real
+                # boundary an accepted detection produced.
+                if isinstance(pending_boundary, WakeAudioBoundary):
+                    # AP-SRV-060 audio boundary: cut exactly at the position the
+                    # accepted detection established, so the wake word stays out
+                    # of the transcript and the first user word survives. A
+                    # ``0 ms`` pre-roll releases the audio right at the wake end.
+                    if self.use_extended_logging:
+                        logger.debug('Debug: Applying wake audio boundary')
+                    frames_end_sample = (
+                        stream_sample_position - len(data) // BYTES_PER_SAMPLE
+                    )
+                    frames_sample_count = sum(
+                        len(frame) // BYTES_PER_SAMPLE for frame in self.frames
+                    )
+                    retained, removed = trim_frames_to_boundary(
+                        self.frames,
+                        first_frame_start_sample=frames_end_sample - frames_sample_count,
+                        release_sample=pending_boundary.release_sample,
+                        bytes_per_sample=BYTES_PER_SAMPLE,
+                    )
+                    self.frames[:] = retained
+                    self.wake_audio_boundary_applied = pending_boundary
+                    self.wake_audio_boundary = None
+                    if self.use_extended_logging:
+                        logger.debug(
+                            'Debug: Wake boundary removed %s samples', removed
+                        )
+                elif wakeword_samples_to_remove and wakeword_samples_to_remove > 0:
                     if self.use_extended_logging:
                         logger.debug('Debug: Removing wakeword samples')
-                    # Drop configured wake-word audio before user speech.
+                    # Legacy path: drop the configured fixed wake-word duration.
                     samples_removed = 0
                     while wakeword_samples_to_remove > 0 and self.frames:
                         frame = self.frames[0]
@@ -276,7 +425,7 @@ def run_recording_worker(recorder):
                         else:
                             self.frames[0] = frame[wakeword_samples_to_remove * 2:]
                             samples_removed += wakeword_samples_to_remove
-                            samples_to_remove = 0
+                            wakeword_samples_to_remove = 0
 
                     wakeword_samples_to_remove = 0
 
@@ -431,8 +580,14 @@ def run_recording_worker(recorder):
             if self.use_extended_logging:
                 logger.debug('Debug: Handling wake word timeout')
             # Wake-word detection expires if speech does not start in time.
-            if self.wake_word_detect_time and time.time() - \
-                    self.wake_word_detect_time > self.wake_word_timeout:
+            # AP-SRV-060: in the v2 path the latch belongs to the accepted
+            # activation and is released at its safe input close, never by a
+            # detector timeout, so the legacy expiry is skipped there.
+            if (
+                getattr(self, "wake_detection_evaluator", None) is None
+                and self.wake_word_detect_time
+                and time.time() - self.wake_word_detect_time > self.wake_word_timeout
+            ):
 
                 self.wake_word_detect_time = 0
                 if self.wakeword_detected and self.on_wakeword_timeout:

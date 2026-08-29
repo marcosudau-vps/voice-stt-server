@@ -71,6 +71,8 @@ def initialize_recorder(
         init_args["openwakeword_inference_framework"],
         load_porcupine_module,
         load_openwakeword_modules,
+        init_args.get("wake_word_selection"),
+        init_args.get("wake_word_engine_options"),
     )
     _initialize_voice_activity_detection(
         recorder,
@@ -216,6 +218,22 @@ def _assign_initial_attributes(recorder, init_args, normalize_wakeword_backend):
     recorder.halo = None
     recorder.state = "inactive"
     recorder.wakeword_detected = False
+    # AP-SRV-060 wake detection/boundary state. The v2 path is inactive until a
+    # server session installs a catalog selection and a detection evaluator;
+    # until then every value below stays neutral and the legacy path runs.
+    recorder.wake_detection_evaluator = None
+    recorder.wake_word_selection = None
+    # AP-SRV-060 C3: the one live wake engine of this recorder, or
+    # ``None`` on every legacy/manual session.
+    recorder.wake_engine = None
+    recorder.wake_detection_evaluator = None
+    recorder.wake_word_model_key_to_id = {}
+    recorder.wake_word_input_frames = {}
+    recorder.wake_word_pre_roll_ms = 0
+    recorder.wake_stream_sample_position = 0
+    recorder.wake_audio_boundary = None
+    recorder.wake_audio_boundary_applied = None
+    recorder.accepted_wake_detection = None
     recorder.text_storage = []
     recorder.realtime_stabilized_text = ""
     recorder.realtime_stabilized_safetext = ""
@@ -543,6 +561,8 @@ def _initialize_wakeword_detection(
     openwakeword_inference_framework,
     load_porcupine_module,
     load_openwakeword_modules,
+    wake_word_selection=None,
+    wake_word_engine_options=None,
 ):
     """
     Initializes wake-word detection backends and callbacks.
@@ -557,6 +577,8 @@ def _initialize_wakeword_detection(
         openwakeword_inference_framework,
         load_porcupine_module=load_porcupine_module,
         load_openwakeword_modules=load_openwakeword_modules,
+        wake_word_selection=wake_word_selection,
+        wake_word_engine_options=wake_word_engine_options,
     )
 
 
