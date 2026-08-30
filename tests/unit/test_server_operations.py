@@ -131,6 +131,45 @@ def test_wakeword_registry_without_authority_stays_empty():
     assert registry.catalog() == {"openwakeword": []}
 
 
+def test_wakeword_registry_listing_honors_the_requested_backend_health(tmp_path):
+    """W1B-C1 F1: entry.available is True as soon as ANY backend is healthy,
+    so listing must gate on the specifically requested backend's health, not
+    on entry.available - otherwise an unhealthy ONNX artifact could still be
+    advertised (and its path handed out) merely because TFLite is healthy.
+    """
+    def failing_onnx_probe(path):
+        raise RuntimeError("onnx probe deliberately fails")
+
+    authority = build_authority(
+        tmp_path,
+        entries=[("hey_jarvis", "Hey Jarvis", ("jarvis",), "jarvis_v2.onnx")],
+        backends=("onnx", "tflite"),
+        artifact_probers={"onnx": failing_onnx_probe, "tflite": lambda path: None},
+    )
+    registry = WakeWordRegistry(authority)
+
+    onnx_models = registry.openwakeword_models(framework="onnx")
+    tflite_models = registry.openwakeword_models(framework="tflite")
+
+    assert onnx_models == []
+    assert len(tflite_models) == 1
+    assert tflite_models[0]["id"] == "hey_jarvis"
+    assert tflite_models[0]["availableFormats"] == ["tflite"]
+    assert set(tflite_models[0]["paths"]) == {"tflite"}
+
+    resolved_onnx, missing_onnx = registry.resolve_openwakeword(
+        ["hey_jarvis"], framework="onnx",
+    )
+    resolved_tflite, missing_tflite = registry.resolve_openwakeword(
+        ["hey_jarvis"], framework="tflite",
+    )
+
+    assert resolved_onnx == []
+    assert missing_onnx == ["hey_jarvis"]
+    assert resolved_tflite[0]["id"] == "hey_jarvis"
+    assert missing_tflite == []
+
+
 @dataclass
 class LogSettings:
     request_logging_enabled: bool = True

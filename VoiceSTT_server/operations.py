@@ -264,7 +264,7 @@ class WakeWordRegistry:
         preferred = str(framework or "onnx").strip().lower()
         result = []
         for entry in snapshot.entries:
-            if not entry.available:
+            if preferred not in entry.healthy_backends:
                 continue
             artifact = entry.artifact_for(preferred)
             if artifact is None:
@@ -307,17 +307,18 @@ class WakeWordRegistry:
 
     @staticmethod
     def _entry_dict(entry, artifact, preferred):
+        healthy = entry.healthy_backends
         return {
             "id": entry.id,
             "label": entry.display_name,
             "backend": "openwakeword",
-            "availableFormats": sorted(entry.declared_backends),
+            "availableFormats": sorted(healthy),
             "default": False,
             "source": "models.json",
             "path": str(artifact.path),
             "paths": {
                 backend: str(entry.artifacts[backend].path)
-                for backend in entry.declared_backends
+                for backend in healthy
             },
         }
 

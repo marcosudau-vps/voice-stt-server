@@ -122,7 +122,7 @@ Wake word flags:
 | `--wake-word-timeout` | Time to wait for speech after wake detection before returning to wake wait mode. |
 | `--wake-word-buffer-duration` | Wake-word audio removed from the beginning of the recorded segment. |
 | `--wake-word-followup-window` | Optional post-recording grace period that keeps the session in Voice mode so follow-up speech can start without repeating the wake word. |
-| `--openwakeword-model-paths` | Comma-separated classifier paths, a model directory, or a `models.json` path. |
+| `--openwakeword-model-paths` | Comma-separated explicit `.onnx`/`.tflite` classifier paths, used verbatim as a direct override. Otherwise wake words are resolved by id against the one canonical wake-word manifest; there is no directory scan and no arbitrary `models.json` path here. |
 | `--openwakeword-inference-framework` | OpenWakeWord inference framework, default `onnx`. |
 
 Capacity and scheduling flags:
@@ -415,7 +415,6 @@ python api_fastapi_server/server.py \
   --model small.en \
   --realtime-model tiny.en \
   --wakeword-backend openwakeword \
-  --openwakeword-model-paths /models/openwakeword/models.json \
   --wake-words hey_jarvis \
   --wake-words-sensitivity 0.7 \
   --wake-word-timeout 5 \
