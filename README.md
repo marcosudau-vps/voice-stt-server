@@ -155,7 +155,9 @@ audio, logging, and executor injection.
 ## Features
 
 - Voice activity detection with WebRTC VAD and Silero VAD.
-- Final and realtime transcription with selectable engines.
+- Final and realtime transcription with selectable engines, including Faster
+  Whisper, Kroko ONNX, whisper.cpp, sherpa-onnx, Parakeet, and other adapters
+  under [docs/engines](docs/engines/).
 - Optional wake word activation through Porcupine or OpenWakeWord.
 - Session-local OpenWakeWord selection for FastAPI WebSocket clients without
   changing the server baseline or other sessions.
@@ -164,6 +166,12 @@ audio, logging, and executor injection.
   word state.
 - A FastAPI browser streaming server example with multi-user session isolation,
   shared inference resources, metrics, and health endpoints.
+- A frozen protocol v2 WebSocket (`/ws/v2`) with a `hello` handshake,
+  server-authoritative activation lifecycle, and a versioned settings control
+  plane, alongside the legacy `/ws/transcribe` (v1) transport kept as a
+  required compatibility path.
+- A canonical, package-bundled wake-word build catalog (`GET`/`POST
+  /api/v2/wake-words[/refresh]`) with no runtime downloads.
 - Four SQLite-first structured server event channels with calendar JSONL
   mirrors, indexed history, session-scoped client access, server-wide Admin
   history/live access, and a separate replayable log WebSocket.
@@ -194,8 +202,8 @@ audio, logging, and executor injection.
   protocol, metrics, and deployment notes.
 - [Structured logging](docs/structured-logging.md): event channels, daily
   JSONL layout, history API, realtime measurements, and live log WebSocket.
-- [Session-local Wake Word](docs/session-wakeword-erweiterung.md): architecture,
-  handshake contract, fallbacks, isolation and live PowerShell verification.
+- [Triggerquellen & sessionlokale Wake-Word-Konfiguration](docs/client-development/09-betriebsmodi-und-serverkonfiguration.md):
+  session contract, canonical wake-word catalog, fallbacks, and isolation.
 - [Troubleshooting](docs/troubleshooting.md): common install, audio, model,
   dependency, and runtime errors.
 - [Engine licenses](docs/licenses.md): license notes for optional engine
@@ -243,6 +251,50 @@ Pro-aware release process under [build/vps](build/vps/README.md). Open
 `http://localhost:8010` for the local setup. See
 [docs/fastapi-server.md](docs/fastapi-server.md)
 for engine recipes, websocket protocol details, health checks, and metrics.
+
+### Protocol v2
+
+New clients integrate against the frozen protocol v2 WebSocket:
+
+```text
+WS /ws/v2
+```
+
+A v2 session opens with a strict `hello`/`hello.accepted` handshake, declares
+its trigger sources (`manual`, `wake_word`, or both) and its wake-word
+selection by canonical id, and is admitted atomically or refused with a
+machine-readable reason. Every subsequent state change is server-authoritative
+through one activation lifecycle shared by both trigger sources, projected as
+versioned domain events (`eventId`/`eventSeq`/`stateVersion`) with
+`session.snapshot` as the resync surface. `serverVersion`, `serverCommit`, and
+`supportedProtocolVersions` are published consistently across every v2 wire
+surface.
+
+The legacy `/ws/transcribe` (v1) transport remains a required compatibility
+path for the browser client and existing integrations; it is not scheduled for
+removal, only for targeted dead-code cleanup. v1 and v2 are strictly isolated
+at the transport level and never fall back into each other.
+
+Session and server settings are managed through a versioned settings control
+plane:
+
+```text
+GET   /api/v2/settings/schema
+GET   /api/v2/settings/server
+PATCH /api/v2/settings/server
+```
+
+Wake words are resolved against one canonical, package-bundled catalog with no
+runtime downloads:
+
+```text
+GET  /api/v2/wake-words
+POST /api/v2/wake-words/refresh
+```
+
+See [docs/fastapi-server.md](docs/fastapi-server.md) for the endpoint
+reference and [docs/client-development](docs/client-development/README.md) for
+the complete wire contract, event catalog, and client state model.
 
 ## Contributing
 

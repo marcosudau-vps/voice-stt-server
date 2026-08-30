@@ -17,7 +17,9 @@ Layering::
       -> AP-SRV-020 segment ledger    (segment_ledger.py)
       -> event projection + snapshot  (events.py, snapshot.py)
 
-The v1 transport stays untouched and isolated until AP-SRV-070.
+The v1 transport stays isolated on its own endpoint. AP-SRV-070 removed
+specific dead v1 code but kept the v1/v2 transport boundary itself intact;
+neither protocol falls back into the other.
 """
 
 from . import commands, events, handshake, identity, ports, schema, snapshot

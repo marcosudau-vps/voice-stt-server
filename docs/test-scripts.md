@@ -28,7 +28,7 @@ the default fast unit test suite.
 | `tests/voicestt_test_whispercpp.py` | Engine demo | whisper.cpp version of the interactive demo with CPU profiles. |
 | `tests/voicestt_omnilingual_test.py` | Engine smoke/demo | Linux/WSL2 Omnilingual ASR script with deterministic file smoke, init-only check, and interactive microphone mode. |
 | `tests/feed_audio.py` | External-audio demo | Opens a PyAudio stream manually and feeds chunks through `feed_audio()` with `use_microphone=False`. |
-| `tests/openwakeword_test.py` | Wake word demo | OpenWakeWord demo using local sample wake word models in the `tests/` folder. |
+| `tests/openwakeword_test.py` | Wake word demo | OpenWakeWord demo; see `tests/README.md` for the standalone setup that downloads its own sample wake word models. |
 | `tests/realtime_loop_test.py` | Realtime demo | Exercises realtime transcription in a loop. |
 | `tests/voicestt_chinese.py` | Language demo | Demonstrates Chinese transcription settings. |
 | `tests/vad_test.py` | VAD demo | Manual VAD behavior check. |
@@ -68,10 +68,7 @@ than the unit tests and maintained regression harnesses.
 | File | Category | Purpose |
 | --- | --- | --- |
 | `tests/install_packages.py` | Helper | Prompts or installs demo dependencies used by older scripts. Avoid it in automated test runs. |
-| `tests/samanta.tflite` | Data/model | OpenWakeWord model artifact used by demos. |
-| `tests/suh_mahn_thuh.onnx` | Data/model | OpenWakeWord model artifact used by `openwakeword_test.py`. |
-| `tests/suh_man_tuh.onnx` | Data/model | OpenWakeWord model artifact used by `openwakeword_test.py`. |
-| `tests/README.md` | Legacy note | Short OpenWakeWord test note. |
+| `tests/README.md` | Legacy note | Short OpenWakeWord test note; downloads its own sample models into a separate folder rather than using files committed here. |
 | `tests/__init__.py` | Package marker | Lets unit tests import from `tests`. |
 
 ## Running The Maintained Scripts

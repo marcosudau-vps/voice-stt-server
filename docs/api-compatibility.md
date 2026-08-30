@@ -338,8 +338,10 @@ The v2 settings surface is additive and coexists with all existing endpoints:
   existing `x-voicestt-admin-key`/Bearer paths), optimistic concurrency via
   `baseSettingsRevision`, atomic validation.
 
-The v1 config/runtime endpoints keep their semantics (legacy removal is
-AP-SRV-070). Errors reuse the frozen wire codes (`settings_revision_conflict`,
+The v1 config/runtime endpoints keep their semantics; AP-SRV-070 removed
+specific dead v1 code paths (see `docs/einheitliche-triggerarchitektur.md`
+§14.11) but the v1 transport itself remains a required compatibility path, not
+a removal target. Errors reuse the frozen wire codes (`settings_revision_conflict`,
 `settings_rejected`) with deterministic `field`/`code`/`message` entries. A
 persistence failure of a server patch returns HTTP 500 with
 `result: internal_error` and code `persistence_failed`, leaving RAM and
@@ -408,7 +410,7 @@ For documentation-only edits:
 
 ```powershell
 Get-Content docs\api-compatibility.md
-git -c safe.directory=D:/Projekte/STT/VoiceSTT/VoiceSTT status --short docs/api-compatibility.md
+git status --short docs/api-compatibility.md
 ```
 
 For code refactors touching the recorder API, start with the smallest relevant

@@ -36,7 +36,9 @@ Folgepaketen zugeordnet:
   `activation.command`/`command.ack`, `eventSeq`, `session.snapshot`) ist seit
   AP-SRV-040 auf dem eigenen Endpunkt `/ws/v2` verfügbar; siehe Abschnitt 12.
   Die hier beschriebenen `trigger`-/`trigger_ack`-Formen sind der geerbte
-  v1-Pfad auf `/ws/transcribe` und bleiben bis AP-SRV-070 unverändert.
+  v1-Pfad auf `/ws/transcribe`. AP-SRV-070 hat gezielt toten v1-Code entfernt
+  (siehe Abschnitt 14.11), den v1-Transport selbst aber als erforderlichen
+  Kompatibilitätspfad bestätigt und nicht abgebaut.
 - Die Timerwerte sind Sessionparameter der bestehenden Query-Admission. Die
   vollständige Settings-Control-Plane mit Scope, Auth, Constraints und
   Apply-Policy folgt in AP-SRV-050. Protokoll v2 veröffentlicht sie bereits als
@@ -51,8 +53,10 @@ Folgepaketen zugeordnet:
   Evidence in AP-SRV-060. AP-SRV-000 erfindet dafür keine Kalibrierwerte.
 
 Die Legacy-Sessionauflösung bleibt in dieser Baseline erhalten. Ihre
-Zielmodellierung beginnt in AP-SRV-010; die endgültige Entfernung der alten
-Mode-Autorität ist AP-SRV-070 zugeordnet.
+Zielmodellierung beginnt in AP-SRV-010. AP-SRV-070 hat die alte
+`activation_config.mode == "legacy"`-Autorität geprüft und als
+`KEEP_REQUIRED` bestätigt, solange der v1-Transport aktiv ist; eine
+Entfernung ist nicht vorgesehen.
 
 ---
 
@@ -867,7 +871,8 @@ eine Session aus Queryparametern **vor** der ersten Nachricht und sendet ein
 Server-`hello`; v2 admittiert nichts, bis das Client-`hello` vollständig
 validiert ist. Beides in einer Route zu mischen hieße, innerhalb einer bereits
 admittierten Session auf die Protokollversion zu verzweigen – genau das
-verbietet der Contract. Der v1-Pfad bleibt bis AP-SRV-070 unverändert.
+verbietet der Contract. Der v1-Pfad bleibt als Kompatibilitätsgrenze bestehen;
+AP-SRV-070 hat daran nur gezielten toten Code entfernt, siehe Abschnitt 14.11.
 
 Eine v2-Verbindung wird absichtlich **nicht** im gemeinsamen
 `ConnectionManager` registriert. Alles, was ein v2-Client sieht, läuft durch
@@ -1143,9 +1148,11 @@ AP_SRV_060_BINDING           -> gebunden durch AP-SRV-060 (Wake-Word-Katalog,
 
 ### 12.10 Koexistenz mit v1
 
-v1 und v2 laufen bis AP-SRV-070 nebeneinander, aber ausschließlich auf der
-Transportebene. Innerhalb einer angenommenen v2-Verbindung gibt es keinen
-v1-Fallback, und keine Domainautorität existiert doppelt.
+v1 und v2 laufen dauerhaft nebeneinander, aber ausschließlich auf der
+Transportebene. AP-SRV-070 hat diese Koexistenz bestätigt statt aufgelöst:
+der v1-Transport bleibt ein erforderlicher Kompatibilitätspfad. Innerhalb
+einer angenommenen v2-Verbindung gibt es keinen v1-Fallback, und keine
+Domainautorität existiert doppelt.
 
 ## 13. Settings-Control-Plane (AP-SRV-050)
 
@@ -1259,7 +1266,9 @@ angeforderten Server-Settings-Commit wirkungslos (prepare → persist → commit
   Latch, Cooldown, Pre-Roll und Audio-Grenze sind AP-SRV-060.
 - Runtime-Suppression bleibt `trigger_suppression.set`-Autorität; die Registry
   stellt sie nur dar (`writable=false`).
-- Der v1-Pfad bleibt unverändert funktional; der Legacyabbau ist AP-SRV-070.
+- Der v1-Pfad bleibt funktional und ist ein `KEEP_REQUIRED`-Kompatibilitätspfad;
+  AP-SRV-070 hat daran nur konkret bewiesenen toten Code entfernt, nicht den
+  v1-Transport selbst.
 
 ### 13.7 Session-Snapshot – Requested vs. Effective
 
@@ -1587,7 +1596,8 @@ Wake-Word-Aufnahmen (`WW-18`/`WW-19`) und ist `EVIDENCE_BLOCKED`. Der Nullpunkt
 selbst gehört nicht zu dieser Lücke.
 
 Die pauschale `wake_word_buffer_duration`-Abschneidung existiert nur noch im
-v1-Recorderpfad und entfällt mit AP-SRV-070.
+v1-Recorderpfad. AP-SRV-070/W1B hat sie bewusst als Legacykompatibilität
+erhalten (siehe Abschnitt 14.11) statt sie zu entfernen.
 
 ### 14.9a Ein gemeinsames Inference Backend je Live-Engine
 

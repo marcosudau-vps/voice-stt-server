@@ -49,7 +49,7 @@ catalog are returned in `hello.sessionConfig` and `sessionCapabilities`.
 `hello.logAccess` supplies the session-scoped token used for the separate log
 WebSocket and history endpoints. See the
 [FastAPI server guide](../docs/fastapi-server.md),
-[session-local Wake Word reference](../docs/session-wakeword-erweiterung.md),
+[session-local Wake Word reference](../docs/client-development/09-betriebsmodi-und-serverkonfiguration.md),
 and [structured logging contract](../docs/structured-logging.md).
 
 See [the complete Windows CPU deployment guide](../docs/windows-cpu-deployment.md).

@@ -32,8 +32,10 @@ einer angenommenen v2-Verbindung gibt es keinen v1-Fallback. Der vollständige
 Vertrag steht in
 [`docs/einheitliche-triggerarchitektur.md`](../einheitliche-triggerarchitektur.md),
 Abschnitt 12. Neue Desktop-Clients werden gegen `/ws/v2` gebaut; der
-Browserclient und bestehende Clients bleiben bis AP-SRV-070 auf
-`/ws/transcribe`. Zusätzlich existiert
+Browserclient und bestehende Clients bleiben auf `/ws/transcribe`. AP-SRV-070
+hat den v1-Transport als dauerhaften Kompatibilitätspfad bestätigt und nur
+gezielt toten Legacy-Code darin entfernt, nicht `/ws/transcribe` selbst.
+Zusätzlich existiert
 auf demselben FastAPI-/HTTP-Port der eigenständige, SQLite-first
 `/ws/logs`-Eventstream. Diese zweite Verbindung transportiert weder Audio noch
 Recorderbefehle und ist nicht mit der unten beschriebenen Zwei-Port-STT-

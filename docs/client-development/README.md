@@ -85,10 +85,11 @@ flowchart LR
 
 ## Aktuelle versionierte Repository-Baseline
 
-Eine zusammenhängende Architektur-, Migrations- und Betriebsbeschreibung der
-Session-Wake-Word-Erweiterung einschließlich eines ausführbaren
-PowerShell-Nachweises steht unter
-[`docs/session-wakeword-erweiterung.md`](../session-wakeword-erweiterung.md).
+Der aktuelle Vertrag der sessionlokalen Wake-Word-Konfiguration steht unter
+[`09-betriebsmodi-und-serverkonfiguration.md`](09-betriebsmodi-und-serverkonfiguration.md)
+und [`docs/wake-words.md`](../wake-words.md). Die ursprüngliche
+Einführungsdokumentation der Erweiterung ist historisch archiviert unter
+[`docs/.archiv/session-wakeword`](../.archiv/session-wakeword/).
 
 Das zentrale Entwicklungs- und Deploymentprofil `config.yaml` konfiguriert:
 

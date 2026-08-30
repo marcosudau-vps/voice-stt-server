@@ -2253,8 +2253,8 @@ class RecorderBackedRealtimeSession:
         self.session_id = session_id
         self.client_id = normalized_client_id(client_id)
         # A protocol v2 session generates canonical, hyphenated UUIDs at every
-        # authoritative id source. The v1 transport keeps its compact ids until
-        # the legacy cut in AP-SRV-070.
+        # authoritative id source. The v1 transport keeps its compact ids
+        # permanently; the AP-SRV-070 legacy cut did not migrate them.
         self.canonical_ids = bool(canonical_ids)
         self._id_factory = (
             (lambda: str(uuid.uuid4())) if self.canonical_ids else None
@@ -9372,7 +9372,8 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         ``hello``, while v2 admits nothing until the *client* ``hello`` has
         been validated. Mixing both into one route would need a protocol
         branch inside an already admitted session, which the frozen contract
-        forbids. The legacy route stays untouched until AP-SRV-070.
+        forbids. The legacy route stays a separate, required compatibility
+        path; AP-SRV-070 removed dead code from it without merging it here.
 
         A v2 connection is deliberately not registered in the shared
         ``ConnectionManager``: everything a v2 client sees passes through the

@@ -17,9 +17,12 @@ die aktuelle Dokumentation eingeordnet:
   sessionweitem `commandId`-Replay, nicht kumulatives `refresh`,
   Daueraufnahme-Watchdog, `closing_input`-Recovery, immutable Segmentkontexte,
   terminales Segmentledger und sessionsweit geordneter Background-Drain.
-- [Sitzungslokale Wake-Word-Konfiguration](session-wakeword-erweiterung.md):
-  sicherer Sessionvertrag, OpenWakeWord-Modellkatalog, Fallbacks, Isolation und
-  Betriebsnachweis.
+- [Wake Words](wake-words.md) und
+  [Triggerquellen & sessionlokale Wake-Word-Konfiguration](client-development/09-betriebsmodi-und-serverkonfiguration.md):
+  sicherer Sessionvertrag, kanonischer Wake-Word-Katalog, OpenWakeWord-Modelle,
+  Fallbacks, Isolation und Admin-API. Die ursprüngliche Einführungsdokumentation
+  ist archiviert unter
+  [`.archiv/session-wakeword`](.archiv/session-wakeword/).
 - [Strukturiertes Logging](structured-logging.md): vier Channels, gemeinsamer
   Event-Envelope, kanonischer SQLite-first Commit, optionale kalenderbasierte
   JSONL-Spiegel, sessionbezogener Zugriff und global authentifizierter

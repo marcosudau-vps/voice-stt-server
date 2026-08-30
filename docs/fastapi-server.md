@@ -73,7 +73,16 @@ The server exposes:
 - `GET /api/logs/events`, `/api/logs/sessions/{sessionId}`, and
   `/api/logs/transcriptions/{transcriptionId}`: authenticated structured event
   history.
-- `WS /ws/transcribe`: browser audio stream and command channel.
+- `WS /ws/transcribe`: legacy (v1) browser audio stream and command channel.
+  Kept as a required compatibility path; see
+  [Session-local Wake Word profile](#session-local-wake-word-profile-legacy-v1-endpoint)
+  below.
+- `WS /ws/v2`: frozen protocol v2 audio/command channel. See
+  [Protocol v2](#protocol-v2) below.
+- `GET /api/v2/settings/schema`, `GET`/`PATCH /api/v2/settings/server`:
+  versioned settings control plane. See [Settings v2](#settings-v2) below.
+- `GET /api/v2/wake-words`, `POST /api/v2/wake-words/refresh`: wake-word build
+  catalog. See [Wake Word build catalog](#wake-word-build-catalog) below.
 - `WS /ws/logs`: SQLite-first, session- or admin-scoped cursor replay and live
   events (log protocol version 2).
 
@@ -421,7 +430,12 @@ python api_fastapi_server/server.py \
   --wake-word-followup-window 5
 ```
 
-## WebSocket Protocol
+## WebSocket Protocol (legacy v1: `/ws/transcribe`)
+
+`/ws/transcribe` is the legacy (v1) audio/command transport. It is kept as a
+required compatibility path for the browser client and existing integrations;
+it is not scheduled for removal. New clients should integrate against
+[Protocol v2](#protocol-v2) instead.
 
 The browser sends binary audio packets to `/ws/transcribe`:
 
@@ -475,7 +489,94 @@ session. `realtime` and `final` events may include a `segment` object with
 recording start/end timestamps, duration, pre-recording buffer range, and wake
 word timing when available.
 
-### Wake Word build catalog (protocol v2)
+### Session-local Wake Word profile (legacy v1 endpoint)
+
+Wake Word behavior is resolved before the session recorder is created:
+
+```text
+/ws/transcribe?wakeWordEnabled=false
+/ws/transcribe?wakeWordEnabled=true
+/ws/transcribe?wakeWordEnabled=true&wakeWords=hey_jarvis
+```
+
+`wakeWordEnabled` is the decisive tri-state selector: absent, `null`, or
+`inherit` copies the server baseline; `false` disables Wake Word for this
+session; `true` activates an OpenWakeWord profile. Optional query parameters
+are `wakeWordBackend`, `wakeWords`, `wakeWordInferenceFramework`, `wakeWordSensitivity`,
+`wakeWordActivationDelay`, `wakeWordTimeout`, `wakeWordBufferDuration`, and
+`wakeWordFollowupWindow`.
+
+Invalid optional values fall back to the corresponding server value or active
+OpenWakeWord profile and are reported under `sessionConfig.fallbacks` and
+`sessionConfig.warnings`; there is no manifest default to fall back to. If no
+local model can satisfy an enabled profile, the server sends a
+`session_config` error and closes with code 1008. `hello` and `ready` contain
+the same effective `sessionConfig` and a path-free logical model catalog under
+`sessionCapabilities`.
+
+## Protocol v2
+
+```text
+WS /ws/v2
+```
+
+`/ws/v2` is the frozen protocol v2 audio/command channel. It is strictly
+isolated from `/ws/transcribe` at the transport level: a v2 client never
+receives a v1 message, an admitted v2 connection has no v1 fallback, and a
+32-character v1 session id is always rejected on v2. `serverVersion`,
+`serverCommit`, and `supportedProtocolVersions` (`(2,)`) are published
+consistently across every v2 wire surface (`hello.accepted`,
+`session.snapshot`, `protocol.incompatible`, `session.rejected`).
+
+A v2 session opens with a strict client-first handshake:
+
+```json
+{
+  "type": "hello",
+  "supportedProtocolVersions": [2],
+  "clientVersion": "1.0.0",
+  "clientCommit": "abcdef1",
+  "clientRunId": "8f14e45f-ceea-467e-adde-3fb5c6c81510",
+  "requestedSession": {
+    "trigger": {"manual": true, "wakeWord": true},
+    "wakeWordIds": ["hey_jarvis"]
+  },
+  "runtimeSuppression": {"manual": false, "wakeWord": false}
+}
+```
+
+The server admits nothing until the `hello` is fully validated, then responds
+with `hello.accepted` carrying `sessionId` (canonical UUIDv4), `serverVersion`,
+`serverCommit`, `supportedProtocolVersions`, and the effective session
+configuration. Admission is atomic: an unsupported protocol version, a
+malformed or missing handshake field, an invalid trigger combination (both
+trigger sources disabled), or an unresolvable wake-word selection refuses the
+whole session with `protocol.incompatible` or `session.rejected` and a
+machine-readable reason; there is no partial session.
+
+### Server-authoritative activation lifecycle
+
+Both trigger sources (`manual` and `wake_word`) open the same kind of
+activation and share one lifecycle, timer, and segment ledger. The client
+sends `activation.command` (`activate`, `refresh`, `finish`, `cancel`) with a
+`commandId`; the server answers `command.ack` and never trusts client-reported
+state. Domain events are versioned and ordered:
+
+```text
+eventId       stable identity of one logical event, safe to retry
+eventSeq      monotonic per-session sequence
+stateVersion  advances exactly once per visible state change
+```
+
+`session.snapshot` is the resynchronization surface: a client that reconnects
+or suspects drift requests it and receives the complete current state,
+including pending activations, requested/effective settings, and wake-word
+capabilities, rather than replaying history. The complete event catalog,
+phase matrix, and close-code reference are in
+[docs/client-development](client-development/README.md) and
+[docs/einheitliche-triggerarchitektur.md](einheitliche-triggerarchitektur.md).
+
+### Wake Word build catalog
 
 ```text
 GET  /api/v2/wake-words           public, versioned build catalog
@@ -508,30 +609,23 @@ artifact is refused at admission instead of failing the session build.
 `VOICESTT_WAKEWORD_ASSET_ROOT` points the server at a bundle outside the
 package. See [Wake Words](wake-words.md) for the complete contract.
 
-### Session-local Wake Word profile (legacy v1 endpoint)
-
-Wake Word behavior is resolved before the session recorder is created:
+## Settings v2
 
 ```text
-/ws/transcribe?wakeWordEnabled=false
-/ws/transcribe?wakeWordEnabled=true
-/ws/transcribe?wakeWordEnabled=true&wakeWords=hey_jarvis
+GET   /api/v2/settings/schema    public, non-secret settings metadata
+GET   /api/v2/settings/server    public, non-secret server values + revision
+PATCH /api/v2/settings/server    admin-auth (X-Admin-Key), optimistic concurrency
 ```
 
-`wakeWordEnabled` is the decisive tri-state selector: absent, `null`, or
-`inherit` copies the server baseline; `false` disables Wake Word for this
-session; `true` activates an OpenWakeWord profile. Optional query parameters
-are `wakeWordBackend`, `wakeWords`, `wakeWordInferenceFramework`, `wakeWordSensitivity`,
-`wakeWordActivationDelay`, `wakeWordTimeout`, `wakeWordBufferDuration`, and
-`wakeWordFollowupWindow`.
-
-Invalid optional values fall back to the corresponding server value, active
-OpenWakeWord profile, or manifest default and are reported under
-`sessionConfig.fallbacks` and `sessionConfig.warnings`. If no local model can
-satisfy an enabled profile, the server sends a `session_config` error and
-closes with code 1008. `hello` and `ready` contain the same effective
-`sessionConfig` and a path-free logical model catalog under
-`sessionCapabilities`.
+`PATCH` validates atomically against `baseSettingsRevision`; a stale revision
+or a rejected value never partially applies and reuses the frozen wire codes
+(`settings_revision_conflict`, `settings_rejected`). On the v2 wire,
+`session.snapshot` additionally carries `requestedSettings` next to
+`effectiveSettings` and `settingsRevision` so a client can distinguish what it
+asked for from what actually applies. Apply policy is per key
+(`live`, `next_activation`, `next_session`, `server_restart`); a running activation
+keeps its latched timing/wake-word snapshot even after a patch, the next one
+uses the new value. No secret value is ever returned.
 
 ## Metrics And Health
 

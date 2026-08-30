@@ -460,7 +460,8 @@ negatives. That needs real positive wake-word recordings (WW-18/WW-19) and is
 reported as **`EVIDENCE_BLOCKED`**.
 
 The legacy `wake_word_buffer_duration` fixed-duration cut still exists for the
-v1 recorder path and is removed with AP-SRV-070.
+v1 recorder path. AP-SRV-070 confirmed it stays as legacy compatibility rather
+than being removed; it is not part of the v2 audio boundary above.
 
 ## Session settings
 

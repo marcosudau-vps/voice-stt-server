@@ -302,7 +302,9 @@ Die folgenden Endpunkte benötigen bei konfiguriertem Adminschlüssel
 | `GET /api/logs/events` | serverweite retained Eventhistorie mit Filtern lesen | keine |
 
 `PUT /api/wake-word` akzeptiert für Aktivierung nur OpenWakeWord. `words`
-enthält logische IDs; leer bedeutet Manifest-Standardmodell. Optional kann
+enthält logische IDs; ist der Wert leer und ist auch keine bestehende
+Baseline auflösbar, lehnt der Endpunkt die Anfrage ab (kein
+Manifest-Standardmodell mehr seit AP-SRV-070/W1B). Optional kann
 `openwakewordModelPaths` als Suchquelle einen Modellpfad, einen Modellordner
 oder `models.json` angeben. Persistiert werden die aufgelösten lokalen
 Klassifikatorpfade.
@@ -374,7 +376,8 @@ exakt der angeforderten Konfiguration entspricht.
   nicht.
 - `false` deaktiviert Wake Word auch bei aktivierter Serverbaseline.
 - fehlend/`null`/`inherit` übernimmt die Baseline unverändert.
-- `true` ohne weitere Werte nutzt Baseline oder `default_model`.
+- `true` ohne weitere Werte nutzt die Baseline; ohne verwendbare Baseline und
+  ohne `wakeWords` lehnt der Server ab (kein `default_model` mehr).
 - logische Modell-IDs werden case-insensitiv aufgelöst.
 - unbekannte IDs und ungültige Tuningwerte erzeugen sichtbare Fallbacks.
 - ein fehlendes Fallbackmodell wird vor der eigentlichen Session abgelehnt.

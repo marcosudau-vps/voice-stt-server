@@ -1,9 +1,8 @@
 # Module Map
 
-This map records the current repository shape for safe, incremental refactoring.
-It complements `docs/ARCHITECTURE.md` with module-level ownership, public
-surfaces, side effects, and validation hints. It is descriptive, not a target
-architecture mandate.
+This map records the current repository shape for safe, incremental
+refactoring: module-level ownership, public surfaces, side effects, and
+validation hints. It is descriptive, not a target architecture mandate.
 
 ## System Shape
 

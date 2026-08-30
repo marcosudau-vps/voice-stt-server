@@ -17,7 +17,9 @@ The frozen schema serialises UUIDs canonically, with hyphens. AP-SRV-040 does
 a second string for one identity. Instead a v2 session generates canonical
 ids at their authoritative source (:func:`new_canonical_id`) and the very
 same string travels through controller, ledger, acks, events and snapshot.
-The v1 transport keeps its compact ids until AP-SRV-070.
+The v1 transport keeps its compact ids permanently; the frozen contract
+rejects them on v2 (Invariant 3) rather than migrating them, and AP-SRV-070
+did not introduce a v1 id migration.
 """
 
 import uuid
