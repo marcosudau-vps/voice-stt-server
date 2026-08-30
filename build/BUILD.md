@@ -208,10 +208,23 @@ die Abnahme. Die schnelle Unit-Suite verwendet `requirements-dev.txt`.
 
 ## Versions- und Releasepflege
 
-Die Paketversion steht derzeit als `current_version` in `setup.py`. Ein
-Projekt-Release muss mindestens folgende Stellen konsistent halten:
+Die Produktversion hat genau eine Authority (AP-SRV-070): die
+source-controlled Datei `VERSION` im Repository-Root, aufgeloest ueber
+`VoiceSTT/_version.py`. `setup.py`, das importierbare Paket
+(`VoiceSTT.__version__`), der laufende Server und der Protocol-v2-Handshake
+(`serverVersion`) lesen alle denselben Resolver; keiner dieser Orte pflegt
+mehr eine eigene Versionskonstante.
 
-1. Version in `setup.py` aendern.
+Ein Release-Kandidat kann die Version ueber die validierte Umgebungsvariable
+`VOICESTT_BUILD_VERSION` injizieren, ohne `VERSION` vor dem Tag dauerhaft zu
+aendern. Ein ungueltiger Override wird hart abgelehnt, nie still verworfen.
+
+Die kuenftige Release-Bedienung (W5/W6) folgt dem Muster
+`python release.py` (Patch), `--minor`, `--major` - ohne manuelle
+Versionspflege durch den Benutzer. Bis dahin muss ein Projekt-Release
+mindestens folgende Stellen konsistent halten:
+
+1. Version in `VERSION` aendern (spaeter automatisiert durch `release.py`).
 2. `RELEASE_NOTES.md` von `Unreleased` in einen datierten Versionsabschnitt
    ueberfuehren.
 3. Unit-Tests, Paketbuild, `twine check` und relevante Realmodelltests

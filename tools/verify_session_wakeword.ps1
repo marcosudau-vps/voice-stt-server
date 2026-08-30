@@ -78,9 +78,12 @@ $queryParameters = @(
 )
 $backends = @($config.sessionCapabilities.wakeWord.backends)
 
+# AP-SRV-070: the product version now comes from one automatic version
+# authority (VoiceSTT/_version.py) and changes on every release, so this
+# check only validates the published shape, not a specific frozen literal.
 Assert-Condition `
-    -Condition ($openApi.info.version -eq "2.0.0") `
-    -Message "Unerwartete FastAPI-Version: $($openApi.info.version)"
+    -Condition ($openApi.info.version -match '^\d+\.\d+\.\d+') `
+    -Message "FastAPI-Version ist keine gueltige SemVer-Version: $($openApi.info.version)"
 Assert-Condition `
     -Condition ($config.sessionCapabilities.version -ge 1) `
     -Message "Der Server veröffentlicht keinen versionierten Session-Contract."

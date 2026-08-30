@@ -1,11 +1,39 @@
 import os
 import re
+import sys
 
 import setuptools
 from setuptools.command.build_py import build_py as _build_py
 
+REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
-current_version = "1.0.2"
+# A PEP 517 in-process build backend execs this file without necessarily
+# putting its own directory on sys.path first (unlike a plain
+# "python setup.py ..." invocation) - make the two repository-root sibling
+# modules below importable in both cases.
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
+from VoiceSTT._version import resolve_version
+from wakeword_package_resources import bundled_package_data_files
+
+# AP-SRV-070: the single product version authority. See VoiceSTT/_version.py
+# for the resolution order (build/release override, else the source-controlled
+# VERSION file, else the installed distribution's own metadata) - this is
+# deliberately not a second, independently maintained version constant.
+current_version = resolve_version()
+
+# AP-SRV-070: the exact, manifest-derived wake-word asset file list. Replaces
+# the previous broad "*.onnx"/"*.tflite" package_data globs, which would also
+# ship unmanifested historical wake-word variants that merely happen to live
+# next to the real bundle (see wakeword_package_resources.py).
+_WAKEWORD_ASSET_DIR = os.path.join(
+    REPO_ROOT, "VoiceSTT", "assets", "wakeword_models"
+)
+wakeword_package_data = [
+    "assets/wakeword_models/" + name
+    for name in bundled_package_data_files(_WAKEWORD_ASSET_DIR)
+]
 
 
 INSTALL_GUIDE = """
@@ -312,11 +340,10 @@ setuptools.setup(
             "assets/warmup_audio.wav",
             # AP-SRV-060: the wake-word build assets ship with the package, so
             # an installed wheel on Windows and on Ubuntu resolves them without
-            # any runtime download.
-            "assets/wakeword_models/models.json",
-            "assets/wakeword_models/*.onnx",
-            "assets/wakeword_models/*.tflite",
-        ],
+            # any runtime download. AP-SRV-070: the exact file list is the
+            # manifest-derived authority above, not a glob - see
+            # wakeword_package_resources.py for why a glob is unsafe here.
+        ] + wakeword_package_data,
         "api_fastapi_server": ["static/index.html"],
     },
     include_package_data=True,

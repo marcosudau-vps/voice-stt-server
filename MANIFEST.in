@@ -2,11 +2,16 @@ include requirements.txt
 include README.md
 include RELEASE_NOTES.md
 include LICENSE
-# AP-SRV-060 wake-word build assets: bundled models plus the canonical
-# catalog manifest. They are product assets, not runtime downloads.
-include VoiceSTT/assets/wakeword_models/models.json
-recursive-include VoiceSTT/assets/wakeword_models *.onnx
-recursive-include VoiceSTT/assets/wakeword_models *.tflite
+# AP-SRV-070: the one version authority (see VoiceSTT/_version.py) and the
+# repository-root helper module setup.py imports to resolve the exact
+# wake-word package data (see wakeword_package_resources.py); an sdist must
+# carry both so it stays independently rebuildable.
+include VERSION
+include wakeword_package_resources.py
+# AP-SRV-070: the wake-word build assets are added to the sdist by setup.py's
+# manifest-derived package_data list (see wakeword_package_resources.py), not
+# by a glob here - a glob would also ship unmanifested historical variants
+# that happen to live in the same directory (AP-SRV-070 W2-C2 root finding).
 prune docs/development
 prune dev-log
 prune roadmap

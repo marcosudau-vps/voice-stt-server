@@ -7563,9 +7563,14 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         yield
         service.stop()
 
+    # AP-SRV-070: the OpenAPI/docs-facing app version reads the one product
+    # version authority (VoiceSTT._version) - not a third, independently
+    # hardcoded literal next to the v2 handshake's serverVersion.
+    from api_fastapi_server.protocol_v2 import identity as _app_identity
+
     app = FastAPI(
         title="VoiceSTT FastAPI-Server",
-        version="2.0.0",
+        version=_app_identity.server_version(),
         lifespan=lifespan,
     )
 

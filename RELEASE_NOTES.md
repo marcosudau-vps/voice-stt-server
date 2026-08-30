@@ -4,6 +4,17 @@
 
 ### Added
 
+- Added a single automatic product version authority (`VERSION` plus
+  `VoiceSTT/_version.py`): `setup.py`, the importable package, the running
+  server and the Protocol-v2 handshake now all read the same resolved
+  version instead of three independently hardcoded values. Migrated the
+  baseline to `2.0.0`, the already-established v2 server identity - this is
+  a packaging/versioning-authority consolidation, not a new release bump.
+- Added a deterministic, manifest-derived wake-word package-data authority
+  (`wakeword_package_resources.py`) so the public wheel/sdist only ever
+  contains the 25 manifested dual-backend wake words, the shared pipeline
+  assets and the bundled VAD asset - never the historical, unmanifested
+  model variants that also live under `VoiceSTT/assets/wakeword_models/`.
 - Added `build/BUILD.md` as the canonical project-wide reference for Python
   packaging, Docker builds, Kroko Community/Pro variants, testing, deployment
   acceptance and rollback.

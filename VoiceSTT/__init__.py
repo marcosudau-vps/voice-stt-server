@@ -2,6 +2,8 @@
 Exposes the public VoiceSTT package objects through lazy imports.
 """
 
+from ._version import resolve_version as _resolve_version
+
 __all__ = [
     "AudioToTextRecorder",
     "AudioToTextRecorderClient",
@@ -9,7 +11,14 @@ __all__ = [
     "RealtimeSpeechBoundaryDetector",
     "SpeechBoundaryEvent",
     "SpeechBoundaryResult",
+    "__version__",
+    "get_version",
 ]
+
+
+def get_version() -> str:
+    """The one product version authority (see :mod:`VoiceSTT._version`)."""
+    return _resolve_version()
 
 
 def __getattr__(name):
@@ -17,6 +26,8 @@ def __getattr__(name):
     Loads exported package attributes lazily.
     """
 
+    if name == "__version__":
+        return get_version()
     if name == "AudioToTextRecorder":
         from .audio_recorder import AudioToTextRecorder
 
