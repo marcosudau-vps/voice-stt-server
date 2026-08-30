@@ -31,10 +31,32 @@ import sys
 REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
 TARGET = REPO_ROOT / "VoiceSTT" / "assets" / "wakeword_models"
 
-#: The framework the bundled build ships. tflite artifacts are deliberately not
-#: bundled: the server default is ONNX and doubling the bundle would add no
-#: capability the v2 catalog exposes.
-BUNDLED_FRAMEWORK = "onnx"
+#: Every backend the bundled build ships, in manifest/output order. The
+#: frozen SRV-060 contract requires a matching ONNX/TFLite pair for every
+#: publicly manifested wake word and pipeline artifact; a source that only
+#: offers one of the two for an entry is a sync error, not a silent
+#: single-backend degrade (see ``build_manifest``).
+BUNDLED_FRAMEWORKS = ("onnx", "tflite")
+
+#: The manifest revision of the current, frozen bundle contract. This is a
+#: source-controlled generator constant, not a value read back from the
+#: previously generated target ``models.json`` - a reproducible rebuild must
+#: not depend on its own prior output. Bump this deliberately whenever the
+#: generated manifest shape or content changes.
+CATALOG_REVISION = 2
+
+#: Wake assets that are not per-wake-word classifiers or per-backend pipeline
+#: components, but are still sourced deterministically from the same
+#: upstream ``--source`` authority (``openwakeword_models.pipeline_models``)
+#: and must round-trip byte for byte. Key: internal label used in
+#: diagnostics. Value: the upstream pipeline_models key. These are synced and
+#: checked exactly like every other bundle artifact; they are deliberately
+#: not added as a new field to the v2 manifest JSON, since no such field is
+#: part of the frozen SRV-060 manifest contract and none of the currently
+#: committed artifacts are consumed through the manifest either.
+AUXILIARY_ASSETS = {
+    "vad": "silero_vad_onnx",
+}
 
 #: Explicit, catalogued short forms. The frozen contract forbids heuristically
 #: stripping "Hey", so every short form has to be listed here or it does not
@@ -86,21 +108,86 @@ def sha256_of(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
+def render_manifest(value, _indent: int = 0) -> str:
+    """The committed manifest's serialization authority.
+
+    Two-space indented, like ``json.dumps(..., indent=2)``, with one
+    deliberate deviation: an array of scalars (``aliases``, deliberately kept
+    short and simple) renders inline on one line instead of one element per
+    line, matching every ``models.json`` committed for this bundle contract.
+    An array of objects (``wakeWords`` itself) still expands normally.
+    """
+    pad = "  " * _indent
+    pad_inner = "  " * (_indent + 1)
+    if isinstance(value, dict):
+        if not value:
+            return "{}"
+        entries = [
+            f"{pad_inner}{json.dumps(key)}: {render_manifest(item, _indent + 1)}"
+            for key, item in value.items()
+        ]
+        return "{\n" + ",\n".join(entries) + "\n" + pad + "}"
+    if isinstance(value, list):
+        if not value:
+            return "[]"
+        if all(not isinstance(item, (dict, list)) for item in value):
+            return "[" + ", ".join(json.dumps(item, ensure_ascii=False) for item in value) + "]"
+        entries = [f"{pad_inner}{render_manifest(item, _indent + 1)}" for item in value]
+        return "[\n" + ",\n".join(entries) + "\n" + pad + "]"
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _index_by_canonical_id(mapping):
+    """Upstream ``{raw_id: filename}`` reindexed by :func:`canonical_id`."""
+    indexed = {}
+    for raw_id, filename in mapping.items():
+        identifier = canonical_id(raw_id)
+        if identifier in indexed:
+            raise SystemExit(f"duplicate canonical id after normalization: {identifier}")
+        indexed[identifier] = filename
+    return indexed
+
+
 def build_manifest(source: pathlib.Path):
     """The canonical v2 manifest plus the file list it references."""
     upstream = json.loads((source / "models.json").read_text(encoding="utf-8"))
     section = upstream["openwakeword_models"]
-    classifiers = section["onnx_models"]
+    classifiers_by_framework = {
+        framework: _index_by_canonical_id(section[f"{framework}_models"])
+        for framework in BUNDLED_FRAMEWORKS
+    }
     pipeline = section["pipeline_models"]
+
+    ids_by_framework = {
+        framework: set(classifiers) for framework, classifiers in classifiers_by_framework.items()
+    }
+    all_ids = set().union(*ids_by_framework.values())
+    for identifier in sorted(all_ids):
+        missing = [
+            framework for framework in BUNDLED_FRAMEWORKS
+            if identifier not in ids_by_framework[framework]
+        ]
+        if missing:
+            raise SystemExit(
+                f"dual-backend mismatch for '{identifier}': "
+                f"missing {', '.join(missing)} classifier upstream"
+            )
 
     files = {}
     wake_words = []
-    for raw_id, filename in sorted(classifiers.items(), key=lambda item: canonical_id(item[0])):
-        artifact = source / filename
-        if not artifact.is_file():
-            raise SystemExit(f"missing upstream artifact: {artifact}")
-        identifier = canonical_id(raw_id)
-        files[filename] = artifact
+    for identifier in sorted(all_ids):
+        artifacts = {}
+        for framework in BUNDLED_FRAMEWORKS:
+            filename = classifiers_by_framework[framework][identifier]
+            artifact = source / filename
+            if not artifact.is_file():
+                raise SystemExit(f"missing upstream artifact: {artifact}")
+            files[filename] = artifact
+            artifacts[framework] = {
+                "file": filename,
+                "sha256": sha256_of(artifact),
+                "bytes": artifact.stat().st_size,
+            }
         wake_words.append({
             "id": identifier,
             "displayName": display_name(identifier),
@@ -110,39 +197,48 @@ def build_manifest(source: pathlib.Path):
             # raised whenever the bundled bytes are replaced. The verifiable
             # byte identity is ``sha256`` below.
             "artifactVersion": "1",
-            "artifacts": {
-                BUNDLED_FRAMEWORK: {
-                    "file": filename,
-                    "sha256": sha256_of(artifact),
-                    "bytes": artifact.stat().st_size,
-                },
-            },
+            "artifacts": artifacts,
         })
 
-    pipeline_files = {}
-    for role, key in (("melspectrogram", "melspectrogram_onnx"),
-                      ("embedding", "embedding_model_onnx")):
-        filename = pipeline[key]
+    pipeline_data = {}
+    for framework in BUNDLED_FRAMEWORKS:
+        pipeline_files = {}
+        for role, key in (("melspectrogram", f"melspectrogram_{framework}"),
+                          ("embedding", f"embedding_model_{framework}")):
+            filename = pipeline[key]
+            artifact = source / filename
+            if not artifact.is_file():
+                raise SystemExit(f"missing upstream pipeline artifact: {artifact}")
+            files[filename] = artifact
+            pipeline_files[role] = {
+                "file": filename,
+                "sha256": sha256_of(artifact),
+                "bytes": artifact.stat().st_size,
+            }
+        pipeline_data[framework] = pipeline_files
+
+    for label, upstream_key in AUXILIARY_ASSETS.items():
+        if upstream_key not in pipeline:
+            raise SystemExit(
+                f"missing upstream auxiliary asset key ({label}): "
+                f"pipeline_models.{upstream_key}"
+            )
+        filename = pipeline[upstream_key]
         artifact = source / filename
         if not artifact.is_file():
-            raise SystemExit(f"missing upstream pipeline artifact: {artifact}")
+            raise SystemExit(f"missing upstream auxiliary artifact ({label}): {artifact}")
         files[filename] = artifact
-        pipeline_files[role] = {
-            "file": filename,
-            "sha256": sha256_of(artifact),
-            "bytes": artifact.stat().st_size,
-        }
 
     manifest = {
         "manifestVersion": 2,
-        "catalogRevision": 1,
+        "catalogRevision": CATALOG_REVISION,
         "generatedBy": "tools/sync_wakeword_assets.py",
         "description": (
             "Kanonische Wake-Word-Catalog-Authority des v2-Pfades. "
             "AP-SRV-070 hat den früheren 'openwakeword_models'-Legacyspiegel "
             "für den v1-Pfad entfernt; dies ist die einzige Manifestquelle."
         ),
-        "pipeline": {BUNDLED_FRAMEWORK: pipeline_files},
+        "pipeline": pipeline_data,
         "wakeWords": wake_words,
     }
     return manifest, files
@@ -156,7 +252,7 @@ def main(argv=None) -> int:
 
     source = pathlib.Path(args.source).expanduser()
     manifest, files = build_manifest(source)
-    rendered = json.dumps(manifest, indent=2, ensure_ascii=False, sort_keys=False) + "\n"
+    rendered = render_manifest(manifest) + "\n"
 
     if args.check:
         problems = []

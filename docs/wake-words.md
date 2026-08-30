@@ -52,8 +52,10 @@ the bundle elsewhere can point the server at it with:
 VOICESTT_WAKEWORD_ASSET_ROOT=/opt/voicestt/wakeword_models
 ```
 
-Only ONNX artifacts are bundled, so the v2 catalog resolves ONNX. The bundle is
-regenerated reproducibly from an upstream model directory with:
+Both ONNX and TFLite artifacts are bundled for every publicly manifested wake
+word and pipeline component, so the v2 catalog resolves `auto`/`onnx`/`tflite`
+(see `wakeWord.inferenceBackend` below). The bundle is regenerated
+reproducibly from an upstream model directory with:
 
 ```bash
 python tools/sync_wakeword_assets.py --source S:/MODELS/openwakeword/resources/models/all_models
