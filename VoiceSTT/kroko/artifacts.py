@@ -44,6 +44,45 @@ from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 from . import buildinputs
 from .fingerprint import canonical_json
 
+#: OS advisory-lock primitives (AP-SRV-070 W4A-C2, Root Finding H). Guarded
+#: import: ``fcntl`` does not exist on Windows, ``msvcrt`` only exists there.
+if os.name == "nt":
+    import msvcrt
+
+    def _acquire_os_lock(handle) -> bool:
+        """Attempts to take an exclusive, non-blocking lock on ``handle``."""
+        try:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+
+    def _release_os_lock(handle) -> None:
+        """Releases a lock previously taken by :func:`_acquire_os_lock`."""
+        try:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+else:
+    import fcntl
+
+    def _acquire_os_lock(handle) -> bool:
+        """Attempts to take an exclusive, non-blocking lock on ``handle``."""
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except OSError:
+            return False
+
+    def _release_os_lock(handle) -> None:
+        """Releases a lock previously taken by :func:`_acquire_os_lock`."""
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+
 #: Version of the stored metadata document.
 ARTIFACT_SCHEMA_VERSION = 1
 
@@ -472,37 +511,53 @@ class KrokoArtifactStore:
     ) -> Iterator[None]:
         """Exclusive, per-(variant, fingerprint) lock (Root Hardening).
 
-        Backed by ``os.open(..., O_CREAT | O_EXCL)``: the create-if-absent
-        check and the creation itself are one atomic OS call on both POSIX and
-        Windows, so two processes racing to acquire the same lock file can
-        never both believe they got it - the loser always sees
-        ``FileExistsError`` and waits. This makes concurrent access to the
-        *same* slot serialize correctly regardless of whether the two callers
-        are threads in one process or two separate OS processes; only the slot
-        this lock names is affected, so a concurrent build of a *different*
-        variant/fingerprint is never blocked.
+        AP-SRV-070 W4A-C2, Root Finding H made this crash-recoverable. The
+        original (C1) implementation treated the lock **file's existence**
+        (``os.open(..., O_CREAT | O_EXCL)``) as the mutex: correct for two
+        live, well-behaved processes, but if the holder was killed after
+        acquiring it, the ``finally`` that deleted the file never ran, and the
+        file stayed behind forever - every future acquirer of that slot would
+        then wait out the full timeout on every attempt, with no automatic or
+        manual way to recover short of deleting the file by hand.
+
+        The mutex is now a real OS advisory lock (POSIX ``flock`` / Windows
+        ``LK_NBLCK``) held on an *open file handle*, not the file's mere
+        presence. That is what makes it crash-recoverable: the OS itself
+        releases the lock the instant the holding handle closes, for any
+        reason at all - a normal exit, an exception, or a hard kill - with no
+        stale-file detection, lease or heartbeat logic needed.
+
+        The lock file is deliberately **never deleted** (unlike the C1
+        version). Unlinking it while another process might already have it
+        open is the classic advisory-lock "unlink race": a second process
+        could ``open()`` and lock a *new* file at the same path while a third,
+        already-waiting process still holds a lock tied to the *old*
+        (unlinked) inode - both would then believe they hold the slot at the
+        same time. Leaving the small, otherwise-inert marker file in place
+        permanently avoids that race entirely; only the OS lock state, never
+        the file's existence, is the actual mutex.
         """
         lock_path = self._slot_lock_path(variant, fingerprint)
         lock_path.parent.mkdir(parents=True, exist_ok=True)
-        deadline = time.monotonic() + timeout
-        fd = None
-        while fd is None:
-            try:
-                fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_RDWR)
-            except FileExistsError:
+        handle = open(lock_path, "a+b")
+        try:
+            if handle.seek(0, 2) == 0:
+                # msvcrt.locking() needs at least one lockable byte.
+                handle.write(b"\0")
+                handle.flush()
+            deadline = time.monotonic() + timeout
+            while not _acquire_os_lock(handle):
                 if time.monotonic() >= deadline:
                     raise KrokoArtifactError(
                         f"timed out waiting for the Kroko artifact slot lock: {lock_path}"
                     )
                 time.sleep(poll_interval)
-        try:
-            yield
-        finally:
-            os.close(fd)
             try:
-                lock_path.unlink()
-            except OSError:
-                pass
+                yield
+            finally:
+                _release_os_lock(handle)
+        finally:
+            handle.close()
 
     # -- read ----------------------------------------------------------------
 

@@ -12,10 +12,13 @@ calls does not.
 
 import json
 import os
+import subprocess
+import sys
 import unittest
 import zipfile
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest import mock
 
 from VoiceSTT import install_kroko
@@ -336,12 +339,22 @@ class AtomicReplacementTests(StoreBaseTest):
             variant="free", fingerprint=computed["fingerprint"], inputs=computed["inputs"]
         )
         self.assertEqual(found.wheel_sha256, second.wheel_sha256)
-        # No leftover staging, lock or backup directories/files.
+        # No leftover staging or backup directories/files.
+        #
+        # AP-SRV-070 W4A-C2, Root Finding H: the lock *file* itself is no
+        # longer expected to be absent here - it is now deliberately never
+        # deleted (see KrokoArtifactStore._slot_lock's docstring for why:
+        # unlinking it would reintroduce the classic advisory-lock "unlink
+        # race"). Only the OS lock state is released, not the file. Staging
+        # must still be fully empty; the lock directory containing exactly
+        # this one inert marker file is the expected, correct steady state.
         leftovers = [p.name for p in self.store.root.glob("*") if p.name.startswith(".")]
         for name in leftovers:
             self.assertIn(name, (artifacts.STAGING_DIR_NAME, artifacts.LOCK_DIR_NAME))
         self.assertEqual(list((self.store.root / artifacts.STAGING_DIR_NAME).iterdir()), [])
-        self.assertEqual(list((self.store.root / artifacts.LOCK_DIR_NAME).iterdir()), [])
+        lock_files = list((self.store.root / artifacts.LOCK_DIR_NAME).iterdir())
+        self.assertEqual(len(lock_files), 1)
+        self.assertTrue(lock_files[0].name.startswith("free__"))
 
     def test_default_store_adopts_rather_than_replaces_an_existing_artifact(self):
         """The counterpart: adopt_existing defaults to True (Root Hardening)."""
@@ -428,6 +441,27 @@ class BuilderReuseFlowTests(unittest.TestCase):
         self.assertEqual(
             self.build_calls, ["free"], "a matching artifact must be reused, not rebuilt"
         )
+
+    def test_reuse_hit_never_calls_prepare_checkout(self):
+        """AP-SRV-070 W4A-C2, Root Finding F, RED-proof #4.
+
+        The pristine-checkout materialization added for Finding F lives
+        inside prepare_checkout(); a reuse hit must never reach it at all, so
+        a cache hit stays exactly as cheap as before - no checkout, no git
+        commands, no re-materialization.
+        """
+        self.assertEqual(self.run_builder(), 0)  # first run: real cache miss
+
+        argv = ["--build", "--skip-install", "--artifact-store", str(self.store_root)]
+        with mock.patch.object(install_kroko, "build_wheel") as build_wheel, \
+             mock.patch.object(install_kroko, "preflight_build") as preflight, \
+             mock.patch.object(install_kroko, "prepare_checkout") as prepare:
+            exit_code = install_kroko.main(argv)  # second run: must be a hit
+
+        self.assertEqual(exit_code, 0)
+        prepare.assert_not_called()
+        preflight.assert_not_called()
+        build_wheel.assert_not_called()
 
     def test_free_artifact_is_reused_after_an_intervening_pro_build(self):
         self.run_builder()                               # free build
@@ -581,8 +615,20 @@ class SecretLeakageTests(StoreBaseTest):
             )
 
     def test_free_build_environment_does_not_enable_pro(self):
+        """AP-SRV-070 W4A-C2, Root Finding E strengthened this assertion.
+
+        Before C2, a free build simply left KROKO_LICENSE unset (absent) -
+        which was itself the bug: if the operator's own shell already had
+        KROKO_LICENSE=ON, "absent from our own explicit settings" meant
+        "silently inherited as ON". The switch must now be explicitly OFF,
+        not merely absent; see RootFindingELinuxCapabilityIsolationTests for
+        the direct ambient-inheritance regression test.
+        """
         build_env = install_kroko.linux_build_env("free")
-        self.assertNotIn(buildinputs.PRO_BUILD_ENV_NAME, build_env)
+        self.assertIn(buildinputs.PRO_BUILD_ENV_NAME, build_env)
+        self.assertEqual(
+            build_env[buildinputs.PRO_BUILD_ENV_NAME], buildinputs.PRO_BUILD_ENV_OFF_VALUE
+        )
 
     def test_runtime_key_lookup_outside_the_builder_is_unchanged(self):
         """The Secret Boundary correction must not touch runtime key reading.
@@ -811,8 +857,14 @@ class RootHardeningConcurrentSlotAccessTests(unittest.TestCase):
         wheel_files = list(found.slot_dir.glob("*.whl"))
         self.assertEqual(len(wheel_files), 1)
 
-        # No stale lock or staging debris left behind.
-        self.assertEqual(list((self.store.root / artifacts.LOCK_DIR_NAME).glob("*")), [])
+        # No staging debris left behind. AP-SRV-070 W4A-C2, Root Finding H:
+        # the lock *file* is deliberately never deleted (see
+        # KrokoArtifactStore._slot_lock's docstring - removing it would
+        # reintroduce the advisory-lock "unlink race"), so exactly one inert
+        # marker file for this slot is the expected steady state, not zero.
+        self.assertEqual(list((self.store.root / artifacts.STAGING_DIR_NAME).glob("*")), [])
+        lock_files = list((self.store.root / artifacts.LOCK_DIR_NAME).glob("*"))
+        self.assertEqual(len(lock_files), 1)
 
     def test_a_second_store_call_reuses_an_already_stored_artifact(self):
         """A parallel process must adopt a hit, not clobber it (Root Hardening)."""
@@ -857,6 +909,363 @@ class RootHardeningConcurrentSlotAccessTests(unittest.TestCase):
             thread.join(timeout=10)
 
         self.assertEqual(order, ["holder-enter", "holder-exit", "waiter-enter"])
+
+
+class RootFindingELinuxCapabilityIsolationTests(unittest.TestCase):
+    """AP-SRV-070 W4A-C2, Root Finding E - KROKO_LICENSE must never be ambient.
+
+    Before this correction, only the ``pro`` branch of ``linux_build_env()``
+    set ``KROKO_LICENSE`` explicitly; a ``free`` build silently kept whatever
+    value (if any) the parent process already had. An operator whose shell
+    already exported ``KROKO_LICENSE=ON`` - or a checkout whose CMake cache
+    still carried it from a previous Pro build - could therefore get a
+    Pro-capable build from ``--variant free``.
+    """
+
+    def test_ambient_license_on_does_not_survive_a_free_build(self):
+        with mock.patch.dict(os.environ, {"KROKO_LICENSE": "ON"}, clear=False):
+            env = install_kroko.linux_build_env("free")
+        self.assertEqual(
+            env[buildinputs.PRO_BUILD_ENV_NAME], buildinputs.PRO_BUILD_ENV_OFF_VALUE
+        )
+
+    def test_ambient_license_off_does_not_prevent_a_pro_build(self):
+        with mock.patch.dict(os.environ, {"KROKO_LICENSE": "OFF"}, clear=False):
+            env = install_kroko.linux_build_env("pro")
+        self.assertEqual(
+            env[buildinputs.PRO_BUILD_ENV_NAME], buildinputs.PRO_BUILD_ENV_VALUE
+        )
+
+    def test_ambient_garbage_value_does_not_survive_a_free_build(self):
+        """Any ambient value, not just ON/OFF, must be overridden - free means OFF."""
+        with mock.patch.dict(
+            os.environ, {"KROKO_LICENSE": "definitely-not-a-recognized-value"}, clear=False
+        ):
+            env = install_kroko.linux_build_env("free")
+        self.assertEqual(
+            env[buildinputs.PRO_BUILD_ENV_NAME], buildinputs.PRO_BUILD_ENV_OFF_VALUE
+        )
+
+    def test_windows_build_env_does_not_inherit_the_ambient_capability_switch(self):
+        with mock.patch.dict(os.environ, {"KROKO_LICENSE": "ON"}, clear=False):
+            env = install_kroko.windows_build_env()
+        self.assertNotIn(buildinputs.PRO_BUILD_ENV_NAME, env)
+
+    def test_sanitizer_strips_the_capability_switch_directly(self):
+        sanitized = install_kroko.sanitize_build_subprocess_env(
+            {"KROKO_LICENSE": "ON", "PATH": "/usr/bin"}
+        )
+        self.assertNotIn("KROKO_LICENSE", sanitized)
+        self.assertEqual(sanitized["PATH"], "/usr/bin")
+
+    def test_runtime_key_variables_remain_stripped_regression(self):
+        """Regression: Finding E must not weaken Finding C's key stripping."""
+        environment = {name: "still-a-secret" for name in install_kroko.KROKO_LICENSE_KEY_ENV_NAMES}
+        environment["KROKO_LICENSE"] = "ON"
+        with mock.patch.dict(os.environ, environment, clear=False):
+            env = install_kroko.linux_build_env("free")
+        for name in install_kroko.KROKO_LICENSE_KEY_ENV_NAMES:
+            self.assertNotIn(name, env)
+
+
+class RootFindingFPristineCheckoutTests(unittest.TestCase):
+    """AP-SRV-070 W4A-C2, Root Finding F - every real build starts pristine.
+
+    Drives a real, throwaway local git repository (never the VoiceSTT
+    worktree and never the real Kroko upstream) through the actual
+    ``prepare_checkout()``/``materialize_pristine_checkout()`` code path, so
+    "tracked files are reset and untracked ones are removed" is proven against
+    real git behavior rather than asserted against a mock.
+    """
+
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.work_dir = Path(self.temp.name) / "work"
+        self.work_dir.mkdir()
+        self._make_local_upstream()
+
+    def _run_git(self, args, cwd):
+        subprocess.run(
+            ["git"] + args, cwd=str(cwd), check=True,
+            capture_output=True, text=True,
+        )
+
+    def _make_local_upstream(self):
+        source = Path(self.temp.name) / "source"
+        source.mkdir()
+        self._run_git(["init"], cwd=source)
+        self._run_git(["config", "user.email", "test@example.invalid"], cwd=source)
+        self._run_git(["config", "user.name", "Test"], cwd=source)
+        (source / "build_windows.bat").write_text("REM pristine upstream content\r\n")
+        self._run_git(["add", "."], cwd=source)
+        self._run_git(["commit", "-m", "initial"], cwd=source)
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=str(source),
+            check=True, capture_output=True, text=True,
+        )
+        self.pinned_revision = result.stdout.strip()
+        self.upstream_dir = Path(self.temp.name) / "upstream.git"
+        self._run_git(["clone", "--bare", str(source), str(self.upstream_dir)], cwd=self.temp.name)
+
+    def _clone_into_work_dir(self):
+        repo_dir = self.work_dir / "kroko-onnx"
+        self._run_git(["clone", str(self.upstream_dir), str(repo_dir)], cwd=self.work_dir)
+        self._run_git(["checkout", "--detach", self.pinned_revision], cwd=repo_dir)
+        return repo_dir
+
+    def _args(self):
+        return SimpleNamespace(
+            force=False, branch="main", repo=str(self.upstream_dir),
+            revision=self.pinned_revision,
+        )
+
+    def test_prepare_checkout_restores_a_tracked_file_modified_by_a_previous_patch_run(self):
+        repo_dir = self._clone_into_work_dir()
+        tracked = repo_dir / "build_windows.bat"
+        tracked.write_text("REM already patched by a previous run\r\n")
+
+        install_kroko.prepare_checkout(self._args(), work_dir=self.work_dir)
+
+        # Compared with normalized line endings: git's own autocrlf handling
+        # on this host may legitimately rewrite CRLF<->LF on checkout, which
+        # is unrelated to what this test actually proves (that the *content*
+        # was reset to the pristine upstream commit, not left as the
+        # "already patched" modification).
+        self.assertEqual(
+            tracked.read_text().replace("\r\n", "\n").strip(),
+            "REM pristine upstream content",
+        )
+
+    def test_prepare_checkout_removes_a_stale_cmake_cache_and_build_artifacts(self):
+        repo_dir = self._clone_into_work_dir()
+        cmake_cache = repo_dir / "CMakeCache.txt"
+        cmake_cache.write_text("KROKO_LICENSE:BOOL=ON\n")
+        build_dir = repo_dir / "release_artifacts"
+        build_dir.mkdir()
+        (build_dir / "stale.whl").write_bytes(b"stale")
+
+        install_kroko.prepare_checkout(self._args(), work_dir=self.work_dir)
+
+        self.assertFalse(
+            cmake_cache.exists(), "a stale CMake cache must not survive prepare_checkout"
+        )
+        self.assertFalse(
+            build_dir.exists(), "a stale build-artifact directory must not survive prepare_checkout"
+        )
+
+    def test_free_cannot_inherit_a_pro_builds_cached_cmake_state(self):
+        """RED-proof #3: a stale Pro CMake cache cannot leak into a free build."""
+        repo_dir = self._clone_into_work_dir()
+        (repo_dir / "CMakeCache.txt").write_text("KROKO_LICENSE:BOOL=ON\n")
+
+        install_kroko.prepare_checkout(self._args(), work_dir=self.work_dir)
+
+        self.assertFalse((repo_dir / "CMakeCache.txt").exists())
+        env = install_kroko.linux_build_env("free")
+        self.assertEqual(
+            env[buildinputs.PRO_BUILD_ENV_NAME], buildinputs.PRO_BUILD_ENV_OFF_VALUE
+        )
+
+    def test_effective_repo_and_revision_still_feed_the_fingerprint(self):
+        """RED-proof #3 (fingerprint side): unaffected by the F correction."""
+        args = SimpleNamespace(variant="free", repo="https://example.invalid/x.git", revision="d" * 40)
+        computed = install_kroko.fingerprint_for(args)
+        self.assertEqual(computed["inputs"]["upstream"]["repo"], "https://example.invalid/x.git")
+        self.assertEqual(computed["inputs"]["upstream"]["revision"], "d" * 40)
+
+    def test_abbreviated_revision_cannot_bypass_the_exact_commit_postcheck(self):
+        """RED-proof #5: a short/abbreviated revision can never silently pass."""
+        repo_dir = self._clone_into_work_dir()
+        short_revision = self.pinned_revision[:10]
+        with self.assertRaises(install_kroko.KrokoInstallError):
+            install_kroko.ensure_pinned_revision(repo_dir, short_revision)
+
+    def test_materialize_pristine_checkout_refuses_a_path_outside_the_work_root(self):
+        """Defensive scoping guard, mirroring remove_tree_inside's existing pattern."""
+        outside = Path(self.temp.name) / "not-under-work-dir"
+        outside.mkdir()
+        with self.assertRaises(install_kroko.KrokoInstallError):
+            install_kroko.materialize_pristine_checkout(
+                outside, self.pinned_revision, work_dir=self.work_dir
+            )
+
+    def test_materialize_pristine_checkout_refuses_the_work_root_itself(self):
+        with self.assertRaises(install_kroko.KrokoInstallError):
+            install_kroko.materialize_pristine_checkout(
+                self.work_dir, self.pinned_revision, work_dir=self.work_dir
+            )
+
+
+class RootFindingHCrashRecoverableLockTests(unittest.TestCase):
+    """AP-SRV-070 W4A-C2, Root Finding H - the slot lock survives a crash.
+
+    C1's lock treated the lock file's mere *existence* as the mutex; a
+    process killed after acquiring it left that file behind forever, and
+    every future acquirer of the same slot would wait out the full timeout on
+    every attempt with no automatic recovery. The lock is now a real OS
+    advisory lock on an open handle, released by the OS itself the instant
+    the holding handle closes - including when the process is killed.
+    """
+
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.store = artifacts.KrokoArtifactStore(Path(self.temp.name) / "store")
+
+    def test_orphaned_lock_is_reacquirable_without_manual_cleanup(self):
+        """Simulates a crashed holder: acquire the OS lock, then close the
+        handle *without* releasing it first - exactly what happens when a
+        process is killed. A fresh acquirer must succeed immediately, not
+        wait out the lock timeout, and no file needs to be deleted by hand.
+        """
+        lock_path = self.store._slot_lock_path("free", "deadbeefdeadbeef")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        crashed = open(lock_path, "a+b")
+        if crashed.seek(0, 2) == 0:
+            crashed.write(b"\0")
+            crashed.flush()
+        self.assertTrue(artifacts._acquire_os_lock(crashed))
+        crashed.close()  # simulated crash: no _release_os_lock call
+
+        import time
+
+        start = time.monotonic()
+        acquired = []
+        with self.store._slot_lock("free", "deadbeefdeadbeef", timeout=5, poll_interval=0.01):
+            acquired.append(True)
+        elapsed = time.monotonic() - start
+        self.assertEqual(acquired, [True])
+        self.assertLess(elapsed, 1.0, "must not wait out the lock timeout for an orphaned lock")
+
+    def test_orphaned_lock_after_a_real_killed_subprocess(self):
+        """The strongest form of the proof: a genuinely separate OS process,
+        forcibly killed while holding the lock.
+        """
+        lock_path = self.store._slot_lock_path("free", "cafebabecafebabe")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+
+        holder_script = (
+            "import sys\n"
+            "sys.path.insert(0, {repo!r})\n"
+            "from VoiceSTT.kroko import artifacts\n"
+            "handle = open({lock!r}, 'a+b')\n"
+            "if handle.seek(0, 2) == 0:\n"
+            "    handle.write(b'\\0'); handle.flush()\n"
+            "assert artifacts._acquire_os_lock(handle)\n"
+            "print('LOCKED', flush=True)\n"
+            "import time\n"
+            "time.sleep(30)\n"
+        ).format(repo=str(Path(__file__).resolve().parents[2]), lock=str(lock_path))
+
+        process = subprocess.Popen(
+            [sys.executable, "-c", holder_script],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        try:
+            line = process.stdout.readline()
+            if line.strip() != "LOCKED":
+                # ``process.stderr.read()`` blocks until the child's stderr
+                # pipe hits EOF, which requires the (still-sleeping) child to
+                # exit - so it must stay out of assertEqual's eagerly
+                # evaluated ``msg`` argument. Calling it there previously made
+                # every run of this test wait out the child's full 30s sleep
+                # before ever reaching the ``kill()`` below, which defeated
+                # the point of proving a *prompt* recovery after a kill.
+                self.fail(f"expected LOCKED, got {line!r}: {process.stderr.read()}")
+        finally:
+            process.kill()
+            process.wait(timeout=10)
+
+        import time
+
+        start = time.monotonic()
+        acquired = []
+        with self.store._slot_lock("free", "cafebabecafebabe", timeout=10, poll_interval=0.05):
+            acquired.append(True)
+        elapsed = time.monotonic() - start
+        self.assertEqual(acquired, [True])
+        self.assertLess(elapsed, 5.0, "must not wait out the lock timeout after a real process kill")
+
+    def test_fresh_lock_still_excludes_a_second_acquirer(self):
+        """Regression: the crash-safety change must not weaken exclusivity."""
+        import threading
+        import time as time_module
+
+        order = []
+        lock_entered = threading.Event()
+
+        def holder():
+            with self.store._slot_lock("free", "fadefadefadefade", timeout=5):
+                lock_entered.set()
+                order.append("holder-enter")
+                time_module.sleep(0.2)
+                order.append("holder-exit")
+
+        def waiter():
+            lock_entered.wait(timeout=5)
+            with self.store._slot_lock("free", "fadefadefadefade", timeout=5):
+                order.append("waiter-enter")
+
+        threads = [threading.Thread(target=holder), threading.Thread(target=waiter)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        self.assertEqual(order, ["holder-enter", "holder-exit", "waiter-enter"])
+
+    def test_force_rebuild_still_really_replaces_regression(self):
+        """RED-proof #4: the lock rewrite must not weaken --rebuild-kroko."""
+        computed = fingerprint.compute_fingerprint(variant="free")
+        with TemporaryDirectory() as build_dir:
+            first = self.store.store(
+                wheel_path=make_wheel(Path(build_dir) / "a", variant="free", payload=b"first"),
+                fingerprint=computed["fingerprint"], inputs=computed["inputs"],
+                adopt_existing=False,
+            )
+            second = self.store.store(
+                wheel_path=make_wheel(Path(build_dir) / "b", variant="free", payload=b"second"),
+                fingerprint=computed["fingerprint"], inputs=computed["inputs"],
+                adopt_existing=False,
+            )
+        self.assertNotEqual(first.wheel_sha256, second.wheel_sha256)
+
+    def test_concurrent_store_still_avoids_corruption_regression(self):
+        """RED-proof #3: the lock rewrite must not weaken concurrency safety."""
+        import threading
+
+        computed = fingerprint.compute_fingerprint(variant="free")
+        with TemporaryDirectory() as build_dir:
+            wheel_a = make_wheel(Path(build_dir) / "a", variant="free", payload=b"racer-a")
+            wheel_b = make_wheel(Path(build_dir) / "b", variant="free", payload=b"racer-b")
+
+            barrier = threading.Barrier(2)
+            results = {}
+            errors = []
+
+            def racer(name, wheel):
+                try:
+                    barrier.wait(timeout=10)
+                    results[name] = self.store.store(
+                        wheel_path=wheel,
+                        fingerprint=computed["fingerprint"],
+                        inputs=computed["inputs"],
+                    )
+                except Exception as exc:  # noqa: BLE001 - captured for assertion
+                    errors.append((name, exc))
+
+            threads = [
+                threading.Thread(target=racer, args=("a", wheel_a)),
+                threading.Thread(target=racer, args=("b", wheel_b)),
+            ]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=30)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(results["a"].wheel_sha256, results["b"].wheel_sha256)
 
 
 if __name__ == "__main__":

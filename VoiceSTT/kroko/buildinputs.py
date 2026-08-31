@@ -84,11 +84,25 @@ PATCH_SET_REVISION = 1
 #: declared rather than appended/defaulted), and the new secret-boundary
 #: sanitizer shared by both platforms (``sanitize_build_subprocess_env``,
 #: ``windows_build_env``).
-BUILDER_REVISION = 2
+#:
+#: Bumped 2 -> 3 (AP-SRV-070 W4A-C2, Root Findings E/F): the Linux build
+#: environment now declares ``KROKO_LICENSE`` explicitly instead of only
+#: setting it for ``pro``, and every real build now forces the external
+#: Kroko builder checkout to a pristine state (``materialize_pristine_checkout``)
+#: before applying VoiceSTT's patches, so a stale patch, CMake cache or
+#: build artifact from a previous run can never influence a new build.
+BUILDER_REVISION = 3
 
 #: CMake flags forced for the CPU-only Linux build. Kroko's license client
 #: includes websocketpp headers unconditionally, which is why WebSocket support
 #: stays ON even for a CPU-only server build.
+#:
+#: AP-SRV-070 W4A-C2, Root Finding G.2: the pinned upstream's own CMakeLists
+#: defaults ``SHERPA_ONNX_USE_PRE_INSTALLED_ONNXRUNTIME_IF_AVAILABLE`` to
+#: ``ON``, so the mere presence of a host-installed ONNX Runtime could
+#: silently change what a build under the *same* declared fingerprint links
+#: against. Forced OFF here so the build is deterministic regardless of what
+#: else happens to be installed on the host.
 LINUX_CMAKE_FLAGS = (
     "-DCMAKE_BUILD_TYPE=Release "
     "-DSHERPA_ONNX_ENABLE_GPU=OFF "
@@ -96,7 +110,8 @@ LINUX_CMAKE_FLAGS = (
     "-DSHERPA_ONNX_ENABLE_WEBSOCKET=ON "
     "-DSHERPA_ONNX_ENABLE_TTS=OFF "
     "-DSHERPA_ONNX_ENABLE_SPEAKER_DIARIZATION=OFF "
-    "-DSHERPA_ONNX_ENABLE_BINARY=OFF"
+    "-DSHERPA_ONNX_ENABLE_BINARY=OFF "
+    "-DSHERPA_ONNX_USE_PRE_INSTALLED_ONNXRUNTIME_IF_AVAILABLE=OFF"
 )
 
 #: Parallelism for the Linux build. Build-effective only in wall-clock terms,
@@ -108,6 +123,26 @@ LINUX_MAKE_ARGS = "-j2"
 #: built without any key, and the key is supplied only at run time.
 PRO_BUILD_ENV_NAME = "KROKO_LICENSE"
 PRO_BUILD_ENV_VALUE = "ON"
+
+#: The explicit value the Linux builder sets for a free build.
+#:
+#: AP-SRV-070 W4A-C2, Root Finding E: this switch must never be inherited
+#: ambiently from the operator's shell. Before this fix, only the ``pro``
+#: branch set it explicitly; a ``free`` build silently kept whatever
+#: ``KROKO_LICENSE`` value (if any) the parent process already had, which
+#: could turn a ``--variant free`` build into a licensed one. The Linux
+#: builder now always declares this switch explicitly - ``ON`` for pro,
+#: ``OFF`` for free - never leaving it to ambient inheritance either way.
+PRO_BUILD_ENV_OFF_VALUE = "OFF"
+
+#: Environment variable names that toggle a Kroko build *capability* rather
+#: than carry a secret. Distinct from ``KROKO_LICENSE_KEY_ENV_NAMES`` in
+#: ``VoiceSTT/install_kroko.py`` (the four runtime license *keys*): stripping
+#: this from a build subprocess's ambient environment is about determinism
+#: and the Free/Pro hard boundary, not about secrecy. Every native build
+#: subprocess environment removes this ambiently and re-declares it
+#: explicitly where it is meaningful (currently: the Linux build).
+KROKO_CAPABILITY_SWITCH_ENV_NAMES = (PRO_BUILD_ENV_NAME,)
 
 #: The build variants this project supports.
 VARIANT_FREE = "free"
@@ -139,6 +174,7 @@ def normalize_variant(variant: str) -> str:
 
 __all__ = [
     "BUILDER_REVISION",
+    "KROKO_CAPABILITY_SWITCH_ENV_NAMES",
     "KROKO_UPSTREAM_BRANCH_HINT",
     "KROKO_UPSTREAM_REPO",
     "KROKO_UPSTREAM_REVISION",
@@ -147,6 +183,7 @@ __all__ = [
     "PATCHED_UPSTREAM_SOURCES",
     "PATCH_SET_REVISION",
     "PRO_BUILD_ENV_NAME",
+    "PRO_BUILD_ENV_OFF_VALUE",
     "PRO_BUILD_ENV_VALUE",
     "SUPPORTED_VARIANTS",
     "VARIANT_FREE",

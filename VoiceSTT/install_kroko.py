@@ -77,18 +77,28 @@ LINUX_BUILD_ENV_STRIP_NAMES = (
 
 def sanitize_build_subprocess_env(base_env):
     """
-    Returns a copy of base_env with every known Kroko license key removed.
+    Returns a copy of base_env with every known Kroko license key AND the
+    ambient Free/Pro capability switch removed.
 
     Applied to every native build subprocess environment - Linux and Windows
-    alike - so a license key an operator has set for runtime use (to test the
-    server, for example) can never leak into a build. This is the one Secret
-    Boundary the builder must uphold on both platforms; see
-    ``VoiceSTT.kroko.buildinputs`` for the Pro capability switch that replaces
-    a key at build time.
+    alike. The four runtime license keys can never leak into a build (a
+    developer's shell may perfectly legitimately have one set to exercise the
+    server at runtime); see ``VoiceSTT.kroko.buildinputs.PRO_BUILD_ENV_NAME``
+    for the Pro capability switch that replaces a key at build time.
+
+    AP-SRV-070 W4A-C2, Root Finding E: the capability switch itself
+    (``KROKO_LICENSE``) is stripped here too, unconditionally, on both
+    platforms. It is not a secret, but it must never be *ambient* either - a
+    ``--variant free`` build must not silently turn Pro-capable just because
+    the operator's shell already had ``KROKO_LICENSE=ON`` set. Whichever
+    platform-specific build-env function needs the switch re-declares it
+    explicitly afterwards; Windows deliberately does not, because its
+    ``--variant`` CLI argument to the pinned builder is the sole authority
+    there.
     """
 
     sanitized = dict(base_env)
-    for name in KROKO_LICENSE_KEY_ENV_NAMES:
+    for name in KROKO_LICENSE_KEY_ENV_NAMES + buildinputs.KROKO_CAPABILITY_SWITCH_ENV_NAMES:
         sanitized.pop(name, None)
     return sanitized
 
@@ -385,8 +395,47 @@ def prepare_checkout(args, work_dir=None):
         print("Using existing Kroko-ONNX checkout: {0}".format(repo_dir))
         print("Pass --force to delete and clone it again.")
 
-    ensure_pinned_revision(repo_dir, getattr(args, "revision", DEFAULT_REVISION))
+    revision = getattr(args, "revision", DEFAULT_REVISION)
+    ensure_pinned_revision(repo_dir, revision)
+    materialize_pristine_checkout(repo_dir, revision, work_dir=work_dir)
     return repo_dir
+
+
+def materialize_pristine_checkout(repo_dir, revision, *, work_dir):
+    """
+    Forces the Kroko builder checkout to a pristine state at ``revision``.
+
+    AP-SRV-070 W4A-C2, Root Finding F: an identical ``HEAD`` does not prove a
+    pristine working tree. ``ensure_pinned_revision()`` above returns
+    immediately once the checkout is already at the pinned commit - which is
+    the common case for a reused checkout - without checking whether any
+    tracked file was modified since (VoiceSTT's own patch functions do exactly
+    that) or whether untracked build artifacts (a CMake cache, a previous
+    ``release_artifacts`` directory) are still lying around. Patches are
+    intentionally idempotent and detect their own marker, so a leftover
+    already-patched file could make a new patch-contract change silently not
+    apply at all. This resets every tracked file back to exactly ``revision``
+    and removes every untracked/ignored file, so VoiceSTT's patches are always
+    applied to a genuinely unmodified upstream tree and nothing from a
+    previous build (including a previous Pro build's cached
+    ``KROKO_LICENSE=ON`` CMake state) can influence a new one.
+
+    Scoped exclusively to ``repo_dir`` - the external Kroko builder checkout
+    under its own builder ``work_dir``, never the VoiceSTT project worktree.
+    ``work_dir`` is required and checked explicitly (mirroring
+    ``remove_tree_inside``'s existing safety pattern) so this can never be
+    pointed at the wrong directory by a future caller.
+    """
+
+    repo_dir = Path(repo_dir).resolve()
+    work_dir = Path(work_dir).resolve()
+    if repo_dir == work_dir or work_dir not in repo_dir.parents:
+        raise KrokoInstallError(
+            "Refusing to force-reset a checkout outside the Kroko builder "
+            "work root: {0}".format(repo_dir)
+        )
+    run(["git", "reset", "--hard", revision], cwd=repo_dir)
+    run(["git", "clean", "-fdx"], cwd=repo_dir)
 
 
 def current_revision(repo_dir):
@@ -933,8 +982,19 @@ def linux_build_env(variant):
     - Every known Kroko license key variable is removed
       (``sanitize_build_subprocess_env``): the build must never be able to see
       a key, even though a developer's shell may have one set to exercise the
-      server at runtime. The Pro capability switch below is unaffected - it is
-      not a secret.
+      server at runtime.
+
+    AP-SRV-070 W4A-C2 root correction (Finding E): the Free/Pro capability
+    switch ``KROKO_LICENSE`` is now *always* declared explicitly - ``ON`` for
+    ``pro``, ``OFF`` for ``free`` - never left to whatever the operator's
+    shell happened to already have. Previously only the ``pro`` branch set it,
+    so a ``free`` build silently inherited an ambient ``KROKO_LICENSE=ON``
+    unchanged, and the pinned upstream itself documents that its CMake cache
+    can keep a previous Pro build's license state around. Combined with
+    ``materialize_pristine_checkout`` (Root Finding F), which forces a fresh
+    CMake state before every real build, a ``free`` build can no longer
+    observe a Pro-capable configuration from either the environment or a
+    stale build directory.
     """
 
     env = sanitize_build_subprocess_env(os.environ)
@@ -942,11 +1002,12 @@ def linux_build_env(variant):
         env.pop(name, None)
     env["SHERPA_ONNX_CMAKE_ARGS"] = buildinputs.LINUX_CMAKE_FLAGS
     env["SHERPA_ONNX_MAKE_ARGS"] = buildinputs.LINUX_MAKE_ARGS
-    if variant == buildinputs.VARIANT_PRO:
-        # Builds a Pro-capable runtime. This is a capability switch only - the
-        # Pro license key is never needed at build time and is never placed
-        # into the build environment.
-        env[buildinputs.PRO_BUILD_ENV_NAME] = buildinputs.PRO_BUILD_ENV_VALUE
+    # Always declared, both directions - never inherited ambiently.
+    env[buildinputs.PRO_BUILD_ENV_NAME] = (
+        buildinputs.PRO_BUILD_ENV_VALUE
+        if variant == buildinputs.VARIANT_PRO
+        else buildinputs.PRO_BUILD_ENV_OFF_VALUE
+    )
     return env
 
 
@@ -1118,16 +1179,34 @@ def detect_linux_toolchain_identity():
     ``CC``/``CXX`` override, so this probes exactly the compiler that will
     actually run. Two machines with different toolchain versions must not
     silently share a fingerprint and therefore an artifact.
+
+    AP-SRV-070 W4A-C2, Root Finding G.1: Kroko builds a native **C++**
+    extension, not a plain C one, so the C++ compiler CMake actually selects is
+    just as build-effective as the C compiler and is now probed and declared
+    separately - never collapsed into the same, unchecked identity as the C
+    compiler, since the two can genuinely differ on a host (e.g. a system
+    ``cc`` alongside a non-default ``g++``/``clang++``).
+
+    Deliberately not probed here: the Make/build-tool selection. With
+    ``CMAKE_GENERATOR`` stripped from the ambient environment by
+    ``linux_build_env()`` and never set explicitly, CMake's generator choice on
+    Linux is already deterministically fixed to its own built-in default
+    ("Unix Makefiles") regardless of the host - there is nothing host-variable
+    left to declare there, and hashing further host details without a
+    concrete build-effective reason would just be noise.
     """
 
     cmake_path = shutil.which("cmake")
-    compiler_path = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+    c_compiler_path = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+    cxx_compiler_path = shutil.which("c++") or shutil.which("g++") or shutil.which("clang++")
     return {
         "kind": "host-native",
         "cmakePath": cmake_path,
         "cmakeVersion": _probe_version(cmake_path) if cmake_path else None,
-        "compilerPath": compiler_path,
-        "compilerVersion": _probe_version(compiler_path) if compiler_path else None,
+        "compilerPath": c_compiler_path,
+        "compilerVersion": _probe_version(c_compiler_path) if c_compiler_path else None,
+        "cxxCompilerPath": cxx_compiler_path,
+        "cxxCompilerVersion": _probe_version(cxx_compiler_path) if cxx_compiler_path else None,
     }
 
 

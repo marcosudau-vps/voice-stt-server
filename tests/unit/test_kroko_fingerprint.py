@@ -224,11 +224,11 @@ class BuildEffectiveLogicGuardTests(unittest.TestCase):
     )
 
     #: SHA-256 over the source of the builder surface, pinned together with
-    #: BUILDER_REVISION = 2 (AP-SRV-070 W4A-C1: the surface grew to include
-    #: fingerprint_for/sanitize_build_subprocess_env/windows_build_env, and
-    #: linux_build_env's own body changed - see buildinputs.BUILDER_REVISION).
+    #: BUILDER_REVISION = 3 (AP-SRV-070 W4A-C2: materialize_pristine_checkout
+    #: was added, prepare_checkout now calls it, and linux_build_env's own
+    #: body changed again - see buildinputs.BUILDER_REVISION).
     EXPECTED_BUILDER_SOURCE_DIGEST = (
-        "3364caf279c2b3686670c356ed536df30f3ba86092bb349877e5dd4c72323f05"
+        "5d4baea1924953743a3c8c9ee083383905f0fc4372f1d47e872f5d44703ada93"
     )
 
     PATCH_FUNCTION_NAMES = (
@@ -254,6 +254,7 @@ class BuildEffectiveLogicGuardTests(unittest.TestCase):
     BUILDER_FUNCTION_NAMES = (
         "prepare_checkout",
         "ensure_pinned_revision",
+        "materialize_pristine_checkout",
         "prepare_windows_checkout",
         "linux_build_env",
         "windows_build_env",
@@ -609,6 +610,140 @@ class RootFindingBLinuxToolchainFingerprintTests(unittest.TestCase):
         self.assertIsNone(identity["cmakeVersion"])
         self.assertIsNone(identity["compilerPath"])
         self.assertIsNone(identity["compilerVersion"])
+
+
+class RootFindingGCxxToolchainTests(unittest.TestCase):
+    """AP-SRV-070 W4A-C2, Root Finding G.1 - the C++ compiler is a real build input.
+
+    Kroko builds a native C++ extension, not a plain C one. C1 only probed
+    the C compiler; since CXX is deliberately stripped from the ambient
+    environment (Root Finding B), CMake picks its own default C++ compiler,
+    and that compiler is exactly as build-effective as the C one C1 already
+    tracked.
+    """
+
+    def test_identity_declares_a_separate_cxx_compiler_field(self):
+        from VoiceSTT import install_kroko
+
+        def fake_which(name):
+            return {"cmake": "/usr/bin/cmake", "cc": "/usr/bin/cc", "c++": "/usr/bin/c++"}.get(name)
+
+        class FakeCompleted:
+            def __init__(self, stdout):
+                self.stdout = stdout
+                self.stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            return FakeCompleted(f"{cmd[0]} version 9.9.9\n")
+
+        with mock.patch("shutil.which", side_effect=fake_which), mock.patch(
+            "subprocess.run", side_effect=fake_run
+        ):
+            identity = install_kroko.detect_linux_toolchain_identity()
+
+        self.assertEqual(identity["cxxCompilerPath"], "/usr/bin/c++")
+        self.assertIn("9.9.9", identity["cxxCompilerVersion"])
+
+    def test_c_and_cxx_compilers_are_not_collapsed_into_one_identity(self):
+        """The two must be genuinely independent fields, not aliases of one probe."""
+        from VoiceSTT import install_kroko
+
+        def fake_which(name):
+            return {"cmake": "/usr/bin/cmake", "cc": "/usr/bin/cc", "c++": "/usr/bin/c++"}.get(name)
+
+        def fake_run(cmd, **kwargs):
+            executable = cmd[0]
+            version = "11.1" if executable == "/usr/bin/cc" else "12.2"
+            return type("R", (), {"stdout": f"{executable} version {version}\n", "stderr": ""})()
+
+        with mock.patch("shutil.which", side_effect=fake_which), mock.patch(
+            "subprocess.run", side_effect=fake_run
+        ):
+            identity = install_kroko.detect_linux_toolchain_identity()
+
+        self.assertIn("11.1", identity["compilerVersion"])
+        self.assertIn("12.2", identity["cxxCompilerVersion"])
+        self.assertNotEqual(identity["compilerVersion"], identity["cxxCompilerVersion"])
+        self.assertNotEqual(identity["compilerPath"], identity["cxxCompilerPath"])
+
+    def test_different_cxx_compiler_version_changes_the_linux_fingerprint(self):
+        from VoiceSTT import install_kroko
+
+        args = install_kroko.parse_args(["--build"])
+
+        def fp_with(cxx_version):
+            identity = {
+                "kind": "host-native", "cmakeVersion": "cmake 3.28",
+                "compilerVersion": "gcc 12", "cxxCompilerVersion": cxx_version,
+            }
+            with mock.patch.object(
+                install_kroko.kroko_fingerprint, "detect_target_platform", return_value="linux"
+            ), mock.patch.object(
+                install_kroko, "detect_linux_toolchain_identity", return_value=identity
+            ):
+                return install_kroko.fingerprint_for(args)["fingerprint"]
+
+        self.assertNotEqual(fp_with("g++ 11.4"), fp_with("g++ 13.2"))
+
+    def test_ambient_cxx_override_does_not_survive_into_the_build_environment(self):
+        """RED-proof #3: a host-set CXX must not become build-effective."""
+        from VoiceSTT import install_kroko
+
+        with mock.patch.dict(
+            "os.environ", {"CXX": "/tmp/evil-cxx-wrapper"}, clear=False
+        ):
+            env = install_kroko.linux_build_env("free")
+        self.assertNotIn("CXX", env)
+
+    def test_ordinary_voicestt_change_still_does_not_move_a_linux_fingerprint_with_cxx(self):
+        """The counter-proof, now with the C++ compiler field present too."""
+        from VoiceSTT import _version, install_kroko
+
+        args = install_kroko.parse_args(["--build"])
+        identity = {
+            "kind": "host-native", "cmakeVersion": "cmake 3.28",
+            "compilerVersion": "gcc 12", "cxxCompilerVersion": "g++ 12",
+        }
+        with mock.patch.object(
+            install_kroko.kroko_fingerprint, "detect_target_platform", return_value="linux"
+        ), mock.patch.object(
+            install_kroko, "detect_linux_toolchain_identity", return_value=identity
+        ):
+            baseline = install_kroko.fingerprint_for(args)["fingerprint"]
+            with mock.patch.dict(
+                "os.environ", {_version.BUILD_VERSION_ENV: "44.33.22"}, clear=False
+            ):
+                self.assertEqual(_version.resolve_version(), "44.33.22")
+                bumped = install_kroko.fingerprint_for(args)["fingerprint"]
+        self.assertEqual(baseline, bumped)
+
+
+class RootFindingGPreInstalledOnnxRuntimeTests(unittest.TestCase):
+    """AP-SRV-070 W4A-C2, Root Finding G.2 - opportunistic pre-installed ONNX Runtime disabled."""
+
+    def test_declared_linux_cmake_flags_disable_the_pre_installed_onnxruntime_default(self):
+        self.assertIn(
+            "-DSHERPA_ONNX_USE_PRE_INSTALLED_ONNXRUNTIME_IF_AVAILABLE=OFF",
+            buildinputs.LINUX_CMAKE_FLAGS,
+        )
+
+    def test_changing_the_declared_flags_changes_the_linux_fingerprint(self):
+        """Confirms the flag change is a real, hashed fingerprint input."""
+        baseline = fingerprint.compute_fingerprint(
+            variant="free", target_platform="linux", architecture="amd64",
+            python_tag="cp312", abi_tag="cp312", toolchain={"kind": "host-native"},
+        )["fingerprint"]
+        with mock.patch.object(
+            buildinputs, "LINUX_CMAKE_FLAGS",
+            buildinputs.LINUX_CMAKE_FLAGS.replace(
+                "-DSHERPA_ONNX_USE_PRE_INSTALLED_ONNXRUNTIME_IF_AVAILABLE=OFF", ""
+            ).strip(),
+        ):
+            changed = fingerprint.compute_fingerprint(
+                variant="free", target_platform="linux", architecture="amd64",
+                python_tag="cp312", abi_tag="cp312", toolchain={"kind": "host-native"},
+            )["fingerprint"]
+        self.assertNotEqual(baseline, changed)
 
 
 if __name__ == "__main__":
