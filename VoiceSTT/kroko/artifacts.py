@@ -26,6 +26,7 @@ runtime is far worse than recompiling.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -33,11 +34,12 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 
 from . import buildinputs
 from .fingerprint import canonical_json
@@ -56,6 +58,16 @@ ARTIFACT_STORE_ENV = "VOICESTT_KROKO_ARTIFACT_STORE"
 #: Directory used for staging a new artifact before it atomically replaces the
 #: current one.
 STAGING_DIR_NAME = ".staging"
+
+#: Directory holding the per-slot lock files (Root Hardening: concurrent access
+#: to the same variant+fingerprint slot).
+LOCK_DIR_NAME = ".locks"
+
+#: How long ``store()`` waits for another process to finish writing the same
+#: slot before giving up. A real native build can take on the order of
+#: minutes, so this is generous; it is not a build timeout, only a lock wait.
+DEFAULT_LOCK_TIMEOUT_SECONDS = 1800.0
+DEFAULT_LOCK_POLL_SECONDS = 0.05
 
 _WHEEL_NAME_RE = re.compile(
     r"^(?P<name>[^-]+)-(?P<version>[^-]+)"
@@ -184,6 +196,63 @@ def variant_of_wheel(wheel_path: Path) -> Optional[str]:
         if buildinputs.VARIANT_FREE in lowered:
             return buildinputs.VARIANT_FREE
     return None
+
+
+#: Architecture tokens a wheel's platform tag may use for one fingerprint
+#: architecture value. A wheel can legitimately spell amd64 as "amd64" or
+#: "x86_64" depending on the toolchain that produced it.
+_PLATFORM_ARCH_TOKENS = {
+    "amd64": ("amd64", "x86_64"),
+    "arm64": ("arm64", "aarch64"),
+}
+
+#: Recognized platform-tag family prefixes per fingerprint target platform.
+_PLATFORM_FAMILY_PREFIXES = {
+    "windows": ("win",),
+    "linux": ("linux", "manylinux", "musllinux"),
+    "darwin": ("macosx",),
+}
+
+
+def wheel_platform_tag_matches_target(
+    platform_tag: str, target_platform: str, architecture: str
+) -> bool:
+    """Whether one wheel platform tag is compatible with the expected target.
+
+    ``verify_artifact`` used to check only that a wheel's tag *started with*
+    the expected Python/ABI fragment, never the platform component. A
+    structurally valid ``cp312-cp312-win_amd64`` tag would therefore pass
+    verification for a Linux-targeted fingerprint whose Python tag/ABI
+    happened to match (AP-SRV-070 W4A-C1, Root Finding D). This checks the
+    actual platform component of the tag against the target platform family
+    and, where the tag encodes it, the architecture.
+    """
+    platform_tag = (platform_tag or "").lower()
+    target_platform = (target_platform or "").lower()
+    architecture = (architecture or "").lower()
+
+    if not platform_tag:
+        return False
+
+    family_prefixes = _PLATFORM_FAMILY_PREFIXES.get(target_platform)
+    if family_prefixes is not None:
+        if not any(platform_tag.startswith(prefix) for prefix in family_prefixes):
+            return False
+    # An unrecognized target platform family cannot be matched by prefix, so
+    # fall through to the architecture check alone rather than reject blindly
+    # - this keeps the function from becoming a second variant allowlist.
+
+    arch_tokens = _PLATFORM_ARCH_TOKENS.get(architecture)
+    if arch_tokens and not any(token in platform_tag for token in arch_tokens):
+        return False
+
+    return True
+
+
+def _wheel_tag_platform_component(tag: str) -> str:
+    """The platform component of one dash-joined wheel compatibility tag."""
+    parts = str(tag).split("-", 2)
+    return parts[2] if len(parts) == 3 else ""
 
 
 @dataclass(frozen=True)
@@ -340,10 +409,29 @@ def verify_artifact(
             python.get("tag", ""), python.get("abi", "")
         )
         tags = [str(tag) for tag in metadata.get("wheelTags", [])]
-        if tags and not any(tag.startswith(expected_tag_fragment) for tag in tags):
-            problems.append(
-                f"wheel tags {tags} are not compatible with {expected_tag_fragment}"
+        if tags:
+            # Root Finding D: a wheel tag's Python/ABI prefix matching is not
+            # enough on its own - the tag's own platform component must also
+            # be checked against the expected target, or a wheel built for the
+            # wrong OS/architecture can pass under a coincidentally matching
+            # Python tag (e.g. a Windows cp312 wheel accepted for a Linux
+            # cp312 fingerprint). Metadata's self-reported targetPlatform is
+            # not sufficient by itself: this checks the wheel's own tag.
+            compatible = any(
+                tag.startswith(expected_tag_fragment)
+                and wheel_platform_tag_matches_target(
+                    _wheel_tag_platform_component(tag),
+                    target.get("platform", ""),
+                    target.get("architecture", ""),
+                )
+                for tag in tags
             )
+            if not compatible:
+                problems.append(
+                    f"wheel tags {tags} are not compatible with target "
+                    f"{target.get('platform', '')}/{target.get('architecture', '')} "
+                    f"({expected_tag_fragment})"
+                )
 
     return (not problems), problems
 
@@ -366,6 +454,55 @@ class KrokoArtifactStore:
 
     def wheel_path_in(self, slot_dir: Path, metadata: Mapping[str, Any]) -> Path:
         return slot_dir / str(metadata.get("wheelFilename", ""))
+
+    def _slot_lock_path(self, variant: str, fingerprint: str) -> Path:
+        return (
+            self.root / LOCK_DIR_NAME
+            / f"{buildinputs.normalize_variant(variant)}__{fingerprint}.lock"
+        )
+
+    @contextlib.contextmanager
+    def _slot_lock(
+        self,
+        variant: str,
+        fingerprint: str,
+        *,
+        timeout: float = DEFAULT_LOCK_TIMEOUT_SECONDS,
+        poll_interval: float = DEFAULT_LOCK_POLL_SECONDS,
+    ) -> Iterator[None]:
+        """Exclusive, per-(variant, fingerprint) lock (Root Hardening).
+
+        Backed by ``os.open(..., O_CREAT | O_EXCL)``: the create-if-absent
+        check and the creation itself are one atomic OS call on both POSIX and
+        Windows, so two processes racing to acquire the same lock file can
+        never both believe they got it - the loser always sees
+        ``FileExistsError`` and waits. This makes concurrent access to the
+        *same* slot serialize correctly regardless of whether the two callers
+        are threads in one process or two separate OS processes; only the slot
+        this lock names is affected, so a concurrent build of a *different*
+        variant/fingerprint is never blocked.
+        """
+        lock_path = self._slot_lock_path(variant, fingerprint)
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        deadline = time.monotonic() + timeout
+        fd = None
+        while fd is None:
+            try:
+                fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_RDWR)
+            except FileExistsError:
+                if time.monotonic() >= deadline:
+                    raise KrokoArtifactError(
+                        f"timed out waiting for the Kroko artifact slot lock: {lock_path}"
+                    )
+                time.sleep(poll_interval)
+        try:
+            yield
+        finally:
+            os.close(fd)
+            try:
+                lock_path.unlink()
+            except OSError:
+                pass
 
     # -- read ----------------------------------------------------------------
 
@@ -416,6 +553,7 @@ class KrokoArtifactStore:
         wheel_path: Any,
         fingerprint: str,
         inputs: Mapping[str, Any],
+        adopt_existing: bool = True,
     ) -> ArtifactRecord:
         """Verifies a freshly built wheel and stores it atomically.
 
@@ -423,6 +561,29 @@ class KrokoArtifactStore:
         existing one, and the previous artifact is only deleted after the swap
         succeeded. A failed store therefore leaves the last known-good artifact
         exactly as it was.
+
+        Root Hardening: staging and verifying a candidate needs no
+        coordination (each caller stages into its own uniquely named
+        directory), but deciding what ends up at the final slot path does -
+        two callers finishing at nearly the same moment must not race each
+        other's ``os.replace``. That decision is made under a short-held,
+        per-(variant, fingerprint) lock.
+
+        ``adopt_existing`` (default ``True``) governs what happens when
+        another caller already finished storing a verified artifact for this
+        exact slot while this call was staging its own:
+
+        - ``True`` (the reuse-by-default path, after an ordinary cache miss):
+          the existing artifact is adopted rather than replaced. Both are
+          equally valid for this fingerprint - a second build was only
+          started because two callers raced past the same cache-miss check -
+          so there is nothing to gain from clobbering a good artifact with
+          another one, and every concurrent caller converges on the same,
+          single stored artifact instead of doing redundant work for nothing.
+        - ``False`` (``--rebuild-kroko``): the caller explicitly asked for a
+          fresh build to replace whatever is there, so it always does -
+          adopting a stale existing artifact here would silently defeat the
+          entire point of a force rebuild.
         """
         source = Path(str(wheel_path))
         if not source.is_file():
@@ -465,18 +626,27 @@ class KrokoArtifactStore:
 
             final = self.slot_dir(variant, fingerprint)
             final.parent.mkdir(parents=True, exist_ok=True)
-            backup = None
-            if final.exists():
-                backup = final.with_name(final.name + f".replaced-{uuid.uuid4().hex}")
-                os.replace(final, backup)
-            try:
-                os.replace(staging, final)
-            except OSError:
+
+            with self._slot_lock(variant, fingerprint):
+                if adopt_existing:
+                    existing, _ = self.lookup(
+                        variant=variant, fingerprint=fingerprint, inputs=inputs
+                    )
+                    if existing is not None:
+                        return existing
+
+                backup = None
+                if final.exists():
+                    backup = final.with_name(final.name + f".replaced-{uuid.uuid4().hex}")
+                    os.replace(final, backup)
+                try:
+                    os.replace(staging, final)
+                except OSError:
+                    if backup is not None:
+                        os.replace(backup, final)
+                    raise
                 if backup is not None:
-                    os.replace(backup, final)
-                raise
-            if backup is not None:
-                shutil.rmtree(backup, ignore_errors=True)
+                    shutil.rmtree(backup, ignore_errors=True)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
@@ -535,6 +705,9 @@ __all__ = [
     "ARTIFACT_METADATA_NAME",
     "ARTIFACT_SCHEMA_VERSION",
     "ARTIFACT_STORE_ENV",
+    "DEFAULT_LOCK_POLL_SECONDS",
+    "DEFAULT_LOCK_TIMEOUT_SECONDS",
+    "LOCK_DIR_NAME",
     "ArtifactRecord",
     "KrokoArtifactError",
     "KrokoArtifactStore",
@@ -547,4 +720,5 @@ __all__ = [
     "variant_of_wheel",
     "verify_artifact",
     "verify_installed_runtime",
+    "wheel_platform_tag_matches_target",
 ]

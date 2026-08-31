@@ -99,6 +99,8 @@ def toolchain_identity(target_platform: str) -> Dict[str, Any]:
 def build_fingerprint_document(
     *,
     variant: str,
+    repo: Optional[str] = None,
+    revision: Optional[str] = None,
     target_platform: Optional[str] = None,
     architecture: Optional[str] = None,
     python_tag: Optional[str] = None,
@@ -110,8 +112,21 @@ def build_fingerprint_document(
     Every argument that is omitted is detected from the running interpreter,
     which is what a normal local build wants. CI and cross-builds pass explicit
     values so the fingerprint describes the *target*, not the builder host.
+
+    ``repo``/``revision`` default to the pinned authority in
+    :mod:`VoiceSTT.kroko.buildinputs`, but a caller may pass the values it
+    actually intends to check out (AP-SRV-070 W4A-C1, Root Finding A): the
+    installer's ``--repo``/``--revision`` overrides are real source overrides,
+    so the effective source they resolve to - not merely the static pin - must
+    be what the cache key is computed from. Two builds from different
+    repos/revisions can therefore never collide on the same fingerprint, and a
+    build from the default pin keeps its original fingerprint unchanged.
     """
     normalized_variant = buildinputs.normalize_variant(variant)
+    resolved_repo = str(repo).strip() if repo else buildinputs.KROKO_UPSTREAM_REPO
+    resolved_revision = (
+        str(revision).strip() if revision else buildinputs.KROKO_UPSTREAM_REVISION
+    )
     resolved_platform = target_platform or detect_target_platform()
     resolved_python_tag = python_tag or detect_python_tag()
     resolved_toolchain = (
@@ -122,8 +137,8 @@ def build_fingerprint_document(
     return {
         "schemaVersion": FINGERPRINT_SCHEMA_VERSION,
         "upstream": {
-            "repo": buildinputs.KROKO_UPSTREAM_REPO,
-            "revision": buildinputs.KROKO_UPSTREAM_REVISION,
+            "repo": resolved_repo,
+            "revision": resolved_revision,
         },
         "variant": normalized_variant,
         "target": {

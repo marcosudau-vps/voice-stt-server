@@ -311,7 +311,40 @@ class AtomicReplacementTests(StoreBaseTest):
         self.assertIsNotNone(still_there, f"good artifact was lost: {problems}")
         self.assertEqual(still_there.wheel_sha256, good_sha)
 
-    def test_successful_store_replaces_the_previous_artifact(self):
+    def test_forced_store_replaces_the_previous_artifact(self):
+        """adopt_existing=False (the --rebuild-kroko path) always replaces.
+
+        See RootHardeningConcurrentSlotAccessTests / BuilderReuseFlowTests for
+        the *default* (adopt_existing=True) behavior, which deliberately does
+        the opposite for an ordinary reuse-by-default race: it adopts an
+        already-stored, equally valid artifact instead of replacing it.
+        """
+        computed = self.inputs_for("free")
+        first = self.store.store(
+            wheel_path=make_wheel(self.build_dir / "a", variant="free", payload=b"first"),
+            fingerprint=computed["fingerprint"], inputs=computed["inputs"],
+            adopt_existing=False,
+        )
+        second = self.store.store(
+            wheel_path=make_wheel(self.build_dir / "b", variant="free", payload=b"second"),
+            fingerprint=computed["fingerprint"], inputs=computed["inputs"],
+            adopt_existing=False,
+        )
+        self.assertNotEqual(first.wheel_sha256, second.wheel_sha256)
+
+        found, _ = self.store.lookup(
+            variant="free", fingerprint=computed["fingerprint"], inputs=computed["inputs"]
+        )
+        self.assertEqual(found.wheel_sha256, second.wheel_sha256)
+        # No leftover staging, lock or backup directories/files.
+        leftovers = [p.name for p in self.store.root.glob("*") if p.name.startswith(".")]
+        for name in leftovers:
+            self.assertIn(name, (artifacts.STAGING_DIR_NAME, artifacts.LOCK_DIR_NAME))
+        self.assertEqual(list((self.store.root / artifacts.STAGING_DIR_NAME).iterdir()), [])
+        self.assertEqual(list((self.store.root / artifacts.LOCK_DIR_NAME).iterdir()), [])
+
+    def test_default_store_adopts_rather_than_replaces_an_existing_artifact(self):
+        """The counterpart: adopt_existing defaults to True (Root Hardening)."""
         computed = self.inputs_for("free")
         first = self.store.store(
             wheel_path=make_wheel(self.build_dir / "a", variant="free", payload=b"first"),
@@ -321,17 +354,7 @@ class AtomicReplacementTests(StoreBaseTest):
             wheel_path=make_wheel(self.build_dir / "b", variant="free", payload=b"second"),
             fingerprint=computed["fingerprint"], inputs=computed["inputs"],
         )
-        self.assertNotEqual(first.wheel_sha256, second.wheel_sha256)
-
-        found, _ = self.store.lookup(
-            variant="free", fingerprint=computed["fingerprint"], inputs=computed["inputs"]
-        )
-        self.assertEqual(found.wheel_sha256, second.wheel_sha256)
-        # No leftover staging or backup directories.
-        leftovers = [p.name for p in self.store.root.glob("*") if p.name.startswith(".")]
-        for name in leftovers:
-            self.assertEqual(name, artifacts.STAGING_DIR_NAME)
-        self.assertEqual(list((self.store.root / artifacts.STAGING_DIR_NAME).iterdir()), [])
+        self.assertEqual(first.wheel_sha256, second.wheel_sha256)
 
 
 class StoreRootResolutionTests(unittest.TestCase):
@@ -374,9 +397,14 @@ class BuilderReuseFlowTests(unittest.TestCase):
             self.build_calls.append(args.variant)
             if build_error is not None:
                 raise build_error
+            # A distinct payload per invocation, so a test can tell whether the
+            # *stored* artifact actually came from this specific build call
+            # (Root Hardening: adopt_existing=False on a forced rebuild must
+            # really replace, not silently keep an earlier build's bytes).
             return make_wheel(
                 self.root / f"build-{len(self.build_calls)}",
                 variant=wheel_variant or args.variant,
+                payload=f"native-bytes-build-{len(self.build_calls)}".encode(),
             )
 
         argv = [
@@ -413,6 +441,32 @@ class BuilderReuseFlowTests(unittest.TestCase):
         self.assertEqual(self.run_builder(["--rebuild-kroko"]), 0)
         self.assertEqual(
             self.build_calls, ["free", "free"], "--rebuild-kroko must call the builder"
+        )
+
+    def test_force_rebuild_actually_replaces_the_stored_artifact(self):
+        """Root Hardening: adopt_existing=False on --rebuild-kroko must hold.
+
+        Two independent build-then-store calls for the same slot could
+        otherwise "adopt" each other's result (the race-safety behavior that
+        protects an ordinary reuse-by-default miss) - which would make
+        --rebuild-kroko silently keep the stale artifact it was explicitly
+        asked to replace. This asserts the *stored bytes* actually changed,
+        not merely that the builder was called twice.
+        """
+        self.run_builder()
+        self.run_builder(["--rebuild-kroko"])
+
+        computed = fingerprint.compute_fingerprint(variant="free")
+        store = artifacts.KrokoArtifactStore(self.store_root)
+        found, problems = store.lookup(
+            variant="free", fingerprint=computed["fingerprint"], inputs=computed["inputs"]
+        )
+        self.assertIsNotNone(found, problems)
+        second_build_wheel = self.root / "build-2"
+        expected_sha = artifacts.sha256_of(next(second_build_wheel.glob("*.whl")))
+        self.assertEqual(
+            found.wheel_sha256, expected_sha,
+            "the forced rebuild's own wheel must be the one stored, not the earlier one",
         )
 
     def test_failed_force_rebuild_keeps_the_existing_artifact(self):
@@ -486,21 +540,323 @@ class SecretLeakageTests(StoreBaseTest):
         self.assertNotIn(self.SECRET, json.dumps(record.public_dict()))
 
     def test_pro_build_environment_carries_no_key(self):
+        """AP-SRV-070 W4A-C1, Root Finding C.
+
+        The previous version of this test only checked that the secret value
+        did not appear inside the CMAKE_ARGS/MAKE_ARGS *strings* - it never
+        proved the key variables themselves were absent from the environment
+        dict, and they were not: linux_build_env() copied the full host
+        environment. This asserts the actual Root Finding C requirement: the
+        variable names are gone from the build child environment entirely.
+        """
         environment = {name: self.SECRET for name in self.KEY_ENVS}
         with mock.patch.dict(os.environ, environment, clear=False):
             build_env = install_kroko.linux_build_env("pro")
 
+        for name in self.KEY_ENVS:
+            self.assertNotIn(
+                name, build_env, f"{name} leaked into the Linux build environment"
+            )
         # The Pro build is enabled by a capability switch, not by a key.
         self.assertEqual(
             build_env[buildinputs.PRO_BUILD_ENV_NAME], buildinputs.PRO_BUILD_ENV_VALUE
         )
-        cmake_args = build_env["SHERPA_ONNX_CMAKE_ARGS"]
-        self.assertNotIn(self.SECRET, cmake_args)
+        self.assertNotIn(self.SECRET, build_env["SHERPA_ONNX_CMAKE_ARGS"])
         self.assertNotIn(self.SECRET, build_env.get("SHERPA_ONNX_MAKE_ARGS", ""))
+
+    def test_windows_build_environment_carries_no_key(self):
+        """AP-SRV-070 W4A-C1, Root Finding C - the Windows build child env.
+
+        The Windows path previously started cmd.exe with no explicit
+        environment at all (env=None), which meant it silently inherited the
+        full parent process environment, keys included.
+        """
+        environment = {name: self.SECRET for name in self.KEY_ENVS}
+        with mock.patch.dict(os.environ, environment, clear=False):
+            build_env = install_kroko.windows_build_env()
+
+        for name in self.KEY_ENVS:
+            self.assertNotIn(
+                name, build_env, f"{name} leaked into the Windows build environment"
+            )
 
     def test_free_build_environment_does_not_enable_pro(self):
         build_env = install_kroko.linux_build_env("free")
         self.assertNotIn(buildinputs.PRO_BUILD_ENV_NAME, build_env)
+
+    def test_runtime_key_lookup_outside_the_builder_is_unchanged(self):
+        """The Secret Boundary correction must not touch runtime key reading.
+
+        Root Finding C is exclusively about the *build* subprocess
+        environment; the engine's own runtime key lookup
+        (kroko_onnx_engine.py) is untouched by this correction and still
+        reads the same four environment variables directly.
+        """
+        from VoiceSTT.transcription_engines import kroko_onnx_engine as engine_module
+
+        with mock.patch.dict(os.environ, {"KROKO_API_KEY": self.SECRET}, clear=False):
+            self.assertEqual(os.environ.get("KROKO_API_KEY"), self.SECRET)
+        source = engine_module.__file__
+        import pathlib
+
+        text = pathlib.Path(source).read_text(encoding="utf-8")
+        for name in self.KEY_ENVS:
+            self.assertIn(name, text, f"engine no longer reads {name} at runtime")
+
+
+class RootFindingBLinuxBuildEnvTests(unittest.TestCase):
+    """AP-SRV-070 W4A-C1, Root Finding B - no undeclared ambient build input.
+
+    linux_build_env() used to copy the full host environment, append to any
+    pre-existing SHERPA_ONNX_CMAKE_ARGS instead of overriding it, and only
+    default SHERPA_ONNX_MAKE_ARGS if unset - so a value already present in the
+    operator's shell silently participated in the compile without ever being
+    reflected in the declared build inputs.
+    """
+
+    AMBIENT_OVERRIDE_ENVS = {
+        "CC": "clang",
+        "CXX": "clang++",
+        "CFLAGS": "-O0 -fsanitize=address",
+        "CXXFLAGS": "-O0 -fsanitize=address",
+        "LDFLAGS": "-static",
+        "CPPFLAGS": "-DEVIL",
+        "CMAKE_GENERATOR": "Ninja",
+        "CMAKE_TOOLCHAIN_FILE": "/tmp/evil-toolchain.cmake",
+        "LD_LIBRARY_PATH": "/tmp/evil-lib",
+    }
+
+    def test_ambient_compiler_overrides_never_reach_the_build_environment(self):
+        with mock.patch.dict(os.environ, self.AMBIENT_OVERRIDE_ENVS, clear=False):
+            env = install_kroko.linux_build_env("free")
+
+        for name in self.AMBIENT_OVERRIDE_ENVS:
+            self.assertNotIn(
+                name, env, f"{name} leaked into the Linux build environment"
+            )
+
+    def test_cmake_args_override_ambient_value_instead_of_appending(self):
+        with mock.patch.dict(
+            os.environ, {"SHERPA_ONNX_CMAKE_ARGS": "-DEVIL_FLAG=ON"}, clear=False
+        ):
+            env = install_kroko.linux_build_env("free")
+        self.assertEqual(env["SHERPA_ONNX_CMAKE_ARGS"], buildinputs.LINUX_CMAKE_FLAGS)
+        self.assertNotIn("-DEVIL_FLAG=ON", env["SHERPA_ONNX_CMAKE_ARGS"])
+
+    def test_make_args_override_ambient_value_instead_of_defaulting(self):
+        with mock.patch.dict(os.environ, {"SHERPA_ONNX_MAKE_ARGS": "-j999"}, clear=False):
+            env = install_kroko.linux_build_env("free")
+        self.assertEqual(env["SHERPA_ONNX_MAKE_ARGS"], buildinputs.LINUX_MAKE_ARGS)
+
+    def test_declared_flags_are_still_applied_with_a_clean_environment(self):
+        env = install_kroko.linux_build_env("free")
+        self.assertEqual(env["SHERPA_ONNX_CMAKE_ARGS"], buildinputs.LINUX_CMAKE_FLAGS)
+        self.assertEqual(env["SHERPA_ONNX_MAKE_ARGS"], buildinputs.LINUX_MAKE_ARGS)
+
+
+class RootFindingDWheelPlatformVerificationTests(StoreBaseTest):
+    """AP-SRV-070 W4A-C1, Root Finding D - the wheel tag's platform must match.
+
+    verify_artifact() used to check only that a wheel tag *started with* the
+    expected Python/ABI fragment - a structurally valid
+    cp312-cp312-win_amd64 wheel could pass under a Linux-targeted fingerprint
+    whose Python tag/ABI happened to match, because the platform component of
+    the tag itself was never checked against the target.
+    """
+
+    def _store_and_lookup(self, *, wheel_tag, target_platform, architecture):
+        computed = fingerprint.compute_fingerprint(
+            variant="free",
+            target_platform=target_platform,
+            architecture=architecture,
+            python_tag="cp312",
+            abi_tag="cp312",
+            toolchain={"kind": "test"},
+        )
+        wheel = make_wheel(self.build_dir, variant="free", tag=wheel_tag)
+        try:
+            self.store.store(
+                wheel_path=wheel, fingerprint=computed["fingerprint"], inputs=computed["inputs"]
+            )
+        except artifacts.KrokoArtifactError:
+            return None, computed
+        found, problems = self.store.lookup(
+            variant="free", fingerprint=computed["fingerprint"], inputs=computed["inputs"]
+        )
+        return found, computed
+
+    def test_windows_wheel_is_rejected_under_linux_inputs(self):
+        found, _ = self._store_and_lookup(
+            wheel_tag="cp312-cp312-win_amd64",
+            target_platform="linux",
+            architecture="amd64",
+        )
+        self.assertIsNone(found, "a Windows wheel must never satisfy a Linux fingerprint")
+
+    def test_linux_wheel_is_rejected_under_windows_inputs(self):
+        found, _ = self._store_and_lookup(
+            wheel_tag="cp312-cp312-linux_x86_64",
+            target_platform="windows",
+            architecture="amd64",
+        )
+        self.assertIsNone(found, "a Linux wheel must never satisfy a Windows fingerprint")
+
+    def test_arm64_wheel_is_rejected_under_amd64_inputs(self):
+        found, _ = self._store_and_lookup(
+            wheel_tag="cp312-cp312-manylinux_2_28_aarch64",
+            target_platform="linux",
+            architecture="amd64",
+        )
+        self.assertIsNone(found, "an arm64 wheel must never satisfy an amd64 fingerprint")
+
+    def test_amd64_wheel_is_rejected_under_arm64_inputs(self):
+        found, _ = self._store_and_lookup(
+            wheel_tag="cp312-cp312-manylinux_2_28_x86_64",
+            target_platform="linux",
+            architecture="arm64",
+        )
+        self.assertIsNone(found, "an amd64 wheel must never satisfy an arm64 fingerprint")
+
+    def test_matching_windows_wheel_is_accepted(self):
+        found, _ = self._store_and_lookup(
+            wheel_tag="cp312-cp312-win_amd64",
+            target_platform="windows",
+            architecture="amd64",
+        )
+        self.assertIsNotNone(found)
+
+    def test_matching_manylinux_wheel_is_accepted(self):
+        found, _ = self._store_and_lookup(
+            wheel_tag="cp312-cp312-manylinux_2_28_x86_64",
+            target_platform="linux",
+            architecture="amd64",
+        )
+        self.assertIsNotNone(found)
+
+    def test_platform_tag_matcher_directly(self):
+        matches = artifacts.wheel_platform_tag_matches_target
+        self.assertTrue(matches("win_amd64", "windows", "amd64"))
+        self.assertFalse(matches("win_amd64", "linux", "amd64"))
+        self.assertFalse(matches("linux_x86_64", "windows", "amd64"))
+        self.assertTrue(matches("manylinux_2_28_x86_64", "linux", "amd64"))
+        self.assertFalse(matches("manylinux_2_28_aarch64", "linux", "amd64"))
+        self.assertTrue(matches("manylinux_2_28_aarch64", "linux", "arm64"))
+        self.assertFalse(matches("", "linux", "amd64"))
+
+
+class RootHardeningConcurrentSlotAccessTests(unittest.TestCase):
+    """AP-SRV-070 W4A-C1, Root Hardening - the same slot under concurrent writers.
+
+    Two processes that both see a cache miss for the same variant+fingerprint
+    can both proceed to build and then both call store() around the same
+    moment. This drives that scenario with real OS threads racing on the real
+    filesystem lock/replace primitives - a meaningful stand-in for separate OS
+    processes, because the lock this exercises (os.open with O_CREAT|O_EXCL)
+    is an OS-level primitive, not a Python-level (GIL) one, and file I/O
+    releases the GIL, so the threads genuinely race at the filesystem.
+    """
+
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.store = artifacts.KrokoArtifactStore(self.root / "store")
+        self.build_dir = self.root / "build"
+
+    def test_concurrent_stores_of_the_same_slot_do_not_corrupt_it(self):
+        import threading
+
+        computed = fingerprint.compute_fingerprint(variant="free")
+        wheel_a = make_wheel(self.build_dir / "a", variant="free", payload=b"racer-a")
+        wheel_b = make_wheel(self.build_dir / "b", variant="free", payload=b"racer-b")
+
+        barrier = threading.Barrier(2)
+        results = {}
+        errors = []
+
+        def racer(name, wheel):
+            try:
+                barrier.wait(timeout=10)
+                record = self.store.store(
+                    wheel_path=wheel,
+                    fingerprint=computed["fingerprint"],
+                    inputs=computed["inputs"],
+                )
+                results[name] = record
+            except Exception as exc:  # noqa: BLE001 - captured for assertion
+                errors.append((name, exc))
+
+        threads = [
+            threading.Thread(target=racer, args=("a", wheel_a)),
+            threading.Thread(target=racer, args=("b", wheel_b)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+        self.assertEqual(errors, [], f"a concurrent store() call raised: {errors}")
+        self.assertEqual(set(results), {"a", "b"})
+
+        # Both racers must converge on exactly the same stored artifact -
+        # whichever one actually won the race - not two different ones.
+        self.assertEqual(results["a"].wheel_sha256, results["b"].wheel_sha256)
+
+        # The persisted slot itself must verify cleanly and contain exactly
+        # one wheel file - no partial write, no leftover competing copy.
+        found, problems = self.store.lookup(
+            variant="free", fingerprint=computed["fingerprint"], inputs=computed["inputs"]
+        )
+        self.assertIsNotNone(found, f"slot failed verification after the race: {problems}")
+        wheel_files = list(found.slot_dir.glob("*.whl"))
+        self.assertEqual(len(wheel_files), 1)
+
+        # No stale lock or staging debris left behind.
+        self.assertEqual(list((self.store.root / artifacts.LOCK_DIR_NAME).glob("*")), [])
+
+    def test_a_second_store_call_reuses_an_already_stored_artifact(self):
+        """A parallel process must adopt a hit, not clobber it (Root Hardening)."""
+        computed = fingerprint.compute_fingerprint(variant="free")
+        first = self.store.store(
+            wheel_path=make_wheel(self.build_dir / "first", variant="free", payload=b"first"),
+            fingerprint=computed["fingerprint"],
+            inputs=computed["inputs"],
+        )
+        second = self.store.store(
+            wheel_path=make_wheel(self.build_dir / "second", variant="free", payload=b"second"),
+            fingerprint=computed["fingerprint"],
+            inputs=computed["inputs"],
+        )
+        self.assertEqual(first.wheel_sha256, second.wheel_sha256)
+        self.assertEqual(second.wheel_sha256, artifacts.sha256_of(first.wheel_path))
+
+    def test_slot_lock_is_mutually_exclusive(self):
+        """Direct proof of the lock primitive itself, independent of store()."""
+        import threading
+        import time as time_module
+
+        order = []
+        lock_entered = threading.Event()
+
+        def holder():
+            with self.store._slot_lock("free", "deadbeefdeadbeef", timeout=5):
+                lock_entered.set()
+                order.append("holder-enter")
+                time_module.sleep(0.2)
+                order.append("holder-exit")
+
+        def waiter():
+            lock_entered.wait(timeout=5)
+            with self.store._slot_lock("free", "deadbeefdeadbeef", timeout=5):
+                order.append("waiter-enter")
+
+        threads = [threading.Thread(target=holder), threading.Thread(target=waiter)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=10)
+
+        self.assertEqual(order, ["holder-enter", "holder-exit", "waiter-enter"])
 
 
 if __name__ == "__main__":

@@ -76,7 +76,15 @@ PATCH_SET_REVISION = 1
 #: built or which wheel is selected. The guard test in
 #: ``tests/unit/test_kroko_fingerprint.py`` hashes that surface and fails if it
 #: changed without a bump, so the obligation is enforced rather than trusted.
-BUILDER_REVISION = 1
+#:
+#: Bumped 1 -> 2 (AP-SRV-070 W4A-C1, Root Findings A/B/C): the guarded surface
+#: grew to include the effective repo/revision now flowing into the fingerprint
+#: (``fingerprint_for``), the sanitized Linux build environment (ambient
+#: overrides removed, ``SHERPA_ONNX_CMAKE_ARGS``/``SHERPA_ONNX_MAKE_ARGS`` fully
+#: declared rather than appended/defaulted), and the new secret-boundary
+#: sanitizer shared by both platforms (``sanitize_build_subprocess_env``,
+#: ``windows_build_env``).
+BUILDER_REVISION = 2
 
 #: CMake flags forced for the CPU-only Linux build. Kroko's license client
 #: includes websocketpp headers unconditionally, which is why WebSocket support

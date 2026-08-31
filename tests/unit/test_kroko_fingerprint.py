@@ -224,9 +224,11 @@ class BuildEffectiveLogicGuardTests(unittest.TestCase):
     )
 
     #: SHA-256 over the source of the builder surface, pinned together with
-    #: BUILDER_REVISION = 1.
+    #: BUILDER_REVISION = 2 (AP-SRV-070 W4A-C1: the surface grew to include
+    #: fingerprint_for/sanitize_build_subprocess_env/windows_build_env, and
+    #: linux_build_env's own body changed - see buildinputs.BUILDER_REVISION).
     EXPECTED_BUILDER_SOURCE_DIGEST = (
-        "cdb728918600a2605d3254c354e3defc8956fd8e7d8986e1471ace57fb43ae70"
+        "3364caf279c2b3686670c356ed536df30f3ba86092bb349877e5dd4c72323f05"
     )
 
     PATCH_FUNCTION_NAMES = (
@@ -239,18 +241,29 @@ class BuildEffectiveLogicGuardTests(unittest.TestCase):
     )
 
     #: Everything that decides *what* is built and *which* wheel becomes the
-    #: artifact. A change here can change the produced runtime even when the
-    #: upstream revision and the patches are untouched.
+    #: artifact, plus - as of W4A-C1 - everything that decides what feeds the
+    #: cache key (fingerprint_for) and what a native build subprocess's
+    #: environment may contain (sanitize_build_subprocess_env,
+    #: windows_build_env). A change to any of these can silently make an
+    #: existing fingerprint describe a different real build - either a
+    #: different produced runtime, a different effective source, or a leaked
+    #: secret - without a source-controlled revision constant, none of this
+    #: would be caught by "the fingerprint changes when a build input changes",
+    #: because these functions are exactly what decides which values the
+    #: fingerprint sees or what a subprocess may read.
     BUILDER_FUNCTION_NAMES = (
         "prepare_checkout",
         "ensure_pinned_revision",
         "prepare_windows_checkout",
         "linux_build_env",
+        "windows_build_env",
+        "sanitize_build_subprocess_env",
         "build_linux_wheel",
         "build_windows_wheel",
         "build_wheel",
         "find_linux_wheel",
         "find_windows_wheel",
+        "fingerprint_for",
     )
 
     def _digest_of(self, names):
@@ -389,6 +402,213 @@ class BuildInputCoverageTests(unittest.TestCase):
         with mock.patch.object(builtins, "open", tracking_open):
             self.assertEqual(baseline, self._fingerprint())
         self.assertEqual(opened, [])
+
+
+class RootFindingASourceOverrideTests(unittest.TestCase):
+    """AP-SRV-070 W4A-C1, Root Finding A - source overrides must feed the fingerprint.
+
+    ``prepare_checkout()`` genuinely uses ``--repo``/``--revision`` for the
+    real clone and checkout. Before this correction, ``fingerprint_for(args)``
+    ignored both and always hashed the static pin, so two builds from
+    different sources could collide on the same cache key.
+    """
+
+    def test_default_and_different_revision_never_share_a_fingerprint(self):
+        from VoiceSTT import install_kroko
+
+        default_fp = install_kroko.fingerprint_for(
+            install_kroko.parse_args(["--build"])
+        )["fingerprint"]
+        override_fp = install_kroko.fingerprint_for(
+            install_kroko.parse_args(["--build", "--revision", "f" * 40])
+        )["fingerprint"]
+        self.assertNotEqual(default_fp, override_fp)
+
+    def test_default_and_different_repo_never_share_a_fingerprint(self):
+        from VoiceSTT import install_kroko
+
+        default_fp = install_kroko.fingerprint_for(
+            install_kroko.parse_args(["--build"])
+        )["fingerprint"]
+        override_fp = install_kroko.fingerprint_for(
+            install_kroko.parse_args(
+                ["--build", "--repo", "https://example.invalid/kroko-fork.git"]
+            )
+        )["fingerprint"]
+        self.assertNotEqual(default_fp, override_fp)
+
+    def test_default_invocation_resolves_to_the_static_pin(self):
+        """Passing the CLI defaults through must not itself change anything."""
+        from VoiceSTT import install_kroko
+
+        computed = install_kroko.fingerprint_for(install_kroko.parse_args(["--build"]))
+        self.assertEqual(
+            computed["inputs"]["upstream"]["revision"], buildinputs.KROKO_UPSTREAM_REVISION
+        )
+        self.assertEqual(
+            computed["inputs"]["upstream"]["repo"], buildinputs.KROKO_UPSTREAM_REPO
+        )
+
+    def test_describe_artifact_and_fingerprint_for_agree_on_the_effective_source(self):
+        """describe-artifact, cache-lookup and the real build must agree."""
+        from VoiceSTT import install_kroko
+
+        args = install_kroko.parse_args(
+            ["--build", "--revision", "e" * 40, "--repo", "https://example.invalid/x.git"]
+        )
+        computed = install_kroko.fingerprint_for(args)
+        described = install_kroko.describe_artifact(args)
+
+        self.assertEqual(described["fingerprint"], computed["fingerprint"])
+        self.assertEqual(described["inputs"]["upstream"]["revision"], "e" * 40)
+        self.assertEqual(
+            described["inputs"]["upstream"]["repo"], "https://example.invalid/x.git"
+        )
+
+    def test_prepare_checkout_uses_the_same_revision_the_fingerprint_hashes(self):
+        """The revision fingerprint_for hashes is the one actually checked out."""
+        import tempfile
+        from pathlib import Path
+
+        from VoiceSTT import install_kroko
+
+        args = install_kroko.parse_args(["--build", "--revision", "d" * 40])
+        computed = install_kroko.fingerprint_for(args)
+        self.assertEqual(computed["inputs"]["upstream"]["revision"], "d" * 40)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(install_kroko, "run"), mock.patch.object(
+                install_kroko, "ensure_pinned_revision"
+            ) as ensure_pinned:
+                install_kroko.prepare_checkout(args, work_dir=Path(tmp))
+
+        ensure_pinned.assert_called_once()
+        call_args, call_kwargs = ensure_pinned.call_args
+        used_revision = call_args[1] if len(call_args) > 1 else call_kwargs.get("revision")
+        self.assertEqual(used_revision, "d" * 40)
+
+
+class RootFindingBLinuxToolchainFingerprintTests(unittest.TestCase):
+    """AP-SRV-070 W4A-C1, Root Finding B - the Linux toolchain identity is declared.
+
+    ``toolchain_identity("linux")`` collapses to the generic
+    ``{"kind": "host-native"}`` by design (see its docstring) so
+    ``compute_fingerprint()`` stays pure by default; it is
+    ``install_kroko.fingerprint_for()`` - the real production entry point -
+    that must supply the concrete, probed identity for a real Linux build.
+    """
+
+    def test_linux_fingerprint_uses_a_probed_toolchain_not_the_generic_placeholder(self):
+        from VoiceSTT import install_kroko
+
+        args = install_kroko.parse_args(["--build"])
+        probed = {"kind": "host-native", "cmakeVersion": "cmake 3.28.0", "compilerVersion": "gcc 12"}
+        with mock.patch.object(
+            install_kroko.kroko_fingerprint, "detect_target_platform", return_value="linux"
+        ), mock.patch.object(
+            install_kroko, "detect_linux_toolchain_identity", return_value=probed
+        ):
+            computed = install_kroko.fingerprint_for(args)
+
+        self.assertEqual(computed["inputs"]["toolchain"], probed)
+        self.assertNotEqual(computed["inputs"]["toolchain"], {"kind": "host-native"})
+
+    def test_different_cmake_version_changes_the_linux_fingerprint(self):
+        from VoiceSTT import install_kroko
+
+        args = install_kroko.parse_args(["--build"])
+
+        def fp_with(cmake_version):
+            with mock.patch.object(
+                install_kroko.kroko_fingerprint, "detect_target_platform", return_value="linux"
+            ), mock.patch.object(
+                install_kroko, "detect_linux_toolchain_identity",
+                return_value={"kind": "host-native", "cmakeVersion": cmake_version, "compilerVersion": "gcc 12"},
+            ):
+                return install_kroko.fingerprint_for(args)["fingerprint"]
+
+        self.assertNotEqual(fp_with("cmake 3.28.0"), fp_with("cmake 3.31.0"))
+
+    def test_different_compiler_version_changes_the_linux_fingerprint(self):
+        from VoiceSTT import install_kroko
+
+        args = install_kroko.parse_args(["--build"])
+
+        def fp_with(compiler_version):
+            with mock.patch.object(
+                install_kroko.kroko_fingerprint, "detect_target_platform", return_value="linux"
+            ), mock.patch.object(
+                install_kroko, "detect_linux_toolchain_identity",
+                return_value={"kind": "host-native", "cmakeVersion": "cmake 3.28", "compilerVersion": compiler_version},
+            ):
+                return install_kroko.fingerprint_for(args)["fingerprint"]
+
+        self.assertNotEqual(fp_with("gcc 11.4"), fp_with("gcc 13.2"))
+
+    def test_windows_fingerprint_never_probes_the_host_toolchain(self):
+        """The Windows crossbuild identity stays host-independent (unchanged)."""
+        from VoiceSTT import install_kroko
+
+        args = install_kroko.parse_args(["--build"])
+        with mock.patch.object(
+            install_kroko.kroko_fingerprint, "detect_target_platform", return_value="windows"
+        ), mock.patch.object(install_kroko, "detect_linux_toolchain_identity") as probe:
+            install_kroko.fingerprint_for(args)
+        probe.assert_not_called()
+
+    def test_ordinary_voicestt_change_still_does_not_move_a_linux_fingerprint(self):
+        """The counter-proof, specifically for the now-probed Linux path."""
+        from VoiceSTT import _version, install_kroko
+
+        args = install_kroko.parse_args(["--build"])
+        probed = {"kind": "host-native", "cmakeVersion": "cmake 3.28", "compilerVersion": "gcc 12"}
+        with mock.patch.object(
+            install_kroko.kroko_fingerprint, "detect_target_platform", return_value="linux"
+        ), mock.patch.object(
+            install_kroko, "detect_linux_toolchain_identity", return_value=probed
+        ):
+            baseline = install_kroko.fingerprint_for(args)["fingerprint"]
+            with mock.patch.dict(
+                "os.environ", {_version.BUILD_VERSION_ENV: "55.44.33"}, clear=False
+            ):
+                self.assertEqual(_version.resolve_version(), "55.44.33")
+                bumped = install_kroko.fingerprint_for(args)["fingerprint"]
+        self.assertEqual(baseline, bumped)
+
+    def test_detect_linux_toolchain_identity_probes_real_tools(self):
+        from VoiceSTT import install_kroko
+
+        def fake_which(name):
+            return {"cmake": "/usr/bin/cmake", "cc": "/usr/bin/cc"}.get(name)
+
+        class FakeCompleted:
+            def __init__(self, stdout):
+                self.stdout = stdout
+                self.stderr = ""
+
+        def fake_run(cmd, **kwargs):
+            return FakeCompleted(f"{cmd[0]} version 1.2.3\n")
+
+        with mock.patch("shutil.which", side_effect=fake_which), mock.patch(
+            "subprocess.run", side_effect=fake_run
+        ):
+            identity = install_kroko.detect_linux_toolchain_identity()
+
+        self.assertEqual(identity["cmakePath"], "/usr/bin/cmake")
+        self.assertIn("1.2.3", identity["cmakeVersion"])
+        self.assertEqual(identity["compilerPath"], "/usr/bin/cc")
+        self.assertIn("1.2.3", identity["compilerVersion"])
+
+    def test_detect_linux_toolchain_identity_tolerates_a_missing_tool(self):
+        from VoiceSTT import install_kroko
+
+        with mock.patch("shutil.which", return_value=None):
+            identity = install_kroko.detect_linux_toolchain_identity()
+
+        self.assertIsNone(identity["cmakePath"])
+        self.assertIsNone(identity["cmakeVersion"])
+        self.assertIsNone(identity["compilerPath"])
+        self.assertIsNone(identity["compilerVersion"])
 
 
 if __name__ == "__main__":

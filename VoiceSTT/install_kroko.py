@@ -30,6 +30,68 @@ DEFAULT_REVISION = buildinputs.KROKO_UPSTREAM_REVISION
 SUPPORTED_VARIANTS = buildinputs.SUPPORTED_VARIANTS
 KROKO_LICENSE_QUIET_ENV = "KROKO_ONNX_SUPPRESS_LICENSE_OUTPUT"
 
+#: Every environment variable the Kroko runtime accepts as a license key (see
+#: VoiceSTT/transcription_engines/kroko_onnx_engine.py). AP-SRV-070 W4A-C1,
+#: Root Finding C: the license key is a runtime secret, never a build input -
+#: the Pro build is enabled exclusively through
+#: buildinputs.PRO_BUILD_ENV_NAME/VALUE, a capability switch. None of these
+#: names may reach a native build subprocess's environment, on either
+#: platform, even though a developer's own shell may perfectly legitimately
+#: have one of them set to test the server at runtime.
+KROKO_LICENSE_KEY_ENV_NAMES = (
+    "KROKO_API_KEY",
+    "KROKO_ONNX_KEY",
+    "VOICESTT_KROKO_ONNX_KEY",
+    "KROKO_KEY",
+)
+
+#: Ambient environment variables that can silently change what a native
+#: compile produces (AP-SRV-070 W4A-C1, Root Finding B). Left alone, any of
+#: these could make two builds with the *same* declared fingerprint compile
+#: different bytes. They are removed from the Linux build's child environment
+#: rather than folded into the fingerprint, because that keeps the fingerprint
+#: small and because a build that silently depended on the operator's shell
+#: environment was exactly the bug - the goal is to make the declared
+#: SHERPA_ONNX_CMAKE_ARGS/SHERPA_ONNX_MAKE_ARGS values in buildinputs.py the
+#: only ones that are ever build-effective.
+LINUX_BUILD_ENV_STRIP_NAMES = (
+    "CC",
+    "CXX",
+    "CFLAGS",
+    "CXXFLAGS",
+    "CPPFLAGS",
+    "LDFLAGS",
+    "CMAKE_ARGS",
+    "CMAKE_GENERATOR",
+    "CMAKE_TOOLCHAIN_FILE",
+    "CMAKE_PREFIX_PATH",
+    "CMAKE_C_COMPILER",
+    "CMAKE_CXX_COMPILER",
+    "LD_LIBRARY_PATH",
+    "LIBRARY_PATH",
+    "CPATH",
+    "C_INCLUDE_PATH",
+    "CPLUS_INCLUDE_PATH",
+)
+
+
+def sanitize_build_subprocess_env(base_env):
+    """
+    Returns a copy of base_env with every known Kroko license key removed.
+
+    Applied to every native build subprocess environment - Linux and Windows
+    alike - so a license key an operator has set for runtime use (to test the
+    server, for example) can never leak into a build. This is the one Secret
+    Boundary the builder must uphold on both platforms; see
+    ``VoiceSTT.kroko.buildinputs`` for the Pro capability switch that replaces
+    a key at build time.
+    """
+
+    sanitized = dict(base_env)
+    for name in KROKO_LICENSE_KEY_ENV_NAMES:
+        sanitized.pop(name, None)
+    return sanitized
+
 
 class KrokoInstallError(RuntimeError):
     """
@@ -837,7 +899,11 @@ def install_windows(args, repo_dir):
 
     ensure_windows_host()
     prepare_windows_checkout(repo_dir)
-    run(["cmd.exe", "/c", str(repo_dir / "build_windows.bat"), "--variant", args.variant], cwd=repo_dir)
+    run(
+        ["cmd.exe", "/c", str(repo_dir / "build_windows.bat"), "--variant", args.variant],
+        cwd=repo_dir,
+        env=windows_build_env(),
+    )
     wheel = find_windows_wheel(repo_dir, args.variant)
     print("Built Kroko-ONNX wheel: {0}".format(wheel))
     if not args.skip_install:
@@ -851,20 +917,54 @@ def linux_build_env(variant):
     The CMake/make flags come from ``VoiceSTT.kroko.buildinputs`` so the values
     that go into the compiler and the values that go into the build fingerprint
     can never drift apart.
+
+    AP-SRV-070 W4A-C1 root correction (Findings B and C):
+
+    - ``SHERPA_ONNX_CMAKE_ARGS``/``SHERPA_ONNX_MAKE_ARGS`` are now set
+      outright, never appended to (``SHERPA_ONNX_CMAKE_ARGS``) or defaulted
+      only if unset (``SHERPA_ONNX_MAKE_ARGS``). Either previous behavior let
+      a value already present in the operator's shell silently participate in
+      the compile without ever being reflected in the fingerprint - two builds
+      with the *same* fingerprint could then produce different bytes.
+    - A fixed list of other ambient, build-affecting variables
+      (``LINUX_BUILD_ENV_STRIP_NAMES`` - ``CC``, ``CXX``, ``CFLAGS``, linker
+      and include-path variables, CMake generator/toolchain overrides, ...) is
+      removed outright for the same reason.
+    - Every known Kroko license key variable is removed
+      (``sanitize_build_subprocess_env``): the build must never be able to see
+      a key, even though a developer's shell may have one set to exercise the
+      server at runtime. The Pro capability switch below is unaffected - it is
+      not a secret.
     """
 
-    env = os.environ.copy()
-    existing_cmake_args = env.get("SHERPA_ONNX_CMAKE_ARGS", "").strip()
-    env["SHERPA_ONNX_CMAKE_ARGS"] = (
-        existing_cmake_args + " " + buildinputs.LINUX_CMAKE_FLAGS
-    ).strip()
-    env.setdefault("SHERPA_ONNX_MAKE_ARGS", buildinputs.LINUX_MAKE_ARGS)
+    env = sanitize_build_subprocess_env(os.environ)
+    for name in LINUX_BUILD_ENV_STRIP_NAMES:
+        env.pop(name, None)
+    env["SHERPA_ONNX_CMAKE_ARGS"] = buildinputs.LINUX_CMAKE_FLAGS
+    env["SHERPA_ONNX_MAKE_ARGS"] = buildinputs.LINUX_MAKE_ARGS
     if variant == buildinputs.VARIANT_PRO:
         # Builds a Pro-capable runtime. This is a capability switch only - the
         # Pro license key is never needed at build time and is never placed
         # into the build environment.
         env[buildinputs.PRO_BUILD_ENV_NAME] = buildinputs.PRO_BUILD_ENV_VALUE
     return env
+
+
+def windows_build_env():
+    """
+    Builds the sanitized environment for the Windows Kroko build subprocess.
+
+    AP-SRV-070 W4A-C1, Root Finding C: the Windows build previously started
+    ``cmd.exe`` with no explicit environment at all, which meant it silently
+    inherited the full parent process environment - including any Kroko
+    license key an operator happened to have set. The Windows build itself is
+    controlled entirely by the pinned upstream revision and VoiceSTT's patch
+    set (see ``VoiceSTT.kroko.fingerprint.toolchain_identity``), so there are
+    no build-effective ambient variables to strip here beyond the same secret
+    boundary Linux enforces.
+    """
+
+    return sanitize_build_subprocess_env(os.environ)
 
 
 def find_linux_wheel(wheel_dir):
@@ -920,6 +1020,7 @@ def build_windows_wheel(args, repo_dir):
     run(
         ["cmd.exe", "/c", str(repo_dir / "build_windows.bat"), "--variant", args.variant],
         cwd=repo_dir,
+        env=windows_build_env(),
     )
     return find_windows_wheel(repo_dir, args.variant)
 
@@ -970,12 +1071,84 @@ def install_linux(args, repo_dir):
     run([sys.executable, "-m", "pip", "install", "."], cwd=repo_dir, env=env)
 
 
+def _first_nonblank_line(text):
+    """
+    Returns the first non-blank line of text, or an empty string.
+    """
+
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return ""
+
+
+def _probe_version(executable):
+    """
+    Runs ``<executable> --version`` and returns its first output line.
+
+    Returns ``None`` on any failure - a missing or unprobeable tool must never
+    raise out of fingerprint computation; it becomes a visible ``None`` in the
+    fingerprint instead, which itself still distinguishes a host that has the
+    tool from one that does not.
+    """
+
+    try:
+        completed = subprocess.run(
+            [str(executable), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return _first_nonblank_line(completed.stdout) or _first_nonblank_line(completed.stderr) or None
+
+
+def detect_linux_toolchain_identity():
+    """
+    Returns the real compiler/CMake identity for a native Linux Kroko build.
+
+    AP-SRV-070 W4A-C1, Root Finding B: unlike the Windows build, which cross-
+    compiles inside Kroko's own Docker image and is therefore fixed by the
+    pinned upstream revision plus VoiceSTT's patch set regardless of the host,
+    a Linux build compiles natively against whatever ``cmake``/``cc`` this host
+    resolves through ``PATH`` - after ``linux_build_env()`` has stripped any
+    ``CC``/``CXX`` override, so this probes exactly the compiler that will
+    actually run. Two machines with different toolchain versions must not
+    silently share a fingerprint and therefore an artifact.
+    """
+
+    cmake_path = shutil.which("cmake")
+    compiler_path = shutil.which("cc") or shutil.which("gcc") or shutil.which("clang")
+    return {
+        "kind": "host-native",
+        "cmakePath": cmake_path,
+        "cmakeVersion": _probe_version(cmake_path) if cmake_path else None,
+        "compilerPath": compiler_path,
+        "compilerVersion": _probe_version(compiler_path) if compiler_path else None,
+    }
+
+
 def fingerprint_for(args):
     """
     Computes the build fingerprint for the requested variant.
+
+    AP-SRV-070 W4A-C1, Root Finding A: ``--repo``/``--revision`` are real
+    source overrides that ``prepare_checkout()`` actually uses for the clone
+    and checkout, so the fingerprint must be computed from those same
+    effective values - not silently from the static pin in
+    ``VoiceSTT.kroko.buildinputs`` - or two builds from different sources
+    could collide on the same cache key. Root Finding B: on Linux, the real
+    compiler/CMake identity is probed rather than left as the generic
+    ``"host-native"`` placeholder.
     """
 
-    return kroko_fingerprint.compute_fingerprint(variant=args.variant)
+    kwargs = dict(variant=args.variant, repo=args.repo, revision=args.revision)
+    if kroko_fingerprint.detect_target_platform() == "linux":
+        kwargs["toolchain"] = detect_linux_toolchain_identity()
+    return kroko_fingerprint.compute_fingerprint(**kwargs)
 
 
 def artifact_store_for(args):
@@ -1048,11 +1221,13 @@ def main(argv=None):
     try:
         computed = fingerprint_for(args)
         store = artifact_store_for(args)
+        effective_upstream = computed["inputs"]["upstream"]
         print(
-            "Kroko build fingerprint: {0} (variant {1}, upstream {2})".format(
+            "Kroko build fingerprint: {0} (variant {1}, upstream {2} @ {3})".format(
                 computed["fingerprint"],
                 args.variant,
-                buildinputs.KROKO_UPSTREAM_REVISION,
+                effective_upstream["repo"],
+                effective_upstream["revision"],
             )
         )
 
@@ -1082,10 +1257,16 @@ def main(argv=None):
 
         # Verify and store before installing. A failed store leaves whatever
         # artifact was already known good untouched.
+        #
+        # adopt_existing=False on a forced rebuild (Root Hardening): the
+        # operator explicitly asked for a fresh build to replace whatever is
+        # already there, so it always does - adopting a concurrently produced
+        # existing artifact here would silently defeat --rebuild-kroko.
         record = store.store(
             wheel_path=wheel,
             fingerprint=computed["fingerprint"],
             inputs=computed["inputs"],
+            adopt_existing=not args.rebuild_kroko,
         )
         print("Stored verified Kroko artifact: {0}".format(record.wheel_path))
 
