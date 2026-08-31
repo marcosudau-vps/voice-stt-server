@@ -5,6 +5,7 @@ Build and install Kroko-ONNX for the active VoiceSTT environment.
 from __future__ import print_function
 
 import argparse
+import json
 import os
 import platform
 import shlex
@@ -15,10 +16,18 @@ import sys
 import tempfile
 from pathlib import Path
 
+from VoiceSTT.kroko import artifacts as kroko_artifacts
+from VoiceSTT.kroko import buildinputs
+from VoiceSTT.kroko import fingerprint as kroko_fingerprint
 
-DEFAULT_REPO = "https://github.com/kroko-ai/kroko-onnx.git"
-DEFAULT_BRANCH = "cross-platform-builds"
-SUPPORTED_VARIANTS = ("free", "pro")
+
+DEFAULT_REPO = buildinputs.KROKO_UPSTREAM_REPO
+# AP-SRV-070 W4A: the branch is only a starting point for the clone. The build
+# authority is the immutable revision below - a build must never silently
+# follow a moving branch head.
+DEFAULT_BRANCH = buildinputs.KROKO_UPSTREAM_BRANCH_HINT
+DEFAULT_REVISION = buildinputs.KROKO_UPSTREAM_REVISION
+SUPPORTED_VARIANTS = buildinputs.SUPPORTED_VARIANTS
 KROKO_LICENSE_QUIET_ENV = "KROKO_ONNX_SUPPRESS_LICENSE_OUTPUT"
 
 
@@ -71,7 +80,52 @@ def parse_args(argv=None):
     parser.add_argument(
         "--branch",
         default=DEFAULT_BRANCH,
-        help="Kroko-ONNX git branch to build.",
+        help=(
+            "Kroko-ONNX git branch used to seed the clone. The build itself "
+            "checks out the pinned revision, not this branch's head."
+        ),
+    )
+    parser.add_argument(
+        "--revision",
+        default=DEFAULT_REVISION,
+        help=(
+            "Immutable Kroko-ONNX commit to build. Defaults to the revision "
+            "pinned in VoiceSTT.kroko.buildinputs; overriding it changes the "
+            "build fingerprint and therefore requires its own artifact."
+        ),
+    )
+    parser.add_argument(
+        "--artifact-store",
+        default=None,
+        help=(
+            "Root of the persistent Kroko artifact store. Defaults to "
+            "${0} or the per-user cache directory.".format(
+                kroko_artifacts.ARTIFACT_STORE_ENV
+            )
+        ),
+    )
+    parser.add_argument(
+        "--rebuild-kroko",
+        action="store_true",
+        help=(
+            "Force a real native rebuild even when a matching verified "
+            "artifact exists, then atomically replace the stored artifact. "
+            "Without this flag a matching artifact is reused and nothing is "
+            "compiled."
+        ),
+    )
+    parser.add_argument(
+        "--print-fingerprint",
+        action="store_true",
+        help="Print the build fingerprint as JSON and exit. Compiles nothing.",
+    )
+    parser.add_argument(
+        "--describe-artifact",
+        action="store_true",
+        help=(
+            "Print the fingerprint plus whether a verified artifact exists in "
+            "the store, as JSON, and exit. Compiles nothing."
+        ),
     )
     parser.add_argument(
         "--work-dir",
@@ -269,7 +323,59 @@ def prepare_checkout(args, work_dir=None):
         print("Using existing Kroko-ONNX checkout: {0}".format(repo_dir))
         print("Pass --force to delete and clone it again.")
 
+    ensure_pinned_revision(repo_dir, getattr(args, "revision", DEFAULT_REVISION))
     return repo_dir
+
+
+def current_revision(repo_dir):
+    """
+    Returns the commit currently checked out in the Kroko checkout.
+    """
+
+    try:
+        output = subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=str(repo_dir),
+        )
+    except (subprocess.CalledProcessError, OSError) as exc:
+        raise KrokoInstallError(
+            "Could not read the Kroko checkout revision in {0}: {1}".format(repo_dir, exc)
+        )
+    return output.decode("utf-8", "replace").strip()
+
+
+def ensure_pinned_revision(repo_dir, revision):
+    """
+    Checks the pinned immutable Kroko revision out.
+
+    A build must be reproducible, so it never uses whatever the branch head
+    happens to be. If the pinned commit is not in the local clone yet - the
+    usual case for a shallow or single-branch clone - it is fetched explicitly.
+    """
+
+    revision = str(revision).strip()
+    if not revision:
+        raise KrokoInstallError("No Kroko upstream revision is pinned.")
+
+    if current_revision(repo_dir) == revision:
+        return revision
+
+    print("Checking out pinned Kroko revision: {0}".format(revision))
+    try:
+        run(["git", "checkout", "--detach", revision], cwd=repo_dir)
+    except KrokoInstallError:
+        run(["git", "fetch", "--tags", "origin", revision], cwd=repo_dir)
+        run(["git", "checkout", "--detach", revision], cwd=repo_dir)
+
+    checked_out = current_revision(repo_dir)
+    if checked_out != revision:
+        raise KrokoInstallError(
+            "Kroko checkout is at {0}, but the pinned revision is {1}.".format(
+                checked_out,
+                revision,
+            )
+        )
+    return checked_out
 
 
 def read_text(path):
@@ -738,6 +844,101 @@ def install_windows(args, repo_dir):
         run([sys.executable, "-m", "pip", "install", "--force-reinstall", str(wheel)])
 
 
+def linux_build_env(variant):
+    """
+    Builds the Linux Kroko build environment from the declared build inputs.
+
+    The CMake/make flags come from ``VoiceSTT.kroko.buildinputs`` so the values
+    that go into the compiler and the values that go into the build fingerprint
+    can never drift apart.
+    """
+
+    env = os.environ.copy()
+    existing_cmake_args = env.get("SHERPA_ONNX_CMAKE_ARGS", "").strip()
+    env["SHERPA_ONNX_CMAKE_ARGS"] = (
+        existing_cmake_args + " " + buildinputs.LINUX_CMAKE_FLAGS
+    ).strip()
+    env.setdefault("SHERPA_ONNX_MAKE_ARGS", buildinputs.LINUX_MAKE_ARGS)
+    if variant == buildinputs.VARIANT_PRO:
+        # Builds a Pro-capable runtime. This is a capability switch only - the
+        # Pro license key is never needed at build time and is never placed
+        # into the build environment.
+        env[buildinputs.PRO_BUILD_ENV_NAME] = buildinputs.PRO_BUILD_ENV_VALUE
+    return env
+
+
+def find_linux_wheel(wheel_dir):
+    """
+    Finds the Kroko wheel produced by a Linux build.
+    """
+
+    wheels = sorted(
+        Path(wheel_dir).glob("kroko_onnx-*.whl"),
+        key=lambda item: item.stat().st_mtime,
+        reverse=True,
+    )
+    if not wheels:
+        raise KrokoInstallError(
+            "Linux build finished, but no Kroko wheel was found in {0}.".format(wheel_dir)
+        )
+    return wheels[0]
+
+
+def build_linux_wheel(args, repo_dir):
+    """
+    Builds the Kroko wheel on Linux and returns its path.
+    """
+
+    ensure_program("cmake", "CMake is required to build Kroko-ONNX from source on Linux.")
+    patch_license_quiet_env(repo_dir)
+    wheel_dir = repo_dir / "release_artifacts" / "linux"
+    wheel_dir.mkdir(parents=True, exist_ok=True)
+    run(
+        [
+            sys.executable,
+            "-m",
+            "pip",
+            "wheel",
+            ".",
+            "--no-deps",
+            "--wheel-dir",
+            str(wheel_dir),
+        ],
+        cwd=repo_dir,
+        env=linux_build_env(args.variant),
+    )
+    return find_linux_wheel(wheel_dir)
+
+
+def build_windows_wheel(args, repo_dir):
+    """
+    Builds the Kroko wheel on Windows and returns its path.
+    """
+
+    ensure_windows_host()
+    prepare_windows_checkout(repo_dir)
+    run(
+        ["cmd.exe", "/c", str(repo_dir / "build_windows.bat"), "--variant", args.variant],
+        cwd=repo_dir,
+    )
+    return find_windows_wheel(repo_dir, args.variant)
+
+
+def build_wheel(args, repo_dir):
+    """
+    Builds the Kroko wheel for this platform and returns its path.
+    """
+
+    if os.name == "nt":
+        return build_windows_wheel(args, repo_dir)
+    if sys.platform.startswith("linux"):
+        return build_linux_wheel(args, repo_dir)
+    raise KrokoInstallError(
+        "stt-install-kroko currently supports Windows and Linux. "
+        "Use Kroko's upstream macOS build script on macOS."
+    )
+
+
 def install_linux(args, repo_dir):
     """
     Installs Kroko from source on Linux.
@@ -745,24 +946,7 @@ def install_linux(args, repo_dir):
 
     ensure_program("cmake", "CMake is required to build Kroko-ONNX from source on Linux.")
     patch_license_quiet_env(repo_dir)
-    env = os.environ.copy()
-    cpu_only_flags = (
-        "-DCMAKE_BUILD_TYPE=Release "
-        "-DSHERPA_ONNX_ENABLE_GPU=OFF "
-        "-DSHERPA_ONNX_ENABLE_PORTAUDIO=OFF "
-        # Kroko's license client includes websocketpp headers unconditionally.
-        "-DSHERPA_ONNX_ENABLE_WEBSOCKET=ON "
-        "-DSHERPA_ONNX_ENABLE_TTS=OFF "
-        "-DSHERPA_ONNX_ENABLE_SPEAKER_DIARIZATION=OFF "
-        "-DSHERPA_ONNX_ENABLE_BINARY=OFF"
-    )
-    existing_cmake_args = env.get("SHERPA_ONNX_CMAKE_ARGS", "").strip()
-    env["SHERPA_ONNX_CMAKE_ARGS"] = (
-        existing_cmake_args + " " + cpu_only_flags
-    ).strip()
-    env.setdefault("SHERPA_ONNX_MAKE_ARGS", "-j2")
-    if args.variant == "pro":
-        env["KROKO_LICENSE"] = "ON"
+    env = linux_build_env(args.variant)
 
     if args.skip_install:
         wheel_dir = repo_dir / "release_artifacts" / "linux"
@@ -786,33 +970,149 @@ def install_linux(args, repo_dir):
     run([sys.executable, "-m", "pip", "install", "."], cwd=repo_dir, env=env)
 
 
+def fingerprint_for(args):
+    """
+    Computes the build fingerprint for the requested variant.
+    """
+
+    return kroko_fingerprint.compute_fingerprint(variant=args.variant)
+
+
+def artifact_store_for(args):
+    """
+    Opens the persistent artifact store selected for this invocation.
+    """
+
+    return kroko_artifacts.KrokoArtifactStore(getattr(args, "artifact_store", None))
+
+
+def describe_artifact(args):
+    """
+    Reports fingerprint and artifact availability as a machine-readable dict.
+
+    This is the read-only interface W4B and later CI use to decide whether a
+    native build is needed at all. It compiles nothing and needs no checkout.
+    """
+
+    computed = fingerprint_for(args)
+    store = artifact_store_for(args)
+    record, problems = store.lookup(
+        variant=args.variant,
+        fingerprint=computed["fingerprint"],
+        inputs=computed["inputs"],
+    )
+    payload = {
+        "variant": args.variant,
+        "fingerprint": computed["fingerprint"],
+        "inputs": computed["inputs"],
+        "artifactStore": str(store.root),
+        "artifactPresent": record is not None,
+    }
+    if record is not None:
+        payload["artifact"] = record.public_dict()
+    else:
+        payload["problems"] = problems
+    return payload
+
+
+def install_wheel(wheel_path):
+    """
+    Installs a built or reused Kroko wheel into this Python environment.
+    """
+
+    run([sys.executable, "-m", "pip", "install", "--force-reinstall", str(wheel_path)])
+
+
 def main(argv=None):
     """
     Runs the Kroko installer command.
     """
 
     args = parse_args(argv)
+
+    if args.print_fingerprint:
+        print(json.dumps(fingerprint_for(args), indent=2, sort_keys=True))
+        return 0
+
+    if args.describe_artifact:
+        try:
+            print(json.dumps(describe_artifact(args), indent=2, sort_keys=True))
+        except kroko_artifacts.KrokoArtifactError as exc:
+            print("ERROR: {0}".format(exc), file=sys.stderr)
+            return 1
+        return 0
+
     if not args.build:
         raise SystemExit("Pass --build to build and install Kroko-ONNX.")
 
     try:
+        computed = fingerprint_for(args)
+        store = artifact_store_for(args)
+        print(
+            "Kroko build fingerprint: {0} (variant {1}, upstream {2})".format(
+                computed["fingerprint"],
+                args.variant,
+                buildinputs.KROKO_UPSTREAM_REVISION,
+            )
+        )
+
+        # Reuse by default: a verified artifact for exactly these build inputs
+        # means there is nothing to compile.
+        if not args.rebuild_kroko:
+            record, problems = store.lookup(
+                variant=args.variant,
+                fingerprint=computed["fingerprint"],
+                inputs=computed["inputs"],
+            )
+            if record is not None:
+                print("Reusing verified Kroko artifact: {0}".format(record.wheel_path))
+                if not args.skip_install:
+                    install_wheel(record.wheel_path)
+                    _report_installed_runtime(args.variant)
+                print("Kroko-ONNX is ready in this Python environment.")
+                return 0
+            print("No reusable Kroko artifact: {0}".format("; ".join(problems)))
+        else:
+            print("--rebuild-kroko: forcing a real native rebuild.")
+
         work_dir = preflight_build(args)
         repo_dir = prepare_checkout(args, work_dir)
-        if os.name == "nt":
-            install_windows(args, repo_dir)
-        elif sys.platform.startswith("linux"):
-            install_linux(args, repo_dir)
-        else:
-            raise KrokoInstallError(
-                "stt-install-kroko currently supports Windows and Linux. "
-                "Use Kroko's upstream macOS build script on macOS."
-            )
-    except KrokoInstallError as exc:
+        wheel = build_wheel(args, repo_dir)
+        print("Built Kroko-ONNX wheel: {0}".format(wheel))
+
+        # Verify and store before installing. A failed store leaves whatever
+        # artifact was already known good untouched.
+        record = store.store(
+            wheel_path=wheel,
+            fingerprint=computed["fingerprint"],
+            inputs=computed["inputs"],
+        )
+        print("Stored verified Kroko artifact: {0}".format(record.wheel_path))
+
+        if not args.skip_install:
+            install_wheel(record.wheel_path)
+            _report_installed_runtime(args.variant)
+    except (KrokoInstallError, kroko_artifacts.KrokoArtifactError) as exc:
         print("ERROR: {0}".format(exc), file=sys.stderr)
         return 1
 
     print("Kroko-ONNX is ready in this Python environment.")
     return 0
+
+
+def _report_installed_runtime(variant):
+    """
+    Verifies the installed Kroko runtime really is the requested variant.
+    """
+
+    result = kroko_artifacts.verify_installed_runtime(variant)
+    if not result.get("ok"):
+        raise KrokoInstallError(
+            "Installed Kroko runtime failed variant verification: {0}".format(
+                result.get("problem") or result.get("importError") or result
+            )
+        )
+    print("Verified installed Kroko runtime variant: {0}".format(variant))
 
 
 if __name__ == "__main__":

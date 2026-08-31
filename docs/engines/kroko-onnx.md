@@ -97,11 +97,39 @@ check.
 
 ## Models
 
-Public Community models are available from
-[Banafo/Kroko-ASR](https://huggingface.co/Banafo/Kroko-ASR). VoiceSTT can
-download known public Community `.data` files automatically when
-`auto_download_model` is enabled. Bare Kroko filenames are cached under
-`~/.cache/voicestt/kroko-onnx` unless `download_root` points somewhere else.
+Kroko models are described by the model authority in
+`VoiceSTT/assets/kroko/models.json` (AP-SRV-070 W4A). It pins each known
+model's identity, SHA-256, byte size, license class and the Kroko runtime
+variant (`free`/`pro`) it requires. The manifest ships metadata only - **no
+Kroko model file is bundled** in Git, in the wheel/sdist or in an image.
+
+### Why models are provisioned rather than shipped
+
+The upstream redistribution grant is not unambiguous: the Hugging Face model
+card declares `license: other` with `license_name: test` and links a `LICENSE`
+file that is empty upstream, while the README prose calls the Community models
+CC-BY-SA. An empty license file with a placeholder name is not a dependable
+basis for redistribution, so every Community entry carries
+`redistributionStatus: POLICY_REQUIRED` and nothing is redistributed. The
+recorded evidence lives in the manifest's `licensePolicy` block; once upstream
+publishes a clear license, the status can be raised to `ALLOWED`.
+
+### Provisioning
+
+Point `VOICESTT_KROKO_MODEL_ROOT` at the directory holding your `.data` files.
+A normal server start **never downloads a model on its own** - production has
+to be deterministic (W4A-08). A download is an explicit action:
+
+```powershell
+$env:VOICESTT_KROKO_ALLOW_MODEL_DOWNLOAD = "1"   # or engine_options auto_download_model=True
+```
+
+Set `VOICESTT_KROKO_VERIFY_MODEL_HASH=1` to re-verify manifested models by
+SHA-256 at start-up; provisioning always verifies by hash, while the runtime
+path checks existence, size and variant by default so start-up stays fast.
+
+Bare Kroko filenames are cached under `~/.cache/voicestt/kroko-onnx` unless
+`download_root` points somewhere else.
 
 You can also pre-download models into a project-local ignored cache:
 

@@ -304,16 +304,61 @@ stt-install-kroko --build
 Ohne `--build` zeigt der Helfer nur die Nutzungsanforderung und fuehrt keinen
 Checkout aus. Mit `--build` laeuft folgender Prozess:
 
-1. Git, Schreibrechte und plattformspezifische Werkzeuge werden geprueft.
-2. `kroko-ai/kroko-onnx` wird aus dem Branch `cross-platform-builds` geklont
-   oder aus dem bestehenden Workdir wiederverwendet.
-3. VoiceSTT wendet reproduzierbare Patches fuer Windows-Builds und die
+1. Der Build-Fingerprint wird aus den deklarierten Buildinputs berechnet.
+2. Existiert im Artifact-Store bereits ein verifiziertes Artefakt fuer genau
+   diesen Fingerprint, wird es **wiederverwendet** - es wird nichts kompiliert.
+3. Sonst: Git, Schreibrechte und plattformspezifische Werkzeuge pruefen.
+4. `kroko-ai/kroko-onnx` wird geklont bzw. wiederverwendet und anschliessend
+   auf die **immutable gepinnte Revision** ausgecheckt (nicht auf den
+   Branch-Head).
+5. VoiceSTT wendet reproduzierbare Patches fuer Windows-Builds und die
    Unterdrueckung asynchroner Lizenzmeldungen an.
-4. Linux baut ein CPU-Wheel direkt aus dem Checkout; Windows verwendet den
+6. Linux baut ein CPU-Wheel direkt aus dem Checkout; Windows verwendet den
    vorgelagerten Docker-Workflow.
-5. Das Wheel wird installiert, sofern `--skip-install` nicht gesetzt ist.
-6. Bei `--variant pro` setzt der Builder `KROKO_LICENSE=ON`; `free` setzt die
-   lizenzierte Runtime nicht frei.
+7. Das Wheel wird verifiziert und atomar im Artifact-Store abgelegt.
+8. Das Wheel wird installiert, sofern `--skip-install` nicht gesetzt ist; dabei
+   wird geprueft, dass die installierte Runtime wirklich die erwartete Variante
+   ist.
+9. Bei `--variant pro` setzt der Builder `KROKO_LICENSE=ON`; `free` setzt die
+   lizenzierte Runtime nicht frei. Der Pro-**Key** wird zum Bauen nie benoetigt.
+
+### Fingerprint und Artifact-Store (AP-SRV-070 W4A)
+
+Der native Kroko-Build ist vom normalen VoiceSTT-Build entkoppelt. Der
+Fingerprint (`VoiceSTT/kroko/fingerprint.py`) umfasst ausschliesslich
+buildwirksame Inputs: gepinnte Upstream-Revision, Variante, Zielplattform,
+Architektur, Python-ABI, Buildflags, Toolchain-Identitaet sowie die beiden
+deklarierten Revisionen fuer VoiceSTTs eigene buildwirksame Logik
+(`patchSetRevision`, `builderRevision`).
+
+**Nicht** enthalten sind Serverlogik, Wake-Word-Code, Doku und insbesondere die
+Produktversion aus `VERSION`/`VOICESTT_BUILD_VERSION` (W3). Eine reine
+Versionserhoehung kompiliert Kroko also nicht neu.
+
+#### Deklarierte Revisionen und ihre Updatepflicht
+
+Der Fingerprint hasht bewusst **deklarierte Werte** statt Quelldateien, damit
+ein Edit an unbeteiligtem VoiceSTT-Code keinen 30-Minuten-Build entwertet. Die
+Kehrseite: VoiceSTTs eigene buildwirksame Logik muss deklariert werden. Dafuer
+gibt es zwei source-controlled Konstanten in `VoiceSTT/kroko/buildinputs.py`:
+
+| Konstante | Deckt ab | Wann erhoehen |
+| --- | --- | --- |
+| `PATCH_SET_REVISION` | Was VoiceSTT an den Upstream-**Quellen** patcht (WebSocket ON, OpenSSL-Beschaffung, native Lizenzausgabe) | Sobald sich der Inhalt dieser Patches aendert |
+| `BUILDER_REVISION` | Wie gebaut wird: welche Revision ausgecheckt wird, welche Patches angewandt werden, wie der Compiler aufgerufen wird, welches erzeugte Wheel als Artefakt genommen wird | Sobald sich diese Builderlogik buildwirksam aendert |
+
+Beide Konstanten sind Fingerprint-Inputs; eine Erhoehung invalidiert gespeicherte
+Artefakte also korrekt.
+
+**Die Updatepflicht ist erzwungen, nicht nur dokumentiert:** der Guard-Test
+`tests/unit/test_kroko_fingerprint.py::BuildEffectiveLogicGuardTests` hasht den
+Quelltext beider Flaechen und schlaegt fehl, sobald sie sich ohne Erhoehung der
+zugehoerigen Konstante aendern. Die Fehlermeldung nennt jeweils, welche
+Konstante zu erhoehen und welcher Digest nachzuziehen ist.
+
+Der Store liegt ausserhalb des Repositories und ist konfigurierbar:
+`--artifact-store` oder `VOICESTT_KROKO_ARTIFACT_STORE`, sonst der
+Benutzer-Cache. Free und Pro liegen in strikt getrennten Namespaces.
 
 Alle Optionen:
 
@@ -322,28 +367,40 @@ Alle Optionen:
 | `--build` | aus | Build ueberhaupt ausfuehren |
 | `--variant free\|pro` | `free` | Community- oder lizenzfaehige Pro-Runtime |
 | `--repo URL` | offizielles Kroko-GitHub-Repo | Alternative Source-URL, etwa ein kontrollierter Mirror |
-| `--branch NAME` | `cross-platform-builds` | Zu bauender Branch |
+| `--branch NAME` | `cross-platform-builds` | Nur Startpunkt fuer den Clone; gebaut wird die gepinnte Revision |
+| `--revision SHA` | gepinnte Revision aus `VoiceSTT/kroko/buildinputs.py` | Immutable Upstream-Commit; Aenderung erzeugt einen neuen Fingerprint |
+| `--artifact-store DIR` | `VOICESTT_KROKO_ARTIFACT_STORE` bzw. Benutzer-Cache | Persistenter Artifact-Store |
+| `--rebuild-kroko` | aus | Erzwingt echten Neubau trotz vorhandenem Artefakt und ersetzt es atomar |
+| `--print-fingerprint` | aus | Fingerprint als JSON ausgeben, nichts bauen |
+| `--describe-artifact` | aus | Fingerprint plus Artefakt-Verfuegbarkeit als JSON ausgeben, nichts bauen |
 | `--work-dir DIR` | OS-Cache, bei Fehler lokal | Checkout und Buildartefakte dauerhaft ablegen |
-| `--force` | aus | Vorhandenen Kroko-Checkout im Workdir sicher loeschen und neu klonen |
+| `--force` | aus | Vorhandenen Kroko-*Checkout* im Workdir sicher loeschen und neu klonen |
 | `--skip-install` | aus | Wheel bauen, aber nicht in das aktive Python installieren |
 | `-h`, `--help` | - | Aktuelle CLI-Hilfe anzeigen |
+
+`--force` und `--rebuild-kroko` sind verschieden: `--force` verwirft den
+Quell-Checkout, `--rebuild-kroko` verwirft das Ergebnis-Artefakt.
 
 Beispiele:
 
 ```bash
-# Reproduzierbarer frischer Pro-Build
-stt-install-kroko --build --variant pro --force --work-dir /tmp/kroko-pro-build
+# Normalfall: baut nur, wenn noch kein passendes Artefakt existiert
+stt-install-kroko --build --variant pro
+
+# Erzwungener Neubau derselben Konfiguration
+stt-install-kroko --build --variant pro --rebuild-kroko
 
 # Nur Artefakt bauen
 stt-install-kroko --build --variant pro --skip-install --work-dir /build/kroko
 
-# Kontrollierter Fork/Branch
-stt-install-kroko --build --repo https://example.invalid/kroko-onnx.git --branch release --work-dir ./kroko-work
+# Maschinenlesbare CI-Schnittstelle
+stt-install-kroko --print-fingerprint --variant pro
+stt-install-kroko --describe-artifact --variant pro
 ```
 
-`--force` loescht nur den validierten Checkout unterhalb des gewaehlten
-Workdirs. Ein bereits gebautes Wheel sollte fuer reproduzierbare Releases mit
-Quellcommit, Python-ABI, Plattform und Variante inventarisiert werden.
+Ein gebautes Wheel wird im Store zusammen mit Fingerprint, Upstream-Revision,
+Python-ABI, Plattform, Variante, SHA-256 und Groesse inventarisiert; eine
+separate manuelle Inventarisierung ist damit nicht mehr noetig.
 
 ### Key und Runtime
 

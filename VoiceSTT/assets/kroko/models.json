@@ -1,0 +1,214 @@
+{
+  "schemaVersion": 1,
+  "manifestRevision": 1,
+  "generatedBy": "AP-SRV-070 W4A",
+  "description": "Kanonische Kroko-Modellauthority. Ersetzt die frühere Praxis, einen beliebigen Ordnerinhalt hinter VOICESTT_KROKO_MODEL_ROOT als Produkt-Authority zu behandeln. Kein Modell wird durch dieses Manifest redistribuiert - es beschreibt nur Identität, Integrität, Lizenzklasse und die erwartete Runtime-Variante.",
+  "upstream": {
+    "communityRepoId": "Banafo/Kroko-ASR",
+    "communityRepoUrl": "https://huggingface.co/Banafo/Kroko-ASR",
+    "communityRevision": "d45212aeb212dd66083dd22710c9954f40ff8cc1",
+    "revisionKind": "huggingface-commit-sha"
+  },
+  "licensePolicy": {
+    "communityRedistribution": "POLICY_REQUIRED",
+    "proRedistribution": "PROHIBITED",
+    "summary": "Die Redistributionsrechte der Community-Modelle sind upstream nicht eindeutig belegt. AP-SRV-070 W4A bündelt daher kein Kroko-Modell in Git, Wheel/Sdist oder Image und stellt stattdessen einen hashverifizierten Provisioning-Pfad bereit.",
+    "evidence": {
+      "cardLicenseField": "other",
+      "cardLicenseName": "test",
+      "cardLicenseLink": "LICENSE",
+      "licenseFileBytes": 0,
+      "licenseFileNote": "Die im Model-Card verlinkte LICENSE-Datei ist upstream leer (0 Bytes, Git-Empty-Blob e69de29bb2d1d6434b8b29ae775ad8c2e48c5391).",
+      "readmeClaim": "Die README-Prosa bezeichnet die Community-Modelle als CC-BY-SA.",
+      "conflict": "Der maschinenlesbare Lizenzeintrag ('other', Name 'test') und die leere LICENSE-Datei widersprechen der CC-BY-SA-Aussage der README. Eine leere Lizenzdatei mit dem Platzhalternamen 'test' ist keine belastbare Redistributionsgrundlage.",
+      "checkedOn": "2026-08-31"
+    },
+    "resolutionPath": "Sobald upstream eine eindeutige Lizenz veröffentlicht, kann redistributionStatus der Community-Einträge auf ALLOWED gehoben und manifestRevision erhöht werden."
+  },
+  "models": [
+    {
+      "id": "kroko-de-community-64-l",
+      "filename": "Kroko-DE-Community-64-L-Streaming-001.data",
+      "language": "de",
+      "tier": "community",
+      "requiresRuntimeVariant": "free",
+      "licenseClass": "community-unresolved",
+      "redistributionStatus": "POLICY_REQUIRED",
+      "sha256": "0013d4b3e1216b4e0c15f18f345aa58ca8bb2cdbeff7a7d55a513f6b400862a5",
+      "bytes": 155839333,
+      "provenance": {
+        "kind": "upstream-verified",
+        "repoId": "Banafo/Kroko-ASR",
+        "revision": "d45212aeb212dd66083dd22710c9954f40ff8cc1"
+      }
+    },
+    {
+      "id": "kroko-de-community-128-l",
+      "filename": "Kroko-DE-Community-128-L-Streaming-001.data",
+      "language": "de",
+      "tier": "community",
+      "requiresRuntimeVariant": "free",
+      "licenseClass": "community-unresolved",
+      "redistributionStatus": "POLICY_REQUIRED",
+      "sha256": "8d39babf998aba69446b1c1e3ac780bf5f90887ad95b0d60eb4bd79d63998462",
+      "bytes": 155836296,
+      "provenance": {
+        "kind": "upstream-verified",
+        "repoId": "Banafo/Kroko-ASR",
+        "revision": "d45212aeb212dd66083dd22710c9954f40ff8cc1"
+      }
+    },
+    {
+      "id": "kroko-en-community-64-l",
+      "filename": "Kroko-EN-Community-64-L-Streaming-001.data",
+      "language": "en",
+      "tier": "community",
+      "requiresRuntimeVariant": "free",
+      "licenseClass": "community-unresolved",
+      "redistributionStatus": "POLICY_REQUIRED",
+      "sha256": "59a1e64cfbe33d35096f69056c484f02778a5d2c0c95016d3e2948588fc72e9c",
+      "bytes": 155839341,
+      "provenance": {
+        "kind": "upstream-verified",
+        "repoId": "Banafo/Kroko-ASR",
+        "revision": "d45212aeb212dd66083dd22710c9954f40ff8cc1"
+      }
+    },
+    {
+      "id": "kroko-en-community-128-l",
+      "filename": "Kroko-EN-Community-128-L-Streaming-001.data",
+      "language": "en",
+      "tier": "community",
+      "requiresRuntimeVariant": "free",
+      "licenseClass": "community-unresolved",
+      "redistributionStatus": "POLICY_REQUIRED",
+      "sha256": "095f7ea4bd879b4308b6b6a4db47e3993c38f863a593fa61fd5586798e514fc1",
+      "bytes": 155836304,
+      "provenance": {
+        "kind": "upstream-verified",
+        "repoId": "Banafo/Kroko-ASR",
+        "revision": "d45212aeb212dd66083dd22710c9954f40ff8cc1"
+      }
+    },
+    {
+      "id": "kroko-de-pro-16-m",
+      "filename": "Kroko-DE-Pro-16-M-Streaming-001.data",
+      "language": "de",
+      "tier": "pro",
+      "requiresRuntimeVariant": "pro",
+      "licenseClass": "commercial",
+      "redistributionStatus": "PROHIBITED",
+      "sha256": "5480693fd69c58ff8b19d96e2a052994efa49cfb1df42ebe9111f61cdb1b85b5",
+      "bytes": 71064141,
+      "provenance": {
+        "kind": "operator-provisioned",
+        "note": "Hash der lizenzierten Betreiberkopie. Dient ausschließlich der Integritäts-/Variantenprüfung und ist keine Redistributionsfreigabe."
+      }
+    },
+    {
+      "id": "kroko-de-pro-16-l",
+      "filename": "Kroko-DE-Pro-16-L-Streaming-001.data",
+      "language": "de",
+      "tier": "pro",
+      "requiresRuntimeVariant": "pro",
+      "licenseClass": "commercial",
+      "redistributionStatus": "PROHIBITED",
+      "sha256": "b4a768b474d5cc9f509668003a279fbef7a811438d0c288c53f3f1fa87ee612e",
+      "bytes": 155852269,
+      "provenance": {
+        "kind": "operator-provisioned",
+        "note": "Hash der lizenzierten Betreiberkopie. Dient ausschließlich der Integritäts-/Variantenprüfung und ist keine Redistributionsfreigabe."
+      }
+    },
+    {
+      "id": "kroko-de-pro-32-m",
+      "filename": "Kroko-DE-Pro-32-M-Streaming-001.data",
+      "language": "de",
+      "tier": "pro",
+      "requiresRuntimeVariant": "pro",
+      "licenseClass": "commercial",
+      "redistributionStatus": "PROHIBITED",
+      "sha256": "33f369b0af64e777626e471d250453fe6002a28bf9836aa9b2c0abea48dd1d30",
+      "bytes": 71062605,
+      "provenance": {
+        "kind": "operator-provisioned",
+        "note": "Hash der lizenzierten Betreiberkopie. Dient ausschließlich der Integritäts-/Variantenprüfung und ist keine Redistributionsfreigabe."
+      }
+    },
+    {
+      "id": "kroko-de-pro-32-l",
+      "filename": "Kroko-DE-Pro-32-L-Streaming-001.data",
+      "language": "de",
+      "tier": "pro",
+      "requiresRuntimeVariant": "pro",
+      "licenseClass": "commercial",
+      "redistributionStatus": "PROHIBITED",
+      "sha256": "a449962ad3310f763ff4853a24026c903320a872ed1eac3d840b1eca8ada0342",
+      "bytes": 155850733,
+      "provenance": {
+        "kind": "operator-provisioned",
+        "note": "Hash der lizenzierten Betreiberkopie. Dient ausschließlich der Integritäts-/Variantenprüfung und ist keine Redistributionsfreigabe."
+      }
+    },
+    {
+      "id": "kroko-de-pro-64-m",
+      "filename": "Kroko-DE-Pro-64-M-Streaming-001.data",
+      "language": "de",
+      "tier": "pro",
+      "requiresRuntimeVariant": "pro",
+      "licenseClass": "commercial",
+      "redistributionStatus": "PROHIBITED",
+      "sha256": "d5556e44a8c51794d231a1bce8cd2d7a4a6e99ee67d00861edf0981afa6e849c",
+      "bytes": 71053293,
+      "provenance": {
+        "kind": "operator-provisioned",
+        "note": "Hash der lizenzierten Betreiberkopie. Dient ausschließlich der Integritäts-/Variantenprüfung und ist keine Redistributionsfreigabe."
+      }
+    },
+    {
+      "id": "kroko-de-pro-64-l",
+      "filename": "Kroko-DE-Pro-64-L-Streaming-001.data",
+      "language": "de",
+      "tier": "pro",
+      "requiresRuntimeVariant": "pro",
+      "licenseClass": "commercial",
+      "redistributionStatus": "PROHIBITED",
+      "sha256": "3b930de48347a37a43539031f84405c60139ae9c4f17b9a3d1e88b57c20f4a92",
+      "bytes": 155839357,
+      "provenance": {
+        "kind": "operator-provisioned",
+        "note": "Hash der lizenzierten Betreiberkopie. Dient ausschließlich der Integritäts-/Variantenprüfung und ist keine Redistributionsfreigabe."
+      }
+    },
+    {
+      "id": "kroko-de-pro-128-m",
+      "filename": "Kroko-DE-Pro-128-M-Streaming-001.data",
+      "language": "de",
+      "tier": "pro",
+      "requiresRuntimeVariant": "pro",
+      "licenseClass": "commercial",
+      "redistributionStatus": "PROHIBITED",
+      "sha256": "1bc66e194c3c2becb8f952124cefe9a6099bf7a0a86cf08eee5d787d7ce698f0",
+      "bytes": 71051293,
+      "provenance": {
+        "kind": "operator-provisioned",
+        "note": "Hash der lizenzierten Betreiberkopie. Dient ausschließlich der Integritäts-/Variantenprüfung und ist keine Redistributionsfreigabe."
+      }
+    },
+    {
+      "id": "kroko-de-pro-128-l",
+      "filename": "Kroko-DE-Pro-128-L-Streaming-001.data",
+      "language": "de",
+      "tier": "pro",
+      "requiresRuntimeVariant": "pro",
+      "licenseClass": "commercial",
+      "redistributionStatus": "PROHIBITED",
+      "sha256": "179ddb1b6095e1fce9c988bc7a5038d7203e8d4529b7f637b50d1b44351c32b3",
+      "bytes": 155836317,
+      "provenance": {
+        "kind": "operator-provisioned",
+        "note": "Hash der lizenzierten Betreiberkopie. Dient ausschließlich der Integritäts-/Variantenprüfung und ist keine Redistributionsfreigabe."
+      }
+    }
+  ]
+}

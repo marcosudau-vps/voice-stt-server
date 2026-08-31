@@ -16,6 +16,7 @@ from urllib.request import Request, urlopen
 
 from ._model_utils import text_from_output
 from .model_resolver import offline_models_enabled, resolve_kroko_model
+from ..kroko import models as kroko_models
 from .base import (
     BaseTranscriptionEngine,
     StreamingTranscriptionSession,
@@ -429,13 +430,18 @@ class KrokoOnnxBackend:
 
         if not path.is_file():
             raise TranscriptionEngineError(
-                "Missing kroko-onnx model file: %s. Public Community models are "
-                "downloaded automatically when auto_download_model is enabled. "
-                "For Pro/private models, pass an existing .data file, a direct "
+                "Missing kroko-onnx model file: %s. This build does not ship "
+                "Kroko models and does not download them on its own; provision "
+                "the .data file and point %s at its directory. A download is an "
+                "explicit action: set %s=1 or pass "
+                "engine_options['auto_download_model']=True. For Pro/private "
+                "models, pass an existing .data file, a direct "
                 "model_download_url, or a Hugging Face repo/token option. Source: "
                 "%s (%s), for example %s, then pass it as model or "
                 "engine_options['model_path']." % (
                     path,
+                    kroko_models.KROKO_MODEL_ROOT_ENV,
+                    kroko_models.ALLOW_MODEL_DOWNLOAD_ENV,
                     KROKO_ONNX_MODEL_URL,
                     KROKO_ONNX_HF_REPO,
                     DEFAULT_KROKO_ONNX_MODEL,
@@ -451,13 +457,20 @@ class KrokoOnnxBackend:
         if filename is None:
             return path
 
+        # AP-SRV-070 W4A-08: production must be deterministic, so a normal
+        # server start never downloads a model on its own. Downloading is an
+        # explicit provisioning action - either an engine option or the
+        # documented opt-in environment variable. Offline mode still wins.
         auto_download = _bool_option(
             self.engine_options,
             "auto_download_model",
             _bool_option(
                 self.engine_options,
                 "download_model",
-                not offline_models_enabled(self.engine_options),
+                (
+                    kroko_models.model_download_allowed()
+                    and not offline_models_enabled(self.engine_options)
+                ),
             ),
         )
         if not auto_download:

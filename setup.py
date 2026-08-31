@@ -338,6 +338,12 @@ setuptools.setup(
     package_data={
         "VoiceSTT": [
             "assets/warmup_audio.wav",
+            # AP-SRV-070 W4A: the Kroko model authority. This ships metadata
+            # only - identity, integrity hashes, license class and required
+            # runtime variant. No Kroko model file is bundled, because the
+            # upstream redistribution grant is not unambiguous (see the
+            # manifest's licensePolicy block).
+            "assets/kroko/models.json",
             # AP-SRV-060: the wake-word build assets ship with the package, so
             # an installed wheel on Windows and on Ubuntu resolves them without
             # any runtime download. AP-SRV-070: the exact file list is the

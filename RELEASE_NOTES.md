@@ -4,6 +4,22 @@
 
 ### Added
 
+- Added a reusable Kroko runtime artifact pipeline (`VoiceSTT/kroko/`): the
+  native Kroko build is pinned to an immutable upstream commit, described by a
+  canonical build fingerprint, and cached in a persistent, configurable
+  artifact store with strictly separated free/pro namespaces. A matching
+  verified artifact is reused by default, `--rebuild-kroko` forces a real
+  rebuild with atomic replacement, and a failed rebuild leaves the previous
+  good artifact intact. The fingerprint deliberately excludes the VoiceSTT
+  product version, server, wake-word and documentation sources, so an ordinary
+  change or a release version bump no longer triggers a native recompilation.
+- Added a Kroko model authority (`VoiceSTT/assets/kroko/models.json`) that pins
+  each known model's identity, SHA-256, size, license class and required
+  runtime variant. It ships metadata only: no Kroko model is bundled, because
+  the upstream redistribution grant is not unambiguous. A normal server start
+  no longer downloads models by itself - provisioning is explicit and
+  hash-verifiable, and free/pro mismatches are refused instead of silently
+  tolerated.
 - Added a single automatic product version authority (`VERSION` plus
   `VoiceSTT/_version.py`): `setup.py`, the importable package, the running
   server and the Protocol-v2 handshake now all read the same resolved

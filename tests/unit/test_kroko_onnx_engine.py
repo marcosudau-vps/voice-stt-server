@@ -27,6 +27,7 @@ from VoiceSTT.transcription_engines.kroko_onnx_engine import (
     KrokoOnnxEngine,
     KrokoOnnxStreamingSession,
 )
+from VoiceSTT.kroko import models as kroko_models
 from tests.unit import test_additional_transcription_engines as audio_fixtures
 from tests.unit.test_additional_transcription_engines import AudioVector
 
@@ -309,7 +310,64 @@ class KrokoOnnxEngineTests(unittest.TestCase):
                     numpy_module=np,
                 )
 
-    def test_auto_downloads_public_model_under_download_root(self):
+    def test_no_model_download_happens_without_an_explicit_opt_in(self):
+        """AP-SRV-070 W4A-08: a normal start must never fetch a model itself.
+
+        Downloading used to be the default whenever offline mode was off. The
+        product now treats provisioning as a deliberate act, so an absent model
+        is a clear error instead of silent network traffic at server start.
+        """
+        filename = sorted(KROKO_ONNX_PUBLIC_MODELS)[0]
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch(
+                "VoiceSTT.transcription_engines.kroko_onnx_engine._download_file",
+            ) as download_file:
+                with self.assertRaisesRegex(TranscriptionEngineError, "Missing kroko-onnx"):
+                    KrokoOnnxBackend(
+                        TranscriptionEngineConfig(
+                            model=filename,
+                            download_root=temp_dir,
+                        ),
+                        recognizer_cls=FakeKrokoRecognizer,
+                        numpy_module=np,
+                    )
+
+        self.assertFalse(download_file.called, "the engine downloaded without an opt-in")
+
+    def test_environment_opt_in_allows_a_public_model_download(self):
+        filename = sorted(KROKO_ONNX_PUBLIC_MODELS)[0]
+
+        def fake_download(url, target_path, token=""):
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_bytes(b"downloaded")
+            return target_path
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(
+                os.environ,
+                {kroko_models.ALLOW_MODEL_DOWNLOAD_ENV: "1"},
+                clear=False,
+            ), patch(
+                "VoiceSTT.transcription_engines.kroko_onnx_engine.import_module",
+                side_effect=ModuleNotFoundError("huggingface_hub"),
+            ), patch(
+                "VoiceSTT.transcription_engines.kroko_onnx_engine._download_file",
+                side_effect=fake_download,
+            ) as download_file:
+                backend = KrokoOnnxBackend(
+                    TranscriptionEngineConfig(
+                        model=filename,
+                        download_root=temp_dir,
+                    ),
+                    recognizer_cls=FakeKrokoRecognizer,
+                    numpy_module=np,
+                )
+
+        self.assertEqual(backend.model_path.name, filename)
+        self.assertTrue(download_file.called)
+
+    def test_explicitly_enabled_download_fetches_public_model_under_download_root(self):
         filename = sorted(KROKO_ONNX_PUBLIC_MODELS)[0]
 
         def fake_download(url, target_path, token=""):
@@ -329,6 +387,7 @@ class KrokoOnnxEngineTests(unittest.TestCase):
                     TranscriptionEngineConfig(
                         model=filename,
                         download_root=temp_dir,
+                        engine_options={"auto_download_model": True},
                     ),
                     recognizer_cls=FakeKrokoRecognizer,
                     numpy_module=np,
@@ -341,7 +400,7 @@ class KrokoOnnxEngineTests(unittest.TestCase):
             str(backend.model_path),
         )
 
-    def test_bare_default_model_downloads_to_voicestt_cache(self):
+    def test_explicitly_enabled_bare_default_model_downloads_to_voicestt_cache(self):
         def fake_download(url, target_path, token=""):
             target_path.parent.mkdir(parents=True, exist_ok=True)
             target_path.write_bytes(b"downloaded")
@@ -360,7 +419,10 @@ class KrokoOnnxEngineTests(unittest.TestCase):
                 side_effect=fake_download,
             ):
                 backend = KrokoOnnxBackend(
-                    TranscriptionEngineConfig(model=DEFAULT_KROKO_ONNX_MODEL),
+                    TranscriptionEngineConfig(
+                        model=DEFAULT_KROKO_ONNX_MODEL,
+                        engine_options={"auto_download_model": True},
+                    ),
                     recognizer_cls=FakeKrokoRecognizer,
                     numpy_module=np,
                 )
