@@ -4,18 +4,15 @@ Adapts Kroko ONNX recognizers to sync and streaming transcription.
 
 import os
 import re
-import shutil
 import sys
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib import import_module
 from pathlib import Path
-from urllib.parse import quote
-from urllib.request import Request, urlopen
 
 from ._model_utils import text_from_output
-from .model_resolver import offline_models_enabled, resolve_kroko_model
+from .model_resolver import resolve_kroko_model
 from ..kroko import models as kroko_models
 from .base import (
     BaseTranscriptionEngine,
@@ -27,9 +24,8 @@ from .base import (
 
 
 DEFAULT_KROKO_ONNX_MODEL = "Kroko-DE-Community-64-L-Streaming-001.data"
-KROKO_ONNX_HF_REPO = "Banafo/Kroko-ASR"
-KROKO_ONNX_MODEL_URL = "https://huggingface.co/Banafo/Kroko-ASR"
-KROKO_ONNX_DEFAULT_CACHE_DIR = Path.home() / ".cache" / "voicestt" / "kroko-onnx"
+# Import-compatible model-name metadata only. Provisioning belongs to
+# STTModelManager and there is no engine-owned cache path.
 KROKO_ONNX_PUBLIC_MODELS = {
     "Kroko-DE-Community-64-L-Streaming-001.data",
     "Kroko-DE-Community-128-L-Streaming-001.data",
@@ -242,58 +238,12 @@ def _maybe_under_download_root(download_root, value):
     return Path(download_root).expanduser() / path
 
 
-def _default_cache_path(filename):
-    """
-    Returns the default cache path for a model file.
-    """
-
-    return KROKO_ONNX_DEFAULT_CACHE_DIR / filename
-
-
 def _looks_like_kroko_data_file(filename):
     """
     Checks whether a filename looks like Kroko model data.
     """
 
     return filename.startswith("Kroko-") and filename.endswith(".data")
-
-
-def _download_url(repo_id, filename, revision="main"):
-    """
-    Builds a Hugging Face download URL.
-    """
-
-    repo = quote(str(repo_id).strip("/"), safe="/")
-    rev = quote(str(revision or "main"), safe="")
-    name = quote(filename, safe="")
-    return "https://huggingface.co/%s/resolve/%s/%s" % (repo, rev, name)
-
-
-def _download_file(url, target_path, token=""):
-    """
-    Downloads a model file to the target path.
-    """
-
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = target_path.with_name("%s.part" % target_path.name)
-    headers = {}
-    if token:
-        headers["Authorization"] = "Bearer %s" % token
-    request = Request(url, headers=headers)
-    try:
-        with urlopen(request) as response, tmp_path.open("wb") as output:
-            shutil.copyfileobj(response, output)
-        tmp_path.replace(target_path)
-    except Exception as exc:
-        try:
-            tmp_path.unlink()
-        except OSError:
-            pass
-        raise TranscriptionEngineError(
-            "Could not download Kroko model from %s to %s: %s"
-            % (url, target_path, exc)
-        ) from exc
-    return target_path
 
 
 def _first_existing_data_file(model_dir):
@@ -421,110 +371,21 @@ class KrokoOnnxBackend:
                 and model_path.parent == Path(".")
                 and _looks_like_kroko_data_file(filename)
             ):
-                path = _default_cache_path(filename)
+                path = model_path
             else:
                 path = _maybe_under_download_root(self.config.download_root, model_value)
 
         if not path.is_file():
-            path = self._maybe_download_model(path, filename)
-
-        if not path.is_file():
             raise TranscriptionEngineError(
-                "Missing kroko-onnx model file: %s. This build does not ship "
-                "Kroko models and does not download them on its own; provision "
-                "the .data file and point %s at its directory. A download is an "
-                "explicit action: set %s=1 or pass "
-                "engine_options['auto_download_model']=True. For Pro/private "
-                "models, pass an existing .data file, a direct "
-                "model_download_url, or a Hugging Face repo/token option. Source: "
-                "%s (%s), for example %s, then pass it as model or "
-                "engine_options['model_path']." % (
+                "Missing kroko-onnx model file: %s. Engine construction is "
+                "strictly local; provision and verify the model through the "
+                "server-authoritative STT model manager, then point %s at its "
+                "directory. For example: %s." % (
                     path,
                     kroko_models.KROKO_MODEL_ROOT_ENV,
-                    kroko_models.ALLOW_MODEL_DOWNLOAD_ENV,
-                    KROKO_ONNX_MODEL_URL,
-                    KROKO_ONNX_HF_REPO,
                     DEFAULT_KROKO_ONNX_MODEL,
                 )
             )
-        return path
-
-    def _maybe_download_model(self, path, filename):
-        """
-        Downloads a Kroko model file when needed.
-        """
-
-        if filename is None:
-            return path
-
-        # AP-SRV-070 W4A-08: production must be deterministic, so a normal
-        # server start never downloads a model on its own. Downloading is an
-        # explicit provisioning action - either an engine option or the
-        # documented opt-in environment variable. Offline mode still wins.
-        auto_download = _bool_option(
-            self.engine_options,
-            "auto_download_model",
-            _bool_option(
-                self.engine_options,
-                "download_model",
-                (
-                    kroko_models.model_download_allowed()
-                    and not offline_models_enabled(self.engine_options)
-                ),
-            ),
-        )
-        if not auto_download:
-            return path
-
-        download_url = self.engine_options.get("model_download_url")
-        repo_id = (
-            self.engine_options.get("model_repo_id")
-            or self.engine_options.get("hf_repo_id")
-            or KROKO_ONNX_HF_REPO
-        )
-        revision = self.engine_options.get("model_revision") or self.engine_options.get("hf_revision") or "main"
-        token = self.engine_options.get("hf_token") or self.engine_options.get("token") or ""
-
-        public_default_repo_model = repo_id == KROKO_ONNX_HF_REPO and filename in KROKO_ONNX_PUBLIC_MODELS
-        if not download_url and not public_default_repo_model:
-            if not _looks_like_kroko_data_file(filename):
-                return path
-            if repo_id == KROKO_ONNX_HF_REPO:
-                return path
-
-        if download_url:
-            return _download_file(str(download_url), path, token=token)
-
-        try:
-            hf_hub_download = import_module("huggingface_hub").hf_hub_download
-        except ModuleNotFoundError:
-            return _download_file(_download_url(repo_id, filename, revision), path, token=token)
-
-        try:
-            downloaded_path = hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                revision=revision,
-                token=token or None,
-                local_dir=str(path.parent),
-            )
-        except TypeError:
-            downloaded_path = hf_hub_download(
-                repo_id=repo_id,
-                filename=filename,
-                revision=revision,
-                token=token or None,
-            )
-        except Exception as exc:
-            raise TranscriptionEngineError(
-                "Could not download Kroko model %s from %s: %s"
-                % (filename, repo_id, exc)
-            ) from exc
-
-        downloaded_path = Path(downloaded_path)
-        if downloaded_path != path and downloaded_path.is_file() and not path.is_file():
-            path.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(downloaded_path, path)
         return path
 
     def _recognizer_kwargs(self):

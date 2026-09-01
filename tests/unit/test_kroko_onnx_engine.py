@@ -303,7 +303,7 @@ class KrokoOnnxEngineTests(unittest.TestCase):
     def test_missing_model_path_reports_download_hint(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             missing = Path(temp_dir) / "missing.data"
-            with self.assertRaisesRegex(TranscriptionEngineError, "Banafo/Kroko-ASR"):
+            with self.assertRaisesRegex(TranscriptionEngineError, "model-management API"):
                 KrokoOnnxBackend(
                     TranscriptionEngineConfig(model=str(missing)),
                     recognizer_cls=FakeKrokoRecognizer,
@@ -320,114 +320,52 @@ class KrokoOnnxEngineTests(unittest.TestCase):
         filename = sorted(KROKO_ONNX_PUBLIC_MODELS)[0]
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            with patch(
-                "VoiceSTT.transcription_engines.kroko_onnx_engine._download_file",
-            ) as download_file:
-                with self.assertRaisesRegex(TranscriptionEngineError, "Missing kroko-onnx"):
-                    KrokoOnnxBackend(
-                        TranscriptionEngineConfig(
-                            model=filename,
-                            download_root=temp_dir,
-                        ),
-                        recognizer_cls=FakeKrokoRecognizer,
-                        numpy_module=np,
-                    )
+            with self.assertRaisesRegex(TranscriptionEngineError, "Missing kroko-onnx"):
+                KrokoOnnxBackend(
+                    TranscriptionEngineConfig(model=filename, download_root=temp_dir),
+                    recognizer_cls=FakeKrokoRecognizer,
+                    numpy_module=np,
+                )
 
-        self.assertFalse(download_file.called, "the engine downloaded without an opt-in")
-
-    def test_environment_opt_in_allows_a_public_model_download(self):
+    def test_environment_opt_in_cannot_bypass_server_provisioner(self):
         filename = sorted(KROKO_ONNX_PUBLIC_MODELS)[0]
-
-        def fake_download(url, target_path, token=""):
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_bytes(b"downloaded")
-            return target_path
-
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch.dict(
                 os.environ,
                 {kroko_models.ALLOW_MODEL_DOWNLOAD_ENV: "1"},
                 clear=False,
-            ), patch(
-                "VoiceSTT.transcription_engines.kroko_onnx_engine.import_module",
-                side_effect=ModuleNotFoundError("huggingface_hub"),
-            ), patch(
-                "VoiceSTT.transcription_engines.kroko_onnx_engine._download_file",
-                side_effect=fake_download,
-            ) as download_file:
-                backend = KrokoOnnxBackend(
-                    TranscriptionEngineConfig(
-                        model=filename,
-                        download_root=temp_dir,
-                    ),
-                    recognizer_cls=FakeKrokoRecognizer,
-                    numpy_module=np,
-                )
-
-        self.assertEqual(backend.model_path.name, filename)
-        self.assertTrue(download_file.called)
-
-    def test_explicitly_enabled_download_fetches_public_model_under_download_root(self):
-        filename = sorted(KROKO_ONNX_PUBLIC_MODELS)[0]
-
-        def fake_download(url, target_path, token=""):
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_bytes(b"downloaded")
-            return target_path
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with patch(
-                "VoiceSTT.transcription_engines.kroko_onnx_engine.import_module",
-                side_effect=ModuleNotFoundError("huggingface_hub"),
-            ), patch(
-                "VoiceSTT.transcription_engines.kroko_onnx_engine._download_file",
-                side_effect=fake_download,
-            ) as download_file:
-                backend = KrokoOnnxBackend(
-                    TranscriptionEngineConfig(
-                        model=filename,
-                        download_root=temp_dir,
-                        engine_options={"auto_download_model": True},
-                    ),
-                    recognizer_cls=FakeKrokoRecognizer,
-                    numpy_module=np,
-                )
-
-        self.assertEqual(backend.model_path.name, filename)
-        self.assertTrue(download_file.called)
-        self.assertEqual(
-            FakeKrokoRecognizer.transducer_calls[0]["model_path"],
-            str(backend.model_path),
-        )
-
-    def test_explicitly_enabled_bare_default_model_downloads_to_voicestt_cache(self):
-        def fake_download(url, target_path, token=""):
-            target_path.parent.mkdir(parents=True, exist_ok=True)
-            target_path.write_bytes(b"downloaded")
-            return target_path
-
-        with tempfile.TemporaryDirectory() as temp_dir:
-            cache_dir = Path(temp_dir) / "cache"
-            with patch(
-                "VoiceSTT.transcription_engines.kroko_onnx_engine.KROKO_ONNX_DEFAULT_CACHE_DIR",
-                cache_dir,
-            ), patch(
-                "VoiceSTT.transcription_engines.kroko_onnx_engine.import_module",
-                side_effect=ModuleNotFoundError("huggingface_hub"),
-            ), patch(
-                "VoiceSTT.transcription_engines.kroko_onnx_engine._download_file",
-                side_effect=fake_download,
             ):
-                backend = KrokoOnnxBackend(
+                with self.assertRaisesRegex(TranscriptionEngineError, "model-management API"):
+                    KrokoOnnxBackend(
+                        TranscriptionEngineConfig(model=filename, download_root=temp_dir),
+                        recognizer_cls=FakeKrokoRecognizer,
+                        numpy_module=np,
+                    )
+
+    def test_engine_option_cannot_bypass_server_provisioner(self):
+        filename = sorted(KROKO_ONNX_PUBLIC_MODELS)[0]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaisesRegex(TranscriptionEngineError, "model-management API"):
+                KrokoOnnxBackend(
                     TranscriptionEngineConfig(
-                        model=DEFAULT_KROKO_ONNX_MODEL,
+                        model=filename,
+                        download_root=temp_dir,
                         engine_options={"auto_download_model": True},
                     ),
                     recognizer_cls=FakeKrokoRecognizer,
                     numpy_module=np,
                 )
 
-        self.assertEqual(backend.model_path, cache_dir / DEFAULT_KROKO_ONNX_MODEL)
+    def test_bare_default_does_not_create_a_second_cache(self):
+        with self.assertRaisesRegex(TranscriptionEngineError, "model-management API"):
+            KrokoOnnxBackend(
+                TranscriptionEngineConfig(
+                    model=DEFAULT_KROKO_ONNX_MODEL,
+                    engine_options={"auto_download_model": True},
+                ),
+                recognizer_cls=FakeKrokoRecognizer,
+                numpy_module=np,
+            )
 
     def test_auto_download_can_be_disabled(self):
         with tempfile.TemporaryDirectory() as temp_dir:

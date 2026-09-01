@@ -30,7 +30,10 @@ recorder = AudioToTextRecorder(
 | `model` | `"tiny"` | Main transcription model name or model path. Interpretation depends on `transcription_engine`. |
 | `transcription_engine` | `"faster_whisper"` | Main transcription backend. See [transcription-engines.md](transcription-engines.md). |
 | `transcription_engine_options` | `None` | Engine-specific dictionary passed only to the main backend. |
-| `download_root` | `None` | Directory for model downloads or lookup. Behavior is engine-specific. |
+| `download_root` | `None` | Legacy local lookup root. Large STT provisioning is owned by the server model manager. |
+| `stt_auto_download_enabled` | `false` | Global arm of the hierarchical STT provisioning request (`global OR engine OR model`). |
+| `stt_engine_settings` | `{}` | Per-engine `enabled`, `auto_download_enabled`, ordered `custom_paths` and optional `provisioning_target`. |
+| `stt_model_settings` | `{}` | Per-model `enabled`, `auto_download_enabled` and optional supported `recovery_priority` override. Static identity/license/runtime facts cannot be set here. |
 | `language` | `""` | Language code. Empty string lets engines auto-detect when they support it. Some engines require a language. |
 | `compute_type` | `"default"` | Numeric precision/quantization hint. For faster-whisper, see CTranslate2 quantization. Other engines map this where possible. |
 | `gpu_device_index` | `0` | GPU id, or a list of GPU ids for compatible engines. |

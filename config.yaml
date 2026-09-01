@@ -20,6 +20,19 @@ settings:
   use_main_model_for_realtime: false
   transcription_engine_options: null
   realtime_transcription_engine_options: null
+  # Grosse STT-Modelle werden nur bei expliziter hierarchischer Freigabe
+  # provisioniert. Custom-Pfade stehen je Engine in Suchreihenfolge.
+  stt_auto_download_enabled: false
+  stt_engine_settings:
+    faster_whisper:
+      enabled: true
+      auto_download_enabled: false
+      custom_paths: []
+    kroko_onnx:
+      enabled: true
+      auto_download_enabled: false
+      custom_paths: []
+  stt_model_settings: {}
 
   # Erkennung und Latenz
   tuning_profile: custom

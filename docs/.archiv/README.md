@@ -94,6 +94,7 @@ Bericht und Evidence sowie den Umsetzungsvergleich.
 | AP-SRV-040 Protokoll v2 | Root PASS | [AP-SRV-040](einheitliche_triggerarchitektur/AP-SRV-040/) |
 | AP-SRV-050 Settings-Control-Plane | Root PASS | [AP-SRV-050](einheitliche_triggerarchitektur/AP-SRV-050/) |
 | AP-SRV-060 Wake-Word-Katalog, Detection und Audiogrenze | **Pending Root Review** (Run 01 ROOT FAIL, Run 02 ROOT FAIL, Run 03 Korrektur eingereicht) | [AP-SRV-060](einheitliche_triggerarchitektur/AP-SRV-060/) |
+| AP-SRV-070 Serverbereinigung und Produktionshaertung | In Umsetzung (W4B) | [AP-SRV-070](einheitliche_triggerarchitektur/AP-SRV-070/) |
 
 Die Gesamtaktion bleibt `In Umsetzung`, bis auch die verbleibenden
 Arbeitspakete abgenommen und Umsetzung, Gegenprüfung,

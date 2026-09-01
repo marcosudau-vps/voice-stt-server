@@ -99,15 +99,14 @@ def resolve_faster_whisper_model(model, download_root=None, options=None):
                     if resolved is not None:
                         return str(resolved.resolve())
 
-    if offline_models_enabled(options):
-        locations = ", ".join(checked) if checked else value
-        raise TranscriptionEngineError(
-            "Offline model mode is enabled and faster-whisper model "
-            f"'{value}' was not found. Checked: {locations}. Set "
-            f"{FASTER_WHISPER_ROOT_ENV} to the mounted CTranslate2 model root "
-            "or pass an absolute model directory."
-        )
-    return value
+    locations = ", ".join(checked) if checked else value
+    prefix = "Offline model mode: " if offline_models_enabled(options) else ""
+    raise TranscriptionEngineError(
+        prefix + "The server-authoritative STT model manager could not resolve local "
+        f"faster-whisper model '{value}'. Checked: {locations}. Provision it "
+        "through the model-management API or configure a local model root; "
+        "engine libraries are not allowed to download models implicitly."
+    )
 
 
 def resolve_kroko_model(model, download_root=None, options=None):
@@ -135,12 +134,22 @@ def resolve_kroko_model(model, download_root=None, options=None):
         if candidate.is_file():
             return str(candidate.resolve())
 
-    if offline_models_enabled(options):
-        locations = ", ".join(checked) if checked else str(path)
-        raise TranscriptionEngineError(
-            "Offline model mode is enabled and Kroko model "
-            f"'{path.name}' was not found. Checked: {locations}. Set "
-            f"{KROKO_ROOT_ENV} to the mounted Kroko model root or pass an "
-            "absolute .data file."
-        )
-    return str(path)
+    model_dir = options.get("model_dir")
+    if model_dir:
+        root = Path(str(model_dir)).expanduser()
+        local_models = sorted(
+            item for item in root.glob("*.data")
+            if item.is_file() and not item.name.lower().endswith(".part")
+        ) if root.is_dir() else []
+        if len(local_models) == 1:
+            return str(local_models[0].resolve())
+
+    locations = ", ".join(checked) if checked else str(path)
+    prefix = "Offline model mode: " if offline_models_enabled(options) else ""
+    raise TranscriptionEngineError(
+        prefix + "Missing kroko-onnx model. The server-authoritative STT model manager "
+        "could not resolve local "
+        f"Kroko model '{path.name}'. Checked: {locations}. Provision it "
+        "through the model-management API or configure a local model root; "
+        "engine libraries are not allowed to download models implicitly."
+    )

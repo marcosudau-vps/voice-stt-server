@@ -99,6 +99,9 @@ Core engine flags:
 | `--engine-options` | JSON object passed to final engine. |
 | `--realtime-engine-options` | JSON object passed to realtime engine. |
 | `--download-root` | Model cache or lookup root. |
+| `--stt-auto-download` / `--no-stt-auto-download` | Global arm of the server-authoritative STT provisioning request; default off. |
+| `--stt-engine-settings` | JSON object for per-engine enablement, custom paths and provisioning intent. |
+| `--stt-model-settings` | JSON object for per-model enablement, provisioning intent and supported priority overrides. |
 | `--device` | `cuda` or `cpu`. |
 | `--compute-type` | Engine precision/quantization hint. |
 | `--language` | Language code. |

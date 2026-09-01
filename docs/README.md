@@ -38,6 +38,7 @@ die aktuelle Dokumentation eingeordnet:
 - [FastAPI-Server](fastapi-server.md)
 - [Windows-/CPU-Deployment](windows-cpu-deployment.md)
 - [Transkriptions-Engines](transcription-engines.md)
+- [STT-Modellverwaltung](stt-model-management.md)
 - [Wake Words](wake-words.md)
 - [Testing](testing.md)
 - [Troubleshooting](troubleshooting.md)

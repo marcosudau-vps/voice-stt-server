@@ -72,11 +72,15 @@ from VoiceSTT.core.wake_detection import (
 )
 from VoiceSTT_server.operations import (
     AuditLogManager,
-    LocalModelRegistry,
     PerformanceLogManager,
     RuntimeConfigStore,
     WakeWordRegistry,
     process_memory_snapshot,
+)
+from VoiceSTT_server.stt_model_management import (
+    ManagedModelRegistryView,
+    OperatorIntent,
+    STTModelManager,
 )
 
 try:
@@ -208,6 +212,9 @@ ACTIVE_RUNTIME_SETTINGS = {
     "transcription_logging_enabled",
     "transcript_log_mode",
     "realtime_degradation_threshold_ms",
+    "stt_auto_download_enabled",
+    "stt_engine_settings",
+    "stt_model_settings",
 }
 
 NEW_SESSION_RUNTIME_SETTINGS = {
@@ -359,6 +366,7 @@ BOOL_SETTINGS = {
     "save_audio_files",
     "model_idle_unload_enabled",
     "model_memory_policy_enabled",
+    "stt_auto_download_enabled",
 }
 
 OPTIONAL_STRING_SETTINGS = {
@@ -376,6 +384,8 @@ DICT_SETTINGS = {
     "realtime_transcription_engine_options",
     "transcription_engine_options",
     "openai_model_aliases",
+    "stt_engine_settings",
+    "stt_model_settings",
 }
 
 TUPLE_FLOAT_SETTINGS = {"realtime_boundary_followup_delays"}
@@ -481,6 +491,9 @@ class ServerSettings:
     model_idle_timeout_seconds: float = 3600.0
     model_memory_policy_enabled: bool = True
     allow_two_medium_models: bool = True
+    stt_auto_download_enabled: bool = False
+    stt_engine_settings: Dict[str, Any] = field(default_factory=dict)
+    stt_model_settings: Dict[str, Any] = field(default_factory=dict)
     openai_api_enabled: bool = True
     openai_api_key: Optional[str] = None
     admin_api_key: Optional[str] = None
@@ -490,6 +503,9 @@ class ServerSettings:
     })
     openai_max_file_bytes: int = 25 * 1024 * 1024
     runtime_config_path: Optional[str] = field(init=False)
+    _resolved_stt_models: Dict[str, Dict[str, str]] = field(
+        init=False, repr=False, default_factory=dict
+    )
 
     def __post_init__(self):
         root = Path(self.data_root_path).expanduser() if self.data_root_path else None
@@ -519,6 +535,7 @@ class ServerSettings:
 
     def public_dict(self):
         data = asdict(self)
+        data.pop("_resolved_stt_models", None)
         data.pop("transcription_engine_options", None)
         data.pop("realtime_transcription_engine_options", None)
         data.pop("openai_api_key", None)
@@ -2142,10 +2159,11 @@ class InferenceScheduler:
             create_transcription_engine,
         )
 
+        resolved = self.settings._resolved_stt_models.get("final", {})
         return create_transcription_engine(
-            self.settings.transcription_engine,
+            resolved.get("engine", self.settings.transcription_engine),
             TranscriptionEngineConfig(
-                model=self.settings.model,
+                model=resolved.get("path", self.settings.model),
                 download_root=self.settings.download_root,
                 compute_type=self.settings.compute_type,
                 gpu_device_index=0,
@@ -2165,11 +2183,17 @@ class InferenceScheduler:
             create_transcription_engine,
         )
 
+        resolved = self.settings._resolved_stt_models.get("realtime", {})
         return create_transcription_engine(
-            self.settings.realtime_transcription_engine
-            or self.settings.transcription_engine,
+            resolved.get(
+                "engine",
+                self.settings.realtime_transcription_engine
+                or self.settings.transcription_engine,
+            ),
             TranscriptionEngineConfig(
-                model=self.settings.realtime_model or self.settings.model,
+                model=resolved.get(
+                    "path", self.settings.realtime_model or self.settings.model
+                ),
                 download_root=self.settings.download_root,
                 compute_type=self.settings.compute_type,
                 gpu_device_index=0,
@@ -6016,12 +6040,19 @@ class VoiceSTTService:
         self.loop = None
         self.recorder_factory = recorder_factory
         self.scheduler_factory = scheduler_factory or InferenceScheduler
+        self._stt_refresh_lock = threading.Lock()
+        self.stt_model_manager = STTModelManager(
+            runtime_root=(settings.data_root_path or "data"),
+            intent=OperatorIntent.from_settings(settings),
+            load_probe=self._probe_stt_model,
+        )
+        self._apply_stt_model_snapshot(self.stt_model_manager.refresh())
         self.scheduler = self._new_scheduler()
         self._model_state = "loaded"
         self._model_state_error = None
         self._last_model_activity_monotonic = time.monotonic()
         self._last_model_activity_at = datetime.datetime.now(datetime.timezone.utc)
-        self.model_registry = LocalModelRegistry()
+        self.model_registry = ManagedModelRegistryView(self.stt_model_manager)
         self.events = StructuredEventHub(settings)
         self.audit = AuditLogManager(settings, self.events)
         self.performance = PerformanceLogManager(settings, self.events)
@@ -6050,6 +6081,121 @@ class VoiceSTTService:
         self._log_access_lock = threading.RLock()
         self.ready_thread = None
         self.idle_thread = None
+
+    def _probe_stt_model(self, candidate):
+        """Perform the expensive engine load only for a serious candidate."""
+
+        probe_settings = replace(self.settings)
+        probe_settings.transcription_engine = candidate.engine
+        probe_settings.realtime_transcription_engine = candidate.engine
+        probe_settings.model = candidate.path
+        probe_settings.realtime_model = candidate.path
+        probe_settings.use_main_model_for_realtime = True
+        probe_settings._resolved_stt_models = {
+            role: {
+                "id": candidate.id,
+                "engine": candidate.engine,
+                "path": candidate.path,
+            }
+            for role in ("final", "realtime")
+        }
+        noop = lambda *_args, **_kwargs: None
+        probe = self.scheduler_factory(
+            probe_settings,
+            noop,
+            noop,
+            noop,
+        )
+        try:
+            probe.start()
+            return bool(probe.wait_ready(timeout=180.0) and probe.healthy())
+        finally:
+            probe.stop()
+
+    def _apply_stt_model_snapshot(self, snapshot):
+        if not snapshot.minimum_ready:
+            return False
+        self.settings._resolved_stt_models = {
+            role: {
+                "id": candidate.id,
+                "engine": candidate.engine,
+                "path": candidate.path,
+            }
+            for role, candidate in snapshot.active.items()
+        }
+        return True
+
+    def refresh_stt_models(self, timeout=180.0):
+        """Refresh the transactional authority without invalidating its LKG."""
+
+        with self._stt_refresh_lock:
+            return self._refresh_stt_models_locked(timeout)
+
+    def _refresh_stt_models_locked(self, timeout):
+        self.stt_model_manager.intent = OperatorIntent.from_settings(self.settings)
+        previous_snapshot = self.stt_model_manager.snapshot()
+        previous = dict(self.settings._resolved_stt_models)
+        snapshot = self.stt_model_manager.refresh()
+        self._apply_stt_model_snapshot(snapshot)
+        changed = previous != self.settings._resolved_stt_models
+        if changed:
+            with self._scheduler_lock:
+                if self._models_busy():
+                    self.settings._resolved_stt_models = previous
+                    self.stt_model_manager.restore_last_known_good(
+                        previous_snapshot,
+                        "active sessions or inference prevented model activation",
+                    )
+                    raise RuntimeError(
+                        "STT-Modelle koennen waehrend aktiver Sessions oder "
+                        "Transkriptionen nicht aktiviert werden."
+                    )
+                old_scheduler = self.scheduler
+                replacement = None
+                try:
+                    if old_scheduler is not None:
+                        old_scheduler.stop()
+                    replacement = self._new_scheduler()
+                    replacement.start()
+                    if not replacement.wait_ready(timeout=timeout) or not replacement.healthy():
+                        raise RuntimeError(
+                            "Der Worker fuer die aufgeloeste Modellkonfiguration "
+                            "wurde nicht fehlerfrei bereit."
+                        )
+                    self.scheduler = replacement
+                    self._model_state = "loaded"
+                    self._model_state_error = None
+                    self.ready.set()
+                except Exception as exc:
+                    if replacement is not None:
+                        try:
+                            replacement.stop()
+                        except Exception:
+                            pass
+                    self.settings._resolved_stt_models = previous
+                    self.stt_model_manager.restore_last_known_good(
+                        previous_snapshot, str(exc)
+                    )
+                    rollback = self._new_scheduler()
+                    rollback.start()
+                    self.scheduler = rollback
+                    if rollback.wait_ready(timeout=timeout) and rollback.healthy():
+                        self.ready.set()
+                        raise RuntimeError(
+                            "Die neue STT-Modellzuordnung ist fehlgeschlagen; "
+                            "der letzte gute Stand wurde wiederhergestellt. "
+                            f"Ursache: {exc}"
+                        ) from exc
+                    self._model_state = "unloaded"
+                    self._model_state_error = str(exc)
+                    raise RuntimeError(
+                        "Die neue und die letzte gute STT-Modellzuordnung "
+                        f"konnten nicht geladen werden: {exc}"
+                    ) from exc
+        return {
+            "changed": changed,
+            "management": self.stt_model_manager.status(),
+        }
 
     # -- AP-SRV-060 wake-word catalog ---------------------------------------
 
@@ -6533,6 +6679,7 @@ class VoiceSTTService:
                 else {"mode": "unloaded", "queues": {}, "workers": {}}
             )
         data["models"] = self.model_lifecycle_status()
+        data["sttModelManagement"] = self.stt_model_manager.readiness_summary()
         data["limits"] = self.limits_dict()
         data["startupErrors"] = list(self.startup_errors)
         return data
@@ -6822,15 +6969,26 @@ class VoiceSTTService:
         return self.config_store.save_settings_control(overlay, revision)
 
     def model_catalog(self):
-        main_engine = normalize_engine_name(self.settings.transcription_engine)
+        main_resolution = self.settings._resolved_stt_models.get("final", {})
+        realtime_resolution = self.settings._resolved_stt_models.get("realtime", {})
+        main_engine = normalize_engine_name(
+            main_resolution.get("engine", self.settings.transcription_engine)
+        )
         realtime_engine = normalize_engine_name(
-            self.settings.realtime_transcription_engine or self.settings.transcription_engine
+            realtime_resolution.get(
+                "engine",
+                self.settings.realtime_transcription_engine
+                or self.settings.transcription_engine,
+            )
         )
         main_aliases = {value.lower() for value in self.model_registry.aliases_for(
-            main_engine, self.settings.model
+            main_engine, main_resolution.get("path", self.settings.model)
         )}
         realtime_aliases = {value.lower() for value in self.model_registry.aliases_for(
-            realtime_engine, self.settings.realtime_model or self.settings.model
+            realtime_engine,
+            realtime_resolution.get(
+                "path", self.settings.realtime_model or self.settings.model
+            ),
         )}
         entries = []
         for entry in self.model_registry.list_models():
@@ -6851,7 +7009,7 @@ class VoiceSTTService:
         return entries
 
     def active_models(self):
-        return {
+        active = {
             "final": {
                 "engine": normalize_engine_name(self.settings.transcription_engine),
                 "model": self.settings.model,
@@ -6864,8 +7022,24 @@ class VoiceSTTService:
                 "sharedWithFinal": bool(self.settings.use_main_model_for_realtime),
             },
         }
+        for role, resolved in self.settings._resolved_stt_models.items():
+            if role not in active:
+                continue
+            if (
+                normalize_engine_name(active[role]["engine"])
+                != normalize_engine_name(resolved.get("engine"))
+                or str(active[role]["model"]).lower()
+                != str(resolved.get("id")).lower()
+            ):
+                active[role]["resolvedEngine"] = resolved.get("engine")
+                active[role]["resolvedModel"] = resolved.get("id")
+        return active
 
     def switch_models(self, updates, timeout=180.0):
+        with self._stt_refresh_lock:
+            return self._switch_models_locked(updates, timeout)
+
+    def _switch_models_locked(self, updates, timeout):
         allowed = {
             "model", "realtime_model", "transcription_engine",
             "realtime_transcription_engine", "use_main_model_for_realtime",
@@ -6888,6 +7062,27 @@ class VoiceSTTService:
         ):
             candidate.use_main_model_for_realtime = False
         enforce_cpu_model_policy(candidate)
+        previous_management = self.stt_model_manager.snapshot()
+        previous_intent = self.stt_model_manager.intent
+        self.stt_model_manager.intent = OperatorIntent.from_settings(candidate)
+        managed = self.stt_model_manager.refresh()
+        if not managed.minimum_ready:
+            self.stt_model_manager.intent = previous_intent
+            self.stt_model_manager.restore_last_known_good(
+                previous_management,
+                "requested model switch did not reach MINIMUM_READY",
+            )
+            raise ValueError(
+                "Die angeforderte Modellkonfiguration erreicht kein MINIMUM_READY."
+            )
+        candidate._resolved_stt_models = {
+            role: {
+                "id": resolved.id,
+                "engine": resolved.engine,
+                "path": resolved.path,
+            }
+            for role, resolved in managed.active.items()
+        }
         requested_lanes = (
             (
                 "final", normalize_engine_name(candidate.transcription_engine),
@@ -6908,6 +7103,11 @@ class VoiceSTTService:
             if engine == current_engine and str(model).lower() == str(current_model).lower():
                 continue
             if self.model_registry.resolve(model, preferred_engine=engine) is None:
+                self.stt_model_manager.intent = previous_intent
+                self.stt_model_manager.restore_last_known_good(
+                    previous_management,
+                    f"requested {lane} model is not locally available",
+                )
                 raise ValueError(
                     f"Das angeforderte {lane}-Modell '{model}' ist nicht in der eingebundenen lokalen Modellregistrierung vorhanden."
                 )
@@ -6916,6 +7116,11 @@ class VoiceSTTService:
             for name in allowed
             if getattr(self.settings, name) != getattr(candidate, name)
         }
+        if self.settings._resolved_stt_models != candidate._resolved_stt_models:
+            changed["resolvedModels"] = {
+                "old": dict(self.settings._resolved_stt_models),
+                "new": dict(candidate._resolved_stt_models),
+            }
         if not changed:
             return {"changed": {}, "active": self.active_models(), "reloaded": False}
 
@@ -6924,13 +7129,22 @@ class VoiceSTTService:
         with self._scheduler_lock:
             self.ready.clear()
             if self._model_state == "loading":
+                self.stt_model_manager.intent = previous_intent
+                self.stt_model_manager.restore_last_known_good(
+                    previous_management,
+                    "model worker was already loading",
+                )
                 self.ready.set()
                 raise RuntimeError("Ein Modellwechsel ist während des Ladens der Modell-Worker gesperrt.")
             previous = {name: getattr(self.settings, name) for name in allowed}
+            previous_resolution = dict(self.settings._resolved_stt_models)
             old_scheduler = self.scheduler
             if old_scheduler is None:
                 for name in allowed:
                     setattr(self.settings, name, getattr(candidate, name))
+                self.settings._resolved_stt_models = dict(
+                    candidate._resolved_stt_models
+                )
                 self.ready.set()
                 self.audit.event("models.switched", changed=changed, active=self.active_models())
                 self._log_model_performance(
@@ -6949,6 +7163,9 @@ class VoiceSTTService:
                 old_scheduler.stop()
                 for name in allowed:
                     setattr(self.settings, name, getattr(candidate, name))
+                self.settings._resolved_stt_models = dict(
+                    candidate._resolved_stt_models
+                )
                 replacement = self._new_scheduler()
                 self.scheduler = replacement
                 replacement.start()
@@ -6963,6 +7180,11 @@ class VoiceSTTService:
                         pass
                 for name, value in previous.items():
                     setattr(self.settings, name, value)
+                self.settings._resolved_stt_models = previous_resolution
+                self.stt_model_manager.intent = previous_intent
+                self.stt_model_manager.restore_last_known_good(
+                    previous_management, str(exc)
+                )
                 rollback = self._new_scheduler()
                 self.scheduler = rollback
                 rollback.start()
@@ -7594,6 +7816,8 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "rejectedSessions": metrics["rejectedSessions"],
             "scheduler": metrics["scheduler"],
             "models": metrics["models"],
+            "sttReady": metrics["sttModelManagement"]["minimumReady"],
+            "sttModels": metrics["sttModelManagement"],
             "startupErrors": metrics["startupErrors"],
             "eventStore": event_store,
         })
@@ -7678,8 +7902,26 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "object": "list",
             "active": service.active_models(),
             "lifecycle": service.model_lifecycle_status(),
+            "management": service.stt_model_manager.status(),
             "data": catalog,
         })
+
+    @app.get("/api/models/management")
+    async def get_stt_model_management(request: Request):
+        auth_error = admin_auth_error(request)
+        if auth_error is not None:
+            return auth_error
+        return JSONResponse(service.stt_model_manager.status())
+
+    @app.post("/api/models/refresh")
+    async def refresh_stt_model_management(request: Request):
+        auth_error = admin_auth_error(request)
+        if auth_error is not None:
+            return auth_error
+        try:
+            return JSONResponse(await asyncio.to_thread(service.refresh_stt_models))
+        except RuntimeError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=409)
 
     @app.get("/api/models/lifecycle")
     async def get_model_lifecycle(request: Request):
@@ -9616,6 +9858,23 @@ def parse_args(argv=None):
     parser.add_argument("--engine-options", dest="transcription_engine_options")
     parser.add_argument("--realtime-engine-options", dest="realtime_transcription_engine_options")
     parser.add_argument("--download-root")
+    parser.add_argument(
+        "--stt-auto-download",
+        dest="stt_auto_download_enabled",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Hierarchische globale Freigabe fuer autorisiertes STT-Model-Provisioning.",
+    )
+    parser.add_argument(
+        "--stt-engine-settings",
+        default="{}",
+        help="JSON-Objekt mit enabled/auto_download_enabled/custom_paths je STT-Engine.",
+    )
+    parser.add_argument(
+        "--stt-model-settings",
+        default="{}",
+        help="JSON-Objekt mit enabled/auto_download_enabled/recovery_priority je Modell-ID.",
+    )
     parser.add_argument("--compute-type", default="int8")
     parser.add_argument("--device", default="cpu", choices=("cpu",))
     parser.add_argument("--beam-size", type=int)
@@ -9866,6 +10125,13 @@ def settings_from_args(args):
             "--realtime-engine-options",
         ),
         download_root=args.download_root,
+        stt_auto_download_enabled=args.stt_auto_download_enabled,
+        stt_engine_settings=parse_json_object(
+            args.stt_engine_settings, "--stt-engine-settings"
+        ),
+        stt_model_settings=parse_json_object(
+            args.stt_model_settings, "--stt-model-settings"
+        ),
         compute_type=args.compute_type,
         device=args.device,
         beam_size=_value_or_default(args, defaults, "beam_size"),
