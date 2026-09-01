@@ -73,15 +73,46 @@ def detect_python_tag() -> str:
     return "cp{0}{1}".format(sys.version_info.major, sys.version_info.minor)
 
 
+def windows_toolchain_authority(
+    declaration: Optional[Mapping[str, Any]] = None,
+) -> str:
+    """The short, stable id of the pinned Windows builder toolchain.
+
+    A digest over the declared, source-controlled Windows builder inputs (see
+    :func:`VoiceSTT.kroko.buildinputs.windows_toolchain_declaration`). Pure
+    computation over constants: no Docker, no registry lookup, no network - so
+    an ordinary artifact REUSE or ``--describe-artifact`` never has to build an
+    image just to learn which toolchain a stored wheel belongs to.
+    """
+    document = (
+        buildinputs.windows_toolchain_declaration()
+        if declaration is None
+        else dict(declaration)
+    )
+    digest = hashlib.sha256(canonical_json(document).encode("utf-8")).hexdigest()
+    return digest[:FINGERPRINT_ID_LENGTH]
+
+
 def toolchain_identity(target_platform: str) -> Dict[str, Any]:
     """The build-effective toolchain identity for one target platform.
 
     Windows wheels are cross-built inside Kroko's own Docker image, so the
     compiler, CMake and OpenSSL that actually produce the binary are fixed by
-    the pinned upstream revision plus VoiceSTT's patch set - not by whatever
-    happens to be installed on the host. Recording host tool versions there
-    would make the fingerprint differ between machines that produce byte-wise
-    equivalent wheels, so the Windows identity is deliberately host-independent.
+    the builder image rather than by whatever happens to be installed on the
+    host. Recording host tool versions there would make the fingerprint differ
+    between machines that produce byte-wise equivalent wheels, so the Windows
+    identity is deliberately host-independent.
+
+    AP-SRV-070 W4A-C3, Root Finding J: host-independent is not the same as
+    immutable, and until C3 this claimed more than it could deliver. Naming the
+    toolchain only as ``"definedBy": "upstream-revision+patch-set"`` was wrong,
+    because the image itself pulled a floating base tag, resolved apt packages
+    against the live archive, installed unpinned packaging tools and chose
+    whichever OpenSSL version a third party still happened to host. The same
+    fingerprint could therefore describe different compiled bytes. The identity
+    now carries the *entire* pinned builder declaration plus a short authority
+    id derived from it, so any change to a pinned input moves the fingerprint
+    and correctly invalidates stored artifacts.
 
     A Linux build compiles natively against host tools, so the host toolchain
     genuinely is a build input. Callers pass concrete versions in; this
@@ -89,9 +120,12 @@ def toolchain_identity(target_platform: str) -> Dict[str, Any]:
     what is installed while a test runs.
     """
     if target_platform == "windows":
+        declaration = buildinputs.windows_toolchain_declaration()
         return {
             "kind": "kroko-docker-windows-crossbuild",
-            "definedBy": "upstream-revision+patch-set",
+            "definedBy": "pinned-windows-builder-inputs",
+            "authority": windows_toolchain_authority(declaration),
+            "inputs": declaration,
         }
     return {"kind": "host-native"}
 
@@ -198,4 +232,5 @@ __all__ = [
     "detect_target_platform",
     "fingerprint_id",
     "toolchain_identity",
+    "windows_toolchain_authority",
 ]

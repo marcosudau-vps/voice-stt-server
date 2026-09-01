@@ -102,6 +102,15 @@ STAGING_DIR_NAME = ".staging"
 #: to the same variant+fingerprint slot).
 LOCK_DIR_NAME = ".locks"
 
+#: Name marker for the last-known-good copy of a slot that a force rebuild is
+#: in the middle of replacing (AP-SRV-070 W4A-C2/C3). The replacement moves the
+#: current artifact aside under ``<fingerprint><suffix><unique>`` before the
+#: new one is moved into place, which is what makes the swap recoverable: a
+#: process killed between the two moves leaves the last known-good artifact
+#: sitting right next to the slot, under the same variant namespace, where
+#: :meth:`KrokoArtifactStore.recover_slot` can find and re-verify it.
+REPLACED_SUFFIX = ".replaced-"
+
 #: How long ``store()`` waits for another process to finish writing the same
 #: slot before giving up. A real native build can take on the order of
 #: minutes, so this is generous; it is not a build timeout, only a lock wait.
@@ -561,8 +570,9 @@ class KrokoArtifactStore:
 
     # -- read ----------------------------------------------------------------
 
-    def read_metadata(self, variant: str, fingerprint: str) -> Optional[Dict[str, Any]]:
-        path = self.slot_dir(variant, fingerprint) / ARTIFACT_METADATA_NAME
+    def read_metadata_in(self, slot_dir: Path) -> Optional[Dict[str, Any]]:
+        """Reads the metadata document of one concrete slot directory."""
+        path = Path(slot_dir) / ARTIFACT_METADATA_NAME
         if not path.is_file():
             return None
         try:
@@ -570,25 +580,29 @@ class KrokoArtifactStore:
         except (OSError, ValueError):
             return None
 
-    def lookup(
+    def read_metadata(self, variant: str, fingerprint: str) -> Optional[Dict[str, Any]]:
+        return self.read_metadata_in(self.slot_dir(variant, fingerprint))
+
+    def _verify_slot_dir(
         self,
+        slot_dir: Path,
         *,
         variant: str,
         fingerprint: str,
         inputs: Optional[Mapping[str, Any]] = None,
     ) -> Tuple[Optional[ArtifactRecord], List[str]]:
-        """Looks up a verified artifact.
+        """Full verification of one concrete directory as an artifact slot.
 
-        Returns ``(record, problems)``. A record is returned *only* when every
-        verification passed; anything else is a miss with a diagnosis, so a
-        damaged or foreign artifact can never be consumed as a hit.
+        Used for the live slot *and* for a last-known-good backup, so a backup
+        is never trusted on the strength of its name: it has to satisfy exactly
+        the same fingerprint, variant, inputs, byte count, SHA-256 and wheel-tag
+        checks a stored artifact does before it can be activated.
         """
-        metadata = self.read_metadata(variant, fingerprint)
+        metadata = self.read_metadata_in(slot_dir)
         if metadata is None:
             return None, ["no stored artifact for this variant/fingerprint"]
 
-        slot = self.slot_dir(variant, fingerprint)
-        wheel_path = self.wheel_path_in(slot, metadata)
+        wheel_path = self.wheel_path_in(Path(slot_dir), metadata)
         ok, problems = verify_artifact(
             metadata,
             wheel_path,
@@ -598,7 +612,149 @@ class KrokoArtifactStore:
         )
         if not ok:
             return None, problems
-        return ArtifactRecord(metadata=metadata, wheel_path=wheel_path, slot_dir=slot), []
+        return (
+            ArtifactRecord(
+                metadata=metadata, wheel_path=wheel_path, slot_dir=Path(slot_dir)
+            ),
+            [],
+        )
+
+    def replaced_backups(self, variant: str, fingerprint: str) -> List[Path]:
+        """The last-known-good backups left next to one slot, oldest name first.
+
+        Cheap: a single directory glob, no hashing. ``lookup`` uses it to decide
+        whether a slot needs the (locked) recovery pass at all, so the ordinary
+        case - a healthy slot with no interrupted replacement behind it - stays
+        exactly as fast as it was.
+        """
+        variant_dir = self.variant_dir(variant)
+        if not variant_dir.is_dir():
+            return []
+        pattern = "{0}{1}*".format(fingerprint, REPLACED_SUFFIX)
+        return sorted(path for path in variant_dir.glob(pattern) if path.is_dir())
+
+    def _recover_slot_locked(
+        self,
+        variant: str,
+        fingerprint: str,
+        inputs: Optional[Mapping[str, Any]] = None,
+    ) -> Optional[str]:
+        """Crash recovery and backup cleanup for one slot. Lock must be held.
+
+        AP-SRV-070 W4A-C3, Root Finding K. ``store()`` replaces an existing
+        slot with two moves - ``final -> backup`` then ``staging -> final`` -
+        and rolls back on a Python exception. A *hard* process kill between the
+        two moves runs no rollback at all: the OS releases the slot lock, the
+        final path is simply gone, and the last known-good artifact survives
+        only under its backup name. An ordinary ``lookup()`` knew nothing about
+        that state and reported a plain cache miss, so the declared contract
+        "a failed force rebuild must not destroy the known-good artifact" did
+        not hold for exactly the crash class C2 already hardened the lock
+        against - the next run would recompile for ~30 minutes to reproduce an
+        artifact that was still sitting on disk.
+
+        Two directions, both decided here under the same per-slot OS lock so
+        concurrent recoverers can never activate different states:
+
+        * a **verified** final slot means the replacement completed; the
+          leftover backups are debris from a crash between the second move and
+          the cleanup, and are removed;
+        * a **missing** final slot with a backup that verifies completely is
+          the interrupted replacement; the backup is moved back into place.
+
+        A final slot that exists but fails verification is deliberately left
+        untouched: ``os.replace`` is atomic, so that state is not this crash
+        window, and overwriting it from a backup would be a repair this
+        function has no evidence to justify.
+
+        Returns ``"restored"``, ``"cleaned"`` or ``None`` for diagnostics.
+        """
+        backups = self.replaced_backups(variant, fingerprint)
+        if not backups:
+            return None
+
+        final = self.slot_dir(variant, fingerprint)
+        if final.exists():
+            record, _ = self._verify_slot_dir(
+                final, variant=variant, fingerprint=fingerprint, inputs=inputs
+            )
+            if record is None:
+                return None
+            for backup in backups:
+                shutil.rmtree(backup, ignore_errors=True)
+            return "cleaned"
+
+        for backup in backups:
+            record, _ = self._verify_slot_dir(
+                backup, variant=variant, fingerprint=fingerprint, inputs=inputs
+            )
+            if record is None:
+                # Corrupt, foreign or half-written: never activated. Left in
+                # place rather than deleted so it stays available for
+                # diagnosis; a later successful store cleans the slot up.
+                continue
+            final.parent.mkdir(parents=True, exist_ok=True)
+            os.replace(backup, final)
+            for other in backups:
+                if other != backup:
+                    shutil.rmtree(other, ignore_errors=True)
+            return "restored"
+        return None
+
+    def recover_slot(
+        self,
+        *,
+        variant: str,
+        fingerprint: str,
+        inputs: Optional[Mapping[str, Any]] = None,
+        timeout: float = DEFAULT_LOCK_TIMEOUT_SECONDS,
+    ) -> Optional[str]:
+        """Takes the slot lock and runs :meth:`_recover_slot_locked`."""
+        variant = buildinputs.normalize_variant(variant)
+        with self._slot_lock(variant, fingerprint, timeout=timeout):
+            return self._recover_slot_locked(variant, fingerprint, inputs)
+
+    def lookup(
+        self,
+        *,
+        variant: str,
+        fingerprint: str,
+        inputs: Optional[Mapping[str, Any]] = None,
+        recover: bool = True,
+    ) -> Tuple[Optional[ArtifactRecord], List[str]]:
+        """Looks up a verified artifact.
+
+        Returns ``(record, problems)``. A record is returned *only* when every
+        verification passed; anything else is a miss with a diagnosis, so a
+        damaged or foreign artifact can never be consumed as a hit.
+
+        ``recover`` (AP-SRV-070 W4A-C3, Root Finding K) governs whether an
+        interrupted force replacement is repaired first. It is on by default -
+        that is what makes an ordinary run after a crashed rebuild find the
+        last known-good artifact instead of recompiling - and is only turned
+        off by ``store()``, which already holds the slot lock and must not try
+        to take it a second time.
+        """
+        record, problems = self._verify_slot_dir(
+            self.slot_dir(variant, fingerprint),
+            variant=variant,
+            fingerprint=fingerprint,
+            inputs=inputs,
+        )
+        if not recover or not self.replaced_backups(variant, fingerprint):
+            return record, problems
+
+        # A backup next to this slot means a force replacement was interrupted:
+        # either it never finished (restore the last known-good artifact) or it
+        # finished but was killed before its own cleanup (drop the debris).
+        # Both decisions belong under the slot lock, so they happen there.
+        self.recover_slot(variant=variant, fingerprint=fingerprint, inputs=inputs)
+        return self._verify_slot_dir(
+            self.slot_dir(variant, fingerprint),
+            variant=variant,
+            fingerprint=fingerprint,
+            inputs=inputs,
+        )
 
     # -- write ---------------------------------------------------------------
 
@@ -683,16 +839,28 @@ class KrokoArtifactStore:
             final.parent.mkdir(parents=True, exist_ok=True)
 
             with self._slot_lock(variant, fingerprint):
+                # Root Finding K: a previous force rebuild may have been killed
+                # mid-swap, leaving the last known-good artifact under its
+                # backup name and no final slot at all. Settle that first, in
+                # the same critical section, so `adopt_existing` sees the real
+                # state of the slot rather than an apparent cache miss.
+                self._recover_slot_locked(variant, fingerprint, inputs)
+
                 if adopt_existing:
                     existing, _ = self.lookup(
-                        variant=variant, fingerprint=fingerprint, inputs=inputs
+                        variant=variant,
+                        fingerprint=fingerprint,
+                        inputs=inputs,
+                        recover=False,
                     )
                     if existing is not None:
                         return existing
 
                 backup = None
                 if final.exists():
-                    backup = final.with_name(final.name + f".replaced-{uuid.uuid4().hex}")
+                    backup = final.with_name(
+                        final.name + REPLACED_SUFFIX + uuid.uuid4().hex
+                    )
                     os.replace(final, backup)
                 try:
                     os.replace(staging, final)
@@ -700,8 +868,12 @@ class KrokoArtifactStore:
                     if backup is not None:
                         os.replace(backup, final)
                     raise
-                if backup is not None:
-                    shutil.rmtree(backup, ignore_errors=True)
+                # Purge every backup of this slot, not only the one this call
+                # created: a crash between the swap and this cleanup in an
+                # earlier run can have left its own behind, and the freshly
+                # verified final artifact makes all of them obsolete.
+                for stale in self.replaced_backups(variant, fingerprint):
+                    shutil.rmtree(stale, ignore_errors=True)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
@@ -763,6 +935,7 @@ __all__ = [
     "DEFAULT_LOCK_POLL_SECONDS",
     "DEFAULT_LOCK_TIMEOUT_SECONDS",
     "LOCK_DIR_NAME",
+    "REPLACED_SUFFIX",
     "ArtifactRecord",
     "KrokoArtifactError",
     "KrokoArtifactStore",

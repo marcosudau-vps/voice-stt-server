@@ -55,6 +55,25 @@ CPython 3.12 `win_amd64` wheel with Docker Desktop, then installs that wheel.
 On Linux it patches the checkout and installs from source. Add `--skip-install`
 to build without installing into the active Python environment.
 
+### Pinned builder inputs
+
+The Windows cross-build image is defined by source-controlled pins in
+`VoiceSTT/kroko/buildinputs.py`: the base image manifest digest, one immutable
+Ubuntu archive snapshot for every apt package, exact versions for the Python
+packaging tools, and a version plus SHA-256 for every downloaded binary
+(CMake, xwin, the Windows CPython target, the VC++ redistributable, OpenSSL
+and openfst). Those same values are what the build fingerprint records as its
+Windows toolchain authority, so a build cannot use a toolchain the fingerprint
+does not describe.
+
+This has one practical consequence for operators: **a pinned source that
+disappears fails the build on purpose.** The builder never falls back to a
+different version, because that would change the produced runtime while the
+fingerprint - and therefore the cached artifact - stayed the same. Update the
+affected constant in `VoiceSTT/kroko/buildinputs.py` deliberately, together
+with its SHA-256; that moves the fingerprint and forces exactly one new
+qualified build.
+
 Windows requirements:
 
 - Python 3.12 x64

@@ -10,9 +10,12 @@ These tests pin both halves of that contract.
 """
 
 import builtins
+import contextlib
 import hashlib
 import inspect
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import mock
 
 from VoiceSTT.kroko import buildinputs, fingerprint
@@ -218,22 +221,32 @@ class BuildEffectiveLogicGuardTests(unittest.TestCase):
     """
 
     #: SHA-256 over the source of every build-affecting patch function, pinned
-    #: together with PATCH_SET_REVISION = 1.
+    #: together with PATCH_SET_REVISION = 2 (AP-SRV-070 W4A-C3, Root Finding J:
+    #: the Windows Dockerfile patch now pins every external builder input and
+    #: the container script verifies the openfst archive).
     EXPECTED_PATCH_SOURCE_DIGEST = (
-        "0d716f365d720da08fac14ec519aed151ea023314f27047344bdccbe567eee9c"
+        "17cbc1dd927d74fc10477579a9475920d0ebfa7df8ddb777d92344aa07e183b5"
     )
 
     #: SHA-256 over the source of the builder surface, pinned together with
-    #: BUILDER_REVISION = 3 (AP-SRV-070 W4A-C2: materialize_pristine_checkout
-    #: was added, prepare_checkout now calls it, and linux_build_env's own
-    #: body changed again - see buildinputs.BUILDER_REVISION).
+    #: BUILDER_REVISION = 4 (AP-SRV-070 W4A-C3, Root Finding I: prepare_checkout
+    #: now proves a reused checkout belongs to the effective --repo authority,
+    #: via the three new source-authority helpers listed below).
     EXPECTED_BUILDER_SOURCE_DIGEST = (
-        "5d4baea1924953743a3c8c9ee083383905f0fc4372f1d47e872f5d44703ada93"
+        "4df7ea655259e01e9e1443212d427c9f82c9b98738a0ce0853402923e502b705"
     )
 
+    #: AP-SRV-070 W4A-C3, Root Finding J added the two functions that *declare*
+    #: what the Windows Dockerfile patch emits. They are as build-effective as
+    #: the patch function that applies them - they decide the base image digest,
+    #: the apt snapshot, the packaging-tool pins and every download hash - so
+    #: they belong to the guarded patch surface, not outside it.
     PATCH_FUNCTION_NAMES = (
         "patch_windows_bat",
         "patch_windows_dockerfile",
+        "_packaging_tool_assertion",
+        "_pinned_windows_dockerfile_edits",
+        "_pinned_windows_openssl_block",
         "patch_windows_container_script",
         "patch_license_quiet_env",
         "_wrap_license_output_line",
@@ -253,6 +266,9 @@ class BuildEffectiveLogicGuardTests(unittest.TestCase):
     #: fingerprint sees or what a subprocess may read.
     BUILDER_FUNCTION_NAMES = (
         "prepare_checkout",
+        "checkout_origin_url",
+        "normalize_repo_authority",
+        "checkout_matches_repo_authority",
         "ensure_pinned_revision",
         "materialize_pristine_checkout",
         "prepare_windows_checkout",
@@ -744,6 +760,366 @@ class RootFindingGPreInstalledOnnxRuntimeTests(unittest.TestCase):
                 python_tag="cp312", abi_tag="cp312", toolchain={"kind": "host-native"},
             )["fingerprint"]
         self.assertNotEqual(baseline, changed)
+
+
+#: The exact sections of the pinned Kroko upstream's own Windows build sources
+#: that VoiceSTT's patch functions anchor on (upstream revision
+#: ``buildinputs.KROKO_UPSTREAM_REVISION``). Kept here rather than reading a
+#: live builder checkout so these tests need neither network nor a warm cache,
+#: and so a reader can see at a glance exactly how much of upstream the pin
+#: depends on. Unrelated upstream lines are elided with a marker comment.
+_UPSTREAM_DOCKERFILE_WINDOWS = """\
+# Linux -> Windows cross-compile image for kroko-onnx.
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Pinned versions so reproducible across reruns. Bump deliberately.
+ARG CLANG_VERSION=19
+ARG XWIN_VERSION=0.6.5
+ARG CMAKE_VERSION=3.30.5
+ARG NSIS_VERSION=3.10
+
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+    build-essential \\
+    curl \\
+    unzip \\
+    nsis \\
+    python3 \\
+    python3-pip \\
+    python3-venv \\
+ && rm -rf /var/lib/apt/lists/* \\
+ && pip3 install --break-system-packages \\
+        setuptools wheel delvewheel
+
+# Modern CMake. Static binary from Kitware mirror.
+RUN curl -sLo /tmp/cmake.tar.gz \\
+    "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" \\
+ && tar -xzf /tmp/cmake.tar.gz -C /opt \\
+ && ln -sf /opt/cmake-${CMAKE_VERSION}-linux-x86_64/bin/cmake /usr/local/bin/cmake \\
+ && rm /tmp/cmake.tar.gz
+
+# Microsoft SDK + CRT via xwin (prebuilt binary release).
+RUN cd /tmp \\
+ && curl -sLo xwin.tar.gz \\
+    "https://github.com/Jake-Shadle/xwin/releases/download/${XWIN_VERSION}/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl.tar.gz" \\
+ && tar -xzf xwin.tar.gz \\
+ && mv xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl/xwin /usr/local/bin/xwin \\
+ && xwin --accept-license --arch x86_64 splat --output /opt/xwin
+
+# Cache Microsoft's VC++ Redistributable installer.
+RUN mkdir -p /opt/vc_redist \\
+ && curl -sL https://aka.ms/vs/17/release/vc_redist.x64.exe \\
+        -o /opt/vc_redist/vc_redist.x64.exe \\
+ && ls -lh /opt/vc_redist/vc_redist.x64.exe
+
+ENV XWIN_DIR=/opt/xwin
+
+# Windows CPython target - headers and python3XX.lib import library.
+ARG PYTHON_TARGET_VERSION=3.12.7
+ARG PYTHON_TAG=312
+RUN mkdir -p /opt/python-win64 \\
+ && cd /tmp \\
+ && curl -sLf "https://www.nuget.org/api/v2/package/python/${PYTHON_TARGET_VERSION}" \\
+        -o python.nupkg \\
+ && 7z x -y -o/opt/python-win64 python.nupkg >/dev/null \\
+ && rm -f /tmp/python.nupkg
+
+ENV PYTHON_WIN_TAG=cp312
+
+# Windows-native OpenSSL - required by sherpa-onnx's CMakeLists when
+# SHERPA_ONNX_ENABLE_WEBSOCKET=ON.
+RUN apt-get update && apt-get install -y --no-install-recommends \\
+        msitools innoextract \\
+ && rm -rf /var/lib/apt/lists/* \\
+ && cd /tmp \\
+ && for v in 3_6_2 3_6_1 3_5_4 3_5_3; do \\
+        if curl -sLf "https://slproweb.com/download/Win64OpenSSL-${v}.msi" \\
+                -o openssl.msi; then \\
+            echo "Downloaded Win64OpenSSL-${v}.msi"; \\
+            break; \\
+        fi; \\
+        rm -f openssl.msi; \\
+    done \\
+ && test -s openssl.msi \\
+ && msiextract -C /tmp/openssl-msi openssl.msi
+
+ENV OPENSSL_ROOT_DIR=/opt/openssl-win64/app
+ENV OPENSSL_LIB_DIR=/opt/openssl-win64/app/lib
+
+WORKDIR /src
+
+COPY in_windows_container.sh /usr/local/bin/in_windows_container.sh
+RUN chmod +x /usr/local/bin/in_windows_container.sh
+ENTRYPOINT ["/usr/local/bin/in_windows_container.sh"]
+"""
+
+_UPSTREAM_IN_WINDOWS_CONTAINER = """\
+#!/bin/bash
+set -euo pipefail
+
+OPENFST_DIR=/tmp/openfst-prepatched
+if [ ! -d "$OPENFST_DIR/src" ]; then
+    echo "Pre-fetching + patching openfst (shared across installer + wheel)"
+    rm -rf "$OPENFST_DIR"
+    mkdir -p "$OPENFST_DIR"
+    curl -sLo /tmp/openfst.tgz \\
+        "https://github.com/csukuangfj/openfst/archive/refs/tags/sherpa-onnx-2024-06-19.tar.gz"
+    tar -xzf /tmp/openfst.tgz -C /tmp/
+fi
+
+cmake \\
+    -B "$BUILD_DIR" \\
+    -DOPENSSL_CRYPTO_LIBRARY=/usr/lib/x86_64-linux-gnu/libcrypto.so.3 \\
+    -DOPENSSL_SSL_LIBRARY=/usr/lib/x86_64-linux-gnu/libssl.so.3 \\
+    -DSHERPA_ONNX_ENABLE_WEBSOCKET=OFF \\
+    -DSHERPA_ONNX_ENABLE_TTS=OFF \\
+    "$@"
+"""
+class RootFindingJWindowsToolchainAuthorityTests(unittest.TestCase):
+    """AP-SRV-070 W4A-C3, Root Finding J - the Windows toolchain is really immutable.
+
+    The Windows fingerprint used to describe its toolchain only as
+    ``"definedBy": "upstream-revision+patch-set"``. That claimed more than the
+    builder could deliver: the image pulled a floating ``ubuntu:24.04`` tag,
+    resolved apt packages against the live archive, installed unpinned Python
+    packaging tools, downloaded binaries with no content hash, and - worst -
+    walked a list of OpenSSL versions and took whichever one a third party
+    still happened to serve. The *same* fingerprint could therefore describe
+    materially different compiled bytes.
+
+    These tests prove the two halves of the correction: the declaration really
+    is an immutable, hashed authority inside the fingerprint, and the emitted
+    Dockerfile/container script really consume exactly that declaration.
+    """
+
+    #: One representative constant per pinned input class, so "changing this
+    #: moves the fingerprint" is proven for every category rather than once.
+    PINNED_CONSTANTS = (
+        ("WINDOWS_BASE_IMAGE_DIGEST", "sha256:" + "0" * 64),
+        ("WINDOWS_APT_SNAPSHOT_URI", "https://snapshot.ubuntu.com/ubuntu/20200101T000000Z"),
+        ("WINDOWS_CLANG_VERSION", "18"),
+        ("WINDOWS_CMAKE_SHA256", "1" * 64),
+        ("WINDOWS_XWIN_SHA256", "2" * 64),
+        ("WINDOWS_PYTHON_NUPKG_SHA256", "3" * 64),
+        ("WINDOWS_VC_REDIST_SHA256", "4" * 64),
+        ("WINDOWS_OPENSSL_VERSION", "3.5.8"),
+        ("WINDOWS_OPENSSL_SHA256", "5" * 64),
+        ("WINDOWS_OPENFST_SHA256", "6" * 64),
+        ("WINDOWS_PACKAGING_TOOLS", ("setuptools==1.0.0", "wheel==0.1.0")),
+    )
+
+    def _windows_fingerprint(self):
+        return fingerprint.compute_fingerprint(
+            variant="free", target_platform="windows", architecture="amd64",
+            python_tag="cp312", abi_tag="cp312",
+        )
+
+    def test_windows_fingerprint_names_a_concrete_immutable_authority(self):
+        """RED-proof #1: not just 'defined by the upstream revision' any more."""
+        toolchain = self._windows_fingerprint()["inputs"]["toolchain"]
+        self.assertEqual(toolchain["kind"], "kroko-docker-windows-crossbuild")
+        self.assertNotEqual(toolchain.get("definedBy"), "upstream-revision+patch-set")
+        self.assertRegex(str(toolchain.get("authority", "")), r"^[0-9a-f]{16}$")
+
+        declared = toolchain["inputs"]
+        self.assertEqual(declared["baseImageDigest"], buildinputs.WINDOWS_BASE_IMAGE_DIGEST)
+        self.assertTrue(declared["baseImageDigest"].startswith("sha256:"))
+        self.assertEqual(declared["aptSnapshot"], buildinputs.WINDOWS_APT_SNAPSHOT_URI)
+        for section in ("cmake", "xwin", "pythonTarget", "vcRedist", "openssl", "openfst"):
+            with self.subTest(section=section):
+                self.assertRegex(declared[section]["sha256"], r"^[0-9a-f]{64}$")
+        for pin in declared["packagingTools"]:
+            with self.subTest(tool=pin):
+                self.assertIn("==", pin)
+
+    def test_changing_any_pinned_input_changes_the_windows_fingerprint(self):
+        """RED-proof #2: the authority is a real hashed input, not decoration."""
+        baseline = self._windows_fingerprint()
+        for name, replacement in self.PINNED_CONSTANTS:
+            with self.subTest(constant=name):
+                with mock.patch.object(buildinputs, name, replacement):
+                    changed = self._windows_fingerprint()
+                self.assertNotEqual(
+                    changed["fingerprint"], baseline["fingerprint"],
+                    f"changing {name} must invalidate stored Windows artifacts",
+                )
+                self.assertNotEqual(
+                    changed["inputs"]["toolchain"]["authority"],
+                    baseline["inputs"]["toolchain"]["authority"],
+                )
+
+    def test_generated_windows_build_has_no_availability_based_openssl_choice(self):
+        """RED-proof #3: exactly one declared OpenSSL, no 'first URL that answers'."""
+        dockerfile = self._patched_upstream()["Dockerfile.windows"]
+        self.assertIn(buildinputs.windows_openssl_url(), dockerfile)
+        self.assertNotIn("slproweb.com", dockerfile)
+        openssl_section = dockerfile[dockerfile.index("# Windows-native OpenSSL"):]
+        openssl_section = openssl_section[: openssl_section.index("ENV OPENSSL_ROOT_DIR=")]
+        self.assertNotIn("for v in", openssl_section)
+        self.assertNotIn("break", openssl_section)
+        self.assertEqual(
+            openssl_section.count("curl -"), 1,
+            "exactly one OpenSSL download, not a list walked until one answers",
+        )
+
+    def test_generated_windows_build_verifies_openssl_against_a_declared_hash(self):
+        """RED-proof #4: the OpenSSL bytes are checked before they are used."""
+        dockerfile = self._patched_upstream()["Dockerfile.windows"]
+        self.assertIn(
+            '&& echo "{0}  /tmp/openssl.conda" | sha256sum -c -'.format(
+                buildinputs.WINDOWS_OPENSSL_SHA256
+            ),
+            dockerfile,
+        )
+        # The hash check has to sit between the download and the unpack.
+        download = dockerfile.index("-o /tmp/openssl.conda")
+        check = dockerfile.index(buildinputs.WINDOWS_OPENSSL_SHA256)
+        unpack = dockerfile.index("unzip -q /tmp/openssl.conda")
+        self.assertLess(download, check)
+        self.assertLess(check, unpack)
+
+    def test_generated_windows_build_closes_the_mutable_image_inputs(self):
+        """RED-proof #5: base image, apt resolution and packaging tools are pinned."""
+        patched = self._patched_upstream()
+        dockerfile = patched["Dockerfile.windows"]
+
+        self.assertIn(
+            "FROM {0}@{1}".format(
+                buildinputs.WINDOWS_BASE_IMAGE, buildinputs.WINDOWS_BASE_IMAGE_DIGEST
+            ),
+            dockerfile,
+        )
+        self.assertNotIn("FROM ubuntu:24.04\n", dockerfile)
+        self.assertIn(buildinputs.WINDOWS_APT_SNAPSHOT_URI, dockerfile)
+        self.assertNotIn("pip3 install --break-system-packages \\\n        setuptools wheel", dockerfile)
+        for pin in buildinputs.WINDOWS_PACKAGING_TOOLS:
+            with self.subTest(tool=pin):
+                self.assertIn(pin, dockerfile)
+        # The pins only bite if they actually beat Ubuntu's own dpkg-managed
+        # copies, which pip cannot uninstall - so the image installs alongside
+        # them and then asserts what the interpreter really resolves.
+        self.assertIn("--ignore-installed", dockerfile)
+        for pin in buildinputs.WINDOWS_PACKAGING_TOOLS:
+            name, _, version = pin.partition("==")
+            with self.subTest(assertion=name):
+                self.assertIn(
+                    "assert m.version('{0}') == '{1}'".format(name, version), dockerfile
+                )
+        self.assertIn("import wheel.bdist_wheel", dockerfile)
+        for sha in (
+            buildinputs.WINDOWS_CMAKE_SHA256,
+            buildinputs.WINDOWS_XWIN_SHA256,
+            buildinputs.WINDOWS_PYTHON_NUPKG_SHA256,
+            buildinputs.WINDOWS_VC_REDIST_SHA256,
+        ):
+            with self.subTest(sha256=sha):
+                self.assertIn('echo "{0}  '.format(sha), dockerfile)
+        self.assertNotIn("aka.ms/vs/17/release", dockerfile)
+
+        # openfst is fetched at container run time and compiled straight in.
+        container = patched["in_windows_container.sh"]
+        self.assertIn(
+            'echo "{0}  /tmp/openfst.tgz" | sha256sum -c -'.format(
+                buildinputs.WINDOWS_OPENFST_SHA256
+            ),
+            container,
+        )
+
+    def test_describe_and_fingerprint_stay_offline_for_windows(self):
+        """RED-proof #6: a stored artifact must never need a Docker build to be found."""
+        from VoiceSTT import install_kroko
+
+        with mock.patch.object(
+            install_kroko.kroko_fingerprint, "detect_target_platform", return_value="windows"
+        ), mock.patch.object(install_kroko, "run") as run_call, \
+                mock.patch.object(install_kroko.subprocess, "run") as raw_run, \
+                mock.patch.object(install_kroko.subprocess, "check_output") as check_output, \
+                mock.patch.object(install_kroko, "prepare_checkout") as checkout:
+            args = install_kroko.parse_args(["--describe-artifact", "--variant", "free"])
+            computed = install_kroko.fingerprint_for(args)
+            self.assertEqual(computed["inputs"]["target"]["platform"], "windows")
+            self.assertEqual(
+                computed["inputs"]["toolchain"]["authority"],
+                fingerprint.windows_toolchain_authority(),
+            )
+
+        run_call.assert_not_called()
+        raw_run.assert_not_called()
+        check_output.assert_not_called()
+        checkout.assert_not_called()
+
+    def test_ordinary_voicestt_changes_still_leave_the_windows_fingerprint_alone(self):
+        """RED-proof #7: pinning the toolchain must not couple it to the product."""
+        from VoiceSTT import _version
+
+        baseline = self._windows_fingerprint()["fingerprint"]
+        with mock.patch.dict(
+            "os.environ", {_version.BUILD_VERSION_ENV: "99.88.77"}, clear=False
+        ):
+            self.assertEqual(_version.resolve_version(), "99.88.77")
+            bumped = self._windows_fingerprint()["fingerprint"]
+        self.assertEqual(baseline, bumped)
+
+    def test_declared_pins_are_the_only_source_of_the_generated_build(self):
+        """The image cannot drift from the declaration the fingerprint hashes."""
+        moved = self._patched_upstream(
+            patches={"WINDOWS_OPENSSL_SHA256": "7" * 64}
+        )["Dockerfile.windows"]
+        self.assertIn("7" * 64, moved)
+        self.assertNotIn(buildinputs.WINDOWS_OPENSSL_SHA256, moved)
+
+    def test_a_missing_upstream_anchor_fails_loudly(self):
+        """A pin that cannot be applied must never be silently skipped."""
+        from VoiceSTT import install_kroko
+
+        checkout = self._materialize_pristine()
+        path = checkout / "Dockerfile.windows"
+        path.write_text("FROM scratch\n", encoding="utf-8")
+        with self.assertRaises(install_kroko.KrokoInstallError):
+            install_kroko.patch_windows_dockerfile(checkout)
+
+    # -- helpers -----------------------------------------------------------
+
+    def _materialize_pristine(self):
+        """Writes the pinned upstream's own Windows build sources to a temp dir.
+
+        Read straight out of this repository's declared expectations rather
+        than out of a live Kroko checkout, so the test needs no network and no
+        builder cache: the fixtures below are the exact upstream sections the
+        patch functions anchor on.
+        """
+        temp = TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        (root / "Dockerfile.windows").write_text(
+            _UPSTREAM_DOCKERFILE_WINDOWS, encoding="utf-8", newline="\n"
+        )
+        (root / "in_windows_container.sh").write_text(
+            _UPSTREAM_IN_WINDOWS_CONTAINER, encoding="utf-8", newline="\n"
+        )
+        return root
+
+    def _patched_upstream(self, patches=None):
+        from VoiceSTT import install_kroko
+
+        checkout = self._materialize_pristine()
+        if patches:
+            with contextlib.ExitStack() as stack:
+                for name, value in patches.items():
+                    stack.enter_context(mock.patch.object(buildinputs, name, value))
+                install_kroko.patch_windows_dockerfile(checkout)
+                install_kroko.patch_windows_container_script(checkout)
+        else:
+            install_kroko.patch_windows_dockerfile(checkout)
+            install_kroko.patch_windows_container_script(checkout)
+        return {
+            "Dockerfile.windows": (checkout / "Dockerfile.windows").read_text(encoding="utf-8"),
+            "in_windows_container.sh": (
+                checkout / "in_windows_container.sh"
+            ).read_text(encoding="utf-8"),
+        }
 
 
 if __name__ == "__main__":

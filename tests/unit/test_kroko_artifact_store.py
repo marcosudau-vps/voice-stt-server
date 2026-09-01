@@ -12,6 +12,7 @@ calls does not.
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import unittest
@@ -1266,6 +1267,380 @@ class RootFindingHCrashRecoverableLockTests(unittest.TestCase):
 
         self.assertEqual(errors, [])
         self.assertEqual(results["a"].wheel_sha256, results["b"].wheel_sha256)
+
+class RootFindingISourceAuthorityTests(unittest.TestCase):
+    """AP-SRV-070 W4A-C3, Root Finding I - checkout and fingerprint share a source.
+
+    W4A-C1 made ``--repo``/``--revision`` real fingerprint inputs, but the
+    checkout the build actually compiled was still whatever the builder work
+    directory happened to hold. A checkout cloned from repo A kept ``origin``
+    pointing at A, so a later ``--repo B`` run fetched from A while the cache
+    key said B - in the worst case building a coincidentally identical commit
+    from the wrong source authority under B's fingerprint.
+
+    Driven against two real, throwaway local git repositories (never the
+    VoiceSTT worktree, never the real Kroko upstream), because the property
+    under test is about git's own remote/fetch behavior.
+    """
+
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.work_dir = self.root / "work"
+        self.work_dir.mkdir()
+        self.repo_a, self.revision_a = self._make_upstream("a", "content from repo A")
+        self.repo_b, self.revision_b = self._make_upstream("b", "content from repo B")
+
+    def _run_git(self, args, cwd):
+        return subprocess.run(
+            ["git"] + args, cwd=str(cwd), check=True, capture_output=True, text=True,
+        )
+
+    def _make_upstream(self, name, marker):
+        source = self.root / ("source-" + name)
+        source.mkdir()
+        self._run_git(["init"], cwd=source)
+        self._run_git(["config", "user.email", "test@example.invalid"], cwd=source)
+        self._run_git(["config", "user.name", "Test"], cwd=source)
+        (source / "build_windows.bat").write_text("REM {0}\r\n".format(marker))
+        self._run_git(["add", "."], cwd=source)
+        self._run_git(["commit", "-m", "initial " + name], cwd=source)
+        revision = self._run_git(["rev-parse", "HEAD"], cwd=source).stdout.strip()
+        bare = self.root / ("upstream-{0}.git".format(name))
+        self._run_git(["clone", "--bare", str(source), str(bare)], cwd=self.root)
+        return bare, revision
+
+    def _args(self, repo, revision):
+        return SimpleNamespace(
+            force=False, branch="main", repo=str(repo), revision=revision,
+            variant="free",
+        )
+
+    def _origin_of(self, repo_dir):
+        return self._run_git(["remote", "get-url", "origin"], cwd=repo_dir).stdout.strip()
+
+    def test_reused_checkout_from_another_repo_is_reclaimed_for_the_requested_one(self):
+        """RED-proof #1-#4: repo A checkout, then --repo B + a B-only commit."""
+        install_kroko.prepare_checkout(self._args(self.repo_a, self.revision_a),
+                                       work_dir=self.work_dir)
+        repo_dir = self.work_dir / "kroko-onnx"
+        self.assertEqual(
+            install_kroko.normalize_repo_authority(self._origin_of(repo_dir)),
+            install_kroko.normalize_repo_authority(self.repo_a),
+        )
+
+        # The B commit exists only in repo B: if the builder still fetched
+        # through repo A's origin this could not resolve at all.
+        install_kroko.prepare_checkout(self._args(self.repo_b, self.revision_b),
+                                       work_dir=self.work_dir)
+
+        self.assertEqual(install_kroko.current_revision(repo_dir), self.revision_b)
+        self.assertEqual(
+            install_kroko.normalize_repo_authority(self._origin_of(repo_dir)),
+            install_kroko.normalize_repo_authority(self.repo_b),
+            "the real fetch authority must be the requested repo, not the previous one",
+        )
+        self.assertIn(
+            "content from repo B",
+            (repo_dir / "build_windows.bat").read_text().replace("\r\n", "\n"),
+        )
+
+    def test_fingerprint_describe_and_checkout_agree_on_the_same_authority(self):
+        """RED-proof #5: one source authority across fingerprint, describe and build."""
+        args = self._args(self.repo_b, self.revision_b)
+        install_kroko.prepare_checkout(args, work_dir=self.work_dir)
+        repo_dir = self.work_dir / "kroko-onnx"
+
+        computed = install_kroko.fingerprint_for(args)
+        with TemporaryDirectory() as store_root:
+            args.artifact_store = store_root
+            described = install_kroko.describe_artifact(args)
+
+        checkout_authority = install_kroko.normalize_repo_authority(self._origin_of(repo_dir))
+        self.assertEqual(
+            checkout_authority,
+            install_kroko.normalize_repo_authority(computed["inputs"]["upstream"]["repo"]),
+        )
+        self.assertEqual(
+            checkout_authority,
+            install_kroko.normalize_repo_authority(described["inputs"]["upstream"]["repo"]),
+        )
+        self.assertEqual(computed["inputs"]["upstream"]["revision"], self.revision_b)
+        self.assertEqual(install_kroko.current_revision(repo_dir), self.revision_b)
+
+    def test_matching_authority_still_reuses_the_existing_checkout(self):
+        """The guard must not turn every ordinary rerun into a fresh clone."""
+        args = self._args(self.repo_a, self.revision_a)
+        install_kroko.prepare_checkout(args, work_dir=self.work_dir)
+        repo_dir = self.work_dir / "kroko-onnx"
+        marker = repo_dir / ".git" / "voicestt-same-checkout-marker"
+        marker.write_text("same clone")
+
+        install_kroko.prepare_checkout(args, work_dir=self.work_dir)
+
+        self.assertTrue(
+            marker.exists(),
+            "a checkout that already belongs to the requested authority must be kept",
+        )
+
+    def test_a_checkout_without_a_readable_origin_is_never_trusted(self):
+        repo_dir = self.work_dir / "kroko-onnx"
+        repo_dir.mkdir()
+        (repo_dir / "stray.txt").write_text("not a git checkout at all")
+        self.assertFalse(
+            install_kroko.checkout_matches_repo_authority(repo_dir, str(self.repo_a))
+        )
+
+        install_kroko.prepare_checkout(self._args(self.repo_a, self.revision_a),
+                                       work_dir=self.work_dir)
+
+        self.assertFalse((repo_dir / "stray.txt").exists())
+        self.assertEqual(install_kroko.current_revision(repo_dir), self.revision_a)
+
+    def test_authority_comparison_folds_only_cosmetic_spellings(self):
+        normalize = install_kroko.normalize_repo_authority
+        self.assertEqual(
+            normalize("https://example.invalid/kroko.git"),
+            normalize("https://example.invalid/kroko/"),
+        )
+        self.assertNotEqual(
+            normalize("https://example.invalid/kroko.git"),
+            normalize("https://other.invalid/kroko.git"),
+        )
+        self.assertEqual(normalize(str(self.repo_a)), normalize(str(self.repo_a) + "\\"))
+        self.assertNotEqual(normalize(str(self.repo_a)), normalize(str(self.repo_b)))
+
+    def test_reuse_hit_needs_no_checkout_at_all_regression(self):
+        """RED-proof #6: the authority guard must never run on a cache hit."""
+        computed = fingerprint.compute_fingerprint(variant="free")
+        with TemporaryDirectory() as store_root, TemporaryDirectory() as build_dir:
+            store = artifacts.KrokoArtifactStore(store_root)
+            store.store(
+                wheel_path=make_wheel(Path(build_dir), variant="free"),
+                fingerprint=computed["fingerprint"],
+                inputs=computed["inputs"],
+            )
+            argv = [
+                "--build", "--variant", "free", "--skip-install",
+                "--artifact-store", store_root,
+            ]
+            with mock.patch.object(install_kroko, "prepare_checkout") as checkout, \
+                    mock.patch.object(install_kroko, "checkout_matches_repo_authority") as guard, \
+                    mock.patch.object(install_kroko, "build_wheel") as builder:
+                exit_code = install_kroko.main(argv)
+
+        self.assertEqual(exit_code, 0)
+        checkout.assert_not_called()
+        guard.assert_not_called()
+        builder.assert_not_called()
+
+
+class RootFindingKCrashAtomicSwapTests(unittest.TestCase):
+    """AP-SRV-070 W4A-C3, Root Finding K - the force-rebuild swap survives a kill.
+
+    ``store()`` replaces a slot with two moves and rolls back on a Python
+    exception, but a *hard* process kill between the moves runs no rollback:
+    the final slot is gone and the last known-good artifact exists only under
+    its backup name. The declared contract - a failed force rebuild must not
+    destroy the known-good artifact - therefore did not hold for exactly the
+    crash class W4A-C2 already hardened the lock against.
+
+    The crash is simulated by performing the same two moves the store performs
+    and stopping in the middle, which is what a killed process leaves behind on
+    disk; the OS lock is released by the (simulated) process ending.
+    """
+
+    def setUp(self):
+        self.temp = TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.store = artifacts.KrokoArtifactStore(self.root / "store")
+        self.build_dir = self.root / "build"
+        self.computed = fingerprint.compute_fingerprint(variant="free")
+        self.fingerprint = self.computed["fingerprint"]
+        self.inputs = self.computed["inputs"]
+
+    def _store(self, payload, **kwargs):
+        return self.store.store(
+            wheel_path=make_wheel(
+                self.build_dir / payload.decode("ascii"), variant="free", payload=payload
+            ),
+            fingerprint=self.fingerprint,
+            inputs=self.inputs,
+            **kwargs,
+        )
+
+    def _slot(self):
+        return self.store.slot_dir("free", self.fingerprint)
+
+    def _crash_after_moving_final_aside(self):
+        """Exactly the on-disk state a kill between the two moves leaves."""
+        final = self._slot()
+        backup = final.with_name(final.name + artifacts.REPLACED_SUFFIX + "crashedrun")
+        os.replace(final, backup)
+        return backup
+
+    def test_known_good_artifact_survives_a_kill_between_the_two_moves(self):
+        """RED-proof #1/#2: recovered on the next lookup, with no native rebuild."""
+        good = self._store(b"known-good")
+        good_sha = good.wheel_sha256
+        backup = self._crash_after_moving_final_aside()
+        self.assertFalse(self._slot().exists())
+        self.assertTrue(backup.is_dir())
+
+        record, problems = self.store.lookup(
+            variant="free", fingerprint=self.fingerprint, inputs=self.inputs
+        )
+
+        self.assertIsNotNone(record, f"the known-good artifact was not recovered: {problems}")
+        self.assertEqual(record.wheel_sha256, good_sha)
+        self.assertTrue(self._slot().is_dir())
+        self.assertEqual(self.store.replaced_backups("free", self.fingerprint), [])
+
+    def test_a_run_after_the_crash_reuses_instead_of_rebuilding(self):
+        """RED-proof #2 end to end: the installer must not start a native build."""
+        self._store(b"known-good")
+        self._crash_after_moving_final_aside()
+
+        argv = [
+            "--build", "--variant", "free", "--skip-install",
+            "--artifact-store", str(self.store.root),
+        ]
+        with mock.patch.object(install_kroko, "prepare_checkout") as checkout, \
+                mock.patch.object(install_kroko, "build_wheel") as builder:
+            exit_code = install_kroko.main(argv)
+
+        self.assertEqual(exit_code, 0)
+        builder.assert_not_called()
+        checkout.assert_not_called()
+
+    def test_crash_after_the_second_move_keeps_the_new_artifact_and_cleans_up(self):
+        """RED-proof #3: a leftover backup never resurrects the previous artifact."""
+        self._store(b"old-artifact")
+        replacement = self._store(b"new-artifact", adopt_existing=False)
+        # Re-create the debris a kill between `staging -> final` and the
+        # cleanup would have left behind.
+        stale = self._slot().with_name(
+            self._slot().name + artifacts.REPLACED_SUFFIX + "leftover"
+        )
+        shutil.copytree(self._slot(), stale)
+
+        record, problems = self.store.lookup(
+            variant="free", fingerprint=self.fingerprint, inputs=self.inputs
+        )
+
+        self.assertIsNotNone(record, f"the new artifact must stay active: {problems}")
+        self.assertEqual(record.wheel_sha256, replacement.wheel_sha256)
+        self.assertEqual(
+            self.store.replaced_backups("free", self.fingerprint), [],
+            "an obsolete backup must be cleaned up once the final slot verifies",
+        )
+
+    def test_a_corrupt_backup_is_never_activated(self):
+        """RED-proof #4: a backup is verified in full, never trusted by name."""
+        self._store(b"known-good")
+        backup = self._crash_after_moving_final_aside()
+        wheel = next(backup.glob("*.whl"))
+        wheel.write_bytes(wheel.read_bytes() + b"tampered")
+
+        record, problems = self.store.lookup(
+            variant="free", fingerprint=self.fingerprint, inputs=self.inputs
+        )
+
+        self.assertIsNone(record, "a tampered backup must never be activated")
+        self.assertTrue(problems)
+        self.assertFalse(self._slot().exists())
+
+    def test_a_foreign_backup_is_never_activated(self):
+        """RED-proof #4: another slot's artifact cannot be recovered into this one."""
+        foreign = fingerprint.compute_fingerprint(variant="pro")
+        self._store(b"known-good")
+        backup = self._crash_after_moving_final_aside()
+        metadata_path = backup / artifacts.ARTIFACT_METADATA_NAME
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["fingerprint"] = foreign["fingerprint"]
+        metadata["variant"] = "pro"
+        metadata_path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
+
+        record, _ = self.store.lookup(
+            variant="free", fingerprint=self.fingerprint, inputs=self.inputs
+        )
+
+        self.assertIsNone(record)
+        self.assertFalse(self._slot().exists())
+
+    def test_two_concurrent_recoverers_converge_on_one_valid_slot(self):
+        """RED-proof #5: concurrent recovery cannot activate two different states."""
+        import threading
+
+        good = self._store(b"known-good")
+        self._crash_after_moving_final_aside()
+
+        barrier = threading.Barrier(2)
+        results = {}
+        errors = []
+
+        def recoverer(name):
+            try:
+                barrier.wait(timeout=10)
+                results[name] = self.store.lookup(
+                    variant="free", fingerprint=self.fingerprint, inputs=self.inputs
+                )[0]
+            except Exception as exc:  # noqa: BLE001 - captured for assertion
+                errors.append((name, exc))
+
+        threads = [
+            threading.Thread(target=recoverer, args=("a",)),
+            threading.Thread(target=recoverer, args=("b",)),
+        ]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=30)
+
+        self.assertEqual(errors, [], f"a concurrent recovery raised: {errors}")
+        self.assertEqual(set(results), {"a", "b"})
+        for name, record in results.items():
+            self.assertIsNotNone(record, f"recoverer {name} did not see the artifact")
+            self.assertEqual(record.wheel_sha256, good.wheel_sha256)
+        self.assertEqual(len(list(self._slot().glob("*.whl"))), 1)
+        self.assertEqual(self.store.replaced_backups("free", self.fingerprint), [])
+
+    def test_store_recovers_before_deciding_what_to_adopt(self):
+        """A store() after the crash must see the real slot state, not a miss."""
+        good = self._store(b"known-good")
+        self._crash_after_moving_final_aside()
+
+        adopted = self._store(b"racing-rebuild")
+
+        self.assertEqual(
+            adopted.wheel_sha256, good.wheel_sha256,
+            "the recovered known-good artifact must be adopted, not clobbered",
+        )
+
+    def test_force_rebuild_semantics_are_unchanged_regression(self):
+        """RED-proof #6: --rebuild-kroko still really replaces the artifact."""
+        first = self._store(b"first-build", adopt_existing=False)
+        second = self._store(b"second-build", adopt_existing=False)
+        self.assertNotEqual(first.wheel_sha256, second.wheel_sha256)
+        record, _ = self.store.lookup(
+            variant="free", fingerprint=self.fingerprint, inputs=self.inputs
+        )
+        self.assertEqual(record.wheel_sha256, second.wheel_sha256)
+        self.assertEqual(self.store.replaced_backups("free", self.fingerprint), [])
+
+    def test_healthy_slot_never_takes_the_recovery_lock(self):
+        """The ordinary reuse path stays lock-free - recovery is the exception."""
+        self._store(b"known-good")
+        with mock.patch.object(
+            artifacts.KrokoArtifactStore, "recover_slot"
+        ) as recover:
+            record, _ = self.store.lookup(
+                variant="free", fingerprint=self.fingerprint, inputs=self.inputs
+            )
+        self.assertIsNotNone(record)
+        recover.assert_not_called()
 
 
 if __name__ == "__main__":

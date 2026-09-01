@@ -364,9 +364,81 @@ def remove_tree_inside(path, root):
     shutil.rmtree(str(path), onerror=clear_readonly)
 
 
+def checkout_origin_url(repo_dir):
+    """
+    Returns the ``origin`` URL of an existing Kroko builder checkout.
+
+    Returns ``None`` when the directory is not a readable git checkout or has
+    no ``origin`` remote at all. Callers treat that as "authority unproven",
+    which is the safe reading: an unidentifiable checkout must never be reused
+    for a build whose fingerprint claims a specific source.
+    """
+
+    try:
+        output = subprocess.check_output(
+            ["git", "remote", "get-url", "origin"],
+            cwd=str(repo_dir),
+            stderr=subprocess.DEVNULL,
+        )
+    except (subprocess.CalledProcessError, OSError):
+        return None
+    return output.decode("utf-8", "replace").strip()
+
+
+def normalize_repo_authority(repo):
+    """
+    Normalizes one Kroko source authority so two spellings compare equal.
+
+    Only cosmetic differences are folded away: a trailing separator, a trailing
+    ``.git``, and - for a local path authority, which is what the tests and a
+    mirror-based build use - the platform's own path spelling. Anything that
+    could denote a *different* source is deliberately left significant.
+    """
+
+    value = str(repo or "").strip().rstrip("/\\")
+    if not value:
+        return ""
+    if value.lower().endswith(".git"):
+        value = value[:-4].rstrip("/\\")
+    try:
+        candidate = Path(value)
+        if candidate.exists():
+            return "path:" + os.path.normcase(str(candidate.resolve()))
+    except OSError:
+        pass
+    return "url:" + value
+
+
+def checkout_matches_repo_authority(repo_dir, repo):
+    """
+    Whether an existing checkout really belongs to the effective repo authority.
+    """
+
+    origin = checkout_origin_url(repo_dir)
+    if not origin:
+        return False
+    return normalize_repo_authority(origin) == normalize_repo_authority(repo)
+
+
 def prepare_checkout(args, work_dir=None):
     """
     Prepares the Kroko source checkout.
+
+    AP-SRV-070 W4A-C3, Root Finding I: the checkout the build actually compiles
+    must come from the same source authority the fingerprint documents. W4A-C1
+    made ``--repo``/``--revision`` real fingerprint inputs, but the checkout
+    path itself was still whatever happened to be in the builder work
+    directory: a checkout previously cloned from repo A kept ``origin``
+    pointing at A, so a later ``--repo B --revision <B-commit>`` run fetched
+    from A while the fingerprint said B. In the best case the build failed; in
+    the worst case a coincidentally identical commit was built from the wrong
+    source under B's cache key. The ``origin`` of a reused checkout is
+    therefore compared against the effective repo authority before anything is
+    fetched, and a checkout that does not belong to it is removed and cloned
+    again from the requested repo.
+
+    The removal is scoped by ``remove_tree_inside`` to the validated Kroko
+    builder work root, so this can never touch the VoiceSTT project worktree.
     """
 
     work_dir = work_dir or resolve_work_dir(args)
@@ -375,6 +447,13 @@ def prepare_checkout(args, work_dir=None):
 
     if args.force and repo_dir.exists():
         print("Removing existing Kroko-ONNX checkout: {0}".format(repo_dir))
+        remove_tree_inside(repo_dir, work_dir)
+
+    if repo_dir.exists() and not checkout_matches_repo_authority(repo_dir, args.repo):
+        print(
+            "Existing Kroko-ONNX checkout does not belong to the requested "
+            "source authority ({0}); removing it and cloning again.".format(args.repo)
+        )
         remove_tree_inside(repo_dir, work_dir)
 
     if not repo_dir.exists():
@@ -578,9 +657,312 @@ def patch_windows_bat(repo_dir):
     print("Patched build_windows.bat version parsing for cmd.exe.")
 
 
+def _packaging_tool_assertion():
+    """A one-line in-image check that the pinned packaging tools really win.
+
+    AP-SRV-070 W4A-C3, Root Finding J. Installing the pins alongside Ubuntu's
+    own dpkg-managed copies is only correct if the interpreter resolves the
+    pinned ones, so the image build asserts it instead of trusting sys.path
+    ordering. ``import wheel.bdist_wheel`` is the specific import upstream's
+    ``cmake/cmake_extension.py`` needs and the concrete reason ``wheel`` is
+    held below 0.46 - if it ever disappears, the image fails to build rather
+    than quietly producing a differently tagged wheel.
+    """
+
+    checks = ["import importlib.metadata as m"]
+    for pin in buildinputs.WINDOWS_PACKAGING_TOOLS:
+        name, _, version = pin.partition("==")
+        checks.append(
+            "assert m.version('{0}') == '{1}', m.version('{0}')".format(name, version)
+        )
+    checks.append("import wheel.bdist_wheel")
+    return "; ".join(checks)
+
+
+def _pinned_windows_dockerfile_edits(newline):
+    """
+    The declared (anchor, replacement) pairs that pin the Windows builder image.
+
+    AP-SRV-070 W4A-C3, Root Finding J. Every pair turns one mutable external
+    input of Kroko's own ``Dockerfile.windows`` into an immutable one, and
+    every replacement is generated from
+    :mod:`VoiceSTT.kroko.buildinputs` - so the constants that feed the
+    fingerprint's Windows toolchain authority are literally the same values
+    the image is built from, and the two cannot drift apart.
+    """
+
+    def block(*lines):
+        return newline.join(lines)
+
+    declaration = buildinputs.windows_toolchain_declaration()
+    edits = []
+
+    # 1. Base image: an immutable manifest digest instead of a floating tag,
+    #    plus an immutable Ubuntu archive snapshot for every apt resolution.
+    #    Pinning the base image alone would not be enough - `apt-get install
+    #    clang-19` against the live archive still picks up whatever point
+    #    release is current, which is the compiler that produces the wheel.
+    edits.append(
+        (
+            "base image + apt snapshot",
+            block(
+                "FROM {0}".format(buildinputs.WINDOWS_BASE_IMAGE),
+                "",
+                "ENV DEBIAN_FRONTEND=noninteractive",
+                "",
+            ),
+            block(
+                "FROM {0}@{1}".format(
+                    buildinputs.WINDOWS_BASE_IMAGE,
+                    buildinputs.WINDOWS_BASE_IMAGE_DIGEST,
+                ),
+                "",
+                "ENV DEBIAN_FRONTEND=noninteractive",
+                "",
+                "# AP-SRV-070 W4A-C3, Root Finding J: resolve every apt package against",
+                "# one immutable Ubuntu archive snapshot. The base image digest alone",
+                "# does not fix the compiler and linker that actually produce the wheel.",
+                "#",
+                "# ca-certificates is bootstrapped from the image's own default sources",
+                "# first: the base image ships no CA bundle and the snapshot service is",
+                "# HTTPS-only. A trust store is not a build input - nothing in it can",
+                "# reach the produced wheel - and the snapshot then supplies its own",
+                "# version of it along with everything that can.",
+                "RUN apt-get update \\",
+                " && apt-get install -y --no-install-recommends ca-certificates \\",
+                " && rm -rf /var/lib/apt/lists/* \\",
+                " && printf '%s\\n' \\",
+                "        'Types: deb' \\",
+                "        'URIs: {0}' \\".format(buildinputs.WINDOWS_APT_SNAPSHOT_URI),
+                "        'Suites: {0}' \\".format(
+                    " ".join(buildinputs.WINDOWS_APT_SUITES)
+                ),
+                "        'Components: {0}' \\".format(
+                    " ".join(buildinputs.WINDOWS_APT_COMPONENTS)
+                ),
+                "        'Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg' \\",
+                "        > /etc/apt/sources.list.d/ubuntu.sources \\",
+                " && rm -f /etc/apt/sources.list",
+                "",
+            ),
+        )
+    )
+
+    # 2. The declared tool versions become the image's own ARG values, so the
+    #    fingerprint's toolchain authority and the image cannot disagree.
+    edits.append(
+        (
+            "toolchain version arguments",
+            block(
+                "ARG CLANG_VERSION=19",
+                "ARG XWIN_VERSION=0.6.5",
+                "ARG CMAKE_VERSION=3.30.5",
+                "ARG NSIS_VERSION=3.10",
+            ),
+            block(
+                "ARG CLANG_VERSION={0}".format(buildinputs.WINDOWS_CLANG_VERSION),
+                "ARG XWIN_VERSION={0}".format(buildinputs.WINDOWS_XWIN_VERSION),
+                "ARG CMAKE_VERSION={0}".format(buildinputs.WINDOWS_CMAKE_VERSION),
+                "ARG NSIS_VERSION={0}".format(buildinputs.WINDOWS_NSIS_VERSION),
+            ),
+        )
+    )
+
+    # 3. Python packaging tools: exact versions. These decide how the wheel is
+    #    produced, tagged and repaired, so an unpinned "latest" here can change
+    #    the artifact under an unchanged fingerprint. Upstream's unpinned
+    #    `pip3 install setuptools wheel delvewheel` silently left Ubuntu's own
+    #    dpkg-managed copies in place - pip considers a bare requirement already
+    #    satisfied - so the produced wheel's tagging depended on the base image
+    #    rather than on anything declared.
+    #
+    #    Given its own layer: an image build that has already spent minutes
+    #    resolving the apt snapshot must not have to repeat that work because a
+    #    packaging pin needed adjusting.
+    edits.append(
+        (
+            "python packaging tools",
+            block(
+                " && rm -rf /var/lib/apt/lists/* \\",
+                " && pip3 install --break-system-packages \\",
+                "        setuptools wheel delvewheel",
+            ),
+            block(
+                " && rm -rf /var/lib/apt/lists/*",
+                "",
+                "# AP-SRV-070 W4A-C3, Root Finding J: the packaging tools that decide how",
+                "# the wheel is built, tagged and repaired, pinned exactly.",
+                "#",
+                "# --ignore-installed: Ubuntu's python3-setuptools/python3-wheel are",
+                "# dpkg-managed and carry no RECORD file, so pip cannot uninstall them.",
+                "# The pinned copies are installed alongside into",
+                "# /usr/local/lib/python3.12/dist-packages, which precedes the",
+                "# distribution's dist-packages on sys.path - and the check below proves",
+                "# that is what the interpreter actually resolves, rather than assuming it.",
+                "#",
+                "# wheel is held below 0.46 deliberately: upstream's",
+                "# cmake/cmake_extension.py imports wheel.bdist_wheel, which 0.46 removed,",
+                "# and falls back to `bdist_wheel = None` on ImportError - which silently",
+                "# changes how the produced wheel is tagged.",
+                "RUN pip3 install --break-system-packages --no-cache-dir --ignore-installed \\",
+                "        {0} \\".format(" ".join(buildinputs.WINDOWS_PACKAGING_TOOLS)),
+                " && python3 -c \"{0}\"".format(_packaging_tool_assertion()),
+            ),
+        )
+    )
+
+    # 4-6. Externally downloaded binaries: verified against a declared SHA-256
+    #      before they are unpacked, so a substituted or rotated download fails
+    #      the build instead of silently changing the produced bits.
+    edits.append(
+        (
+            "cmake download",
+            block(
+                'RUN curl -sLo /tmp/cmake.tar.gz \\',
+                '    "{0}" \\'.format(
+                    "https://github.com/Kitware/CMake/releases/download/"
+                    "v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz"
+                ),
+                " && tar -xzf /tmp/cmake.tar.gz -C /opt \\",
+            ),
+            block(
+                'RUN curl -sLf "{0}" \\'.format(declaration["cmake"]["url"]),
+                "        -o /tmp/cmake.tar.gz \\",
+                ' && echo "{0}  /tmp/cmake.tar.gz" | sha256sum -c - \\'.format(
+                    declaration["cmake"]["sha256"]
+                ),
+                " && tar -xzf /tmp/cmake.tar.gz -C /opt \\",
+            ),
+        )
+    )
+    edits.append(
+        (
+            "xwin download",
+            block(
+                " && curl -sLo xwin.tar.gz \\",
+                '    "{0}" \\'.format(
+                    "https://github.com/Jake-Shadle/xwin/releases/download/"
+                    "${XWIN_VERSION}/xwin-${XWIN_VERSION}-x86_64-unknown-linux-musl.tar.gz"
+                ),
+                " && tar -xzf xwin.tar.gz \\",
+            ),
+            block(
+                ' && curl -sLf "{0}" \\'.format(declaration["xwin"]["url"]),
+                "        -o xwin.tar.gz \\",
+                ' && echo "{0}  xwin.tar.gz" | sha256sum -c - \\'.format(
+                    declaration["xwin"]["sha256"]
+                ),
+                " && tar -xzf xwin.tar.gz \\",
+            ),
+        )
+    )
+    edits.append(
+        (
+            "visual c++ redistributable",
+            block(
+                "RUN mkdir -p /opt/vc_redist \\",
+                " && curl -sL https://aka.ms/vs/17/release/vc_redist.x64.exe \\",
+                "        -o /opt/vc_redist/vc_redist.x64.exe \\",
+                " && ls -lh /opt/vc_redist/vc_redist.x64.exe",
+            ),
+            block(
+                "# The rolling aka.ms alias resolves to a different build over time;",
+                "# this is the immutable versioned URL plus its content hash.",
+                "RUN mkdir -p /opt/vc_redist \\",
+                ' && curl -sLf "{0}" \\'.format(declaration["vcRedist"]["url"]),
+                "        -o /opt/vc_redist/vc_redist.x64.exe \\",
+                ' && echo "{0}  /opt/vc_redist/vc_redist.x64.exe" | sha256sum -c - \\'.format(
+                    declaration["vcRedist"]["sha256"]
+                ),
+                " && ls -lh /opt/vc_redist/vc_redist.x64.exe",
+            ),
+        )
+    )
+    edits.append(
+        (
+            "windows python target",
+            block(
+                "ARG PYTHON_TARGET_VERSION=3.12.7",
+                "ARG PYTHON_TAG=312",
+                "RUN mkdir -p /opt/python-win64 \\",
+                " && cd /tmp \\",
+                ' && curl -sLf "https://www.nuget.org/api/v2/package/python/${PYTHON_TARGET_VERSION}" \\',
+                "        -o python.nupkg \\",
+            ),
+            block(
+                "ARG PYTHON_TARGET_VERSION={0}".format(
+                    buildinputs.WINDOWS_PYTHON_TARGET_VERSION
+                ),
+                "ARG PYTHON_TAG={0}".format(buildinputs.WINDOWS_PYTHON_TAG),
+                "RUN mkdir -p /opt/python-win64 \\",
+                " && cd /tmp \\",
+                ' && curl -sLf "{0}" \\'.format(declaration["pythonTarget"]["url"]),
+                "        -o python.nupkg \\",
+                ' && echo "{0}  python.nupkg" | sha256sum -c - \\'.format(
+                    declaration["pythonTarget"]["sha256"]
+                ),
+            ),
+        )
+    )
+
+    return edits
+
+
+def _pinned_windows_openssl_block(newline):
+    """
+    The replacement OpenSSL provisioning block for ``Dockerfile.windows``.
+
+    AP-SRV-070 W4A-C3, Root Finding J. Upstream - and VoiceSTT's own earlier
+    patch - downloaded "whichever OpenSSL version the vendor still happens to
+    serve", walking a fallback list until one URL answered. That is not a build
+    input at all: it makes the linked TLS library a function of a third party's
+    retention policy while the fingerprint stays unchanged, and the observed
+    Slproweb outage showed it is not even reliable. Exactly one version, from
+    an immutable content-addressed source, verified against a declared
+    SHA-256; if that file is ever gone the build fails and the pin has to be
+    updated deliberately.
+    """
+
+    declaration = buildinputs.windows_toolchain_declaration()["openssl"]
+    package = buildinputs.windows_openssl_filename()
+    inner = package[: -len(".conda")]
+    return newline.join(
+        [
+            "# Windows-native OpenSSL - required by sherpa-onnx's CMakeLists when",
+            "# SHERPA_ONNX_ENABLE_WEBSOCKET=ON (websocketpp uses it for wss:// support",
+            "# and the link is unconditional).",
+            "#",
+            "# AP-SRV-070 W4A-C3, Root Finding J: exactly one deliberately pinned",
+            "# version from an immutable, content-addressed source, verified against a",
+            "# source-controlled SHA-256. No availability-driven version search: if",
+            "# this exact artifact is gone the build must fail loudly rather than link",
+            "# against different bits under an unchanged fingerprint.",
+            "RUN apt-get update && apt-get install -y --no-install-recommends \\",
+            "        curl unzip zstd \\",
+            " && rm -rf /var/lib/apt/lists/* \\",
+            " && mkdir -p /tmp/openssl-pkg /opt/openssl-win64/app \\",
+            ' && curl -sLf "{0}" -o /tmp/openssl.conda \\'.format(declaration["url"]),
+            ' && echo "{0}  /tmp/openssl.conda" | sha256sum -c - \\'.format(
+                declaration["sha256"]
+            ),
+            " && cd /tmp/openssl-pkg \\",
+            " && unzip -q /tmp/openssl.conda \\",
+            " && tar --zstd -xf pkg-{0}.tar.zst \\".format(inner),
+            " && test -f Library/lib/libcrypto.lib \\",
+            " && test -f Library/lib/libssl.lib \\",
+            " && test -f Library/bin/libcrypto-3-x64.dll \\",
+            " && test -f Library/bin/libssl-3-x64.dll \\",
+            " && cp -r Library/bin Library/lib Library/include /opt/openssl-win64/app/ \\",
+            " && rm -rf /tmp/openssl-pkg /tmp/openssl.conda",
+            "",
+            "",
+        ]
+    )
+
+
 def patch_windows_dockerfile(repo_dir):
     """
-    Patches the Kroko Windows Dockerfile.
+    Patches the Kroko Windows Dockerfile onto the declared immutable toolchain.
     """
 
     path = repo_dir / "Dockerfile.windows"
@@ -588,61 +970,35 @@ def patch_windows_dockerfile(repo_dir):
         raise KrokoInstallError("Missing Kroko Windows Dockerfile: {0}".format(path))
 
     text = read_text(path)
+    newline = "\r\n" if "\r\n" in text else "\n"
     changed = False
+
+    for name, anchor, replacement in _pinned_windows_dockerfile_edits(newline):
+        if replacement in text:
+            continue
+        if anchor not in text:
+            raise KrokoInstallError(
+                "Cannot pin the Kroko Windows builder input {0!r}: the expected "
+                "upstream section is missing from {1}. The declared Windows "
+                "toolchain in VoiceSTT/kroko/buildinputs.py must be updated "
+                "deliberately for this upstream revision.".format(name, path)
+            )
+        text = text.replace(anchor, replacement, 1)
+        changed = True
+        print("Pinned Kroko Windows builder input: {0}.".format(name))
 
     openssl_start = text.find("# Windows-native OpenSSL")
     openssl_end = text.find("ENV OPENSSL_ROOT_DIR=", openssl_start)
-    if openssl_start != -1 and openssl_end != -1:
-        newline = "\r\n" if "\r\n" in text else "\n"
-        openssl_block = newline.join(
-            [
-                "# Windows-native OpenSSL - required by sherpa-onnx's CMakeLists when",
-                "# SHERPA_ONNX_ENABLE_WEBSOCKET=ON (websocketpp uses it for wss:// support",
-                "# and the link is unconditional). Slproweb no longer keeps the previously",
-                "# pinned MSI files online reliably, so download the current Inno Setup EXE",
-                "# installers and extract the DLLs, import libraries, and headers directly.",
-                "RUN apt-get update && apt-get install -y --no-install-recommends \\",
-                "        curl innoextract \\",
-                " && rm -rf /var/lib/apt/lists/* \\",
-                " && mkdir -p /tmp/openssl-final /opt/openssl-win64/app/bin \\",
-                "        /opt/openssl-win64/app/lib /opt/openssl-win64/app/include \\",
-                " && cd /tmp \\",
-                " && for v in 3_6_3 3_5_7 3_4_6 3_0_21; do \\",
-                "        for flavor in \"\" \"_Light\"; do \\",
-                "            if curl -sLf \"https://slproweb.com/download/Win64OpenSSL${flavor}-${v}.exe\" \\",
-                "                    -o openssl.exe; then \\",
-                "                echo \"Downloaded Win64OpenSSL${flavor}-${v}.exe\"; \\",
-                "                break 2; \\",
-                "            fi; \\",
-                "            rm -f openssl.exe; \\",
-                "        done; \\",
-                "    done \\",
-                " && test -s openssl.exe \\",
-                " && innoextract -d /tmp/openssl-final openssl.exe \\",
-                " && (cp -r /tmp/openssl-final/app/* /opt/openssl-win64/app/ 2>/dev/null \\",
-                "     || (find /tmp/openssl-final -name \"libcrypto*.dll\" \\",
-                "            -exec cp -v {} /opt/openssl-win64/app/bin/ \\; ; \\",
-                "         find /tmp/openssl-final -name \"libssl*.dll\" \\",
-                "            -exec cp -v {} /opt/openssl-win64/app/bin/ \\; ; \\",
-                "         find /tmp/openssl-final -name \"libcrypto.lib\" \\",
-                "            -exec cp -v {} /opt/openssl-win64/app/lib/ \\; ; \\",
-                "         find /tmp/openssl-final -name \"libssl.lib\" \\",
-                "            -exec cp -v {} /opt/openssl-win64/app/lib/ \\; ; \\",
-                "         find /tmp/openssl-final -type d -name \"include\" \\",
-                "            -exec cp -r {} /opt/openssl-win64/app/ \\;)) \\",
-                " && (test -d /opt/openssl-win64/app/lib/VC/x64/MT \\",
-                "     && mv /opt/openssl-win64/app/lib/VC/x64/MT/* /opt/openssl-win64/app/lib/ \\",
-                "     || true) \\",
-                " && test -f /opt/openssl-win64/app/lib/libcrypto.lib \\",
-                "        -o -f /opt/openssl-win64/app/lib/libcrypto_static.lib \\",
-                " && rm -rf /tmp/openssl-final /tmp/openssl.exe",
-                "",
-            ]
+    if openssl_start == -1 or openssl_end == -1:
+        raise KrokoInstallError(
+            "Cannot pin the Kroko Windows OpenSSL provisioning: the expected "
+            "upstream section is missing from {0}.".format(path)
         )
-        if text[openssl_start:openssl_end] != openssl_block:
-            text = text[:openssl_start] + openssl_block + text[openssl_end:]
-            changed = True
-            print("Patched Dockerfile.windows to use current Slproweb OpenSSL EXE installers.")
+    openssl_block = _pinned_windows_openssl_block(newline)
+    if text[openssl_start:openssl_end] != openssl_block:
+        text = text[:openssl_start] + openssl_block + text[openssl_end:]
+        changed = True
+        print("Pinned Kroko Windows builder input: openssl.")
 
     if "sed -i 's/\\r$//'" in text:
         if changed:
@@ -697,6 +1053,29 @@ def patch_windows_container_script(repo_dir):
         "-DSHERPA_ONNX_ENABLE_WEBSOCKET=OFF",
         "-DSHERPA_ONNX_ENABLE_WEBSOCKET=ON",
     )
+
+    # AP-SRV-070 W4A-C3, Root Finding J: openfst is fetched at container run
+    # time and compiled straight into the produced runtime, so it is exactly as
+    # build-effective as the image-time downloads and gets the same treatment -
+    # a declared source archive verified against a declared SHA-256, never
+    # trusted merely because the download succeeded.
+    openfst_declaration = buildinputs.windows_toolchain_declaration()["openfst"]
+    openfst_anchor = (
+        '    curl -sLo /tmp/openfst.tgz \\' + newline
+        + '        "' + openfst_declaration["url"] + '"' + newline
+    )
+    openfst_pinned = (
+        openfst_anchor
+        + '    echo "' + openfst_declaration["sha256"]
+        + '  /tmp/openfst.tgz" | sha256sum -c -' + newline
+    )
+    if openfst_pinned not in text:
+        if openfst_anchor not in text:
+            raise KrokoInstallError(
+                "Cannot pin the Kroko openfst source archive: the expected "
+                "upstream download is missing from {0}.".format(path)
+            )
+        text = text.replace(openfst_anchor, openfst_pinned, 1)
 
     linux_openssl_lines = (
         "-DOPENSSL_CRYPTO_LIBRARY=/usr/lib/x86_64-linux-gnu/libcrypto.so.3",

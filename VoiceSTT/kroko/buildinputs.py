@@ -58,7 +58,15 @@ PATCHED_UPSTREAM_SOURCES = (
 #: Bump this whenever the *content* of those patches changes. A guard test
 #: fails if the patch functions change without a bump, so this cannot silently
 #: drift.
-PATCH_SET_REVISION = 1
+#:
+#: Bumped 1 -> 2 (AP-SRV-070 W4A-C3, Root Finding J): the Windows Dockerfile
+#: patch no longer emits an availability-driven OpenSSL search loop and now
+#: pins every externally downloaded builder input (base image digest, apt
+#: snapshot, packaging tools, CMake/xwin/Python-target/VC redistributable and
+#: OpenSSL) to a declared version plus SHA-256, and the container build script
+#: verifies the openfst source archive against a declared SHA-256. That really
+#: does change the produced bits, so the patch set is a new revision.
+PATCH_SET_REVISION = 2
 
 #: Revision of the builder logic itself: which revision gets checked out, which
 #: patches are applied, how the compiler is invoked, and which produced wheel is
@@ -91,7 +99,12 @@ PATCH_SET_REVISION = 1
 #: Kroko builder checkout to a pristine state (``materialize_pristine_checkout``)
 #: before applying VoiceSTT's patches, so a stale patch, CMake cache or
 #: build artifact from a previous run can never influence a new build.
-BUILDER_REVISION = 3
+#:
+#: Bumped 3 -> 4 (AP-SRV-070 W4A-C3, Root Finding I): ``prepare_checkout``
+#: now proves that a reused external builder checkout actually belongs to the
+#: effective ``--repo`` authority before any fetch or build, and re-clones it
+#: from that authority when it does not.
+BUILDER_REVISION = 4
 
 #: CMake flags forced for the CPU-only Linux build. Kroko's license client
 #: includes websocketpp headers unconditionally, which is why WebSocket support
@@ -144,6 +157,223 @@ PRO_BUILD_ENV_OFF_VALUE = "OFF"
 #: explicitly where it is meaningful (currently: the Linux build).
 KROKO_CAPABILITY_SWITCH_ENV_NAMES = (PRO_BUILD_ENV_NAME,)
 
+#: --------------------------------------------------------------------------
+#: The immutable Windows cross-build toolchain (AP-SRV-070 W4A-C3, Finding J)
+#: --------------------------------------------------------------------------
+#:
+#: The Windows wheel is cross-built inside Kroko's own Docker image. Until C3
+#: the fingerprint described that toolchain only as
+#: ``"definedBy": "upstream-revision+patch-set"``, which was not true: the
+#: image pulled a floating ``ubuntu:24.04`` tag, resolved apt packages against
+#: the live archive, installed unpinned Python packaging tools, downloaded
+#: several binaries with no content hash at all, and - worst - picked whichever
+#: OpenSSL version slproweb still happened to be serving. The *same* declared
+#: fingerprint could therefore describe materially different compiled bytes.
+#:
+#: Everything below closes that hole the way the root correction demands
+#: (Variant A - pin the build inputs): every externally supplied byte that can
+#: reach the produced wheel is named by an exact version *and* an immutable
+#: identity (a digest, a snapshot instant, or a SHA-256). All of it is plain
+#: source-controlled data, so ``fingerprint_for()`` / ``describe_artifact()``
+#: keep computing the Windows fingerprint offline - no Docker build, no
+#: registry lookup, no network - which is what keeps an ordinary artifact
+#: REUSE cheap.
+#:
+#: **Update obligation:** changing any constant here changes the Windows
+#: toolchain authority and therefore the fingerprint, which correctly forces
+#: exactly one new qualified build. If a pinned source ever disappears, the
+#: build must fail loudly and the pin must be updated deliberately - never
+#: silently fall back to different bits.
+
+#: The builder base image, pinned by immutable manifest digest rather than by
+#: the floating ``24.04`` tag.
+WINDOWS_BASE_IMAGE = "ubuntu:24.04"
+WINDOWS_BASE_IMAGE_DIGEST = (
+    "sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517"
+)
+
+#: Canonical Ubuntu archive snapshot the builder resolves *all* apt packages
+#: against. This is what makes the compiler and linker themselves immutable:
+#: ``apt-get install clang-19`` against the live archive silently picks up
+#: whatever point release is current, so two builds under one fingerprint
+#: could link against different toolchains. https://snapshot.ubuntu.com serves
+#: the archive exactly as it stood at the declared instant.
+WINDOWS_APT_SNAPSHOT_URI = "https://snapshot.ubuntu.com/ubuntu/20260825T000000Z"
+WINDOWS_APT_SUITES = ("noble", "noble-updates", "noble-security")
+WINDOWS_APT_COMPONENTS = ("main", "restricted", "universe", "multiverse")
+
+#: Toolchain versions requested from that snapshot. Kept declared even though
+#: the snapshot already fixes the resolved package version, because these are
+#: what the Dockerfile actually asks for.
+WINDOWS_CLANG_VERSION = "19"
+WINDOWS_NSIS_VERSION = "3.10"
+
+#: Externally downloaded builder binaries: exact version plus SHA-256. The
+#: hash is verified inside the image build, so a substituted or truncated
+#: download fails the build instead of quietly producing different bytes.
+WINDOWS_CMAKE_VERSION = "3.30.5"
+WINDOWS_CMAKE_SHA256 = (
+    "f747d9b23e1a252a8beafb4ed2bc2ddf78cff7f04a8e4de19f4ff88e9b51dc9d"
+)
+WINDOWS_XWIN_VERSION = "0.6.5"
+WINDOWS_XWIN_SHA256 = (
+    "9fd53950b064d067f42428a69453b927656cae68dbd7f8d3f86dcb81c80dd22d"
+)
+
+#: The Windows CPython headers/import library the extension is compiled
+#: against. Must stay on the same minor version as the image's Linux python3
+#: (pybind11 enforces that), which the pinned base image fixes at 3.12.
+WINDOWS_PYTHON_TARGET_VERSION = "3.12.7"
+WINDOWS_PYTHON_TAG = "312"
+WINDOWS_PYTHON_NUPKG_SHA256 = (
+    "149dd298e0b7a82250ca019471770fff079874088a4e8501ca20922d7df3a6ac"
+)
+
+#: Microsoft's VC++ redistributable. Upstream fetched it through the rolling
+#: ``aka.ms/vs/17/release`` alias, which resolves to a different build over
+#: time; this is the immutable versioned URL that alias currently resolves to.
+WINDOWS_VC_REDIST_URL = (
+    "https://download.visualstudio.microsoft.com/download/pr/"
+    "9d270333-8b7b-4f96-9458-6fcdb2ec0b25/"
+    "CC0FF0EB1DC3F5188AE6300FAEF32BF5BEEBA4BDD6E8E445A9184072096B713B/"
+    "VC_redist.x64.exe"
+)
+WINDOWS_VC_REDIST_SHA256 = (
+    "cc0ff0eb1dc3f5188ae6300faef32bf5beeba4bdd6e8e445a9184072096b713b"
+)
+
+#: Windows-native OpenSSL - the single most important pin here. sherpa-onnx
+#: links it unconditionally when ``SHERPA_ONNX_ENABLE_WEBSOCKET=ON``, and both
+#: upstream and VoiceSTT's own earlier patch downloaded "the first version
+#: slproweb still serves", which is not a build input at all but a race with a
+#: third party's retention policy. conda-forge is used instead because its
+#: published packages are immutable and content-addressed: this exact file
+#: either is byte-identical or is gone, and "gone" must fail the build.
+WINDOWS_OPENSSL_VERSION = "3.6.4"
+WINDOWS_OPENSSL_CONDA_BUILD = "hf411b9b_0"
+WINDOWS_OPENSSL_SHA256 = (
+    "9dddb559ba49744d5d94092d8d13cb0567f5c3b3f439f3acf28433d1f4256acc"
+)
+
+#: openfst is fetched at container *run* time (in_windows_container.sh) and is
+#: compiled into the produced binary, so it is just as build-effective as the
+#: image-time downloads and gets the same treatment.
+WINDOWS_OPENFST_TAG = "sherpa-onnx-2024-06-19"
+WINDOWS_OPENFST_SHA256 = (
+    "5c98e82cc509c5618502dde4860b8ea04d843850ed57e6d6b590b644b268853d"
+)
+
+#: Python packaging tools installed into the builder image. Pinned exactly
+#: because they decide how the wheel is produced, tagged and repaired.
+#: ``wheel`` is held below 0.46 deliberately: upstream's
+#: ``cmake/cmake_extension.py`` imports ``wheel.bdist_wheel``, which 0.46
+#: removed, and silently falls back to ``bdist_wheel = None`` - which changes
+#: how the produced wheel is tagged.
+WINDOWS_PACKAGING_TOOLS = (
+    "setuptools==75.8.2",
+    "wheel==0.45.1",
+    "delvewheel==1.10.1",
+    "pefile==2024.8.26",
+)
+
+
+def windows_cmake_url():
+    """The pinned CMake release tarball URL."""
+    return (
+        "https://github.com/Kitware/CMake/releases/download/"
+        "v{0}/cmake-{0}-linux-x86_64.tar.gz".format(WINDOWS_CMAKE_VERSION)
+    )
+
+
+def windows_xwin_url():
+    """The pinned xwin release tarball URL."""
+    return (
+        "https://github.com/Jake-Shadle/xwin/releases/download/"
+        "{0}/xwin-{0}-x86_64-unknown-linux-musl.tar.gz".format(WINDOWS_XWIN_VERSION)
+    )
+
+
+def windows_python_nupkg_url():
+    """The pinned Windows CPython NuGet package URL."""
+    return "https://www.nuget.org/api/v2/package/python/{0}".format(
+        WINDOWS_PYTHON_TARGET_VERSION
+    )
+
+
+def windows_openssl_filename():
+    """The pinned conda-forge OpenSSL package filename."""
+    return "openssl-{0}-{1}.conda".format(
+        WINDOWS_OPENSSL_VERSION, WINDOWS_OPENSSL_CONDA_BUILD
+    )
+
+
+def windows_openssl_url():
+    """The pinned, immutable conda-forge OpenSSL package URL."""
+    return "https://conda.anaconda.org/conda-forge/win-64/{0}".format(
+        windows_openssl_filename()
+    )
+
+
+def windows_openfst_url():
+    """The pinned openfst source archive URL."""
+    return (
+        "https://github.com/csukuangfj/openfst/archive/refs/tags/"
+        "{0}.tar.gz".format(WINDOWS_OPENFST_TAG)
+    )
+
+
+def windows_toolchain_declaration():
+    """The complete, immutable Windows builder toolchain declaration.
+
+    Pure data assembled from the constants above: no probing, no network, no
+    Docker. This is what the Windows fingerprint records as its toolchain
+    authority, so changing any pinned input above moves the fingerprint and a
+    previously stored artifact stops matching - which is exactly the property
+    Root Finding J found missing.
+    """
+    return {
+        "baseImage": WINDOWS_BASE_IMAGE,
+        "baseImageDigest": WINDOWS_BASE_IMAGE_DIGEST,
+        "aptSnapshot": WINDOWS_APT_SNAPSHOT_URI,
+        "aptSuites": list(WINDOWS_APT_SUITES),
+        "aptComponents": list(WINDOWS_APT_COMPONENTS),
+        "clangVersion": WINDOWS_CLANG_VERSION,
+        "nsisVersion": WINDOWS_NSIS_VERSION,
+        "cmake": {
+            "version": WINDOWS_CMAKE_VERSION,
+            "url": windows_cmake_url(),
+            "sha256": WINDOWS_CMAKE_SHA256,
+        },
+        "xwin": {
+            "version": WINDOWS_XWIN_VERSION,
+            "url": windows_xwin_url(),
+            "sha256": WINDOWS_XWIN_SHA256,
+        },
+        "pythonTarget": {
+            "version": WINDOWS_PYTHON_TARGET_VERSION,
+            "tag": WINDOWS_PYTHON_TAG,
+            "url": windows_python_nupkg_url(),
+            "sha256": WINDOWS_PYTHON_NUPKG_SHA256,
+        },
+        "vcRedist": {
+            "url": WINDOWS_VC_REDIST_URL,
+            "sha256": WINDOWS_VC_REDIST_SHA256,
+        },
+        "openssl": {
+            "version": WINDOWS_OPENSSL_VERSION,
+            "condaBuild": WINDOWS_OPENSSL_CONDA_BUILD,
+            "url": windows_openssl_url(),
+            "sha256": WINDOWS_OPENSSL_SHA256,
+        },
+        "openfst": {
+            "tag": WINDOWS_OPENFST_TAG,
+            "url": windows_openfst_url(),
+            "sha256": WINDOWS_OPENFST_SHA256,
+        },
+        "packagingTools": list(WINDOWS_PACKAGING_TOOLS),
+    }
+
+
 #: The build variants this project supports.
 VARIANT_FREE = "free"
 VARIANT_PRO = "pro"
@@ -174,6 +404,35 @@ def normalize_variant(variant: str) -> str:
 
 __all__ = [
     "BUILDER_REVISION",
+    "WINDOWS_APT_COMPONENTS",
+    "WINDOWS_APT_SNAPSHOT_URI",
+    "WINDOWS_APT_SUITES",
+    "WINDOWS_BASE_IMAGE",
+    "WINDOWS_BASE_IMAGE_DIGEST",
+    "WINDOWS_CLANG_VERSION",
+    "WINDOWS_CMAKE_SHA256",
+    "WINDOWS_CMAKE_VERSION",
+    "WINDOWS_NSIS_VERSION",
+    "WINDOWS_OPENFST_SHA256",
+    "WINDOWS_OPENFST_TAG",
+    "WINDOWS_OPENSSL_CONDA_BUILD",
+    "WINDOWS_OPENSSL_SHA256",
+    "WINDOWS_OPENSSL_VERSION",
+    "WINDOWS_PACKAGING_TOOLS",
+    "WINDOWS_PYTHON_NUPKG_SHA256",
+    "WINDOWS_PYTHON_TAG",
+    "WINDOWS_PYTHON_TARGET_VERSION",
+    "WINDOWS_VC_REDIST_SHA256",
+    "WINDOWS_VC_REDIST_URL",
+    "WINDOWS_XWIN_SHA256",
+    "WINDOWS_XWIN_VERSION",
+    "windows_cmake_url",
+    "windows_openfst_url",
+    "windows_openssl_filename",
+    "windows_openssl_url",
+    "windows_python_nupkg_url",
+    "windows_toolchain_declaration",
+    "windows_xwin_url",
     "KROKO_CAPABILITY_SWITCH_ENV_NAMES",
     "KROKO_UPSTREAM_BRANCH_HINT",
     "KROKO_UPSTREAM_REPO",
