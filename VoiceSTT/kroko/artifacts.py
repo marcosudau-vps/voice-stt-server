@@ -741,20 +741,31 @@ class KrokoArtifactStore:
             fingerprint=fingerprint,
             inputs=inputs,
         )
-        if not recover or not self.replaced_backups(variant, fingerprint):
+
+        # store() benutzt recover=False bereits innerhalb des Slot-Locks.
+        if not recover:
             return record, problems
 
-        # A backup next to this slot means a force replacement was interrupted:
-        # either it never finished (restore the last known-good artifact) or it
-        # finished but was killed before its own cleanup (drop the debris).
-        # Both decisions belong under the slot lock, so they happen there.
-        self.recover_slot(variant=variant, fingerprint=fingerprint, inputs=inputs)
-        return self._verify_slot_dir(
-            self.slot_dir(variant, fingerprint),
-            variant=variant,
-            fingerprint=fingerprint,
-            inputs=inputs,
-        )
+        # Gesunder Hit ohne verbliebene Backups bleibt vollstaendig lock-frei.
+        if record is not None and not self.replaced_backups(variant, fingerprint):
+            return record, problems
+
+        # AP-SRV-070 W4A-C4, Root Finding N:
+        # Sowohl der MISS-Pfad (der mitten in einem Force-Swap final -> backup
+        # entstanden sein kann) als auch der Bereinigungspfad fuer verbliebene
+        # Backups werden unter dem Slot-Lock ausgefuehrt.
+        with self._slot_lock(variant, fingerprint):
+            self._recover_slot_locked(
+                variant,
+                fingerprint,
+                inputs,
+            )
+            return self._verify_slot_dir(
+                self.slot_dir(variant, fingerprint),
+                variant=variant,
+                fingerprint=fingerprint,
+                inputs=inputs,
+            )
 
     # -- write ---------------------------------------------------------------
 

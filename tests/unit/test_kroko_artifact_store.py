@@ -10,11 +10,14 @@ about half an hour, and repeating it would prove nothing that counting the
 calls does not.
 """
 
+import contextlib
+import hashlib
 import json
 import os
 import shutil
 import subprocess
 import sys
+import threading
 import unittest
 import zipfile
 from pathlib import Path
@@ -1635,12 +1638,120 @@ class RootFindingKCrashAtomicSwapTests(unittest.TestCase):
         self._store(b"known-good")
         with mock.patch.object(
             artifacts.KrokoArtifactStore, "recover_slot"
-        ) as recover:
+        ) as recover, mock.patch.object(
+            self.store, "_slot_lock", wraps=self.store._slot_lock
+        ) as slot_lock:
             record, _ = self.store.lookup(
                 variant="free", fingerprint=self.fingerprint, inputs=self.inputs
             )
         self.assertIsNotNone(record)
         recover.assert_not_called()
+        slot_lock.assert_not_called()
+
+    def test_concurrent_lookup_during_store_swap_never_returns_miss(self):
+        """AP-SRV-070 W4A-C4, Root Finding N: lookup() must not return MISS during force swap."""
+        # 1. Gueltiger final-Slot existiert
+        initial = self._store(b"initial-artifact")
+        self.assertTrue(self._slot().is_dir())
+
+        # Synchronisations-Events
+        writer_at_swap = threading.Event()
+        reader_waiting_for_lock = threading.Event()
+        writer_resume = threading.Event()
+
+        errors = []
+        reader_result = {}
+
+        # 3. Writer fuehrt final -> backup aus
+        # 4. Writer wird exakt dort angehalten
+        real_replace = os.replace
+        final_slot = self._slot()
+
+        def guarded_replace(src, dst):
+            real_replace(src, dst)
+            if Path(src) == final_slot and artifacts.REPLACED_SUFFIX in str(dst):
+                writer_at_swap.set()
+                if not writer_resume.wait(timeout=10):
+                    errors.append(TimeoutError("writer_resume wait timed out"))
+
+        real_slot_lock = self.store._slot_lock
+
+        @contextlib.contextmanager
+        def tracked_slot_lock(variant, fingerprint):
+            if threading.current_thread().name == "reader-thread":
+                reader_waiting_for_lock.set()
+            with real_slot_lock(variant, fingerprint):
+                yield
+
+        replacement_wheel = make_wheel(
+            self.build_dir / "replacement", variant="free", payload=b"replacement-artifact"
+        )
+
+        def writer_job():
+            try:
+                # 2. Writer haelt den Slot-Lock und fuehrt swap aus
+                with mock.patch("os.replace", side_effect=guarded_replace):
+                    self.store.store(
+                        wheel_path=replacement_wheel,
+                        fingerprint=self.fingerprint,
+                        inputs=self.inputs,
+                        adopt_existing=False,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                errors.append(("writer", exc))
+
+        def reader_job():
+            try:
+                # 5. Reader startet lookup(recover=True)
+                # 6. Reader sieht initial final als fehlend und wartet am Slot-Lock
+                record, problems = self.store.lookup(
+                    variant="free", fingerprint=self.fingerprint, inputs=self.inputs, recover=True
+                )
+                reader_result["record"] = record
+                reader_result["problems"] = problems
+            except Exception as exc:  # noqa: BLE001
+                errors.append(("reader", exc))
+
+        writer_thread = threading.Thread(target=writer_job, name="writer-thread")
+        reader_thread = threading.Thread(target=reader_job, name="reader-thread")
+
+        with mock.patch.object(self.store, "_slot_lock", side_effect=tracked_slot_lock):
+            writer_thread.start()
+            self.assertTrue(writer_at_swap.wait(timeout=10), "Writer did not reach swap point")
+            self.assertFalse(self._slot().exists(), "final slot must be temporarily absent")
+
+            reader_thread.start()
+            self.assertTrue(
+                reader_waiting_for_lock.wait(timeout=10),
+                "Reader did not attempt to take slot lock after observing missing final",
+            )
+            self.assertTrue(reader_thread.is_alive(), "Reader must be blocked waiting for lock")
+
+            # 7. Writer darf weiterlaufen: staging -> final, backup cleanup, lock release
+            writer_resume.set()
+
+            writer_thread.join(timeout=10)
+            reader_thread.join(timeout=10)
+
+        self.assertEqual(errors, [], f"Unexpected thread error: {errors}")
+        self.assertFalse(writer_thread.is_alive(), "Writer thread hung")
+        self.assertFalse(reader_thread.is_alive(), "Reader thread hung")
+
+        # 8-11. Reader liefert gueltigen ArtifactRecord, keinen MISS!
+        record = reader_result.get("record")
+        problems = reader_result.get("problems", [])
+        self.assertIsNotNone(record, f"Reader got unexpected MISS: {problems}")
+        self.assertEqual(problems, [])
+        self.assertEqual(
+            record.wheel_sha256,
+            hashlib.sha256(replacement_wheel.read_bytes()).hexdigest(),
+        )
+
+        # Nach Test keine Backup- oder Staging-Leichen
+        self.assertEqual(self.store.replaced_backups("free", self.fingerprint), [])
+        staging_dir = self.store.root / artifacts.STAGING_DIR_NAME
+        if staging_dir.exists():
+            self.assertEqual(list(staging_dir.iterdir()), [])
 
 
 if __name__ == "__main__":

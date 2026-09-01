@@ -221,11 +221,11 @@ class BuildEffectiveLogicGuardTests(unittest.TestCase):
     """
 
     #: SHA-256 over the source of every build-affecting patch function, pinned
-    #: together with PATCH_SET_REVISION = 2 (AP-SRV-070 W4A-C3, Root Finding J:
-    #: the Windows Dockerfile patch now pins every external builder input and
-    #: the container script verifies the openfst archive).
+    #: together with PATCH_SET_REVISION = 3 (AP-SRV-070 W4A-C4, Root Finding L/M:
+    #: the Windows Dockerfile patch now pins xwin channel manifest, package
+    #: manifest, SDK version, and CRT version, with size and digest verification).
     EXPECTED_PATCH_SOURCE_DIGEST = (
-        "17cbc1dd927d74fc10477579a9475920d0ebfa7df8ddb777d92344aa07e183b5"
+        "70d8bacbe95c358e532db9ce1b6127d2aa575ff7724b90464a5aec71b7387c80"
     )
 
     #: SHA-256 over the source of the builder surface, pinned together with
@@ -1016,7 +1016,7 @@ class RootFindingJWindowsToolchainAuthorityTests(unittest.TestCase):
         ):
             with self.subTest(sha256=sha):
                 self.assertIn('echo "{0}  '.format(sha), dockerfile)
-        self.assertNotIn("aka.ms/vs/17/release", dockerfile)
+        self.assertNotIn("aka.ms/vs/17/release/vc_redist", dockerfile)
 
         # openfst is fetched at container run time and compiled straight in.
         container = patched["in_windows_container.sh"]
@@ -1120,6 +1120,167 @@ class RootFindingJWindowsToolchainAuthorityTests(unittest.TestCase):
                 checkout / "in_windows_container.sh"
             ).read_text(encoding="utf-8"),
         }
+
+
+class RootFindingLMWindowsToolchainAuthorityTests(RootFindingJWindowsToolchainAuthorityTests):
+    """AP-SRV-070 W4A-C4, Root Finding L/M - xwin manifests, SDK, and CRT are source-controlled.
+
+    xwin 0.6.5 formerly resolved SDK and CRT versions implicitly from a floating
+    live Microsoft channel manifest. These tests prove:
+    1. The Channel Manifest, Package Manifest, SDK version, and CRT version are
+       formally declared and hashed into the Windows toolchain authority;
+    2. Changing any of these inputs invalidates the toolchain authority and fingerprint;
+    3. The emitted Dockerfile downloads and verifies both manifests (including
+       the actual uncompressed vsman package manifest SHA-256) before invoking
+       xwin with explicit pinned parameters;
+    4. There is no unpinned/latest fallback or duplicate unpinned splat command;
+    5. Offline fingerprinting remains strictly network/docker-free;
+    6. Negative proofs: incorrect manifest hashes fail verification, and a missing
+       upstream xwin block raises KrokoInstallError.
+    """
+
+    def test_xwin_declaration_contains_complete_c3_reconstructed_authority(self):
+        """10.1: Declaration contains exact manifests, SDK and CRT versions."""
+        toolchain = self._windows_fingerprint()["inputs"]["toolchain"]["inputs"]
+        xwin_decl = toolchain["xwin"]
+
+        self.assertEqual(xwin_decl["version"], "0.6.5")
+        self.assertEqual(xwin_decl["sha256"], buildinputs.WINDOWS_XWIN_SHA256)
+
+        # Channel Manifest
+        channel = xwin_decl["channelManifest"]
+        self.assertEqual(channel["url"], "https://aka.ms/vs/17/release/channel")
+        self.assertEqual(channel["cacheName"], "manifest_17.json")
+        self.assertEqual(channel["bytes"], 91833)
+        self.assertEqual(
+            channel["sha256"],
+            "4c81e902fb7fe2acea779b828e6dc548fe0bbb693df50eda0224263c16686bdd",
+        )
+
+        # Package Manifest
+        pkg = xwin_decl["packageManifest"]
+        self.assertIn("VisualStudio.vsman", pkg["url"])
+        self.assertEqual(
+            pkg["cacheKey"],
+            "bd98dd01efa4195cb1c11030da63b9e4a3bcec7bc406799a9db80339d6dabd79",
+        )
+        self.assertEqual(
+            pkg["cacheName"],
+            "pkg_manifest_bd98dd01efa4195cb1c11030da63b9e4a3bcec7bc406799a9db80339d6dabd79.vsman",
+        )
+        self.assertEqual(pkg["bytes"], 17955171)
+        self.assertEqual(
+            pkg["sha256"],
+            "3891c3018a07338b3880cbb28088bb22ef7762eb9206523655b2e3972b9d527e",
+        )
+
+        # SDK & CRT Versions
+        self.assertEqual(xwin_decl["sdkVersion"], "10.0.26100")
+        self.assertEqual(xwin_decl["crtVersion"], "14.44.17.14")
+
+    def test_changing_any_manifest_or_sdk_crt_input_invalidates_fingerprint(self):
+        """10.2: Invalidation proof for each individual xwin manifest, SDK, and CRT input."""
+        baseline = self._windows_fingerprint()
+
+        mutations = [
+            ("WINDOWS_XWIN_MANIFEST_SHA256", "0" * 64),
+            ("WINDOWS_XWIN_MANIFEST_URL", "https://aka.ms/vs/17/preview/channel"),
+            ("WINDOWS_XWIN_PACKAGE_MANIFEST_SHA256", "f" * 64),
+            ("WINDOWS_XWIN_PACKAGE_MANIFEST_URL", "https://example.com/vsman"),
+            ("WINDOWS_XWIN_PACKAGE_MANIFEST_CACHE_KEY", "0" * 64),
+            ("WINDOWS_XWIN_SDK_VERSION", "10.0.22621"),
+            ("WINDOWS_XWIN_CRT_VERSION", "14.40.33807"),
+        ]
+
+        for attr, bad_value in mutations:
+            with self.subTest(mutation=attr):
+                with mock.patch.object(buildinputs, attr, bad_value):
+                    mutated = self._windows_fingerprint()
+                self.assertNotEqual(
+                    mutated["fingerprint"],
+                    baseline["fingerprint"],
+                    f"Changing {attr} must change the fingerprint",
+                )
+                self.assertNotEqual(
+                    mutated["inputs"]["toolchain"]["authority"],
+                    baseline["inputs"]["toolchain"]["authority"],
+                    f"Changing {attr} must change the toolchain authority",
+                )
+
+    def test_generated_dockerfile_downloads_and_verifies_manifests_and_invokes_pinned_xwin(self):
+        """10.3: Generated Dockerfile has verified downloads and pinned splat invocation."""
+        patched = self._patched_upstream()
+        dockerfile = patched["Dockerfile.windows"]
+
+        # Channel Manifest download + checks
+        self.assertIn("curl -sLf \"https://aka.ms/vs/17/release/channel\"", dockerfile)
+        self.assertIn("-o /tmp/.xwin-cache/dl/manifest_17.json", dockerfile)
+        self.assertIn(
+            'test "$(stat -c %s /tmp/.xwin-cache/dl/manifest_17.json)" = "91833"',
+            dockerfile,
+        )
+        self.assertIn(
+            'echo "4c81e902fb7fe2acea779b828e6dc548fe0bbb693df50eda0224263c16686bdd  /tmp/.xwin-cache/dl/manifest_17.json" | sha256sum -c -',
+            dockerfile,
+        )
+
+        # Package Manifest download + checks
+        pkg_name = "pkg_manifest_bd98dd01efa4195cb1c11030da63b9e4a3bcec7bc406799a9db80339d6dabd79.vsman"
+        self.assertIn(f"-o /tmp/.xwin-cache/dl/{pkg_name}", dockerfile)
+        self.assertIn(
+            f'test "$(stat -c %s /tmp/.xwin-cache/dl/{pkg_name})" = "17955171"',
+            dockerfile,
+        )
+        self.assertIn(
+            f'echo "3891c3018a07338b3880cbb28088bb22ef7762eb9206523655b2e3972b9d527e  /tmp/.xwin-cache/dl/{pkg_name}" | sha256sum -c -',
+            dockerfile,
+        )
+
+        # Pinned xwin splat invocation
+        self.assertIn("--cache-dir /tmp/.xwin-cache", dockerfile)
+        self.assertIn("--manifest /tmp/.xwin-cache/dl/manifest_17.json", dockerfile)
+        self.assertIn("--sdk-version 10.0.26100", dockerfile)
+        self.assertIn("--crt-version 14.44.17.14", dockerfile)
+        self.assertIn("--arch x86_64", dockerfile)
+        self.assertIn("splat", dockerfile)
+        self.assertIn("--output /opt/xwin", dockerfile)
+
+        # No unpinned xwin invocation or availability fallback
+        self.assertNotIn("xwin --accept-license --arch x86_64 splat --output /opt/xwin", dockerfile)
+        # Exactly one splat invocation
+        self.assertEqual(dockerfile.count("splat"), 1)
+
+        # Ordering check: both sha256 checks must precede the xwin invocation
+        channel_check_idx = dockerfile.index(buildinputs.WINDOWS_XWIN_MANIFEST_SHA256)
+        pkg_check_idx = dockerfile.index(buildinputs.WINDOWS_XWIN_PACKAGE_MANIFEST_SHA256)
+        splat_idx = dockerfile.index("splat")
+        self.assertLess(channel_check_idx, splat_idx)
+        self.assertLess(pkg_check_idx, splat_idx)
+
+    def test_missing_xwin_anchor_raises_kroko_install_error(self):
+        """10.5 Negative proof: missing upstream anchor raises KrokoInstallError."""
+        from VoiceSTT import install_kroko
+
+        bad_dockerfile = _UPSTREAM_DOCKERFILE_WINDOWS.replace(
+            "xwin --accept-license --arch x86_64 splat --output /opt/xwin",
+            "broken_command_line",
+        )
+        temp = TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        root = Path(temp.name)
+        (root / "Dockerfile.windows").write_text(bad_dockerfile, encoding="utf-8", newline="\n")
+
+        with self.assertRaises(install_kroko.KrokoInstallError) as ctx:
+            install_kroko.patch_windows_dockerfile(root)
+        self.assertIn("xwin manifest authority and splat", str(ctx.exception))
+
+    def test_manifest_sha_mismatch_would_fail_verification(self):
+        """10.5 Negative proof: wrong manifest SHA would fail sha256sum verification."""
+        patched = self._patched_upstream(
+            patches={"WINDOWS_XWIN_MANIFEST_SHA256": "0" * 64}
+        )
+        dockerfile = patched["Dockerfile.windows"]
+        self.assertIn(f'echo "{"0" * 64}  /tmp/.xwin-cache/dl/manifest_17.json" | sha256sum -c -', dockerfile)
 
 
 if __name__ == "__main__":

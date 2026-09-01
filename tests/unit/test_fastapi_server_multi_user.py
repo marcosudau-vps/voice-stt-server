@@ -6,8 +6,16 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
+
+
+def _inside_retention_timestamp(now: datetime) -> str:
+    """Returns a timestamp strictly inside a 30-day retention window relative to now."""
+    return (
+        now - timedelta(days=1)
+    ).isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 import numpy as np
 from starlette.websockets import WebSocketDisconnect
@@ -1900,7 +1908,9 @@ class FastAPIMultiUserWebSocketTests(unittest.TestCase):
                 session_b_cursor = events._store.append({
                     **common,
                     "eventId": "retention-transcription-session-b",
-                    "timestamp": "2026-08-02T00:00:00.000Z",
+                    "timestamp": _inside_retention_timestamp(
+                        datetime.now(timezone.utc)
+                    ),
                     "channel": "transcription",
                     "event": "retention.session_b",
                     "sessionId": "session-b",
@@ -1978,6 +1988,24 @@ class FastAPIMultiUserWebSocketTests(unittest.TestCase):
                     replay = logs.receive_json()
                     self.assertEqual(replay["type"], "log.event")
                     self.assertEqual(replay["event"]["cursor"], session_b_cursor)
+
+    def test_inside_retention_timestamp_fixture_is_future_proof(self):
+        """Proves _inside_retention_timestamp produces timestamps inside the 30d window across dates."""
+        for ref_str in ("2026-09-01T12:00:00Z", "2036-09-01T12:00:00Z"):
+            ref_now = datetime.fromisoformat(ref_str.replace("Z", "+00:00"))
+            ts_str = _inside_retention_timestamp(ref_now)
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
+            retention_cutoff = ref_now - timedelta(days=30)
+            self.assertGreater(
+                ts,
+                retention_cutoff,
+                f"Generated timestamp {ts_str} must be strictly newer than cutoff {retention_cutoff} for {ref_str}",
+            )
+            self.assertLess(
+                ts,
+                ref_now,
+                f"Generated timestamp {ts_str} must be strictly before current reference now {ref_now}",
+            )
 
     def test_session_log_websocket_replays_more_than_one_page(self):
         with tempfile.TemporaryDirectory() as temp_dir:

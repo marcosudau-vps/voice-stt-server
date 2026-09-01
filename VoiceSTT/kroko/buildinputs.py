@@ -66,7 +66,14 @@ PATCHED_UPSTREAM_SOURCES = (
 #: OpenSSL) to a declared version plus SHA-256, and the container build script
 #: verifies the openfst source archive against a declared SHA-256. That really
 #: does change the produced bits, so the patch set is a new revision.
-PATCH_SET_REVISION = 2
+#:
+#: Bumped 2 -> 3 (AP-SRV-070 W4A-C4, Root Finding L/M): the Windows Dockerfile
+#: patch now pins the Microsoft Channel Manifest, Package Manifest, Windows
+#: SDK version, and MSVC CRT version for xwin, verifies downloaded manifests
+#: against declared byte counts and source-controlled SHA-256 digests, and
+#: invokes xwin with explicit --manifest, --sdk-version, and --crt-version
+#: arguments without relying on unpinned upstream latest fallbacks.
+PATCH_SET_REVISION = 3
 
 #: Revision of the builder logic itself: which revision gets checked out, which
 #: patches are applied, how the compiler is invoked, and which produced wheel is
@@ -220,6 +227,43 @@ WINDOWS_XWIN_SHA256 = (
     "9fd53950b064d067f42428a69453b927656cae68dbd7f8d3f86dcb81c80dd22d"
 )
 
+#: Microsoft Channel Manifest (AP-SRV-070 W4A-C4, Root Finding L).
+#: Pinned to the exact VisualStudio 17.14.39 (August 2026) release manifest
+#: captured during W4A-C3.
+WINDOWS_XWIN_MANIFEST_URL = "https://aka.ms/vs/17/release/channel"
+WINDOWS_XWIN_MANIFEST_CACHE_NAME = "manifest_17.json"
+WINDOWS_XWIN_MANIFEST_BYTES = 91833
+WINDOWS_XWIN_MANIFEST_SHA256 = (
+    "4c81e902fb7fe2acea779b828e6dc548fe0bbb693df50eda0224263c16686bdd"
+)
+
+#: Microsoft Package Manifest (.vsman) (AP-SRV-070 W4A-C4, Root Finding L/M).
+#: Referenced by the Channel Manifest above. xwin 0.6.5 downloads this with
+#: checksum=None; VoiceSTT explicitly verifies the actual file bytes against
+#: WINDOWS_XWIN_PACKAGE_MANIFEST_SHA256 before xwin reads it.
+WINDOWS_XWIN_PACKAGE_MANIFEST_URL = (
+    "https://download.visualstudio.microsoft.com/download/pr/"
+    "fa619120-9c0e-47e6-bfe0-3ee96fb671b2/"
+    "bd98dd01efa4195cb1c11030da63b9e4a3bcec7bc406799a9db80339d6dabd79/"
+    "VisualStudio.vsman"
+)
+WINDOWS_XWIN_PACKAGE_MANIFEST_CACHE_KEY = (
+    "bd98dd01efa4195cb1c11030da63b9e4a3bcec7bc406799a9db80339d6dabd79"
+)
+WINDOWS_XWIN_PACKAGE_MANIFEST_CACHE_NAME = (
+    "pkg_manifest_"
+    + WINDOWS_XWIN_PACKAGE_MANIFEST_CACHE_KEY
+    + ".vsman"
+)
+WINDOWS_XWIN_PACKAGE_MANIFEST_BYTES = 17955171
+WINDOWS_XWIN_PACKAGE_MANIFEST_SHA256 = (
+    "3891c3018a07338b3880cbb28088bb22ef7762eb9206523655b2e3972b9d527e"
+)
+
+#: Pinned Windows SDK and MSVC CRT versions (AP-SRV-070 W4A-C4, Root Finding L).
+WINDOWS_XWIN_SDK_VERSION = "10.0.26100"
+WINDOWS_XWIN_CRT_VERSION = "14.44.17.14"
+
 #: The Windows CPython headers/import library the extension is compiled
 #: against. Must stay on the same minor version as the image's Linux python3
 #: (pybind11 enforces that), which the pinned base image fixes at 3.12.
@@ -348,6 +392,21 @@ def windows_toolchain_declaration():
             "version": WINDOWS_XWIN_VERSION,
             "url": windows_xwin_url(),
             "sha256": WINDOWS_XWIN_SHA256,
+            "channelManifest": {
+                "url": WINDOWS_XWIN_MANIFEST_URL,
+                "cacheName": WINDOWS_XWIN_MANIFEST_CACHE_NAME,
+                "bytes": WINDOWS_XWIN_MANIFEST_BYTES,
+                "sha256": WINDOWS_XWIN_MANIFEST_SHA256,
+            },
+            "packageManifest": {
+                "url": WINDOWS_XWIN_PACKAGE_MANIFEST_URL,
+                "cacheKey": WINDOWS_XWIN_PACKAGE_MANIFEST_CACHE_KEY,
+                "cacheName": WINDOWS_XWIN_PACKAGE_MANIFEST_CACHE_NAME,
+                "bytes": WINDOWS_XWIN_PACKAGE_MANIFEST_BYTES,
+                "sha256": WINDOWS_XWIN_PACKAGE_MANIFEST_SHA256,
+            },
+            "sdkVersion": WINDOWS_XWIN_SDK_VERSION,
+            "crtVersion": WINDOWS_XWIN_CRT_VERSION,
         },
         "pythonTarget": {
             "version": WINDOWS_PYTHON_TARGET_VERSION,
@@ -424,6 +483,17 @@ __all__ = [
     "WINDOWS_PYTHON_TARGET_VERSION",
     "WINDOWS_VC_REDIST_SHA256",
     "WINDOWS_VC_REDIST_URL",
+    "WINDOWS_XWIN_CRT_VERSION",
+    "WINDOWS_XWIN_MANIFEST_BYTES",
+    "WINDOWS_XWIN_MANIFEST_CACHE_NAME",
+    "WINDOWS_XWIN_MANIFEST_SHA256",
+    "WINDOWS_XWIN_MANIFEST_URL",
+    "WINDOWS_XWIN_PACKAGE_MANIFEST_BYTES",
+    "WINDOWS_XWIN_PACKAGE_MANIFEST_CACHE_KEY",
+    "WINDOWS_XWIN_PACKAGE_MANIFEST_CACHE_NAME",
+    "WINDOWS_XWIN_PACKAGE_MANIFEST_SHA256",
+    "WINDOWS_XWIN_PACKAGE_MANIFEST_URL",
+    "WINDOWS_XWIN_SDK_VERSION",
     "WINDOWS_XWIN_SHA256",
     "WINDOWS_XWIN_VERSION",
     "windows_cmake_url",

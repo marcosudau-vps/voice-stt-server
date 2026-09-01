@@ -856,6 +856,44 @@ def _pinned_windows_dockerfile_edits(newline):
             ),
         )
     )
+    channel_manifest = declaration["xwin"]["channelManifest"]
+    package_manifest = declaration["xwin"]["packageManifest"]
+    edits.append(
+        (
+            "xwin manifest authority and splat",
+            block(
+                " && xwin --accept-license --arch x86_64 splat --output /opt/xwin",
+            ),
+            block(
+                " && mkdir -p /tmp/.xwin-cache/dl \\",
+                ' && curl -sLf "{0}" \\'.format(channel_manifest["url"]),
+                "        -o /tmp/.xwin-cache/dl/{0} \\".format(channel_manifest["cacheName"]),
+                ' && test "$(stat -c %s /tmp/.xwin-cache/dl/{0})" = "{1}" \\'.format(
+                    channel_manifest["cacheName"], channel_manifest["bytes"]
+                ),
+                ' && echo "{0}  /tmp/.xwin-cache/dl/{1}" | sha256sum -c - \\'.format(
+                    channel_manifest["sha256"], channel_manifest["cacheName"]
+                ),
+                ' && curl -sLf "{0}" \\'.format(package_manifest["url"]),
+                "        -o /tmp/.xwin-cache/dl/{0} \\".format(package_manifest["cacheName"]),
+                ' && test "$(stat -c %s /tmp/.xwin-cache/dl/{0})" = "{1}" \\'.format(
+                    package_manifest["cacheName"], package_manifest["bytes"]
+                ),
+                ' && echo "{0}  /tmp/.xwin-cache/dl/{1}" | sha256sum -c - \\'.format(
+                    package_manifest["sha256"], package_manifest["cacheName"]
+                ),
+                " && xwin \\",
+                "        --accept-license \\",
+                "        --cache-dir /tmp/.xwin-cache \\",
+                "        --manifest /tmp/.xwin-cache/dl/{0} \\".format(channel_manifest["cacheName"]),
+                "        --sdk-version {0} \\".format(declaration["xwin"]["sdkVersion"]),
+                "        --crt-version {0} \\".format(declaration["xwin"]["crtVersion"]),
+                "        --arch x86_64 \\",
+                "        splat \\",
+                "        --output /opt/xwin",
+            ),
+        )
+    )
     edits.append(
         (
             "visual c++ redistributable",
