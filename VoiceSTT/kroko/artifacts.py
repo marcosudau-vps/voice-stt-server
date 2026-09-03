@@ -37,7 +37,7 @@ import tempfile
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Mapping, Optional, Tuple
 
@@ -93,6 +93,11 @@ ARTIFACT_METADATA_NAME = "artifact.json"
 #: variable plus an explicit CLI argument, so no personal absolute path is ever
 #: baked into the product.
 ARTIFACT_STORE_ENV = "VOICESTT_KROKO_ARTIFACT_STORE"
+
+#: Best-effort cleanup policy for obsolete variant slots. Age is not an
+#: artifact expiry: current and last-known-good slots stay reusable forever.
+ARTIFACT_RETENTION_ENV = "VOICESTT_KROKO_ARTIFACT_RETENTION_DAYS"
+DEFAULT_ARTIFACT_RETENTION_DAYS = 30
 
 #: Directory used for staging a new artifact before it atomically replaces the
 #: current one.
@@ -767,6 +772,127 @@ class KrokoArtifactStore:
                 inputs=inputs,
             )
 
+    def cleanup_obsolete(
+        self,
+        *,
+        variant: str,
+        current_fingerprint: str,
+        retention_days: int = DEFAULT_ARTIFACT_RETENTION_DAYS,
+        now: Optional[datetime] = None,
+    ) -> Dict[str, Any]:
+        """Best-effort removal of old obsolete slots in one variant namespace.
+
+        The current fingerprint and newest verified LKG are protected
+        regardless of age. The other variant is never enumerated. Every
+        deletion first takes that exact slot's advisory lock with zero wait,
+        so a live lookup/build wins over cleanup.
+        """
+        variant = buildinputs.normalize_variant(variant)
+        if isinstance(retention_days, bool):
+            raise ValueError("artifact retention days must be a non-negative integer")
+        try:
+            retention_days = int(retention_days)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                "artifact retention days must be a non-negative integer"
+            ) from exc
+        if retention_days < 0:
+            raise ValueError("artifact retention days must be a non-negative integer")
+
+        report: Dict[str, Any] = {
+            "variant": variant,
+            "retentionDays": retention_days,
+            "removed": [],
+            "protected": [],
+            "skippedLocked": [],
+            "errors": [],
+        }
+        if retention_days == 0:
+            report["disabled"] = True
+            return report
+
+        variant_dir = self.variant_dir(variant)
+        if not variant_dir.is_dir():
+            return report
+        root = self.root.resolve()
+        resolved_variant = variant_dir.resolve()
+        if resolved_variant.parent != root or variant_dir.is_symlink():
+            report["errors"].append("unsafe variant directory; cleanup skipped")
+            return report
+
+        slots = [
+            path
+            for path in variant_dir.iterdir()
+            if path.is_dir()
+            and not path.is_symlink()
+            and re.fullmatch(r"[0-9a-fA-F]{16}", path.name)
+        ]
+
+        def slot_time(path: Path, metadata: Optional[Mapping[str, Any]]) -> datetime:
+            value = str((metadata or {}).get("builtAt") or "")
+            try:
+                return datetime.strptime(value, "%Y-%m-%dT%H:%M:%SZ").replace(
+                    tzinfo=timezone.utc
+                )
+            except ValueError:
+                return datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+
+        verified = []
+        metadata_by_slot = {}
+        for slot in slots:
+            metadata = self.read_metadata_in(slot)
+            metadata_by_slot[slot] = metadata
+            inputs = dict((metadata or {}).get("fingerprintInputs", {}))
+            record, _ = self._verify_slot_dir(
+                slot,
+                variant=variant,
+                fingerprint=slot.name,
+                inputs=inputs or None,
+            )
+            if record is not None:
+                verified.append((slot_time(slot, metadata), slot))
+
+        protected = {str(current_fingerprint)}
+        if verified:
+            protected.add(max(verified, key=lambda item: (item[0], item[1].name))[1].name)
+
+        current_time = now or datetime.now(timezone.utc)
+        if current_time.tzinfo is None:
+            current_time = current_time.replace(tzinfo=timezone.utc)
+        cutoff = current_time - timedelta(days=retention_days)
+
+        for slot in sorted(slots, key=lambda path: path.name):
+            if slot.name in protected:
+                report["protected"].append(slot.name)
+                continue
+            try:
+                if slot_time(slot, metadata_by_slot.get(slot)) >= cutoff:
+                    report["protected"].append(slot.name)
+                    continue
+                resolved = slot.resolve()
+                if resolved.parent != resolved_variant or slot.is_symlink():
+                    report["errors"].append(
+                        "unsafe slot path skipped: {0}".format(slot.name)
+                    )
+                    continue
+                try:
+                    with self._slot_lock(
+                        variant,
+                        slot.name,
+                        timeout=0.0,
+                        poll_interval=0.0,
+                    ):
+                        if slot.exists() and not slot.is_symlink():
+                            shutil.rmtree(slot)
+                            report["removed"].append(slot.name)
+                except KrokoArtifactError:
+                    report["skippedLocked"].append(slot.name)
+            except Exception as exc:  # noqa: BLE001 - cleanup is best effort
+                report["errors"].append(
+                    "{0}: {1}: {2}".format(slot.name, type(exc).__name__, exc)
+                )
+        return report
+
     # -- write ---------------------------------------------------------------
 
     def store(
@@ -943,6 +1069,8 @@ __all__ = [
     "ARTIFACT_METADATA_NAME",
     "ARTIFACT_SCHEMA_VERSION",
     "ARTIFACT_STORE_ENV",
+    "ARTIFACT_RETENTION_ENV",
+    "DEFAULT_ARTIFACT_RETENTION_DAYS",
     "DEFAULT_LOCK_POLL_SECONDS",
     "DEFAULT_LOCK_TIMEOUT_SECONDS",
     "LOCK_DIR_NAME",

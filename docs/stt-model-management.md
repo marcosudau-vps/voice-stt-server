@@ -104,11 +104,30 @@ Registry-Snapshots auf und publiziert ihn atomar. Schlaegt ein Refresh fehl,
 bleiben Registry, Rollenzuordnung und `MINIMUM_READY` des letzten guten Stands
 erhalten.
 
-Kroko-Pro-Modelle bleiben bei fehlender Pro-Runtime oder Lizenzvoraussetzung
-diagnostisch sichtbar, koennen aber nicht aktiv werden. Der Lizenzschluessel
-wird weder in Modellmetadaten noch Status, Logs oder Speicher geschrieben.
+Kroko-Pro-Modelle muessen zur explizit aufgeloesten Runtimevariante `pro`
+passen. Ein Lizenzschluessel ist ausschliesslich Runtime-Credential: seine
+Anwesenheit waehlt weder Pro noch entscheidet sie Modell-Eligibility. Ob die
+konkrete Pro-Runtime mit dem Credential laden kann, entscheidet nur der echte
+Load-Probe. Der Lizenzschluessel wird weder in Modellmetadaten noch Status,
+API-Antworten, Audit-/Performance-Events, Diagnosen oder Runtime-Persistenz
+geschrieben; bekannte Aliase und verschachtelte Kroko-Optionsfelder werden an
+allen diesen Grenzen zentral entfernt bzw. redigiert.
 Native Kroko-Runtimes und ASR-Modelle sind getrennte Artefakte; diese Schicht
 baut keine native Runtime.
+
+Die Runtimevariante hat genau eine dokumentierte Praezedenz:
+
+1. `stt_engine_settings.kroko_onnx.runtime_variant`
+2. `transcription_engine_options.runtime_variant`, wenn Final Kroko verwendet
+3. `realtime_transcription_engine_options.runtime_variant`, wenn Realtime Kroko verwendet
+4. `VOICESTT_KROKO_VARIANT`
+5. `free`
+
+Nur `free` und `pro` sind gueltig. Engine-Optionen werden bei Probe, Worker-
+Start, Recovery und Modellwechsel anhand der tatsaechlich aufgeloesten Engine
+gewaehlt. Dadurch erhaelt ein Kroko-Fallback nie Faster-Whisper-Optionen und
+umgekehrt; bei identischen Engines bleiben die lanespezifischen Optionen
+erhalten.
 
 Engine-Konstruktoren erhalten ausschliesslich lokale Pfade. Auch alte
 `auto_download_model`-Optionen oder Umgebungsflags koennen keinen versteckten
@@ -120,6 +139,15 @@ Faster-Whisper-/Kroko-Download mehr ausloesen.
   handlungsrelevante Diagnosen.
 - `POST /api/models/refresh`: transaktionaler Discovery-/Recovery-Refresh.
 - `GET /health`: `sttReady` und `sttModels` getrennt von Prozess-Liveness.
+
+`PATCH /api/config` mit `stt_auto_download_enabled`, `stt_engine_settings`
+oder `stt_model_settings` persistiert nur den neuen Betreiber-Intent und setzt
+`modelRefreshRequired`/`refreshRequired`. PATCH laedt oder provisioniert kein
+Modell. Erst `POST /api/models/refresh` baut einen Kandidatensnapshot auf. Er
+wird nur bei erfolgreichem Load-Probe und Aktivierung uebernommen; bei Fehler,
+Busy-Zustand oder Worker-Startfehler bleiben vorheriger Intent im aktiven
+Manager, letzter guter Snapshot und Rollenzuordnung erhalten, waehrend der
+persistierte neue Intent fuer einen spaeteren Retry ausstehend bleibt.
 
 Ohne nutzbares Modell bleibt der Prozess erreichbar. Konfiguration,
 Diagnostik und Recovery koennen daher bedient werden, statt einen

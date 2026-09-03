@@ -18,6 +18,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
+from VoiceSTT import install_kroko
 from VoiceSTT.kroko import buildinputs, fingerprint
 
 
@@ -51,6 +52,117 @@ class FingerprintStabilityTests(unittest.TestCase):
         )
         self.assertEqual(len(value), fingerprint.FINGERPRINT_ID_LENGTH)
         int(value, 16)  # raises if it is not hex
+
+    def test_qualified_windows_fingerprint_remains_byte_stable(self):
+        computed = fingerprint.compute_fingerprint(
+            variant="free",
+            target_platform="windows",
+            architecture="amd64",
+            python_tag="cp312",
+            abi_tag="cp312",
+        )
+        self.assertEqual(computed["fingerprint"], "28594e6d201fc4a7")
+
+    def test_linux_revision_change_does_not_move_windows_fingerprint(self):
+        before = fingerprint.compute_fingerprint(
+            variant="free",
+            target_platform="windows",
+            architecture="amd64",
+            python_tag="cp312",
+            abi_tag="cp312",
+        )
+        with mock.patch.object(buildinputs, "LINUX_BUILDER_REVISION", 999):
+            after = fingerprint.compute_fingerprint(
+                variant="free",
+                target_platform="windows",
+                architecture="amd64",
+                python_tag="cp312",
+                abi_tag="cp312",
+            )
+        self.assertEqual(before["fingerprint"], after["fingerprint"])
+
+
+class LinuxOpenSSLToolchainAuthorityTests(unittest.TestCase):
+    def _root(self, parent, name, marker):
+        root = Path(parent) / name
+        include = root / "include" / "openssl"
+        library = root / "lib"
+        include.mkdir(parents=True)
+        library.mkdir(parents=True)
+        (include / "opensslv.h").write_text(
+            '#define OPENSSL_VERSION_TEXT "OpenSSL {0}"\n'.format(marker),
+            encoding="utf-8",
+        )
+        (include / "ssl.h").write_text("ssl-{0}\n".format(marker), encoding="utf-8")
+        (library / "libssl.so").write_bytes(("ssl-" + marker).encode())
+        (library / "libcrypto.so").write_bytes(("crypto-" + marker).encode())
+        return root
+
+    def test_explicit_openssl_root_and_bytes_change_linux_fingerprint(self):
+        with TemporaryDirectory() as temporary:
+            first_root = self._root(temporary, "first", "3.0-a")
+            second_root = self._root(temporary, "second", "3.0-b")
+            first = install_kroko.detect_linux_openssl_identity(
+                first_root, required=True
+            )
+            second = install_kroko.detect_linux_openssl_identity(
+                second_root, required=True
+            )
+            first_fp = fingerprint.compute_fingerprint(
+                variant="free",
+                target_platform="linux",
+                architecture="amd64",
+                python_tag="cp312",
+                abi_tag="cp312",
+                toolchain={"kind": "host-native", "opensslDevelopment": first},
+            )
+            second_fp = fingerprint.compute_fingerprint(
+                variant="free",
+                target_platform="linux",
+                architecture="amd64",
+                python_tag="cp312",
+                abi_tag="cp312",
+                toolchain={"kind": "host-native", "opensslDevelopment": second},
+            )
+        self.assertNotEqual(first_fp["fingerprint"], second_fp["fingerprint"])
+        self.assertEqual(first["source"], "explicit-root")
+        self.assertNotIn("zlib", first)
+
+    def test_missing_explicit_openssl_development_stack_fails_early(self):
+        with TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(
+                install_kroko.KrokoInstallError,
+                "libssl-dev|OPENSSL_ROOT_DIR",
+            ):
+                install_kroko.detect_linux_openssl_identity(
+                    Path(temporary) / "missing",
+                    required=True,
+                )
+
+    def test_system_and_explicit_openssl_authorities_cannot_collide(self):
+        common = {
+            "version": "OpenSSL 3.0",
+            "headers": [{"path": "/include/opensslv.h", "sha256": "a" * 64}],
+            "libraries": [{"name": "ssl", "path": "/lib/libssl.so", "sha256": "b" * 64}],
+        }
+        explicit = dict(common, source="explicit-root", root="/opt/project-openssl")
+        system = dict(common, source="system-development-stack", root=None)
+        kwargs = dict(
+            variant="free",
+            target_platform="linux",
+            architecture="amd64",
+            python_tag="cp312",
+            abi_tag="cp312",
+        )
+        explicit_fp = fingerprint.compute_fingerprint(
+            **kwargs,
+            toolchain={"kind": "host-native", "opensslDevelopment": explicit},
+        )
+        system_fp = fingerprint.compute_fingerprint(
+            **kwargs,
+            toolchain={"kind": "host-native", "opensslDevelopment": system},
+        )
+        self.assertNotEqual(explicit_fp["fingerprint"], system_fp["fingerprint"])
 
 
 class FingerprintIndependenceTests(unittest.TestCase):
@@ -212,9 +324,9 @@ class BuildEffectiveLogicGuardTests(unittest.TestCase):
     * the **patch surface** - what VoiceSTT rewrites in the upstream sources
       (WebSocket on, OpenSSL provisioning, native license logging), tracked by
       :data:`PATCH_SET_REVISION`;
-    * the **builder surface** - which revision is checked out, which patches are
-      applied, how the compiler is invoked and which produced wheel is taken,
-      tracked by :data:`BUILDER_REVISION`.
+    * platform-specific **builder surfaces** - shared checkout plus the Windows
+      or Linux invocation/selection logic, tracked independently so a Linux-only
+      correction cannot invalidate the qualified Windows artifact.
 
     Both revisions are fingerprint inputs, so bumping either correctly
     invalidates stored artifacts.
@@ -228,12 +340,11 @@ class BuildEffectiveLogicGuardTests(unittest.TestCase):
         "70d8bacbe95c358e532db9ce1b6127d2aa575ff7724b90464a5aec71b7387c80"
     )
 
-    #: SHA-256 over the source of the builder surface, pinned together with
-    #: BUILDER_REVISION = 4 (AP-SRV-070 W4A-C3, Root Finding I: prepare_checkout
-    #: now proves a reused checkout belongs to the effective --repo authority,
-    #: via the three new source-authority helpers listed below).
-    EXPECTED_BUILDER_SOURCE_DIGEST = (
-        "4df7ea655259e01e9e1443212d427c9f82c9b98738a0ce0853402923e502b705"
+    EXPECTED_WINDOWS_BUILDER_SOURCE_DIGEST = (
+        "58736daff6b3eff495240cdf4ec061d90991f1139bf39cdba8593d2296f7553b"
+    )
+    EXPECTED_LINUX_BUILDER_SOURCE_DIGEST = (
+        "69bdaea499d9b2a373b39a044eba743a78c4e0b4f64cec3015f8dea08cf5ad76"
     )
 
     #: AP-SRV-070 W4A-C3, Root Finding J added the two functions that *declare*
@@ -264,23 +375,30 @@ class BuildEffectiveLogicGuardTests(unittest.TestCase):
     #: would be caught by "the fingerprint changes when a build input changes",
     #: because these functions are exactly what decides which values the
     #: fingerprint sees or what a subprocess may read.
-    BUILDER_FUNCTION_NAMES = (
+    COMMON_BUILDER_FUNCTION_NAMES = (
         "prepare_checkout",
         "checkout_origin_url",
         "normalize_repo_authority",
         "checkout_matches_repo_authority",
         "ensure_pinned_revision",
         "materialize_pristine_checkout",
-        "prepare_windows_checkout",
-        "linux_build_env",
-        "windows_build_env",
         "sanitize_build_subprocess_env",
-        "build_linux_wheel",
-        "build_windows_wheel",
         "build_wheel",
-        "find_linux_wheel",
+    )
+    WINDOWS_BUILDER_FUNCTION_NAMES = COMMON_BUILDER_FUNCTION_NAMES + (
+        "prepare_windows_checkout",
+        "windows_build_env",
+        "build_windows_wheel",
         "find_windows_wheel",
-        "fingerprint_for",
+    )
+    LINUX_BUILDER_FUNCTION_NAMES = COMMON_BUILDER_FUNCTION_NAMES + (
+        "effective_linux_openssl_root",
+        "linux_build_env",
+        "find_linux_wheel",
+        "retag_linux_wheel",
+        "build_linux_wheel",
+        "detect_linux_openssl_identity",
+        "detect_linux_toolchain_identity",
     )
 
     def _digest_of(self, names):
@@ -303,22 +421,40 @@ class BuildEffectiveLogicGuardTests(unittest.TestCase):
             "EXPECTED_PATCH_SOURCE_DIGEST here.",
         )
 
-    def test_builder_surface_matches_its_declared_revision(self):
+    def test_windows_builder_surface_matches_its_declared_revision(self):
         self.assertEqual(
-            self._digest_of(self.BUILDER_FUNCTION_NAMES),
-            self.EXPECTED_BUILDER_SOURCE_DIGEST,
-            "The Kroko builder surface changed - checkout, patch application, "
-            "build invocation or wheel selection. That can change the produced "
-            "runtime, so bump BUILDER_REVISION in VoiceSTT/kroko/buildinputs.py "
-            "(which invalidates stored artifacts) and update "
-            "EXPECTED_BUILDER_SOURCE_DIGEST here.",
+            self._digest_of(self.WINDOWS_BUILDER_FUNCTION_NAMES),
+            self.EXPECTED_WINDOWS_BUILDER_SOURCE_DIGEST,
+            "The Windows Kroko builder surface changed; bump "
+            "WINDOWS_BUILDER_REVISION and its guard digest.",
         )
 
-    def test_both_declared_revisions_are_fingerprint_inputs(self):
-        """Bumping either revision must really invalidate stored artifacts."""
-        document = fingerprint.build_fingerprint_document(variant="free")
-        self.assertIn("patchSetRevision", document["build"])
-        self.assertIn("builderRevision", document["build"])
+    def test_linux_builder_surface_matches_its_declared_revision(self):
+        self.assertEqual(
+            self._digest_of(self.LINUX_BUILDER_FUNCTION_NAMES),
+            self.EXPECTED_LINUX_BUILDER_SOURCE_DIGEST,
+            "The Linux Kroko builder surface changed; bump "
+            "LINUX_BUILDER_REVISION and its guard digest.",
+        )
+
+    def test_platform_builder_revisions_are_fingerprint_inputs(self):
+        windows = fingerprint.build_fingerprint_document(
+            variant="free", target_platform="windows"
+        )
+        linux = fingerprint.build_fingerprint_document(
+            variant="free",
+            target_platform="linux",
+            toolchain={"kind": "host-native"},
+        )
+        self.assertEqual(
+            windows["build"]["builderRevision"],
+            buildinputs.WINDOWS_BUILDER_REVISION,
+        )
+        self.assertEqual(
+            linux["build"]["builderRevision"],
+            buildinputs.LINUX_BUILDER_REVISION,
+        )
+        self.assertIn("patchSetRevision", windows["build"])
 
     def test_declared_patched_sources_are_documented(self):
         self.assertIn("sherpa-onnx/csrc/license.h", buildinputs.PATCHED_UPSTREAM_SOURCES)
@@ -370,7 +506,10 @@ class BuildInputCoverageTests(unittest.TestCase):
                 {}, {"toolchain": {"kind": "host-native", "cmake": "3.31"}}
             ),
             "voicestt kroko patch set": ({"attr": ("PATCH_SET_REVISION", 42)}, {}),
-            "voicestt kroko builder logic": ({"attr": ("BUILDER_REVISION", 42)}, {}),
+            "voicestt kroko builder logic": (
+                {"attr": ("LINUX_BUILDER_REVISION", 42)},
+                {},
+            ),
             "fingerprint schema": (
                 {"schema": 99}, {}
             ),

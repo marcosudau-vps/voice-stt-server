@@ -30,6 +30,8 @@ settings:
       custom_paths: []
     kroko_onnx:
       enabled: true
+      # Explizite Runtime-Authority; ein vorhandener Key waehlt niemals Pro.
+      runtime_variant: free
       auto_download_enabled: false
       custom_paths: []
   stt_model_settings: {}

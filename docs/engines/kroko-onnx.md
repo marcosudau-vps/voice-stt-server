@@ -96,6 +96,29 @@ Linux requirements:
 - Git
 - CMake
 - A working C/C++ build toolchain
+- OpenSSL development headers and libraries (`libssl-dev` on Ubuntu)
+
+The Linux fingerprint records the effective OpenSSL development identity:
+resolution source (system stack or explicit `--openssl-root-dir` /
+`OPENSSL_ROOT_DIR`), version, concrete header/library paths and their hashes.
+A missing development stack fails before compilation with an actionable
+message. zlib is not added as a separate fingerprint field: the current Kroko
+Linux build does not consume a separately selected zlib development input, so
+recording an ambient zlib version would create false cache misses rather than
+describe the produced runtime.
+
+Linux output wheels are retagged consistently in both places required by the
+wheel format: the filename and the internal `.dist-info/WHEEL` metadata carry
+`1free` or `1pro`. The RECORD hash/size for the changed metadata is regenerated
+before the result is atomically published. Free and Pro wheels therefore
+coexist in separate artifact-store namespaces and cannot overwrite each other.
+
+Verified artifact slots are retained for 30 days by default. Configure this
+with `--artifact-retention-days` or
+`VOICESTT_KROKO_ARTIFACT_RETENTION_DAYS`; `0` disables cleanup. Cleanup is
+best-effort and never removes the current fingerprint, the newest verified
+last-known-good slot, the other runtime variant, or a slot whose artifact lock
+is held.
 
 After the builder finishes, download a public Community model:
 
@@ -113,6 +136,12 @@ stt-install-kroko --build --variant pro
 The `free` variant is for public Community models. The `pro` variant is for
 licensed Pro/private models and may need network access for Kroko's license
 check.
+
+At server runtime the variant is selected independently from credentials. The
+precedence is `stt_engine_settings.kroko_onnx.runtime_variant`, then the final
+Kroko engine option, then the realtime Kroko engine option, then
+`VOICESTT_KROKO_VARIANT`, and finally `free`. A Kroko API key is only a runtime
+credential; its presence never selects Pro and never changes model eligibility.
 
 ## Models
 

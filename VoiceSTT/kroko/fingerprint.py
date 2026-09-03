@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import platform
 import sys
 from typing import Any, Dict, Mapping, Optional
@@ -60,7 +61,14 @@ def detect_target_platform() -> str:
 
 def detect_architecture() -> str:
     """The normalized CPU architecture of the running interpreter."""
-    machine = platform.machine().lower()
+    if sys.platform.startswith("win"):
+        machine = (
+            os.environ.get("PROCESSOR_ARCHITEW6432")
+            or os.environ.get("PROCESSOR_ARCHITECTURE")
+            or ("amd64" if sys.maxsize > 2**32 else "x86")
+        ).lower()
+    else:
+        machine = platform.machine().lower()
     if machine in ("amd64", "x86_64"):
         return "amd64"
     if machine in ("arm64", "aarch64"):
@@ -195,7 +203,9 @@ def build_fingerprint_document(
             # the build. Both are guarded against silent drift by a source-digest
             # test - see VoiceSTT/kroko/buildinputs.py for the update obligation.
             "patchSetRevision": buildinputs.PATCH_SET_REVISION,
-            "builderRevision": buildinputs.BUILDER_REVISION,
+            "builderRevision": buildinputs.builder_revision_for(
+                resolved_platform
+            ),
         },
         "toolchain": resolved_toolchain,
     }

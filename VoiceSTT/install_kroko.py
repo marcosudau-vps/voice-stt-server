@@ -5,15 +5,21 @@ Build and install Kroko-ONNX for the active VoiceSTT environment.
 from __future__ import print_function
 
 import argparse
+import base64
+import csv
+import hashlib
+import io
 import json
 import os
 import platform
+import re
 import shlex
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+import zipfile
 from pathlib import Path
 
 from VoiceSTT.kroko import artifacts as kroko_artifacts
@@ -72,6 +78,12 @@ LINUX_BUILD_ENV_STRIP_NAMES = (
     "CPATH",
     "C_INCLUDE_PATH",
     "CPLUS_INCLUDE_PATH",
+    "OPENSSL_ROOT_DIR",
+    "OPENSSL_DIR",
+    "OPENSSL_INCLUDE_DIR",
+    "OPENSSL_LIB_DIR",
+    "OPENSSL_CRYPTO_LIBRARY",
+    "OPENSSL_SSL_LIBRARY",
 )
 
 
@@ -109,6 +121,21 @@ class KrokoInstallError(RuntimeError):
     """
 
     pass
+
+
+def parse_retention_days(value):
+    """Argparse type for the non-negative artifact retention setting."""
+    try:
+        days = int(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError(
+            "artifact retention days must be a non-negative integer"
+        ) from exc
+    if days < 0:
+        raise argparse.ArgumentTypeError(
+            "artifact retention days must be a non-negative integer"
+        )
+    return days
 
 
 def parse_args(argv=None):
@@ -174,6 +201,28 @@ def parse_args(argv=None):
             "${0} or the per-user cache directory.".format(
                 kroko_artifacts.ARTIFACT_STORE_ENV
             )
+        ),
+    )
+    parser.add_argument(
+        "--artifact-retention-days",
+        type=parse_retention_days,
+        default=os.getenv(
+            kroko_artifacts.ARTIFACT_RETENTION_ENV,
+            str(kroko_artifacts.DEFAULT_ARTIFACT_RETENTION_DAYS),
+        ),
+        help=(
+            "Remove old obsolete artifact slots after this many days "
+            "(default: 30; 0 disables cleanup). Can also be set through {0}."
+        ).format(kroko_artifacts.ARTIFACT_RETENTION_ENV),
+    )
+    parser.add_argument(
+        "--openssl-root-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Explicit OpenSSL development root for a Linux native build. "
+            "Overrides OPENSSL_ROOT_DIR; otherwise the system development "
+            "stack is used."
         ),
     )
     parser.add_argument(
@@ -339,6 +388,10 @@ def preflight_build(args):
         ensure_windows_host()
     elif sys.platform.startswith("linux"):
         ensure_program("cmake", "CMake is required to build Kroko-ONNX from source on Linux.")
+        detect_linux_openssl_identity(
+            effective_linux_openssl_root(args),
+            required=True,
+        )
 
     return work_dir
 
@@ -1376,7 +1429,17 @@ def install_windows(args, repo_dir):
         run([sys.executable, "-m", "pip", "install", "--force-reinstall", str(wheel)])
 
 
-def linux_build_env(variant):
+def effective_linux_openssl_root(args=None):
+    """Resolve explicit CLI OpenSSL root, then environment, else system stack."""
+    configured = getattr(args, "openssl_root_dir", None) if args is not None else None
+    if configured is None:
+        configured = os.getenv("OPENSSL_ROOT_DIR")
+    if not configured:
+        return None
+    return Path(str(configured)).expanduser().resolve()
+
+
+def linux_build_env(variant, openssl_root=None):
     """
     Builds the Linux Kroko build environment from the declared build inputs.
 
@@ -1425,6 +1488,8 @@ def linux_build_env(variant):
         if variant == buildinputs.VARIANT_PRO
         else buildinputs.PRO_BUILD_ENV_OFF_VALUE
     )
+    if openssl_root is not None:
+        env["OPENSSL_ROOT_DIR"] = str(Path(openssl_root).expanduser().resolve())
     return env
 
 
@@ -1462,6 +1527,167 @@ def find_linux_wheel(wheel_dir):
     return wheels[0]
 
 
+def _declared_variant(value):
+    lowered = str(value or "").lower()
+    if buildinputs.VARIANT_PRO in lowered:
+        return buildinputs.VARIANT_PRO
+    if buildinputs.VARIANT_FREE in lowered:
+        return buildinputs.VARIANT_FREE
+    return None
+
+
+def _record_digest(data):
+    digest = hashlib.sha256(data).digest()
+    return "sha256=" + base64.urlsafe_b64encode(digest).rstrip(b"=").decode("ascii")
+
+
+def retag_linux_wheel(wheel_path, variant):
+    """Apply a real PEP 427 build tag to a freshly produced Linux wheel.
+
+    Both the filename and the archive WHEEL document are rewritten. When a
+    RECORD exists its WHEEL hash and size are updated as well. An existing
+    declaration for the opposite variant is rejected rather than relabelled.
+    """
+    source = Path(wheel_path)
+    variant = buildinputs.normalize_variant(variant)
+    parsed = kroko_artifacts.parse_wheel_filename(source.name)
+    requested_build = "1{0}".format(variant)
+    filename_variant = _declared_variant(parsed.get("build"))
+    if filename_variant is not None and filename_variant != variant:
+        raise KrokoInstallError(
+            "Linux wheel filename declares {0}, requested {1}: {2}".format(
+                filename_variant, variant, source.name
+            )
+        )
+
+    try:
+        with zipfile.ZipFile(source, "r") as archive:
+            infos = archive.infolist()
+            payloads = {info.filename: archive.read(info.filename) for info in infos}
+            wheel_names = [
+                info.filename
+                for info in infos
+                if info.filename.endswith(".dist-info/WHEEL")
+            ]
+            record_names = [
+                info.filename
+                for info in infos
+                if info.filename.endswith(".dist-info/RECORD")
+            ]
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise KrokoInstallError(
+            "Cannot retag corrupt Linux wheel: {0}".format(source)
+        ) from exc
+
+    if len(wheel_names) != 1:
+        raise KrokoInstallError(
+            "Linux wheel must contain exactly one dist-info/WHEEL document"
+        )
+    wheel_name = wheel_names[0]
+    wheel_text = payloads[wheel_name].decode("utf-8", "strict")
+    existing_builds = [
+        line.partition(":")[2].strip()
+        for line in wheel_text.splitlines()
+        if line.lower().startswith("build:")
+    ]
+    for existing in existing_builds:
+        existing_variant = _declared_variant(existing)
+        if existing_variant is not None and existing_variant != variant:
+            raise KrokoInstallError(
+                "Linux wheel metadata declares {0}, requested {1}".format(
+                    existing_variant, variant
+                )
+            )
+        if existing and existing.lower() != requested_build:
+            raise KrokoInstallError(
+                "Linux wheel has unsupported existing Build tag: {0}".format(
+                    existing
+                )
+            )
+
+    lines = [
+        line
+        for line in wheel_text.splitlines()
+        if not line.lower().startswith("build:")
+    ]
+    insertion = next(
+        (
+            index + 1
+            for index, line in enumerate(lines)
+            if line.lower().startswith("wheel-version:")
+        ),
+        len(lines),
+    )
+    lines.insert(insertion, "Build: {0}".format(requested_build))
+    newline = "\r\n" if "\r\n" in wheel_text else "\n"
+    tagged_wheel_bytes = (newline.join(lines) + newline).encode("utf-8")
+    payloads[wheel_name] = tagged_wheel_bytes
+
+    if len(record_names) > 1:
+        raise KrokoInstallError(
+            "Linux wheel contains more than one dist-info/RECORD document"
+        )
+    if record_names:
+        record_name = record_names[0]
+        rows = list(
+            csv.reader(io.StringIO(payloads[record_name].decode("utf-8", "strict")))
+        )
+        found_wheel = False
+        found_record = False
+        for row in rows:
+            while len(row) < 3:
+                row.append("")
+            if row[0] == wheel_name:
+                row[1] = _record_digest(tagged_wheel_bytes)
+                row[2] = str(len(tagged_wheel_bytes))
+                found_wheel = True
+            if row[0] == record_name:
+                row[1] = ""
+                row[2] = ""
+                found_record = True
+        if not found_wheel:
+            rows.append([
+                wheel_name,
+                _record_digest(tagged_wheel_bytes),
+                str(len(tagged_wheel_bytes)),
+            ])
+        if not found_record:
+            rows.append([record_name, "", ""])
+        stream = io.StringIO(newline="")
+        csv.writer(stream, lineterminator="\n").writerows(rows)
+        payloads[record_name] = stream.getvalue().encode("utf-8")
+
+    target_name = "{name}-{version}-{build}-{python}-{abi}-{platform}.whl".format(
+        name=parsed["name"],
+        version=parsed["version"],
+        build=requested_build,
+        python=parsed["python"],
+        abi=parsed["abi"],
+        platform=parsed["platform"],
+    )
+    target = source.with_name(target_name)
+    handle, temporary_name = tempfile.mkstemp(
+        prefix=".{0}.".format(target.name),
+        suffix=".part",
+        dir=str(target.parent),
+    )
+    os.close(handle)
+    temporary = Path(temporary_name)
+    try:
+        with zipfile.ZipFile(temporary, "w") as output:
+            for info in infos:
+                output.writestr(info, payloads[info.filename])
+        os.replace(temporary, target)
+        if target != source:
+            source.unlink()
+    finally:
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+    return target
+
+
 def build_linux_wheel(args, repo_dir):
     """
     Builds the Kroko wheel on Linux and returns its path.
@@ -1483,9 +1709,12 @@ def build_linux_wheel(args, repo_dir):
             str(wheel_dir),
         ],
         cwd=repo_dir,
-        env=linux_build_env(args.variant),
+        env=linux_build_env(
+            args.variant,
+            effective_linux_openssl_root(args),
+        ),
     )
-    return find_linux_wheel(wheel_dir)
+    return retag_linux_wheel(find_linux_wheel(wheel_dir), args.variant)
 
 
 def build_windows_wheel(args, repo_dir):
@@ -1584,7 +1813,149 @@ def _probe_version(executable):
     return _first_nonblank_line(completed.stdout) or _first_nonblank_line(completed.stderr) or None
 
 
-def detect_linux_toolchain_identity():
+def _probe_command(command):
+    """Return stripped stdout for one cheap toolchain probe, else None."""
+    try:
+        completed = subprocess.run(
+            [str(item) for item in command],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if getattr(completed, "returncode", 0) != 0:
+        return None
+    return (completed.stdout or "").strip() or None
+
+
+def _sha256_identity(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _first_existing(candidates):
+    for candidate in candidates:
+        path = Path(candidate)
+        if path.is_file():
+            return path.resolve()
+    return None
+
+
+def _openssl_version_from_headers(headers):
+    pattern = re.compile(r'OPENSSL_VERSION_(?:TEXT|STR)\s+"([^"]+)"')
+    for header in headers:
+        try:
+            match = pattern.search(Path(header).read_text(encoding="utf-8", errors="ignore"))
+        except OSError:
+            continue
+        if match:
+            return match.group(1)
+    return None
+
+
+def detect_linux_openssl_identity(openssl_root=None, *, required=False):
+    """Describe the effective Linux OpenSSL development headers and libraries.
+
+    The normal path uses the system development stack resolved by pkg-config.
+    An explicit root is kept distinct even when it reports the same version,
+    and concrete header/library hashes make byte-changing development inputs
+    visible to the fingerprint.
+    """
+    root = Path(openssl_root).expanduser().resolve() if openssl_root else None
+    pkg_version = None
+    if root is None:
+        pkg_version = _probe_command(["pkg-config", "--modversion", "openssl"])
+        include_value = _probe_command(["pkg-config", "--variable=includedir", "openssl"])
+        library_value = _probe_command(["pkg-config", "--variable=libdir", "openssl"])
+        include_dirs = [Path(include_value)] if include_value else [Path("/usr/include")]
+        library_dirs = [Path(library_value)] if library_value else []
+        machine = (
+            (
+                os.environ.get("PROCESSOR_ARCHITEW6432")
+                or os.environ.get("PROCESSOR_ARCHITECTURE")
+                or "amd64"
+            ).lower()
+            if os.name == "nt"
+            else platform.machine().lower()
+        )
+        multiarch = {
+            "x86_64": "x86_64-linux-gnu",
+            "amd64": "x86_64-linux-gnu",
+            "aarch64": "aarch64-linux-gnu",
+            "arm64": "aarch64-linux-gnu",
+        }.get(machine)
+        if multiarch:
+            library_dirs.append(Path("/usr/lib") / multiarch)
+        library_dirs.extend((Path("/usr/lib64"), Path("/usr/lib")))
+        source = "system-development-stack"
+    else:
+        include_dirs = [root / "include"]
+        library_dirs = [root / "lib64", root / "lib"]
+        source = "explicit-root"
+
+    headers = []
+    for name in ("openssl/opensslv.h", "openssl/ssl.h"):
+        found = _first_existing(directory / name for directory in include_dirs)
+        if found is not None and found not in headers:
+            headers.append(found)
+
+    libraries = {}
+    for library_name in ("ssl", "crypto"):
+        candidates = []
+        for directory in library_dirs:
+            for pattern in (
+                "lib{0}.so".format(library_name),
+                "lib{0}.so.*".format(library_name),
+                "lib{0}.a".format(library_name),
+            ):
+                candidates.extend(sorted(directory.glob(pattern)))
+        found = _first_existing(candidates)
+        if found is not None:
+            libraries[library_name] = found
+
+    problems = []
+    if len(headers) < 2:
+        problems.append("OpenSSL development headers (opensslv.h and ssl.h)")
+    for library_name in ("ssl", "crypto"):
+        if library_name not in libraries:
+            problems.append("lib{0} development library".format(library_name))
+    if required and problems:
+        location = str(root) if root is not None else "the system development stack"
+        raise KrokoInstallError(
+            "Linux Kroko build requires {0} from {1}. Install the Ubuntu "
+            "libssl-dev package or provide --openssl-root-dir/OPENSSL_ROOT_DIR."
+            .format(", ".join(problems), location)
+        )
+
+    return {
+        "source": source,
+        "root": str(root) if root is not None else None,
+        "version": (
+            _openssl_version_from_headers(headers)
+            or pkg_version
+            or _probe_command(["openssl", "version"])
+        ),
+        "headers": [
+            {"path": str(path), "sha256": _sha256_identity(path)}
+            for path in headers
+        ],
+        "libraries": [
+            {
+                "name": name,
+                "path": str(path),
+                "sha256": _sha256_identity(path),
+            }
+            for name, path in sorted(libraries.items())
+        ],
+    }
+
+
+def detect_linux_toolchain_identity(openssl_root=None, *, require_openssl=False):
     """
     Returns the real compiler/CMake identity for a native Linux Kroko build.
 
@@ -1624,6 +1995,10 @@ def detect_linux_toolchain_identity():
         "compilerVersion": _probe_version(c_compiler_path) if c_compiler_path else None,
         "cxxCompilerPath": cxx_compiler_path,
         "cxxCompilerVersion": _probe_version(cxx_compiler_path) if cxx_compiler_path else None,
+        "opensslDevelopment": detect_linux_openssl_identity(
+            openssl_root,
+            required=require_openssl,
+        ),
     }
 
 
@@ -1643,7 +2018,10 @@ def fingerprint_for(args):
 
     kwargs = dict(variant=args.variant, repo=args.repo, revision=args.revision)
     if kroko_fingerprint.detect_target_platform() == "linux":
-        kwargs["toolchain"] = detect_linux_toolchain_identity()
+        kwargs["toolchain"] = detect_linux_toolchain_identity(
+            effective_linux_openssl_root(args),
+            require_openssl=True,
+        )
     return kroko_fingerprint.compute_fingerprint(**kwargs)
 
 
@@ -1653,6 +2031,33 @@ def artifact_store_for(args):
     """
 
     return kroko_artifacts.KrokoArtifactStore(getattr(args, "artifact_store", None))
+
+
+def cleanup_artifact_store(store, args, fingerprint):
+    """Run configured best-effort retention without changing build success."""
+    try:
+        report = store.cleanup_obsolete(
+            variant=args.variant,
+            current_fingerprint=fingerprint,
+            retention_days=getattr(
+                args,
+                "artifact_retention_days",
+                kroko_artifacts.DEFAULT_ARTIFACT_RETENTION_DAYS,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 - retention never fails reuse/build
+        print(
+            "Kroko artifact retention warning: {0}: {1}".format(
+                type(exc).__name__, exc
+            ),
+            file=sys.stderr,
+        )
+        return
+    for problem in report.get("errors", []):
+        print(
+            "Kroko artifact retention warning: {0}".format(problem),
+            file=sys.stderr,
+        )
 
 
 def describe_artifact(args):
@@ -1737,6 +2142,7 @@ def main(argv=None):
             )
             if record is not None:
                 print("Reusing verified Kroko artifact: {0}".format(record.wheel_path))
+                cleanup_artifact_store(store, args, computed["fingerprint"])
                 if not args.skip_install:
                     install_wheel(record.wheel_path)
                     _report_installed_runtime(args.variant)
@@ -1765,6 +2171,7 @@ def main(argv=None):
             adopt_existing=not args.rebuild_kroko,
         )
         print("Stored verified Kroko artifact: {0}".format(record.wheel_path))
+        cleanup_artifact_store(store, args, computed["fingerprint"])
 
         if not args.skip_install:
             install_wheel(record.wheel_path)
