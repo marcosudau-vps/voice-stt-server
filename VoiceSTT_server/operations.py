@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from VoiceSTT_server.event_logging import ChannelLogManager
+from VoiceSTT_server.credential_redaction import redact_kroko_credentials
 
 FASTER_MODEL_ROOT_ENV = "VOICESTT_FASTER_WHISPER_MODEL_ROOT"
 KROKO_MODEL_ROOT_ENV = "VOICESTT_KROKO_MODEL_ROOT"
@@ -435,6 +436,7 @@ class RuntimeConfigStore:
             values = asdict(settings)
         else:
             values = dict(settings)
+        values = redact_kroko_credentials(values, drop=True)
         legacy = {
             "version": 1,
             "updatedAt": _utc_now(),

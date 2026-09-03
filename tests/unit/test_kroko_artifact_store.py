@@ -20,6 +20,7 @@ import sys
 import threading
 import unittest
 import zipfile
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -29,7 +30,7 @@ from VoiceSTT import install_kroko
 from VoiceSTT.kroko import artifacts, buildinputs, fingerprint
 
 
-def make_wheel(directory, *, variant="free", tag="cp312-cp312-win_amd64", version="1.12.9",
+def make_wheel(directory, *, variant="free", tag=None, version="1.12.9",
                payload=b"native-bytes"):
     """Writes a structurally valid Kroko-style wheel.
 
@@ -37,6 +38,17 @@ def make_wheel(directory, *, variant="free", tag="cp312-cp312-win_amd64", versio
     ``dist-info/WHEEL`` carrying the tag and the ``1free``/``1pro`` build tag -
     without needing a real 30-minute compilation.
     """
+    if tag is None:
+        target = fingerprint.detect_target_platform()
+        architecture = fingerprint.detect_architecture()
+        platform_tag = {
+            ("windows", "amd64"): "win_amd64",
+            ("linux", "amd64"): "linux_x86_64",
+            ("linux", "arm64"): "linux_aarch64",
+            ("darwin", "amd64"): "macosx_11_0_x86_64",
+            ("darwin", "arm64"): "macosx_11_0_arm64",
+        }.get((target, architecture), "{0}_{1}".format(target, architecture))
+        tag = "cp312-cp312-{0}".format(platform_tag)
     build_tag = "1" + variant
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
@@ -101,8 +113,8 @@ class StoreBaseTest(unittest.TestCase):
     def inputs_for(self, variant="free"):
         return fingerprint.compute_fingerprint(
             variant=variant,
-            target_platform="windows",
-            architecture="amd64",
+            target_platform=fingerprint.detect_target_platform(),
+            architecture=fingerprint.detect_architecture(),
             python_tag="cp312",
             abi_tag="cp312",
         )
@@ -472,6 +484,198 @@ class BuilderReuseFlowTests(unittest.TestCase):
         self.run_builder(["--variant", "pro"])           # pro build
         self.run_builder()                               # free again -> reuse
         self.assertEqual(self.build_calls, ["free", "pro"])
+
+    def test_free_and_pro_rebuilds_never_modify_the_other_variant(self):
+        self.run_builder()
+        self.run_builder(["--variant", "pro"])
+        free = fingerprint.compute_fingerprint(variant="free")
+        pro = fingerprint.compute_fingerprint(variant="pro")
+        store = artifacts.KrokoArtifactStore(self.store_root)
+        pro_before, _ = store.lookup(
+            variant="pro", fingerprint=pro["fingerprint"], inputs=pro["inputs"]
+        )
+        self.run_builder(["--rebuild-kroko"])
+        pro_after, problems = store.lookup(
+            variant="pro", fingerprint=pro["fingerprint"], inputs=pro["inputs"]
+        )
+        self.assertIsNotNone(pro_after, problems)
+        self.assertEqual(pro_after.wheel_sha256, pro_before.wheel_sha256)
+
+        free_before, _ = store.lookup(
+            variant="free", fingerprint=free["fingerprint"], inputs=free["inputs"]
+        )
+        self.run_builder(["--variant", "pro", "--rebuild-kroko"])
+        free_after, problems = store.lookup(
+            variant="free", fingerprint=free["fingerprint"], inputs=free["inputs"]
+        )
+        self.assertIsNotNone(free_after, problems)
+        self.assertEqual(free_after.wheel_sha256, free_before.wheel_sha256)
+
+
+class ArtifactRetentionTests(StoreBaseTest):
+    def _stored(self, variant, revision, built_at):
+        computed = fingerprint.compute_fingerprint(
+            variant=variant,
+            revision=revision,
+            target_platform=fingerprint.detect_target_platform(),
+            architecture=fingerprint.detect_architecture(),
+            python_tag="cp312",
+            abi_tag="cp312",
+        )
+        record = self.store.store(
+            wheel_path=make_wheel(
+                self.build_dir / "{0}-{1}".format(variant, revision),
+                variant=variant,
+                payload=revision.encode(),
+            ),
+            fingerprint=computed["fingerprint"],
+            inputs=computed["inputs"],
+        )
+        metadata_path = record.slot_dir / artifacts.ARTIFACT_METADATA_NAME
+        metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        metadata["builtAt"] = built_at.strftime("%Y-%m-%dT%H:%M:%SZ")
+        metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+        return computed, record
+
+    def test_old_obsolete_slot_is_removed_but_young_and_current_old_stay(self):
+        now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        old, old_record = self._stored("free", "old", now - timedelta(days=90))
+        young, young_record = self._stored("free", "young", now - timedelta(days=2))
+        current, current_record = self._stored(
+            "free", "current", now - timedelta(days=90)
+        )
+        report = self.store.cleanup_obsolete(
+            variant="free",
+            current_fingerprint=current["fingerprint"],
+            retention_days=30,
+            now=now,
+        )
+        self.assertIn(old["fingerprint"], report["removed"])
+        self.assertFalse(old_record.slot_dir.exists())
+        self.assertTrue(young_record.slot_dir.exists())
+        self.assertTrue(current_record.slot_dir.exists())
+
+    def test_newest_verified_lkg_is_kept_even_when_old(self):
+        now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        older, older_record = self._stored(
+            "free", "older-lkg", now - timedelta(days=100)
+        )
+        newest, newest_record = self._stored(
+            "free", "newest-lkg", now - timedelta(days=80)
+        )
+        self.store.cleanup_obsolete(
+            variant="free",
+            current_fingerprint="0" * 16,
+            retention_days=30,
+            now=now,
+        )
+        self.assertFalse(older_record.slot_dir.exists())
+        self.assertTrue(newest_record.slot_dir.exists())
+
+    def test_cleanup_is_variant_local_and_zero_disables_it(self):
+        now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        free, free_record = self._stored("free", "free-old", now - timedelta(days=90))
+        pro, pro_record = self._stored("pro", "pro-old", now - timedelta(days=90))
+        disabled = self.store.cleanup_obsolete(
+            variant="free",
+            current_fingerprint="f" * 16,
+            retention_days=0,
+            now=now,
+        )
+        self.assertTrue(disabled["disabled"])
+        self.assertTrue(free_record.slot_dir.exists())
+        self.store.cleanup_obsolete(
+            variant="free",
+            current_fingerprint="f" * 16,
+            retention_days=30,
+            now=now,
+        )
+        self.assertTrue(pro_record.slot_dir.exists())
+
+    def test_cleanup_failure_is_diagnostic_and_does_not_break_reuse(self):
+        now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        old, _ = self._stored("free", "undeletable", now - timedelta(days=90))
+        current, current_record = self._stored("free", "current-good", now)
+        original = shutil.rmtree
+
+        def refuse_old(path, *args, **kwargs):
+            if Path(path).name == old["fingerprint"]:
+                raise PermissionError("read only")
+            return original(path, *args, **kwargs)
+
+        with mock.patch.object(shutil, "rmtree", side_effect=refuse_old):
+            report = self.store.cleanup_obsolete(
+                variant="free",
+                current_fingerprint=current["fingerprint"],
+                retention_days=30,
+                now=now,
+            )
+        self.assertTrue(report["errors"])
+        reused, problems = self.store.lookup(
+            variant="free",
+            fingerprint=current["fingerprint"],
+            inputs=current["inputs"],
+        )
+        self.assertIsNotNone(reused, problems)
+        self.assertEqual(reused.wheel_path, current_record.wheel_path)
+
+    def test_invalid_retention_values_are_rejected(self):
+        for value in (-1, "invalid"):
+            with self.assertRaises(ValueError):
+                self.store.cleanup_obsolete(
+                    variant="free",
+                    current_fingerprint="0" * 16,
+                    retention_days=value,
+                )
+        with self.assertRaises(SystemExit):
+            install_kroko.parse_args(["--artifact-retention-days", "-1"])
+        with self.assertRaises(SystemExit):
+            install_kroko.parse_args(["--artifact-retention-days", "invalid"])
+
+    def test_variant_and_fingerprint_locks_are_isolated(self):
+        self.assertNotEqual(
+            self.store._slot_lock_path("free", "a" * 16),
+            self.store._slot_lock_path("pro", "a" * 16),
+        )
+        self.assertNotEqual(
+            self.store._slot_lock_path("free", "a" * 16),
+            self.store._slot_lock_path("free", "b" * 16),
+        )
+
+    def test_locked_obsolete_slot_is_not_deleted(self):
+        now = datetime(2026, 9, 1, tzinfo=timezone.utc)
+        locked, locked_record = self._stored(
+            "free", "locked-old", now - timedelta(days=100)
+        )
+        self._stored("free", "newest-lkg", now - timedelta(days=80))
+        acquired = threading.Event()
+        release = threading.Event()
+
+        def holder():
+            with self.store._slot_lock("free", locked["fingerprint"]):
+                acquired.set()
+                release.wait(timeout=5)
+
+        thread = threading.Thread(target=holder)
+        thread.start()
+        self.assertTrue(acquired.wait(timeout=5))
+        try:
+            report = self.store.cleanup_obsolete(
+                variant="free",
+                current_fingerprint="0" * 16,
+                retention_days=30,
+                now=now,
+            )
+        finally:
+            release.set()
+            thread.join(timeout=5)
+        self.assertIn(locked["fingerprint"], report["skippedLocked"])
+        self.assertTrue(locked_record.slot_dir.exists())
+
+
+class BuilderReuseContinuationTests(unittest.TestCase):
+    setUp = BuilderReuseFlowTests.setUp
+    run_builder = BuilderReuseFlowTests.run_builder
 
     def test_force_rebuild_really_invokes_the_builder(self):
         self.run_builder()

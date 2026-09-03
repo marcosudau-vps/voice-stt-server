@@ -77,6 +77,11 @@ from VoiceSTT_server.operations import (
     WakeWordRegistry,
     process_memory_snapshot,
 )
+from VoiceSTT_server.credential_redaction import (
+    kroko_credential_values,
+    redact_kroko_credentials,
+    redact_secret_text,
+)
 from VoiceSTT_server.stt_model_management import (
     ManagedModelRegistryView,
     OperatorIntent,
@@ -279,6 +284,12 @@ STARTUP_ONLY_SETTINGS = {
     "openai_model_aliases",
     "event_log_queue_size",
     "event_store_enabled",
+}
+
+MODEL_MANAGEMENT_SETTINGS = {
+    "stt_auto_download_enabled",
+    "stt_engine_settings",
+    "stt_model_settings",
 }
 
 DERIVED_DATA_PATH_SETTINGS = {
@@ -534,7 +545,7 @@ class ServerSettings:
             )
 
     def public_dict(self):
-        data = asdict(self)
+        data = redact_kroko_credentials(asdict(self), drop=True)
         data.pop("_resolved_stt_models", None)
         data.pop("transcription_engine_options", None)
         data.pop("realtime_transcription_engine_options", None)
@@ -1262,6 +1273,38 @@ def coerce_setting_value(name, value):
     if not isinstance(value, str):
         raise ValueError(f"{name} muss eine Zeichenfolge sein")
     return value
+
+
+def resolved_engine_options(settings, resolved_engine, lane):
+    """Options belonging to the engine actually selected for one STT lane."""
+    resolved_engine = normalize_engine_name(resolved_engine)
+    final_engine = normalize_engine_name(settings.transcription_engine)
+    realtime_engine = normalize_engine_name(
+        settings.realtime_transcription_engine or settings.transcription_engine
+    )
+    final_options = settings.transcription_engine_options
+    realtime_options = (
+        settings.realtime_transcription_engine_options
+        if settings.realtime_transcription_engine_options is not None
+        else final_options
+    )
+
+    lane_sources = (
+        ((final_engine, final_options), (realtime_engine, realtime_options))
+        if lane == "final"
+        else ((realtime_engine, realtime_options), (final_engine, final_options))
+    )
+    for configured_engine, options in lane_sources:
+        if configured_engine == resolved_engine and options is not None:
+            return dict(options)
+
+    for key, value in dict(settings.stt_engine_settings or {}).items():
+        if normalize_engine_name(key) != resolved_engine or not isinstance(value, dict):
+            continue
+        options = value.get("engine_options", value.get("options"))
+        if isinstance(options, dict):
+            return dict(options)
+    return {}
 
 
 class SegmentState:
@@ -2173,7 +2216,11 @@ class InferenceScheduler:
                 batch_size=self.settings.batch_size,
                 vad_filter=self.settings.vad_filter,
                 normalize_audio=self.settings.normalize_audio,
-                engine_options=self.settings.transcription_engine_options,
+                engine_options=resolved_engine_options(
+                    self.settings,
+                    resolved.get("engine", self.settings.transcription_engine),
+                    "final",
+                ),
             ),
         )
 
@@ -2203,10 +2250,14 @@ class InferenceScheduler:
                 batch_size=self.settings.realtime_batch_size,
                 vad_filter=self.settings.vad_filter,
                 normalize_audio=self.settings.normalize_audio,
-                engine_options=(
-                    self.settings.realtime_transcription_engine_options
-                    if self.settings.realtime_transcription_engine_options is not None
-                    else self.settings.transcription_engine_options
+                engine_options=resolved_engine_options(
+                    self.settings,
+                    resolved.get(
+                        "engine",
+                        self.settings.realtime_transcription_engine
+                        or self.settings.transcription_engine,
+                    ),
+                    "realtime",
                 ),
             ),
         )
@@ -6047,6 +6098,7 @@ class VoiceSTTService:
             load_probe=self._probe_stt_model,
         )
         self._apply_stt_model_snapshot(self.stt_model_manager.refresh())
+        self._stt_model_refresh_required = False
         self.scheduler = self._new_scheduler()
         self._model_state = "loaded"
         self._model_state_error = None
@@ -6086,8 +6138,6 @@ class VoiceSTTService:
         """Perform the expensive engine load only for a serious candidate."""
 
         probe_settings = replace(self.settings)
-        probe_settings.transcription_engine = candidate.engine
-        probe_settings.realtime_transcription_engine = candidate.engine
         probe_settings.model = candidate.path
         probe_settings.realtime_model = candidate.path
         probe_settings.use_main_model_for_realtime = True
@@ -6125,6 +6175,32 @@ class VoiceSTTService:
         }
         return True
 
+    def stt_model_management_status(self):
+        data = self.stt_model_manager.status()
+        data["refreshRequired"] = bool(self._stt_model_refresh_required)
+        return data
+
+    def stt_model_readiness_summary(self):
+        data = self.stt_model_manager.readiness_summary()
+        data["refreshRequired"] = bool(self._stt_model_refresh_required)
+        return data
+
+    def _stt_secret_values(self, settings=None):
+        source = settings or self.settings
+        return kroko_credential_values({
+            "transcription_engine_options": source.transcription_engine_options,
+            "realtime_transcription_engine_options": (
+                source.realtime_transcription_engine_options
+            ),
+            "stt_engine_settings": source.stt_engine_settings,
+        })
+
+    def _safe_stt_error(self, error, *settings_objects):
+        values = []
+        for source in settings_objects or (self.settings,):
+            values.extend(self._stt_secret_values(source))
+        return redact_secret_text(error, values)
+
     def refresh_stt_models(self, timeout=180.0):
         """Refresh the transactional authority without invalidating its LKG."""
 
@@ -6132,16 +6208,47 @@ class VoiceSTTService:
             return self._refresh_stt_models_locked(timeout)
 
     def _refresh_stt_models_locked(self, timeout):
-        self.stt_model_manager.intent = OperatorIntent.from_settings(self.settings)
         previous_snapshot = self.stt_model_manager.snapshot()
+        previous_intent = self.stt_model_manager.intent
         previous = dict(self.settings._resolved_stt_models)
-        snapshot = self.stt_model_manager.refresh()
+        candidate_intent = OperatorIntent.from_settings(self.settings)
+        self.stt_model_manager.intent = candidate_intent
+        try:
+            snapshot = self.stt_model_manager.refresh()
+        except Exception as exc:
+            self.stt_model_manager.intent = previous_intent
+            message = self._safe_stt_error(exc)
+            self.stt_model_manager.restore_last_known_good(
+                previous_snapshot,
+                message,
+            )
+            self._stt_model_refresh_required = True
+            raise RuntimeError(
+                "Der STT-Modell-Refresh ist fehlgeschlagen; der letzte gute "
+                "Stand bleibt aktiv. Ursache: {0}".format(message)
+            ) from exc
+        if (
+            previous_snapshot.minimum_ready
+            and snapshot.revision == previous_snapshot.revision
+        ):
+            self.stt_model_manager.intent = previous_intent
+            self.stt_model_manager.restore_last_known_good(
+                previous_snapshot,
+                "new model intent did not produce a ready candidate snapshot",
+            )
+            self._stt_model_refresh_required = True
+            raise RuntimeError(
+                "Der neue STT-Modell-Intent erreicht kein MINIMUM_READY; "
+                "der letzte gute Stand bleibt aktiv."
+            )
         self._apply_stt_model_snapshot(snapshot)
         changed = previous != self.settings._resolved_stt_models
         if changed:
             with self._scheduler_lock:
                 if self._models_busy():
                     self.settings._resolved_stt_models = previous
+                    self.stt_model_manager.intent = previous_intent
+                    self._stt_model_refresh_required = True
                     self.stt_model_manager.restore_last_known_good(
                         previous_snapshot,
                         "active sessions or inference prevented model activation",
@@ -6167,14 +6274,17 @@ class VoiceSTTService:
                     self._model_state_error = None
                     self.ready.set()
                 except Exception as exc:
+                    message = self._safe_stt_error(exc)
                     if replacement is not None:
                         try:
                             replacement.stop()
                         except Exception:
                             pass
                     self.settings._resolved_stt_models = previous
+                    self.stt_model_manager.intent = previous_intent
+                    self._stt_model_refresh_required = True
                     self.stt_model_manager.restore_last_known_good(
-                        previous_snapshot, str(exc)
+                        previous_snapshot, message
                     )
                     rollback = self._new_scheduler()
                     rollback.start()
@@ -6184,17 +6294,19 @@ class VoiceSTTService:
                         raise RuntimeError(
                             "Die neue STT-Modellzuordnung ist fehlgeschlagen; "
                             "der letzte gute Stand wurde wiederhergestellt. "
-                            f"Ursache: {exc}"
+                            f"Ursache: {message}"
                         ) from exc
                     self._model_state = "unloaded"
-                    self._model_state_error = str(exc)
+                    self._model_state_error = message
                     raise RuntimeError(
                         "Die neue und die letzte gute STT-Modellzuordnung "
-                        f"konnten nicht geladen werden: {exc}"
+                        f"konnten nicht geladen werden: {message}"
                     ) from exc
+        self._stt_model_refresh_required = False
         return {
             "changed": changed,
-            "management": self.stt_model_manager.status(),
+            "management": self.stt_model_management_status(),
+            "modelRefreshRequired": False,
         }
 
     # -- AP-SRV-060 wake-word catalog ---------------------------------------
@@ -6679,7 +6791,7 @@ class VoiceSTTService:
                 else {"mode": "unloaded", "queues": {}, "workers": {}}
             )
         data["models"] = self.model_lifecycle_status()
-        data["sttModelManagement"] = self.stt_model_manager.readiness_summary()
+        data["sttModelManagement"] = self.stt_model_readiness_summary()
         data["limits"] = self.limits_dict()
         data["startupErrors"] = list(self.startup_errors)
         return data
@@ -6887,11 +6999,17 @@ class VoiceSTTService:
                 applied[name] = {
                     "value": coerced,
                     "appliesTo": (
-                        "active_sessions"
-                        if name in ACTIVE_RUNTIME_SETTINGS
-                        else "new_sessions"
+                        "model_refresh"
+                        if name in MODEL_MANAGEMENT_SETTINGS
+                        else (
+                            "active_sessions"
+                            if name in ACTIVE_RUNTIME_SETTINGS
+                            else "new_sessions"
+                        )
                     ),
                 }
+            if MODEL_MANAGEMENT_SETTINGS & set(applied):
+                self._stt_model_refresh_required = True
             if "transcript_log_mode" in applied:
                 self.settings.request_log_transcripts = (
                     self.settings.transcript_log_mode != "none"
@@ -6942,14 +7060,18 @@ class VoiceSTTService:
                 )
             if "log_level" in applied:
                 apply_process_log_level(self.settings.log_level)
-            self.audit.event("config.updated", applied=applied)
+            public_applied = redact_kroko_credentials(applied)
+            self.audit.event("config.updated", applied=public_applied)
             self.persist_settings()
+        else:
+            public_applied = {}
 
         return {
-            "applied": applied,
+            "applied": public_applied,
             "rejected": rejected,
             "settings": self.settings.public_dict(),
             "runtimeSettings": self.runtime_settings_contract(),
+            "modelRefreshRequired": bool(self._stt_model_refresh_required),
         }
 
     def persist_settings(self):
@@ -7121,6 +7243,7 @@ class VoiceSTTService:
                 "old": dict(self.settings._resolved_stt_models),
                 "new": dict(candidate._resolved_stt_models),
             }
+        public_changed = redact_kroko_credentials(changed)
         if not changed:
             return {"changed": {}, "active": self.active_models(), "reloaded": False}
 
@@ -7146,14 +7269,18 @@ class VoiceSTTService:
                     candidate._resolved_stt_models
                 )
                 self.ready.set()
-                self.audit.event("models.switched", changed=changed, active=self.active_models())
+                self.audit.event(
+                    "models.switched",
+                    changed=public_changed,
+                    active=self.active_models(),
+                )
                 self._log_model_performance(
                     "models.switched", switch_started, memory_before,
-                    reloaded=False, changed=changed,
+                    reloaded=False, changed=public_changed,
                 )
                 self.persist_settings()
                 return {
-                    "changed": changed,
+                    "changed": public_changed,
                     "active": self.active_models(),
                     "reloaded": False,
                     "lifecycle": self.model_lifecycle_status(),
@@ -7173,6 +7300,7 @@ class VoiceSTTService:
                 if not ready or not replacement.healthy():
                     raise RuntimeError("Der neue Modell-Worker hat keinen fehlerfreien Zustand erreicht.")
             except Exception as exc:
+                message = self._safe_stt_error(exc, self.settings, candidate)
                 if replacement is not None:
                     try:
                         replacement.stop()
@@ -7183,7 +7311,7 @@ class VoiceSTTService:
                 self.settings._resolved_stt_models = previous_resolution
                 self.stt_model_manager.intent = previous_intent
                 self.stt_model_manager.restore_last_known_good(
-                    previous_management, str(exc)
+                    previous_management, message
                 )
                 rollback = self._new_scheduler()
                 self.scheduler = rollback
@@ -7193,21 +7321,29 @@ class VoiceSTTService:
                     self.ready.set()
                     raise RuntimeError(
                         "Der neue Modell-Worker ist fehlgeschlagen; die vorherige Modellkonfiguration wurde wiederhergestellt. "
-                        f"Ursache: {exc}"
+                        f"Ursache: {message}"
                     ) from exc
                 raise RuntimeError(
                     "Der neue Modell-Worker ist fehlgeschlagen und der vorherige Worker konnte nicht wiederhergestellt werden. "
-                    f"Ursache: {exc}"
+                    f"Ursache: {message}"
                 ) from exc
             self.ready.set()
 
-        self.audit.event("models.switched", changed=changed, active=self.active_models())
+        self.audit.event(
+            "models.switched",
+            changed=public_changed,
+            active=self.active_models(),
+        )
         self._log_model_performance(
             "models.switched", switch_started, memory_before,
-            reloaded=True, changed=changed,
+            reloaded=True, changed=public_changed,
         )
         self.persist_settings()
-        return {"changed": changed, "active": self.active_models(), "reloaded": True}
+        return {
+            "changed": public_changed,
+            "active": self.active_models(),
+            "reloaded": True,
+        }
 
     def transcribe_for_recorder(
         self,
@@ -7902,7 +8038,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "object": "list",
             "active": service.active_models(),
             "lifecycle": service.model_lifecycle_status(),
-            "management": service.stt_model_manager.status(),
+            "management": service.stt_model_management_status(),
             "data": catalog,
         })
 
@@ -7911,7 +8047,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         auth_error = admin_auth_error(request)
         if auth_error is not None:
             return auth_error
-        return JSONResponse(service.stt_model_manager.status())
+        return JSONResponse(service.stt_model_management_status())
 
     @app.post("/api/models/refresh")
     async def refresh_stt_model_management(request: Request):
@@ -7920,8 +8056,11 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             return auth_error
         try:
             return JSONResponse(await asyncio.to_thread(service.refresh_stt_models))
-        except RuntimeError as exc:
-            return JSONResponse({"error": str(exc)}, status_code=409)
+        except (RuntimeError, ValueError) as exc:
+            return JSONResponse(
+                {"error": service._safe_stt_error(exc)},
+                status_code=409,
+            )
 
     @app.get("/api/models/lifecycle")
     async def get_model_lifecycle(request: Request):

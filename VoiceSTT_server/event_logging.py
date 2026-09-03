@@ -33,6 +33,7 @@ _SECRET_KEYS = {
     "adminkey",
     "adminapikey",
     "apikey",
+    "key",
     "authorization",
     "cookie",
     "credential",

@@ -490,6 +490,8 @@ def test_event_hub_redacts_secrets_audio_queries_and_transcripts_centrally(tmp_p
         nested={
             "authorization": "Bearer secret-token",
             "access_token": "secret-token",
+            "key": "kroko-runtime-secret",
+            "kroko_api_key": "kroko-alias-secret",
             "safe": "visible",
         },
         requestUrl="https://example.test/path?token=secret",
@@ -516,6 +518,8 @@ def test_event_hub_redacts_secrets_audio_queries_and_transcripts_centrally(tmp_p
     assert transcription["data"]["text"] == "final text"
     assert "authorization" not in transcription["data"]
     assert all("secret-token" not in json.dumps(event) for event in history)
+    assert all("kroko-runtime-secret" not in json.dumps(event) for event in history)
+    assert all("kroko-alias-secret" not in json.dumps(event) for event in history)
 
     settings.transcript_log_mode = "none"
     hub.configure(settings)

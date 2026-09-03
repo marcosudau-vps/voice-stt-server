@@ -18,6 +18,10 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Tuple
 
 from VoiceSTT.kroko import models as kroko_models
+from VoiceSTT_server.credential_redaction import (
+    kroko_credential_values,
+    redact_secret_text,
+)
 
 
 DISCOVERED = "DISCOVERED"
@@ -58,20 +62,9 @@ def _stage_name(name: str) -> bool:
     )
 
 
-def _safe_error(error: Any) -> str:
+def _safe_error(error: Any, secrets: Iterable[Any] = ()) -> str:
     """Render diagnostics without ever echoing a configured Kroko secret."""
-
-    text = str(error)
-    for name in (
-        "KROKO_API_KEY",
-        "KROKO_ONNX_KEY",
-        "VOICESTT_KROKO_ONNX_KEY",
-        "KROKO_KEY",
-    ):
-        value = os.getenv(name)
-        if value:
-            text = text.replace(value, "[REDACTED]")
-    return text
+    return redact_secret_text(error, secrets)
 
 
 @dataclass(frozen=True)
@@ -160,8 +153,12 @@ class OperatorIntent:
     engines: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     models: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     defaults: Mapping[str, Tuple[str, str]] = field(default_factory=dict)
-    kroko_runtime_variant: Optional[str] = None
-    kroko_pro_license_present: bool = False
+    kroko_runtime_variant: str = "free"
+    redaction_values: Tuple[str, ...] = field(
+        default=(),
+        repr=False,
+        compare=False,
+    )
 
     @classmethod
     def from_settings(cls, settings: Any) -> "OperatorIntent":
@@ -206,18 +203,36 @@ class OperatorIntent:
             realtime_engine,
             getattr(settings, "realtime_transcription_engine_options", None),
         )
-        runtime_variant = os.getenv("VOICESTT_KROKO_VARIANT")
-        option_license_present = False
-        for candidate in (
-            getattr(settings, "realtime_transcription_engine_options", None),
-            getattr(settings, "transcription_engine_options", None),
+        final_options = getattr(settings, "transcription_engine_options", None)
+        realtime_options = getattr(
+            settings, "realtime_transcription_engine_options", None
+        )
+        kroko_config = engines.get("kroko_onnx", {})
+        runtime_variant = kroko_config.get("runtime_variant")
+        if (
+            not runtime_variant
+            and final_engine == "kroko_onnx"
+            and isinstance(final_options, Mapping)
         ):
-            if isinstance(candidate, Mapping):
-                if candidate.get("runtime_variant"):
-                    runtime_variant = str(candidate["runtime_variant"])
-                option_license_present = bool(
-                    option_license_present or candidate.get("key")
-                )
+            runtime_variant = final_options.get("runtime_variant")
+        if (
+            not runtime_variant
+            and realtime_engine == "kroko_onnx"
+            and isinstance(realtime_options, Mapping)
+        ):
+            runtime_variant = realtime_options.get("runtime_variant")
+        if not runtime_variant:
+            runtime_variant = os.getenv("VOICESTT_KROKO_VARIANT")
+        runtime_variant = str(runtime_variant or "free").strip().lower()
+        if runtime_variant not in {"free", "pro"}:
+            raise ValueError(
+                "Kroko runtime_variant must be explicitly 'free' or 'pro'"
+            )
+        redaction_values = kroko_credential_values({
+            "transcription_engine_options": final_options,
+            "realtime_transcription_engine_options": realtime_options,
+            "stt_engine_settings": engines,
+        })
         return cls(
             global_auto_download=_as_bool(
                 getattr(settings, "stt_auto_download_enabled", False)
@@ -225,14 +240,8 @@ class OperatorIntent:
             engines=engines,
             models=models,
             defaults=defaults,
-            kroko_runtime_variant=(str(runtime_variant).lower() if runtime_variant else None),
-            kroko_pro_license_present=bool(
-                option_license_present
-                or os.getenv("KROKO_API_KEY")
-                or os.getenv("KROKO_ONNX_KEY")
-                or os.getenv("VOICESTT_KROKO_ONNX_KEY")
-                or os.getenv("KROKO_KEY")
-            ),
+            kroko_runtime_variant=runtime_variant,
+            redaction_values=redaction_values,
         )
 
     def engine_config(self, engine: str) -> Mapping[str, Any]:
@@ -759,7 +768,7 @@ class STTModelManager:
         diagnostic = ({
             "stage": "activation",
             "result": "failed_lkg_restored",
-            "message": _safe_error(message),
+            "message": _safe_error(message, self.intent.redaction_values),
         },)
         with self._state_lock:
             self._snapshot = snapshot
@@ -810,7 +819,7 @@ class STTModelManager:
                 probed[item.path] = verified
                 return verified
             except Exception as exc:  # noqa: BLE001 - diagnostic boundary
-                message = _safe_error(exc)
+                message = _safe_error(exc, self.intent.redaction_values)
                 failed = replace(item, problems=item.problems + (message,))
                 probed[item.path] = failed
                 diagnostics.append({
@@ -1008,13 +1017,6 @@ class STTModelManager:
                     "result": "runtime_variant_incompatible",
                 })
                 return False
-            if product.runtime_variant == "pro" and not self.intent.kroko_pro_license_present:
-                diagnostics.append({
-                    "modelId": product.id,
-                    "stage": "eligibility",
-                    "result": "pro_license_prerequisite_missing",
-                })
-                return False
         return True
 
     def candidate_eligible(
@@ -1037,11 +1039,6 @@ class STTModelManager:
             return False
         if product.engine == "kroko_onnx" and product.runtime_variant:
             if self.intent.kroko_runtime_variant != product.runtime_variant:
-                return False
-            if (
-                product.runtime_variant == "pro"
-                and not self.intent.kroko_pro_license_present
-            ):
                 return False
         return True
 
@@ -1075,7 +1072,7 @@ class STTModelManager:
                 product_id=product.id,
             )
         except Exception as exc:  # noqa: BLE001 - result is diagnostic, never partial
-            message = _safe_error(exc)
+            message = _safe_error(exc, self.intent.redaction_values)
             diagnostics.append({
                 "modelId": product.id,
                 "stage": "provisioning",

@@ -13,10 +13,17 @@ from VoiceSTT_server.stt_model_management import (
     LOAD_VERIFIED,
     ManagedModelRegistryView,
     MINIMUM_READY,
+    ModelCandidate,
+    ModelSnapshot,
     NOT_READY,
     OperatorIntent,
     ProductModel,
     STTModelManager,
+)
+from VoiceSTT_server.credential_redaction import (
+    kroko_credential_values,
+    redact_kroko_credentials,
+    redact_secret_text,
 )
 
 
@@ -60,7 +67,6 @@ def intent(
     engine_auto=False,
     model_settings=None,
     runtime_variant=None,
-    pro_license=False,
 ):
     return OperatorIntent(
         global_auto_download=global_auto,
@@ -74,7 +80,6 @@ def intent(
         models=model_settings or {},
         defaults=defaults or {},
         kroko_runtime_variant=runtime_variant,
-        kroko_pro_license_present=pro_license,
     )
 
 
@@ -441,25 +446,58 @@ def test_concurrent_refresh_never_publishes_partial_candidates(tmp_path):
     assert manager.status()["minimumReady"] is True
 
 
-def test_pro_model_is_visible_but_not_activatable_without_prerequisites(tmp_path):
+def test_pro_model_eligibility_is_not_inferred_from_api_key_presence(tmp_path):
     pro = product("pro", priority=1, runtime_variant="pro")
     root = tmp_path / "models"
     write_model(root, pro)
     manager = STTModelManager(
         runtime_root=tmp_path / "runtime",
         authority=[pro],
-        intent=intent(custom=[root], runtime_variant="pro", pro_license=False),
+        intent=intent(custom=[root], runtime_variant="pro"),
+        load_probe=lambda candidate: True,
     )
     snapshot = manager.refresh()
     assert any(item.id == pro.id for item in snapshot.candidates)
+    assert snapshot.readiness == MINIMUM_READY
+    listed = ManagedModelRegistryView(manager).list_models()
+    assert listed[0]["eligible"] is True
+    assert listed[0]["available"] is True
+
+
+def test_default_free_runtime_reaches_free_model_without_a_key(tmp_path, monkeypatch):
+    for name in ("KROKO_API_KEY", "KROKO_ONNX_KEY", "KROKO_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    free = product("community-free", priority=1, runtime_variant="free")
+    root = tmp_path / "models"
+    write_model(root, free)
+    manager = STTModelManager(
+        runtime_root=tmp_path / "runtime",
+        authority=[free],
+        intent=intent(custom=[root], runtime_variant="free"),
+        load_probe=lambda _candidate: True,
+    )
+    assert manager.refresh().readiness == MINIMUM_READY
+
+
+def test_key_cannot_make_a_pro_model_eligible_for_free_runtime(tmp_path, monkeypatch):
+    monkeypatch.setenv("KROKO_API_KEY", "cannot-promote-runtime")
+    pro = product("pro", priority=1, runtime_variant="pro")
+    root = tmp_path / "models"
+    write_model(root, pro)
+    probe_calls = []
+    manager = STTModelManager(
+        runtime_root=tmp_path / "runtime",
+        authority=[pro],
+        intent=intent(custom=[root], runtime_variant="free"),
+        load_probe=lambda candidate: probe_calls.append(candidate) or True,
+    )
+    snapshot = manager.refresh()
     assert snapshot.readiness == NOT_READY
+    assert probe_calls == []
     assert any(
-        item["result"] == "pro_license_prerequisite_missing"
+        item["result"] == "runtime_variant_incompatible"
         for item in snapshot.diagnostics
     )
-    listed = ManagedModelRegistryView(manager).list_models()
-    assert listed[0]["eligible"] is False
-    assert listed[0]["available"] is False
 
 
 def test_invalid_content_and_source_never_activate_or_leave_part_file(tmp_path):
@@ -563,6 +601,238 @@ def test_operator_config_cannot_rewrite_product_facts_or_expose_pro_secret(tmp_p
     assert os.environ["KROKO_API_KEY"] not in encoded
 
 
+def _variant_settings(**overrides):
+    values = {
+        "stt_auto_download_enabled": False,
+        "stt_engine_settings": {},
+        "stt_model_settings": {},
+        "transcription_engine": "kroko_onnx",
+        "realtime_transcription_engine": "kroko_onnx",
+        "model": "community-free",
+        "realtime_model": "community-free",
+        "download_root": None,
+        "transcription_engine_options": None,
+        "realtime_transcription_engine_options": None,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def test_kroko_runtime_variant_defaults_to_community_free_and_ignores_key(monkeypatch):
+    monkeypatch.setenv("KROKO_API_KEY", "credential-does-not-select-pro")
+    monkeypatch.delenv("VOICESTT_KROKO_VARIANT", raising=False)
+    parsed = OperatorIntent.from_settings(_variant_settings())
+    assert parsed.kroko_runtime_variant == "free"
+
+
+@pytest.mark.parametrize(
+    ("settings", "environment", "expected"),
+    [
+        (
+            _variant_settings(
+                stt_engine_settings={"kroko_onnx": {"runtime_variant": "free"}},
+            ),
+            "pro",
+            "free",
+        ),
+        (
+            _variant_settings(
+                stt_engine_settings={"kroko_onnx": {"runtime_variant": "pro"}},
+                transcription_engine_options={"runtime_variant": "free"},
+                realtime_transcription_engine_options={"runtime_variant": "free"},
+            ),
+            "free",
+            "pro",
+        ),
+        (
+            _variant_settings(
+                transcription_engine_options={"runtime_variant": "pro"},
+                realtime_transcription_engine_options={"runtime_variant": "free"},
+            ),
+            "free",
+            "pro",
+        ),
+        (
+            _variant_settings(
+                transcription_engine="faster_whisper",
+                realtime_transcription_engine="kroko_onnx",
+                realtime_transcription_engine_options={"runtime_variant": "pro"},
+            ),
+            "free",
+            "pro",
+        ),
+        (_variant_settings(), "pro", "pro"),
+    ],
+)
+def test_kroko_runtime_variant_has_one_deterministic_precedence(
+    settings, environment, expected, monkeypatch
+):
+    monkeypatch.setenv("VOICESTT_KROKO_VARIANT", environment)
+    assert OperatorIntent.from_settings(settings).kroko_runtime_variant == expected
+
+
+def test_kroko_credential_redaction_is_recursive_and_context_aware(monkeypatch):
+    monkeypatch.setenv("KROKO_API_KEY", "environment-secret")
+    value = {
+        "ordinary": {"key": "business-key"},
+        "stt_engine_settings": {
+            "kroko_onnx": {
+                "key": "nested-secret",
+                "api_key": "alias-secret",
+                "beam_size": 5,
+            }
+        },
+    }
+    redacted = redact_kroko_credentials(value)
+    dropped = redact_kroko_credentials(value, drop=True)
+    assert redacted["ordinary"]["key"] == "business-key"
+    assert redacted["stt_engine_settings"]["kroko_onnx"]["key"] == "[REDACTED]"
+    assert "key" not in dropped["stt_engine_settings"]["kroko_onnx"]
+    assert dropped["stt_engine_settings"]["kroko_onnx"]["beam_size"] == 5
+    secrets = kroko_credential_values(value)
+    assert set(secrets) == {"nested-secret", "alias-secret"}
+    message = redact_secret_text(
+        "failed key=nested-secret and environment-secret", secrets
+    )
+    assert "nested-secret" not in message
+    assert "environment-secret" not in message
+
+
+@pytest.mark.parametrize(
+    "option_field",
+    ["transcription_engine_options", "realtime_transcription_engine_options"],
+)
+def test_engine_option_only_secret_is_redacted_from_model_diagnostics(
+    tmp_path, monkeypatch, option_field
+):
+    monkeypatch.delenv("KROKO_API_KEY", raising=False)
+    secret = "option-only-secret-{0}".format(option_field)
+    settings = _variant_settings(
+        stt_engine_settings={
+            "kroko_onnx": {"custom_paths": [str(tmp_path / "models")]}
+        },
+        **{option_field: {"key": secret, "provider": "cpu"}},
+    )
+    parsed = OperatorIntent.from_settings(settings)
+    assert secret in parsed.redaction_values
+    assert secret not in repr(parsed)
+    entry = product("community-free", priority=1)
+    write_model(tmp_path / "models", entry)
+    manager = STTModelManager(
+        runtime_root=tmp_path / "runtime",
+        authority=[entry],
+        intent=parsed,
+        load_probe=lambda _candidate: (_ for _ in ()).throw(
+            RuntimeError("native engine echoed {0}".format(secret))
+        ),
+    )
+    manager.refresh()
+    assert secret not in json.dumps(manager.status(), sort_keys=True)
+
+
+def _ready_snapshot(revision=1):
+    candidate = ModelCandidate(
+        id="community-free",
+        engine="kroko_onnx",
+        path="C:/models/community-free.data",
+        source_root="C:/models",
+        state=LOAD_VERIFIED,
+    )
+    return ModelSnapshot(
+        revision=revision,
+        readiness=MINIMUM_READY,
+        candidates=(candidate,),
+        active={"final": candidate, "realtime": candidate},
+    )
+
+
+def _refresh_service(manager):
+    from api_fastapi_server.server import ServerSettings, VoiceSTTService
+
+    service = object.__new__(VoiceSTTService)
+    service.settings = ServerSettings(
+        transcription_engine="kroko_onnx",
+        realtime_transcription_engine="kroko_onnx",
+        model="community-free",
+        realtime_model="community-free",
+        stt_engine_settings={
+            "kroko_onnx": {"runtime_variant": "pro", "key": "refresh-secret"}
+        },
+    )
+    service.settings._resolved_stt_models = {
+        "final": {
+            "id": "community-free",
+            "engine": "kroko_onnx",
+            "path": "C:/models/community-free.data",
+        },
+        "realtime": {
+            "id": "community-free",
+            "engine": "kroko_onnx",
+            "path": "C:/models/community-free.data",
+        },
+    }
+    service.stt_model_manager = manager
+    service._stt_refresh_lock = threading.Lock()
+    service._stt_model_refresh_required = True
+    return service
+
+
+def test_explicit_refresh_adopts_pending_intent_only_after_ready_snapshot():
+    previous = _ready_snapshot(1)
+    replacement = _ready_snapshot(2)
+
+    class Manager:
+        def __init__(self):
+            self.intent = object()
+
+        def snapshot(self):
+            return previous
+
+        def refresh(self):
+            return replacement
+
+        def status(self):
+            return replacement.public_dict()
+
+    manager = Manager()
+    old_intent = manager.intent
+    service = _refresh_service(manager)
+    result = service.refresh_stt_models()
+    assert manager.intent is not old_intent
+    assert manager.intent.kroko_runtime_variant == "pro"
+    assert result["modelRefreshRequired"] is False
+    assert result["management"]["refreshRequired"] is False
+
+
+def test_failed_explicit_refresh_preserves_lkg_and_pending_intent_boundary():
+    previous = _ready_snapshot(4)
+    restored = []
+
+    class Manager:
+        def __init__(self):
+            self.intent = object()
+
+        def snapshot(self):
+            return previous
+
+        def refresh(self):
+            raise RuntimeError("native key=refresh-secret load failure")
+
+        def restore_last_known_good(self, snapshot, message):
+            restored.append((snapshot, message))
+
+    manager = Manager()
+    old_intent = manager.intent
+    service = _refresh_service(manager)
+    with pytest.raises(RuntimeError) as caught:
+        service.refresh_stt_models()
+    assert manager.intent is old_intent
+    assert restored[0][0] is previous
+    assert "refresh-secret" not in restored[0][1]
+    assert "refresh-secret" not in str(caught.value)
+    assert service._stt_model_refresh_required is True
+
+
 def test_load_probe_exception_redacts_pro_secret(tmp_path, monkeypatch):
     secret = "never-echo-this-license"
     monkeypatch.setenv("KROKO_API_KEY", secret)
@@ -583,10 +853,15 @@ def test_load_probe_exception_redacts_pro_secret(tmp_path, monkeypatch):
     assert "[REDACTED]" in encoded
 
 
-def test_server_admin_and_health_remain_available_when_stt_is_not_ready(tmp_path):
+def test_server_admin_and_health_remain_available_when_stt_is_not_ready(
+    tmp_path, monkeypatch
+):
     pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
     from api_fastapi_server.server import ServerSettings, create_app
+    from VoiceSTT.core import wakeword_catalog
+
+    monkeypatch.setattr(wakeword_catalog, "default_artifact_probers", lambda: {})
 
     class HealthyFakeScheduler:
         def __init__(self, *_args):
@@ -607,9 +882,18 @@ def test_server_admin_and_health_remain_available_when_stt_is_not_ready(tmp_path
         def snapshot(self):
             return {"mode": "fake", "queues": {}, "workers": {}}
 
+    initial_secret = "initial-kroko-secret"
+    updated_secret = "updated-kroko-secret"
     app = create_app(
         ServerSettings(
             data_root_path=str(tmp_path / "runtime"),
+            stt_engine_settings={
+                "kroko_onnx": {
+                    "runtime_variant": "free",
+                    "key": initial_secret,
+                    "beam_size": 4,
+                }
+            },
             event_store_enabled=False,
             log_live_enabled=False,
             request_logging_enabled=False,
@@ -619,16 +903,63 @@ def test_server_admin_and_health_remain_available_when_stt_is_not_ready(tmp_path
         ),
         scheduler_factory=HealthyFakeScheduler,
     )
+    service = app.state.voicestt_service
+    original_intent = service.stt_model_manager.intent
+    monkeypatch.setattr(
+        service.stt_model_manager,
+        "refresh",
+        lambda: pytest.fail("PATCH /api/config must not refresh or provision models"),
+    )
     with TestClient(app) as client:
         health = client.get("/health")
         management = client.get("/api/models/management")
         config = client.get("/api/config")
+        update = client.patch(
+            "/api/config",
+            json={
+                "settings": {
+                    "stt_engine_settings": {
+                        "kroko_onnx": {
+                            "runtime_variant": "pro",
+                            "api_key": updated_secret,
+                            "beam_size": 7,
+                        }
+                    }
+                }
+            },
+        )
+        pending_management = client.get("/api/models/management")
+        pending_health = client.get("/health")
     assert health.status_code == 200
     assert health.json()["sttReady"] is False
     assert health.json()["ok"] is True  # process liveness is separate
     assert management.status_code == 200
     assert management.json()["state"] == "not_ready"
     assert config.status_code == 200
+    assert update.status_code == 200
+    assert update.json()["modelRefreshRequired"] is True
+    assert update.json()["applied"]["stt_engine_settings"]["appliesTo"] == "model_refresh"
+    assert pending_management.json()["refreshRequired"] is True
+    assert pending_health.json()["sttModels"]["refreshRequired"] is True
+    assert service.stt_model_manager.intent is original_intent
+    public_payload = json.dumps(
+        {
+            "health": pending_health.json(),
+            "management": pending_management.json(),
+            "config": config.json(),
+            "update": update.json(),
+        },
+        sort_keys=True,
+    )
+    assert initial_secret not in public_payload
+    assert updated_secret not in public_payload
+    persisted = json.loads(Path(service.settings.runtime_config_path).read_text("utf-8"))
+    persisted_payload = json.dumps(persisted, sort_keys=True)
+    assert initial_secret not in persisted_payload
+    assert updated_secret not in persisted_payload
+    persisted_settings = persisted["settings"]
+    assert persisted_settings["stt_engine_settings"]["kroko_onnx"]["runtime_variant"] == "pro"
+    assert persisted_settings["stt_engine_settings"]["kroko_onnx"]["beam_size"] == 7
 
 
 def test_existing_yaml_settings_authority_parses_model_management_fields():
@@ -639,6 +970,7 @@ def test_existing_yaml_settings_authority_parses_model_management_fields():
     assert settings.stt_auto_download_enabled is False
     assert settings.stt_engine_settings["faster_whisper"]["enabled"] is True
     assert settings.stt_engine_settings["kroko_onnx"]["auto_download_enabled"] is False
+    assert settings.stt_engine_settings["kroko_onnx"]["runtime_variant"] == "free"
     assert settings.stt_model_settings == {}
 
 

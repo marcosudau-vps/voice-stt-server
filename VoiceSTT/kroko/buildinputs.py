@@ -111,7 +111,16 @@ PATCH_SET_REVISION = 3
 #: now proves that a reused external builder checkout actually belongs to the
 #: effective ``--repo`` authority before any fetch or build, and re-clones it
 #: from that authority when it does not.
-BUILDER_REVISION = 4
+#: Platform-specific builder revisions.  The already qualified Windows
+#: artifact records revision 4 and must not be invalidated by a Linux-only
+#: retagging or host-toolchain correction.  Linux starts its own authority at
+#: revision 1 with W4AB-C1.
+WINDOWS_BUILDER_REVISION = 4
+LINUX_BUILDER_REVISION = 1
+
+#: Backwards-compatible name for callers that described the original,
+#: Windows-qualified builder before platform revisions were split.
+BUILDER_REVISION = WINDOWS_BUILDER_REVISION
 
 #: CMake flags forced for the CPU-only Linux build. Kroko's license client
 #: includes websocketpp headers unconditionally, which is why WebSocket support
@@ -451,6 +460,15 @@ def cmake_flags_for(target_platform: str) -> str:
     return ""
 
 
+def builder_revision_for(target_platform: str) -> int:
+    """The source-controlled builder revision for one target platform."""
+    if target_platform == "linux":
+        return LINUX_BUILDER_REVISION
+    if target_platform == "windows":
+        return WINDOWS_BUILDER_REVISION
+    return BUILDER_REVISION
+
+
 def normalize_variant(variant: str) -> str:
     """Validates a build variant, refusing anything but ``free``/``pro``."""
     value = str(variant).strip().lower()
@@ -463,6 +481,7 @@ def normalize_variant(variant: str) -> str:
 
 __all__ = [
     "BUILDER_REVISION",
+    "LINUX_BUILDER_REVISION",
     "WINDOWS_APT_COMPONENTS",
     "WINDOWS_APT_SNAPSHOT_URI",
     "WINDOWS_APT_SUITES",
@@ -496,6 +515,8 @@ __all__ = [
     "WINDOWS_XWIN_SDK_VERSION",
     "WINDOWS_XWIN_SHA256",
     "WINDOWS_XWIN_VERSION",
+    "WINDOWS_BUILDER_REVISION",
+    "builder_revision_for",
     "windows_cmake_url",
     "windows_openfst_url",
     "windows_openssl_filename",

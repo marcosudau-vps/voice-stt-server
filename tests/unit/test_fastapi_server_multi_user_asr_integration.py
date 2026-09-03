@@ -6,6 +6,7 @@ import time
 import unittest
 import wave
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
@@ -16,6 +17,7 @@ from api_fastapi_server.server import (
     InferenceScheduler,
     VoiceSTTService,
     ServerSettings,
+    resolved_engine_options,
 )
 
 
@@ -23,6 +25,146 @@ ROOT_DIR = Path(__file__).resolve().parents[2]
 AUDIO_DIR = ROOT_DIR / "tests" / "unit" / "audio"
 REFERENCE_WAV = AUDIO_DIR / "asr-reference.wav"
 EXPECTED_JSON = AUDIO_DIR / "asr-reference.expected_sentences.json"
+
+
+def test_resolved_engine_options_follow_the_actual_engine_for_each_lane():
+    settings = ServerSettings(
+        transcription_engine="faster_whisper",
+        realtime_transcription_engine="kroko_onnx",
+        transcription_engine_options={"owner": "faster", "sentinel": 1},
+        realtime_transcription_engine_options={"owner": "kroko", "sentinel": 2},
+        stt_engine_settings={
+            "parakeet": {"engine_options": {"owner": "parakeet"}}
+        },
+    )
+
+    assert resolved_engine_options(settings, "kroko_onnx", "final") == {
+        "owner": "kroko",
+        "sentinel": 2,
+    }
+    assert resolved_engine_options(settings, "faster_whisper", "realtime") == {
+        "owner": "faster",
+        "sentinel": 1,
+    }
+    assert resolved_engine_options(settings, "parakeet", "final") == {
+        "owner": "parakeet"
+    }
+
+
+def test_scheduler_workers_never_cross_wire_options_after_recovery_switch():
+    settings = ServerSettings(
+        model="faster-main",
+        realtime_model="kroko-live",
+        use_main_model_for_realtime=False,
+        transcription_engine="faster_whisper",
+        realtime_transcription_engine="kroko_onnx",
+        transcription_engine_options={"owner": "faster"},
+        realtime_transcription_engine_options={"owner": "kroko"},
+        model_warmup=False,
+    )
+    settings._resolved_stt_models = {
+        "final": {
+            "engine": "kroko_onnx",
+            "path": "recovered-kroko-final.data",
+        },
+        "realtime": {
+            "engine": "faster_whisper",
+            "path": "recovered-faster-live",
+        },
+    }
+    created = []
+
+    def capture(engine, config):
+        created.append((engine, config))
+        return object()
+
+    scheduler = InferenceScheduler(settings, lambda _result: None)
+    with mock.patch(
+        "VoiceSTT.transcription_engines.create_transcription_engine",
+        side_effect=capture,
+    ):
+        scheduler._create_main_engine()
+        scheduler._create_realtime_engine()
+
+    assert created[0][0] == "kroko_onnx"
+    assert created[0][1].model == "recovered-kroko-final.data"
+    assert created[0][1].engine_options == {"owner": "kroko"}
+    assert created[1][0] == "faster_whisper"
+    assert created[1][1].model == "recovered-faster-live"
+    assert created[1][1].engine_options == {"owner": "faster"}
+
+
+def test_same_engine_lane_keeps_its_lane_specific_options():
+    settings = ServerSettings(
+        transcription_engine="kroko_onnx",
+        realtime_transcription_engine="kroko_onnx",
+        transcription_engine_options={"lane": "final"},
+        realtime_transcription_engine_options={"lane": "realtime"},
+    )
+    assert resolved_engine_options(settings, "kroko_onnx", "final") == {
+        "lane": "final"
+    }
+    assert resolved_engine_options(settings, "kroko_onnx", "realtime") == {
+        "lane": "realtime"
+    }
+
+
+def test_load_probe_uses_options_for_candidate_engine_in_both_directions():
+    cases = (
+        (
+            "faster_whisper",
+            "kroko_onnx",
+            "kroko_onnx",
+            {"owner": "kroko"},
+        ),
+        (
+            "kroko_onnx",
+            "faster_whisper",
+            "faster_whisper",
+            {"owner": "faster"},
+        ),
+    )
+    for final_engine, realtime_engine, candidate_engine, expected in cases:
+        captured = []
+        settings = ServerSettings(
+            transcription_engine=final_engine,
+            realtime_transcription_engine=realtime_engine,
+            transcription_engine_options={"owner": final_engine.split("_")[0]},
+            realtime_transcription_engine_options={
+                "owner": realtime_engine.split("_")[0]
+            },
+        )
+
+        class ProbeScheduler:
+            def __init__(self, probe_settings, *_args):
+                resolved = probe_settings._resolved_stt_models["final"]["engine"]
+                captured.append(
+                    resolved_engine_options(probe_settings, resolved, "final")
+                )
+
+            def start(self):
+                pass
+
+            def wait_ready(self, timeout=None):
+                return True
+
+            def healthy(self):
+                return True
+
+            def stop(self):
+                pass
+
+        service = object.__new__(VoiceSTTService)
+        service.settings = settings
+        service.scheduler_factory = ProbeScheduler
+        assert service._probe_stt_model(
+            SimpleNamespace(
+                id="candidate",
+                engine=candidate_engine,
+                path="C:/models/candidate",
+            )
+        )
+        assert captured == [expected]
 
 
 def test_native_engine_initialization_is_serialized_across_workers():

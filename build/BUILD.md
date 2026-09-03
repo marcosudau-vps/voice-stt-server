@@ -329,7 +329,11 @@ Fingerprint (`VoiceSTT/kroko/fingerprint.py`) umfasst ausschliesslich
 buildwirksame Inputs: gepinnte Upstream-Revision, Variante, Zielplattform,
 Architektur, Python-ABI, Buildflags, Toolchain-Identitaet sowie die beiden
 deklarierten Revisionen fuer VoiceSTTs eigene buildwirksame Logik
-(`patchSetRevision`, `builderRevision`).
+(`patchSetRevision`, `builderRevision`). Auf Linux gehoert ausserdem die
+effektive OpenSSL-Development-Identitaet (Quelle, Version, Header und
+Bibliotheken samt Inhalts-Hashes) zum Fingerprint. zlib wird nicht separat
+aufgenommen, solange der aktuelle Buildpfad keine eigenstaendig ausgewaehlte
+zlib-Development-Authority konsumiert.
 
 **Nicht** enthalten sind Serverlogik, Wake-Word-Code, Doku und insbesondere die
 Produktversion aus `VERSION`/`VOICESTT_BUILD_VERSION` (W3). Eine reine
@@ -345,7 +349,8 @@ gibt es zwei source-controlled Konstanten in `VoiceSTT/kroko/buildinputs.py`:
 | Konstante | Deckt ab | Wann erhoehen |
 | --- | --- | --- |
 | `PATCH_SET_REVISION` | Was VoiceSTT an den Upstream-**Quellen** patcht (WebSocket ON, OpenSSL-Beschaffung, native Lizenzausgabe) | Sobald sich der Inhalt dieser Patches aendert |
-| `BUILDER_REVISION` | Wie gebaut wird: welche Revision ausgecheckt wird, welche Patches angewandt werden, wie der Compiler aufgerufen wird, welches erzeugte Wheel als Artefakt genommen wird | Sobald sich diese Builderlogik buildwirksam aendert |
+| `WINDOWS_BUILDER_REVISION` | Wie der Windows-Dockerpfad baut und das Wheel auswaehlt | Sobald sich diese Windows-Builderlogik buildwirksam aendert |
+| `LINUX_BUILDER_REVISION` | Wie der native Linuxpfad baut, Toolchaininputs aufloest und das Wheel retaggt | Sobald sich diese Linux-Builderlogik buildwirksam aendert |
 
 Beide Konstanten sind Fingerprint-Inputs; eine Erhoehung invalidiert gespeicherte
 Artefakte also korrekt.
@@ -370,6 +375,8 @@ Alle Optionen:
 | `--branch NAME` | `cross-platform-builds` | Nur Startpunkt fuer den Clone; gebaut wird die gepinnte Revision |
 | `--revision SHA` | gepinnte Revision aus `VoiceSTT/kroko/buildinputs.py` | Immutable Upstream-Commit; Aenderung erzeugt einen neuen Fingerprint |
 | `--artifact-store DIR` | `VOICESTT_KROKO_ARTIFACT_STORE` bzw. Benutzer-Cache | Persistenter Artifact-Store |
+| `--artifact-retention-days N` | `30` bzw. `VOICESTT_KROKO_ARTIFACT_RETENTION_DAYS` | Alter fuer best-effort Cleanup; `0` deaktiviert |
+| `--openssl-root-dir DIR` | `OPENSSL_ROOT_DIR` oder System-Development-Stack | Autoritative OpenSSL-Header/Bibliotheken fuer Linux |
 | `--rebuild-kroko` | aus | Erzwingt echten Neubau trotz vorhandenem Artefakt und ersetzt es atomar |
 | `--print-fingerprint` | aus | Fingerprint als JSON ausgeben, nichts bauen |
 | `--describe-artifact` | aus | Fingerprint plus Artefakt-Verfuegbarkeit als JSON ausgeben, nichts bauen |
@@ -401,6 +408,13 @@ stt-install-kroko --describe-artifact --variant pro
 Ein gebautes Wheel wird im Store zusammen mit Fingerprint, Upstream-Revision,
 Python-ABI, Plattform, Variante, SHA-256 und Groesse inventarisiert; eine
 separate manuelle Inventarisierung ist damit nicht mehr noetig.
+
+Linux-Wheels tragen den Build-Tag `1free` beziehungsweise `1pro` sowohl im
+Dateinamen als auch in `.dist-info/WHEEL`; der RECORD-Eintrag wird dabei neu
+gehasht. Free und Pro bleiben in getrennten Namespaces parallel erhalten.
+Retention-Cleanup ist best-effort und schuetzt immer den aktuellen
+Fingerprint, den neuesten verifizierten LKG-Slot, die jeweils andere Variante
+und gesperrte Slots.
 
 ### Key und Runtime
 
