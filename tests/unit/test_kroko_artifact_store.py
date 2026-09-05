@@ -138,7 +138,9 @@ class StoreAndReuseTests(StoreBaseTest):
         self.assertEqual(record.wheel_sha256, artifacts.sha256_of(wheel))
         self.assertEqual(record.metadata["wheelBytes"], wheel.stat().st_size)
         self.assertEqual(record.metadata["upstreamRevision"], buildinputs.KROKO_UPSTREAM_REVISION)
-        self.assertEqual(record.metadata["wheelTags"], ["cp312-cp312-win_amd64"])
+        parsed_wheel = artifacts.parse_wheel_filename(wheel.name)
+        expected_tag = "{python}-{abi}-{platform}".format(**parsed_wheel)
+        self.assertEqual(record.metadata["wheelTags"], [expected_tag])
 
     def test_stored_artifact_is_found_again(self):
         computed = self.inputs_for("free")
@@ -419,6 +421,15 @@ class BuilderReuseFlowTests(unittest.TestCase):
         self.store_root = self.root / "store"
         self.build_calls = []
 
+    def fingerprint_for(self, extra_args=()):
+        argv = [
+            "--build",
+            "--skip-install",
+            "--artifact-store", str(self.store_root),
+        ] + list(extra_args)
+        args = install_kroko.parse_args(argv)
+        return install_kroko.fingerprint_for(args)
+
     def run_builder(self, extra_args=(), wheel_variant=None, build_error=None):
         """Runs ``install_kroko.main`` with an instrumented, non-compiling builder."""
 
@@ -488,8 +499,8 @@ class BuilderReuseFlowTests(unittest.TestCase):
     def test_free_and_pro_rebuilds_never_modify_the_other_variant(self):
         self.run_builder()
         self.run_builder(["--variant", "pro"])
-        free = fingerprint.compute_fingerprint(variant="free")
-        pro = fingerprint.compute_fingerprint(variant="pro")
+        free = self.fingerprint_for()
+        pro = self.fingerprint_for(["--variant", "pro"])
         store = artifacts.KrokoArtifactStore(self.store_root)
         pro_before, _ = store.lookup(
             variant="pro", fingerprint=pro["fingerprint"], inputs=pro["inputs"]
@@ -676,6 +687,7 @@ class ArtifactRetentionTests(StoreBaseTest):
 class BuilderReuseContinuationTests(unittest.TestCase):
     setUp = BuilderReuseFlowTests.setUp
     run_builder = BuilderReuseFlowTests.run_builder
+    fingerprint_for = BuilderReuseFlowTests.fingerprint_for
 
     def test_force_rebuild_really_invokes_the_builder(self):
         self.run_builder()
@@ -698,7 +710,7 @@ class BuilderReuseContinuationTests(unittest.TestCase):
         self.run_builder()
         self.run_builder(["--rebuild-kroko"])
 
-        computed = fingerprint.compute_fingerprint(variant="free")
+        computed = self.fingerprint_for()
         store = artifacts.KrokoArtifactStore(self.store_root)
         found, problems = store.lookup(
             variant="free", fingerprint=computed["fingerprint"], inputs=computed["inputs"]
@@ -713,7 +725,7 @@ class BuilderReuseContinuationTests(unittest.TestCase):
 
     def test_failed_force_rebuild_keeps_the_existing_artifact(self):
         self.run_builder()
-        computed = fingerprint.compute_fingerprint(variant="free")
+        computed = self.fingerprint_for()
         store = artifacts.KrokoArtifactStore(self.store_root)
         before, _ = store.lookup(
             variant="free", fingerprint=computed["fingerprint"], inputs=computed["inputs"]
@@ -1202,12 +1214,16 @@ class RootFindingFPristineCheckoutTests(unittest.TestCase):
     def _make_local_upstream(self):
         source = Path(self.temp.name) / "source"
         source.mkdir()
-        self._run_git(["init"], cwd=source)
+        try:
+            self._run_git(["init", "-b", "main"], cwd=source)
+        except subprocess.CalledProcessError:
+            self._run_git(["init"], cwd=source)
         self._run_git(["config", "user.email", "test@example.invalid"], cwd=source)
         self._run_git(["config", "user.name", "Test"], cwd=source)
         (source / "build_windows.bat").write_text("REM pristine upstream content\r\n")
         self._run_git(["add", "."], cwd=source)
         self._run_git(["commit", "-m", "initial"], cwd=source)
+        self._run_git(["branch", "-M", "main"], cwd=source)
         result = subprocess.run(
             ["git", "rev-parse", "HEAD"], cwd=str(source),
             check=True, capture_output=True, text=True,
@@ -1507,12 +1523,16 @@ class RootFindingISourceAuthorityTests(unittest.TestCase):
     def _make_upstream(self, name, marker):
         source = self.root / ("source-" + name)
         source.mkdir()
-        self._run_git(["init"], cwd=source)
+        try:
+            self._run_git(["init", "-b", "main"], cwd=source)
+        except subprocess.CalledProcessError:
+            self._run_git(["init"], cwd=source)
         self._run_git(["config", "user.email", "test@example.invalid"], cwd=source)
         self._run_git(["config", "user.name", "Test"], cwd=source)
         (source / "build_windows.bat").write_text("REM {0}\r\n".format(marker))
         self._run_git(["add", "."], cwd=source)
         self._run_git(["commit", "-m", "initial " + name], cwd=source)
+        self._run_git(["branch", "-M", "main"], cwd=source)
         revision = self._run_git(["rev-parse", "HEAD"], cwd=source).stdout.strip()
         bare = self.root / ("upstream-{0}.git".format(name))
         self._run_git(["clone", "--bare", str(source), str(bare)], cwd=self.root)
@@ -1620,18 +1640,19 @@ class RootFindingISourceAuthorityTests(unittest.TestCase):
 
     def test_reuse_hit_needs_no_checkout_at_all_regression(self):
         """RED-proof #6: the authority guard must never run on a cache hit."""
-        computed = fingerprint.compute_fingerprint(variant="free")
         with TemporaryDirectory() as store_root, TemporaryDirectory() as build_dir:
+            argv = [
+                "--build", "--variant", "free", "--skip-install",
+                "--artifact-store", store_root,
+            ]
+            args = install_kroko.parse_args(argv)
+            computed = install_kroko.fingerprint_for(args)
             store = artifacts.KrokoArtifactStore(store_root)
             store.store(
                 wheel_path=make_wheel(Path(build_dir), variant="free"),
                 fingerprint=computed["fingerprint"],
                 inputs=computed["inputs"],
             )
-            argv = [
-                "--build", "--variant", "free", "--skip-install",
-                "--artifact-store", store_root,
-            ]
             with mock.patch.object(install_kroko, "prepare_checkout") as checkout, \
                     mock.patch.object(install_kroko, "checkout_matches_repo_authority") as guard, \
                     mock.patch.object(install_kroko, "build_wheel") as builder:
@@ -1664,7 +1685,11 @@ class RootFindingKCrashAtomicSwapTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.store = artifacts.KrokoArtifactStore(self.root / "store")
         self.build_dir = self.root / "build"
-        self.computed = fingerprint.compute_fingerprint(variant="free")
+        args = install_kroko.parse_args([
+            "--build", "--variant", "free", "--skip-install",
+            "--artifact-store", str(self.store.root),
+        ])
+        self.computed = install_kroko.fingerprint_for(args)
         self.fingerprint = self.computed["fingerprint"]
         self.inputs = self.computed["inputs"]
 
@@ -1761,7 +1786,11 @@ class RootFindingKCrashAtomicSwapTests(unittest.TestCase):
 
     def test_a_foreign_backup_is_never_activated(self):
         """RED-proof #4: another slot's artifact cannot be recovered into this one."""
-        foreign = fingerprint.compute_fingerprint(variant="pro")
+        foreign_args = install_kroko.parse_args([
+            "--build", "--variant", "pro", "--skip-install",
+            "--artifact-store", str(self.store.root),
+        ])
+        foreign = install_kroko.fingerprint_for(foreign_args)
         self._store(b"known-good")
         backup = self._crash_after_moving_final_aside()
         metadata_path = backup / artifacts.ARTIFACT_METADATA_NAME
