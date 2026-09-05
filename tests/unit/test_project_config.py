@@ -40,16 +40,24 @@ class ProjectConfigTests(TestCase):
         compose = yaml.safe_load(
             (root / "docker-compose.yml").read_text(encoding="utf-8")
         )
+        # AP-SRV-070 W4C: the production Dockerfile no longer has a
+        # KROKO_VARIANT build arg that triggers a native Kroko compile - the
+        # variant is decided before `docker build` runs, by which wheel
+        # tools/build_production.py stages under dist/kroko/. The ARG here is
+        # informational (an OCI label) only.
         self.assertEqual(
-            compose["services"]["server"]["build"]["args"]["KROKO_VARIANT"],
+            compose["services"]["server"]["build"]["args"]["VOICESTT_KROKO_VARIANT"],
             "${VOICESTT_KROKO_VARIANT:-free}",
         )
+        # AP-SRV-070 W4C: the public compose is portable by default - a
+        # single persistent runtime root at /var/lib/voicestt with a
+        # documented fallback, not a value tools/compose.py must supply.
         data_mount = next(
             mount
             for mount in compose["services"]["server"]["volumes"]
-            if mount.get("target") == "/data"
+            if mount.get("target") == "/var/lib/voicestt"
         )
-        self.assertEqual(data_mount["source"], "${VOICESTT_DATA_PATH:?Starte Compose über tools/compose.py}")
+        self.assertEqual(data_mount["source"], "${VOICESTT_DATA_PATH:-./data}")
         defaults = load_example_app_defaults(root / "config.yaml")
         self.assertEqual(defaults["STT_BACKEND"], "faster_whisper")
         self.assertEqual(defaults["USER_COLOR_RGB"], "0,188,242")
@@ -76,6 +84,40 @@ class ProjectConfigTests(TestCase):
                 discover_model_path("faster_whisper", config, root),
                 second.resolve(),
             )
+
+    def test_model_path_discovery_is_optional_and_returns_none_when_unconfigured(self):
+        """AP-SRV-070 W4C: a custom model path is optional, not a hard requirement."""
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.assertIsNone(discover_model_path("faster_whisper", {}, root))
+            self.assertIsNone(
+                discover_model_path(
+                    "kroko",
+                    {"kroko": {"path": "auto", "candidates": ["models/missing"]}},
+                    root,
+                )
+            )
+
+    def test_compose_environment_skips_env_var_for_an_unconfigured_optional_model_path(self):
+        ambient = {
+            key: value
+            for key, value in os.environ.items()
+            if key not in ("VOICESTT_FASTER_WHISPER_HOST_PATH", "VOICESTT_KROKO_HOST_PATH")
+        }
+        with patch.dict(os.environ, ambient, clear=True):
+            with TemporaryDirectory() as directory:
+                root = Path(directory)
+                deployment = {
+                    "image": "test-image",
+                    "kroko_variant": "free",
+                    "runtime_data": {"path": "auto", "candidates": ["./runtime-data"]},
+                    # No model_paths at all - AP-SRV-070 W4C made both optional.
+                }
+
+                environment = build_compose_environment(deployment, root)
+
+                self.assertNotIn("VOICESTT_FASTER_WHISPER_HOST_PATH", environment)
+                self.assertNotIn("VOICESTT_KROKO_HOST_PATH", environment)
 
     def test_compose_environment_comes_only_from_deployment_config(self):
         with TemporaryDirectory() as directory:

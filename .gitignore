@@ -65,6 +65,7 @@ build/
 !build/
 build/*
 !build/BUILD.md
+!build/kroko-builder.Dockerfile
 !build/vps/
 !build/vps/**
 .build-python/

@@ -132,7 +132,11 @@ settings:
 
 deployment:
   compose_project: voice
-  image: voicestt-cpu:local
+  # AP-SRV-070 W4C: the public production image identity is voice-stt-server
+  # / voice-stt-server-pro (see build/BUILD.md); the previous voicestt-cpu
+  # tag is renamed here only because it would otherwise point at an image
+  # name the new production Dockerfile no longer produces.
+  image: voice-stt-server:local
   # Portabler Standard. Lizenzierte Deployments muessen pro explizit setzen.
   kroko_variant: free
   server_port: 8010

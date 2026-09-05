@@ -45,33 +45,54 @@ export KROKO_API_KEY='...nur in der lokalen Secret-Verwaltung...'
 Der Key ist ein Laufzeit-Secret. Er wird nicht beim Build benoetigt und darf
 nicht in Shell-Historien, Images, Compose-Dateien oder Git abgelegt werden.
 
-### Docker mit Community-Kroko
+### Oeffentliches Production-Image (AP-SRV-070 W4C)
 
-Modellpfade in `config.yaml` pruefen und den portablen Compose-Launcher nutzen:
+Der Production-Docker-Pfad kompiliert Kroko nie selbst und installiert
+VoiceSTT nie editable: `tools/build_production.py` baut zuerst das
+VoiceSTT-Wheel (`python -m build`), loest danach ueber den vorhandenen
+Kroko-Fingerprint-/Artifact-Store (W4A) ein verifiziertes Linux/AMD64-Wheel
+auf (REUSE, sonst einmaliger Build im eigenstaendigen
+[`build/kroko-builder.Dockerfile`](kroko-builder.Dockerfile)) und baut dann
+erst das eigentliche Production-Image aus dem neuen zweistufigen
+`Dockerfile` (Ubuntu 24.04, `builder`/`runtime`, non-root, kein
+Kroko-Builder-Stage):
 
 ```bash
-python -m pip install PyYAML
-python tools/compose.py up --build -d
-python tools/compose.py ps
+python tools/build_production.py free
+python tools/build_production.py pro
+python tools/build_production.py all
+```
+
+Jeder Lauf schreibt `dist/build-manifest.json` mit Git-Commit, VoiceSTT- und
+Kroko-Artefaktidentitaet, Image-Tags und Image-ID. Die beiden oeffentlichen
+Produktidentitaeten sind `voice-stt-server` (Free) und `voice-stt-server-pro`
+(Pro) - beide mit demselben VoiceSTT-Stand, nur mit unterschiedlichem
+Kroko-Build-Input. Ein vorhandener Kroko-Runtime-Key ist niemals Build-Input
+und kann eine Free-Variante nie zu Pro machen.
+
+Danach mit dem oeffentlichen, portablen `docker-compose.yml` starten:
+
+```bash
+VOICESTT_IMAGE=voice-stt-server:local docker compose up -d
 curl -fsS http://127.0.0.1:8010/health
 ```
 
-`deployment.kroko_variant` ist standardmaessig `free`. Compose baut das
-CPU-Image und mountet vorhandene Modellverzeichnisse read-only.
-
-### Docker mit Kroko Pro
-
-Den Pro-Build immer explizit ausloesen und den Lizenz-Key erst beim Start als
-Environment-Secret bereitstellen:
+`docker-compose.yml` hat portable Defaults fuer Port, Datenverzeichnis und
+optionale Custom-Model-Pfade; kein Wert ist an Marcos Infrastruktur
+gebunden. Fuer Pro `VOICESTT_IMAGE=voice-stt-server-pro:local` setzen und den
+Lizenz-Key erst zur Laufzeit als Secret bereitstellen (`VOICESTT_API_KEY`
+bzw. `KROKO_API_KEY` ueber `env_file`, nie im Compose-File selbst):
 
 ```bash
-docker build --target cpu --build-arg KROKO_VARIANT=pro -t voicestt-cpu:pro .
-docker run --rm -e KROKO_API_KEY --mount type=bind,src=/pfad/kroko,dst=/models/kroko,readonly voicestt-cpu:pro python -c 'import kroko_onnx; print("Kroko runtime importiert")'
+docker run --rm -e KROKO_API_KEY voice-stt-server-pro:local \
+  /opt/venv/bin/python -c 'import kroko_onnx; print("Kroko runtime importiert")'
 ```
 
-Fuer Compose kann `deployment.kroko_variant: pro` in einer lokalen
-Konfigurationskopie gesetzt werden. Die produktive VPS-Variante ist bereits
-unter [`build/vps`](vps/README.md) festgelegt.
+Marcos bestehende lokale/VPS-nahe Komfortschicht (`tools/compose.py` +
+`config.yaml`'s `deployment`-Abschnitt) bleibt fuer sein eigenes Environment
+nutzbar; Custom-Model-Pfade daraus sind jetzt optional statt Pflichtwerte.
+Die produktive VPS-Variante bleibt unter [`build/vps`](vps/README.md)
+festgelegt und ist nicht Teil des oeffentlichen Pfads.
 
 ### Vor einem Release pruefen
 
@@ -115,10 +136,11 @@ Runtime uebergeben werden. Eine Free-Runtime kann Pro-Modelle nicht laden.
 | Kroko Community | `stt-install-kroko --build --variant free` | Community-faehige Kroko-Runtime im aktiven Python |
 | Kroko Pro | `stt-install-kroko --build --variant pro` | Lizenzfaehige Kroko-Runtime im aktiven Python |
 | Kroko-Wheel ohne Installation | `stt-install-kroko --build --skip-install --work-dir DIR` | Wheel im Kroko-Artefaktverzeichnis |
-| Docker CPU/Community | `docker build --target cpu --build-arg KROKO_VARIANT=free -t voicestt-cpu:free .` | Vollstaendiges Offline-CPU-Image |
-| Docker CPU/Pro | `docker build --target cpu --build-arg KROKO_VARIANT=pro -t voicestt-cpu:pro .` | Gleiches Image mit Pro-Wheel |
-| Nur Kroko-Builder | `docker build --target kroko-builder --build-arg KROKO_VARIANT=pro -t voicestt:kroko-builder-pro .` | Wiederverwendbarer Builder/Cache |
-| Pro-Wheel-Upgrade | `docker build -f Dockerfile.pro-upgrade -t voicestt-cpu:pro-upgrade .` | Bestehendes Image plus bereits gebautes Pro-Wheel |
+| Production-Image Free | `python tools/build_production.py free` | `voice-stt-server:<version>` (Ubuntu 24.04, non-root) |
+| Production-Image Pro | `python tools/build_production.py pro` | `voice-stt-server-pro:<version>`, gleicher VoiceSTT-Stand |
+| Production-Image beide | `python tools/build_production.py all` | Beide Images plus `dist/build-manifest.json` |
+| Nur Kroko-Builder-Image | `docker build -f build/kroko-builder.Dockerfile -t voicestt-kroko-builder .` | Eigenstaendiges Linux/AMD64-Builder-Image (W4A-Pfad, ausserhalb des Production-Images) |
+| Pro-Wheel-Upgrade | `docker build -f Dockerfile.pro-upgrade -t voicestt-cpu:pro-upgrade .` | Marcos enger `selfhost/stt-voice`-Reparaturpfad; nicht Teil des oeffentlichen W4C-Pfads |
 
 `setup.py` ist aktuell die kanonische Paketmetadatenquelle. Eine spaetere
 Migration auf `pyproject.toml` muss Extras, Console-Scripts, den angepassten
@@ -192,12 +214,17 @@ Zeitzonenabhaengigkeiten. `api_fastapi_server/requirements.txt` ist die
 zusaetzliche Docker-/Entwicklungsquelle fuer den Server.
 
 Die Browseroberflaeche unter `api_fastapi_server/static/index.html` ist ein
-statisches Asset und hat keinen Node-, Bundler- oder Transpiler-Build. Der
-Compose-Service `browserclient` mountet sie direkt in `nginx:alpine`; die
-Proxyregeln aus `docker/nginx.conf` leiten `/ws`, `/health`, `/config`, `/api`
-und `/v1` an den Server weiter. Aenderungen an der statischen Datei erfordern
-kein Python-Wheel, aber einen Container-Recreate beziehungsweise ein neues
-Image, wenn das Asset nicht als Hostmount genutzt wird.
+einzelnes, selbstenthaltenes statisches Asset ohne Node-, Bundler- oder
+Transpiler-Build und ohne externe Asset-Referenzen; `setup.py` paketiert sie
+als `package_data`. `api_fastapi_server/server.py` liest sie relativ zum
+installierten Modul und liefert sie unter `/` aus - seit AP-SRV-070 W4C
+braucht die oeffentliche Production Compose dafuer keinen separaten
+`nginx`/Browserclient-Container und keinen Source-Bind-Mount mehr; `stt-server`
+liefert API, WebSocket und Browseroberflaeche aus einem Container. Der
+historische `nginx:alpine`-Compose-Service und `docker/nginx.conf` bleiben im
+Repository liegen, sind aber nicht mehr Teil des Production-Compose-Pfads.
+Aenderungen an der statischen Datei erfordern ein neues VoiceSTT-Wheel plus
+Imagebuild, da sie nicht mehr als Hostmount genutzt wird.
 
 ### Extras- und Installationsmatrix
 
@@ -451,43 +478,49 @@ Pro-Recognizer fuehrten mit dem getesteten nativen Build reproduzierbar zum
 Prozessende mit Exit 139. Das ist eine serverseitig beobachtete Einschraenkung,
 keine allgemeine Zusage ueber alle Kroko-Versionen.
 
-### Docker-Build
+### Docker-Build (AP-SRV-070 W4C)
 
-`Dockerfile` hat zwei Stages:
+`Dockerfile` hat seit W4C zwei Stages, beide `ubuntu:24.04`, und keine davon
+kompiliert Kroko:
 
-1. `kroko-builder` installiert Buildwerkzeuge und erzeugt das Kroko-Wheel mit
-   der Build-Variante aus `ARG KROKO_VARIANT`.
-2. `cpu` installiert CPU-Torch, das erzeugte Kroko-Wheel, VoiceSTT mit den
-   benoetigten Extras und den FastAPI-Server. Buildwerkzeuge werden danach
-   weitgehend entfernt.
+1. `builder` installiert eine venv unter `/opt/venv` und installiert darin
+   CPU-Torch, das bereits aufgeloeste Kroko-Wheel (`dist/kroko/*.whl`) und
+   das bereits gebaute VoiceSTT-Wheel (`dist/voicestt/*.whl`) mit den
+   benoetigten Extras.
+2. `runtime` kopiert nur `/opt/venv` in ein schlankes Ubuntu-24.04-Image,
+   legt den nicht-root Benutzer `voicestt` und `/var/lib/voicestt` an und
+   setzt den korrigierten liveness-only `HEALTHCHECK`.
 
-Der Build-Arg ist nur waehrend des Builds gueltig:
+Beide Wheels sind Pflicht-Build-Context-Eingaben; sie werden von
+`tools/build_production.py` erzeugt (siehe oben), nicht vom Dockerfile
+selbst. Der eigenstaendige Kroko-Builder lebt in
+[`build/kroko-builder.Dockerfile`](kroko-builder.Dockerfile) und wird nie vom
+Production-`Dockerfile` referenziert:
 
 ```bash
-docker build --pull --target cpu \
-  --build-arg KROKO_VARIANT=pro \
-  -t voicestt-cpu:pro .
+docker build -f build/kroko-builder.Dockerfile -t voicestt-kroko-builder .
+docker run --rm -v "$PWD/.kroko-artifacts:/artifact-store" \
+  -e VOICESTT_KROKO_ARTIFACT_STORE=/artifact-store \
+  voicestt-kroko-builder --describe-artifact --variant pro
 ```
 
-Ein normales `docker compose up --build` ohne gesetzte Variante baut bewusst
-Community. `docker-compose.yml` reicht deshalb
-`${VOICESTT_KROKO_VARIANT:-free}` als Build-Arg weiter; `tools/compose.py`
-setzt den Wert aus `deployment.kroko_variant`.
+`tools/build_production.py` orchestriert genau diese beiden Schritte
+(Kroko-Wheel aufloesen, dann Production-Image bauen) fuer `free`, `pro` oder
+`all`.
 
 ### Schnelles Pro-Wheel-Upgrade
 
-`Dockerfile.pro-upgrade` ist ein enger Reparaturpfad, kein Ersatz fuer einen
-vollstaendigen Release-Build. Es nimmt ein vorhandenes Runtime-Image und
-ersetzt nur das Kroko-Wheel durch das Artefakt eines bereits gebauten
-Pro-Builder-Images. Vorher muessen die referenzierten Image-Tags existieren.
-
-Beispiel mit den derzeit im Dockerfile erwarteten Tags:
-
-```bash
-docker build --target kroko-builder --build-arg KROKO_VARIANT=pro \
-  -t selfhost/stt-voice:kroko-builder-pro .
-docker build -f Dockerfile.pro-upgrade -t selfhost/stt-voice:pro-candidate .
-```
+`Dockerfile.pro-upgrade` bleibt Marcos enger `selfhost/stt-voice`-
+Reparaturpfad und ist nicht Teil des oeffentlichen W4C-Production-Pfads. Es
+erwartet ein bereits gebautes `selfhost/stt-voice:kroko-builder-pro`-Image mit
+dem fertigen Wheel unter `/build/kroko-work/kroko-onnx/release_artifacts/linux/`.
+Das bis W4C dafuer genutzte `kroko-builder`-Target existiert im
+Production-`Dockerfile` nicht mehr; wer diesen Reparaturpfad weiter nutzen
+will, muss das erwartete Builder-Image ausserhalb des W4C-Pfads selbst
+bereitstellen (z. B. mit einer eigenen, build/vps-gebundenen Variante, die den
+Kroko-Build wie zuvor als `RUN`-Schritt in das Image backt statt ihn - wie
+`build/kroko-builder.Dockerfile` - erst beim `docker run` auszufuehren). Das
+ist Marcos Betreiberpfad und bewusst nicht Teil dieses Runs.
 
 Danach sind mindestens Import, Lizenzinitialisierung, `/health`, eine reale
 HTTP-Transkription und Realtime-WebSocket-Teilergebnisse zu pruefen. Der
@@ -497,21 +530,23 @@ Build, weil dabei alle Projekt- und Abhaengigkeitsaenderungen enthalten sind.
 ## Docker Compose und Konfiguration
 
 Der portable Launcher `tools/compose.py` liest ausschließlich den Abschnitt
-`deployment` aus `config.yaml`, findet vorhandene Modellordner und setzt die
-notwendigen Compose-Variablen. Direkter Aufruf von `docker compose` scheitert
-absichtlich, wenn erforderliche Variablen fehlen.
+`deployment` aus `config.yaml` und setzt die entsprechenden Compose-Variablen;
+seit AP-SRV-070 W4C hat `docker-compose.yml` selbst fuer alle diese Variablen
+bereits portable Defaults, `tools/compose.py` ist also Komfort, keine
+Voraussetzung. Ein direkter `docker compose up` ohne `tools/compose.py`
+funktioniert; ohne konfigurierte Custom-Model-Pfade nutzt der Server einfach
+den persistenten verwalteten Store unter `/var/lib/voicestt`.
 
 Wichtige Werte:
 
 | Konfiguration | Compose-Variable | Zweck |
 | --- | --- | --- |
 | `deployment.image` | `VOICESTT_IMAGE` | lokaler Image-Tag |
-| `deployment.kroko_variant` | `VOICESTT_KROKO_VARIANT` | `free` oder `pro` beim Build |
-| `deployment.server_port` | `VOICESTT_PORT` | FastAPI-Port |
-| `deployment.browser_port` | `VOICESTT_BROWSER_PORT` | Browserclient-Port |
+| `deployment.kroko_variant` | `VOICESTT_KROKO_VARIANT` | Label-Wert des Builds (Variantenwahl selbst passiert vor dem Imagebuild, siehe `tools/build_production.py`) |
+| `deployment.server_port` | `VOICESTT_PORT` | FastAPI-/Browserclient-Port (ein Container) |
 | `deployment.cpu_threads` | `VOICESTT_CPU_THREADS` | CPU-Threadlimit |
-| `deployment.model_paths.*` | jeweilige Hostpfade | read-only Modellmounts |
-| `deployment.runtime_data` | `VOICESTT_DATA_PATH` | persistentes `/data` |
+| `deployment.model_paths.faster_whisper`/`.kroko` | jeweilige Hostpfade | optionale read-only Custom-Model-Mounts; fehlend/nicht gefunden bleibt unmontiert |
+| `deployment.runtime_data` | `VOICESTT_DATA_PATH` | persistentes `/var/lib/voicestt` |
 
 `settings` beschreibt den Serverstart. Persistierte Admin-Aenderungen liegen
 unter `/data/config/runtime.json` und koennen YAML-Werte beim Neustart

@@ -243,12 +243,19 @@ OpenAI-compatible transcription route through one shared model scheduler.
 
 ```bash
 .\install_windows_cpu.ps1
-python .\tools\compose.py up --build -d
+python tools\build_production.py free
+python .\tools\compose.py up -d
 ```
 
-This is the portable development path. Marcos VPS uses the separate,
-Pro-aware release process under [build/vps](build/vps/README.md). Open
-`http://localhost:8010` for the local setup. See
+This is the portable development path. Since AP-SRV-070 W4C, the production
+Dockerfile installs a pre-built VoiceSTT wheel and a pre-resolved Kroko
+wheel instead of compiling anything itself - run
+`tools/build_production.py` (see [build/BUILD.md](build/BUILD.md)) once
+before `up`, or point `VOICESTT_IMAGE` at an already-built
+`voice-stt-server`/`voice-stt-server-pro` image and skip `--build`. Marcos
+VPS uses the separate, Pro-aware release process under
+[build/vps](build/vps/README.md). Open `http://localhost:8010` for the
+local setup. See
 [docs/fastapi-server.md](docs/fastapi-server.md)
 for engine recipes, websocket protocol details, health checks, and metrics.
 

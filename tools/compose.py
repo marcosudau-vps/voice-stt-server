@@ -14,10 +14,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = PROJECT_ROOT / "config.yaml"
 COMPOSE_FILE = PROJECT_ROOT / "docker-compose.yml"
 
+#: AP-SRV-070 W4C: both are optional, read-only custom-model overrides on top
+#: of the persistent managed store under /var/lib/voicestt - discovery falls
+#: through to the managed store when a candidate is not found, it no longer
+#: aborts. Wake-word product assets ship inside the installed VoiceSTT wheel
+#: (see setup.py package_data), so there is no openwakeword host mount.
 MODEL_ENV_NAMES = {
     "faster_whisper": "VOICESTT_FASTER_WHISPER_HOST_PATH",
     "kroko": "VOICESTT_KROKO_HOST_PATH",
-    "openwakeword": "VOICESTT_OPENWAKEWORD_HOST_PATH",
 }
 
 
@@ -50,10 +54,21 @@ def discover_model_path(
     name: str,
     config: Dict[str, Any],
     project_root: Path = PROJECT_ROOT,
-) -> Path:
+) -> "Path | None":
+    """Resolves one optional custom model path override.
+
+    AP-SRV-070 W4C: a custom model path is an optional, pre-vetted read-only
+    override on top of the persistent managed store under /var/lib/voicestt
+    (see VoiceSTT_server/stt_model_management.py discovery_roots()), not a
+    mandatory deployment input. Returns ``None`` - never raises - when
+    ``deployment.model_paths`` has no entry for ``name`` or none of its
+    candidates exist; the caller then leaves the corresponding compose
+    override unset and the public docker-compose.yml default (an empty local
+    directory) applies.
+    """
     raw = config.get(name)
     if not isinstance(raw, dict):
-        raise ValueError(f"deployment.model_paths.{name} fehlt.")
+        return None
 
     configured = str(raw.get("path", "auto")).strip()
     candidates: Iterable[str]
@@ -62,19 +77,11 @@ def discover_model_path(
     else:
         candidates = raw.get("candidates") or ()
 
-    checked = []
     for candidate in candidates:
         path = _resolve_path(str(candidate), project_root)
-        checked.append(str(path))
         if path.is_dir():
             return path
-
-    locations = "\n  - ".join(checked) if checked else "(keine)"
-    raise FileNotFoundError(
-        f"Kein Modellpfad für '{name}' gefunden. Geprüft:\n  - {locations}\n"
-        "Ergänze genau einen Kandidaten in config.yaml unter "
-        f"deployment.model_paths.{name}.candidates."
-    )
+    return None
 
 
 def discover_data_path(
@@ -108,12 +115,12 @@ def build_compose_environment(
     environment = os.environ.copy()
     model_paths = deployment.get("model_paths")
     if not isinstance(model_paths, dict):
-        raise ValueError("config.yaml: deployment.model_paths fehlt.")
+        model_paths = {}
 
     for model_name, env_name in MODEL_ENV_NAMES.items():
-        environment[env_name] = str(
-            discover_model_path(model_name, model_paths, project_root)
-        )
+        resolved = discover_model_path(model_name, model_paths, project_root)
+        if resolved is not None:
+            environment[env_name] = str(resolved)
 
     data_path = discover_data_path(deployment, project_root)
     kroko_variant = str(deployment.get("kroko_variant", "free")).strip().lower()
@@ -122,10 +129,9 @@ def build_compose_environment(
             "deployment.kroko_variant muss 'free' oder 'pro' sein."
         )
     environment.update({
-        "VOICESTT_IMAGE": str(deployment.get("image", "voicestt-cpu:local")),
+        "VOICESTT_IMAGE": str(deployment.get("image", "voice-stt-server:local")),
         "VOICESTT_KROKO_VARIANT": kroko_variant,
         "VOICESTT_PORT": str(deployment.get("server_port", 8010)),
-        "VOICESTT_BROWSER_PORT": str(deployment.get("browser_port", 8081)),
         "VOICESTT_CPU_THREADS": str(deployment.get("cpu_threads", 4)),
         "VOICESTT_DATA_PATH": str(data_path),
     })

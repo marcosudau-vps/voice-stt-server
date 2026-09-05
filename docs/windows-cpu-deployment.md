@@ -183,21 +183,25 @@ The canonical Docker stage, Kroko variant and packaging explanation is in
 [`build/BUILD.md`](../build/BUILD.md). This section only covers the tested
 Windows host workflow.
 
-The image has one stage named `cpu`, installs PyTorch from the CPU wheel index,
-and declares no host devices or accelerator runtime. Models are read-only bind
-mounts. Start it through the portable configuration launcher:
+Since AP-SRV-070 W4C, the production `Dockerfile` has two Ubuntu-24.04 stages
+(`builder`/`runtime`), installs PyTorch from the CPU wheel index into a venv,
+and declares no host devices or accelerator runtime; it installs a pre-built
+VoiceSTT wheel and a pre-resolved Kroko wheel rather than compiling anything
+itself (see `build/BUILD.md`). Custom model paths are optional, read-only
+bind mounts on top of the persistent `/var/lib/voicestt` store. Build the
+wheels first, then start through the portable configuration launcher:
 
 ```powershell
+python tools\build_production.py free
 python .\tools\compose.py config
-python .\tools\compose.py up --build -d
+python .\tools\compose.py up -d
 ```
 
-- API/server: `http://localhost:8010`
-- proxied standalone browser client: `http://localhost:8081`
+- API, WebSocket and browser client (single container): `http://localhost:8010`
 
-The browser container proxies `/ws`, `/health`, `/config`, `/api`, and `/v1` to the
-server, so it remains an independent container without hard-coded localhost
-assumptions.
+The FastAPI server serves the browser client itself from the installed
+package's static assets - there is no separate browserclient/nginx container
+or proxy in the public production path.
 
 The Linux image installs OpenWakeWord's ONNX runtime dependencies explicitly.
 Its Python 3.12 package metadata still declares `tflite-runtime`, although that

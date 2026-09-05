@@ -1,70 +1,90 @@
+# Public, portable production Compose (AP-SRV-070 W4C). No operator-specific
+# hostpaths, domains, networks, ports or secret paths are baked in here -
+# every value below has a portable default and can be overridden through the
+# environment or an optional env_file. See build/BUILD.md for the full
+# contract and tools/build_production.py for how the Free/Pro images
+# referenced by VOICESTT_IMAGE are produced.
+#
+# `docker compose build`/`up --build` requires dist/voicestt/*.whl and
+# dist/kroko/*.whl to already exist in the build context - this Dockerfile
+# never builds the wheel or compiles Kroko itself. Run
+# `python tools/build_production.py <free|pro|all>` first, or set
+# VOICESTT_IMAGE to an image already built that way and skip `--build`.
 services:
   server:
     build:
       context: .
-      target: cpu
+      target: runtime
       args:
-        KROKO_VARIANT: ${VOICESTT_KROKO_VARIANT:-free}
-    image: ${VOICESTT_IMAGE:?Starte Compose über tools/compose.py}
-    container_name: voicestt-server
+        VOICESTT_KROKO_VARIANT: ${VOICESTT_KROKO_VARIANT:-free}
+    image: ${VOICESTT_IMAGE:-voice-stt-server:local}
     restart: unless-stopped
     init: true
     environment:
       VOICESTT_CPU_ONLY: "1"
       VOICESTT_OFFLINE_MODELS: "1"
-      VOICESTT_FASTER_WHISPER_MODEL_ROOT: /models/ctranslate2
-      VOICESTT_KROKO_MODEL_ROOT: /models/kroko
-      VOICESTT_OPENWAKEWORD_MODEL_ROOT: /models/openwakeword
-      VOICESTT_API_KEY: ${VOICESTT_API_KEY:-}
-      VOICESTT_ADMIN_API_KEY: ${VOICESTT_ADMIN_API_KEY:-}
       HF_HUB_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
-      OMP_NUM_THREADS: ${VOICESTT_CPU_THREADS:?Starte Compose über tools/compose.py}
+      VOICESTT_DATA_ROOT: /var/lib/voicestt
+      # Legacy-named but still-consumed custom-path overrides (see
+      # VoiceSTT_server/stt_model_management.py discovery_roots()). Pointed
+      # at the optional read-only mounts below; an empty mount means these
+      # simply resolve to nothing and discovery falls through to the
+      # persistent managed store.
+      VOICESTT_FASTER_WHISPER_MODEL_ROOT: /models/custom/faster-whisper
+      VOICESTT_KROKO_MODEL_ROOT: /models/custom/kroko
+      VOICESTT_API_KEY: ${VOICESTT_API_KEY:-}
+      VOICESTT_ADMIN_API_KEY: ${VOICESTT_ADMIN_API_KEY:-}
+      OMP_NUM_THREADS: ${VOICESTT_CPU_THREADS:-4}
       CT2_USE_EXPERIMENTAL_PACKED_GEMM: "1"
+    env_file:
+      - path: ${VOICESTT_ENV_FILE:-./voicestt.env}
+        required: false
     command:
-      - python
-      - -m
-      - VoiceSTT_server.server
-      - --config
-      - /config/config.yaml
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8010"
+      - --device
+      - cpu
+      - --compute-type
+      - int8
+      - --engine-options
+      - '{"local_files_only":true}'
+      - --realtime-engine-options
+      - '{"local_files_only":true}'
     volumes:
+      # Single persistent runtime root: logs, admin config and the managed
+      # model store (models/stt/fasterwhisper, models/stt/kroko_asr) all
+      # live under here. See VoiceSTT_server/stt_model_management.py.
       - type: bind
-        source: ./config.yaml
-        target: /config/config.yaml
+        source: ${VOICESTT_DATA_PATH:-./data}
+        target: /var/lib/voicestt
+        bind:
+          create_host_path: true
+      # Optional, read-only, pre-vetted custom model directories. Both
+      # default to an empty local folder: if nothing is mounted there,
+      # discovery simply falls through to the persistent managed store
+      # above - this is not a required deployment input.
+      - type: bind
+        source: ${VOICESTT_FASTER_WHISPER_HOST_PATH:-./models/custom/faster-whisper}
+        target: /models/custom/faster-whisper
         read_only: true
+        bind:
+          create_host_path: true
       - type: bind
-        source: ${VOICESTT_FASTER_WHISPER_HOST_PATH:?Starte Compose über tools/compose.py}
-        target: /models/ctranslate2
+        source: ${VOICESTT_KROKO_HOST_PATH:-./models/custom/kroko}
+        target: /models/custom/kroko
         read_only: true
-      - type: bind
-        source: ${VOICESTT_KROKO_HOST_PATH:?Starte Compose über tools/compose.py}
-        target: /models/kroko
-        read_only: true
-      - type: bind
-        source: ${VOICESTT_OPENWAKEWORD_HOST_PATH:?Starte Compose über tools/compose.py}
-        target: /models/openwakeword
-        read_only: true
-      - type: bind
-        source: ${VOICESTT_DATA_PATH:?Starte Compose über tools/compose.py}
-        target: /data
+        bind:
+          create_host_path: true
     ports:
-      - "${VOICESTT_PORT:?Starte Compose über tools/compose.py}:8010"
+      - "${VOICESTT_PORT:-8010}:8010"
     healthcheck:
-      test: ["CMD", "python", "-c", "import json, urllib.request; result=json.load(urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=5)); assert result.get('ready') and result.get('ok')"]
+      # AP-SRV-070 W4C, section 10: liveness only - see Dockerfile HEALTHCHECK
+      # for why this must never require a loaded STT model.
+      test: ["CMD", "python3.12", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=5).getcode() == 200 or exit(1)"]
       interval: 30s
       timeout: 10s
-      start_period: 180s
+      start_period: 60s
       retries: 5
-
-  browserclient:
-    image: nginx:1.29-alpine
-    container_name: voicestt-browserclient
-    restart: unless-stopped
-    volumes:
-      - ./api_fastapi_server/static:/usr/share/nginx/html:ro
-      - ./docker/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    ports:
-      - "${VOICESTT_BROWSER_PORT:?Starte Compose über tools/compose.py}:80"
-    depends_on:
-      server:
-        condition: service_healthy

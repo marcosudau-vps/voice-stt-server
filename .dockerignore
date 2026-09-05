@@ -19,7 +19,11 @@ server_zwischenstand
 htmlcov
 .coverage
 pytest.ini
-dist
+# AP-SRV-070 W4C: dist/voicestt/*.whl and dist/kroko/*.whl are the production
+# Dockerfile's deliberate build inputs (see tools/build_production.py) and
+# must reach the build context; only their own past sdist/build scratch
+# output would need excluding, and neither Dockerfile COPYs anything else
+# from dist/.
 build
 *.egg-info
 .dockerignore

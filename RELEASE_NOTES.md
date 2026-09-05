@@ -64,6 +64,20 @@
 - Added a mandatory documentation archive process for larger change actions,
   including a dated plan, a later plan-versus-implementation review, and a
   separate rationale for material deviations.
+- Added a public production Docker/Compose release path
+  (`tools/build_production.py`, `build/kroko-builder.Dockerfile`, the
+  rewritten `Dockerfile`/`docker-compose.yml`): the production image installs
+  a pre-built VoiceSTT wheel and a pre-resolved, W4A-verified Kroko wheel
+  instead of compiling or editable-installing anything itself, runs Ubuntu
+  24.04 as the non-root `voicestt` user with a persistent
+  `/var/lib/voicestt` root, and produces the two public product identities
+  `voice-stt-server` (free) and `voice-stt-server-pro` with the same
+  VoiceSTT build. The public Compose file no longer needs a separate
+  browserclient/nginx container - the FastAPI server serves the browser
+  client from its own installed package - and its Docker health probe now
+  only proves the process/control plane is alive, never that an STT model is
+  loaded, so a container with no model provisioned yet stays healthy instead
+  of restart-looping.
 
 ### Changed
 
