@@ -1,0 +1,166 @@
+# AP-SRV-070 W5: public CI for VoiceSTT.
+#
+# Scope (see build/BUILD.md "Versions- und Releasepflege" and the AP-SRV-070
+# W5 archive plan): ordinary correctness/packaging CI for an open-source
+# repository. It builds the wheel/sdist, proves the wheel installs and runs
+# standalone (never from an editable/source checkout), and runs the fast
+# unit/guard/release-tool suite on the two mandatory release-qualification
+# platforms.
+#
+# This workflow intentionally does NOT publish anything (no PyPI/GHCR/Docker
+# Hub upload, no Git tag, no GitHub Release), does NOT require any Kroko Pro
+# runtime secret, and does NOT perform a native Kroko build - that stays a
+# separate, opt-in, secret-bearing path outside ordinary CI. release.py
+# (AP-SRV-070 W5) owns the actual publication order and never runs it here.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - "main"
+      - "feat/**"
+      - "work/**"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  build-and-test:
+    name: build-and-test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Linux audio prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev
+
+      - name: Upgrade packaging tools
+        run: python -m pip install --upgrade pip build twine
+
+      # ------------------------------------------------------------------
+      # 1. Package build + wheel/sdist metadata validation (W5P-G18)
+      # ------------------------------------------------------------------
+      - name: Build wheel + sdist
+        run: python -m build --outdir dist
+
+      - name: List built artifacts
+        run: ls -la dist
+
+      - name: twine check
+        run: python -m twine check dist/*
+
+      # ------------------------------------------------------------------
+      # 2. Fresh-install smoke test from the built wheel, never editable
+      #    (W5P-G19 / W5P-G20)
+      # ------------------------------------------------------------------
+      - name: Create install-smoke virtual environment
+        run: python -m venv .venv-install-smoke
+
+      - name: Install the built wheel (not editable) into the smoke venv
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            PY=".venv-install-smoke/Scripts/python.exe"
+          else
+            PY=".venv-install-smoke/bin/python"
+          fi
+          echo "PY=$PY" >> "$GITHUB_ENV"
+          WHEEL=$(ls dist/*.whl | head -n1)
+          "$PY" -m pip install --upgrade pip
+          "$PY" -m pip install "${WHEEL}[recommended,server]"
+
+      - name: pip check (installed distribution)
+        run: $PY -m pip check
+
+      - name: Import / version check from the installed distribution
+        run: |
+          SMOKE_DIR="${RUNNER_TEMP:-/tmp}/voicestt-install-smoke"
+          mkdir -p "$SMOKE_DIR"
+          cd "$SMOKE_DIR"
+          "$OLDPWD/$PY" - <<'PYEOF'
+          import importlib.metadata as metadata
+          import VoiceSTT_server  # noqa: F401 - proves the installed distribution imports
+          from VoiceSTT._version import resolve_version
+
+          installed_version = metadata.version("voicestt")
+          resolved_version = resolve_version()
+          print(f"installed distribution version: {installed_version}")
+          print(f"resolve_version(): {resolved_version}")
+          assert installed_version == resolved_version, "installed metadata and resolve_version() disagree"
+          PYEOF
+
+      - name: Console-script availability (installed distribution)
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            BIN_DIR=".venv-install-smoke/Scripts"
+            EXT=".exe"
+          else
+            BIN_DIR=".venv-install-smoke/bin"
+            EXT=""
+          fi
+          for script in stt-server stt-server-legacy stt stt-install-kroko; do
+            test -f "${BIN_DIR}/${script}${EXT}" || { echo "missing console script: ${script}"; exit 1; }
+            echo "found console script: ${script}"
+          done
+
+      - name: Installed package assets present (no checkout dependency)
+        run: |
+          SMOKE_DIR="${RUNNER_TEMP:-/tmp}/voicestt-install-smoke"
+          cd "$SMOKE_DIR"
+          "$OLDPWD/$PY" - <<'PYEOF'
+          import pathlib
+          import VoiceSTT
+          import api_fastapi_server
+
+          voicestt_root = pathlib.Path(VoiceSTT.__file__).resolve().parent
+          server_root = pathlib.Path(api_fastapi_server.__file__).resolve().parent
+
+          required = [
+              voicestt_root / "assets" / "warmup_audio.wav",
+              voicestt_root / "assets" / "kroko" / "models.json",
+              server_root / "static" / "index.html",
+          ]
+          missing = [str(p) for p in required if not p.is_file()]
+          assert not missing, f"missing installed package assets: {missing}"
+          wakeword_dir = voicestt_root / "assets" / "wakeword_models"
+          assert wakeword_dir.is_dir() and any(wakeword_dir.iterdir()), "wake-word assets missing from installed distribution"
+          print("all required installed package assets are present")
+          PYEOF
+
+      # ------------------------------------------------------------------
+      # 3. Fast unit/guard/packaging/release-tool tests (W5P-G21)
+      # ------------------------------------------------------------------
+      - name: Install development/test dependencies (source checkout)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[recommended,server]"
+          python -m pip install -r requirements-dev.txt
+
+      - name: pip check (dev environment)
+        run: python -m pip check
+
+      - name: Run fast unit/guard/packaging/release-tool test suite
+        run: python -m pytest -q tests/unit
+
+      - name: git diff --check (no whitespace errors)
+        run: git diff --check

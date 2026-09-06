@@ -246,23 +246,149 @@ Ein Release-Kandidat kann die Version ueber die validierte Umgebungsvariable
 `VOICESTT_BUILD_VERSION` injizieren, ohne `VERSION` vor dem Tag dauerhaft zu
 aendern. Ein ungueltiger Override wird hart abgelehnt, nie still verworfen.
 
-Die kuenftige Release-Bedienung (W5/W6) folgt dem Muster
-`python release.py` (Patch), `--minor`, `--major` - ohne manuelle
-Versionspflege durch den Benutzer. Bis dahin muss ein Projekt-Release
-mindestens folgende Stellen konsistent halten:
+### Der Release-Orchestrator (AP-SRV-070 W5)
 
-1. Version in `VERSION` aendern (spaeter automatisiert durch `release.py`).
-2. `RELEASE_NOTES.md` von `Unreleased` in einen datierten Versionsabschnitt
+`release.py` im Repository-Root ist die eine kanonische Release-Bedienung;
+es gibt keine zweite, konkurrierende Release-Authority. Die eigentliche
+Implementierung liegt in `release_tooling/` (Preflight, Dry-Run,
+resumable State, RC-Manifest); `release.py` selbst delegiert nur dorthin.
+
+```bash
+python release.py --help
+python release.py preflight
+python release.py dry-run
+python release.py status
+python release.py manifest validate <pfad>
+```
+
+`preflight` ist rein lesend und prueft unter anderem VERSION, den
+`RELEASE_NOTES.md`-Abschnitt, sauberen/exakten Git-Zustand, Tag-Abwesenheit
+bzw. -Kompatibilitaet, Tool-Verfuegbarkeit sowie Registry-Konfiguration und
+Credential-*Praesenz* (nie den Wert selbst).
+
+### Eine Engine fuer Dry-Run und echte Publikation (AP-SRV-070 W5-R01-C1)
+
+`release_tooling/engine.py` ist die eine Stelle, an der die feste
+W6-Publikationsreihenfolge als Daten kodiert ist (`STEP_DEFINITIONS`), nicht
+als verstreute Fallunterscheidung:
+
+```text
+PRECHECK -> PyPI -> GHCR -> Docker Hub -> externe Verifikation
+  -> Git-Tag -> GitHub Release -> finale Verifikation -> COMPLETE
+```
+
+`python release.py dry-run` und `python release.py publish` rufen beide
+dieselbe Funktion `engine.run_engine()` mit demselben Adapter-Bundle auf -
+der einzige Unterschied ist `ExecutionMode.DRY_RUN` gegenueber
+`ExecutionMode.REAL`. Jeder Schritt prueft zuerst rein lesend den
+Remote-Zustand (`adapter.verify()` - sicher in beiden Modi); nur im
+REAL-Modus und nur wenn dabei "noch nicht vorhanden" herauskommt, wird
+`adapter.publish()` ueberhaupt aufgerufen. Im DRY_RUN-Modus ist es
+strukturell unmoeglich, dass `publish()` jemals aufgerufen wird - das ist
+keine Konvention, sondern eine Eigenschaft der Engine-Schleife selbst
+(siehe `tests/unit/test_release_engine.py::DryRunNeverWritesTests`).
+
+`release_tooling/adapters.py` implementiert die fuenf echten,
+W6-faehigen Publikationsadapter (PyPI ueber Twine, GHCR/Docker Hub ueber
+`docker tag`/`docker push`, Git-Tag ueber `git tag`/`git push`, GitHub
+Release ueber `gh release create`) sowie zwei rein lesende
+Verifikationsadapter (externe/finale Verifikation, die verlangen, dass
+alle darunterliegenden Adapter `MATCH` melden). Kein Adapter liest, loggt
+oder speichert jemals einen Credential-Wert - jedes Werkzeug liest seinen
+eigenen etablierten Zugangsdatenvertrag direkt aus der Prozessumgebung
+(Twines `TWINE_USERNAME`/`TWINE_PASSWORD`/`TWINE_API_KEY`, `docker login`,
+gits Credential-Helper, `gh`s `GH_TOKEN`/`GITHUB_TOKEN`) - dieser Code fasst
+den Wert nie an.
+
+Der Git-Tag entsteht bewusst spaet: sowohl die feste Schrittreihenfolge als
+auch `GitTagAdapter.publish()` selbst (`state.assert_tag_allowed()`)
+verhindern eine Tag-Erstellung vor erfolgreicher externer Verifikation.
+Ebenso verhindert `GitHubReleaseAdapter.publish()`
+(`state.assert_github_release_allowed()`) eine Release-Erstellung vor dem
+Tag. Ein Versuch, diese Reihenfolge zu umgehen, ist ein harter Fehler
+(`OrderError`), keine stille Ausnahme.
+
+Der Release-State (`release_state/<version>.json`, git-ignoriert, niemals
+Secrets) bindet die exakte Quell-Commit-/Tree-Identitaet sowie Wheel-,
+Sdist- und Image-Identitaeten an eine Version und laesst sich nach einem
+Teilausfall wieder aufnehmen - ohne die Version automatisch zu wechseln
+(Abschnitt "Kein verschwendeter oeffentlicher Versionsstand" weiter unten).
+Ein bereits vorhandenes, abweichendes Remote-Artefakt (PyPI-Release,
+GHCR-/Docker-Hub-Tag, Git-Tag, GitHub Release) fuehrt zu einem harten Stopp
+(`ConflictError`), nie zu einem stillen Ausweichen auf eine neue Version.
+Selbst wenn der lokale State nach einem Absturz nicht mitgeschrieben wurde,
+aber die externe Operation tatsaechlich erfolgreich war, erkennt die Engine
+das beim naechsten Lauf automatisch (derselbe lesende
+`verify()`-vor-`publish()`-Schritt reconciled den State, statt ihn erneut
+auszufuehren).
+
+`python release.py publish --manifest <RC-Manifest> --yes` fuehrt die echte
+Engine im `ExecutionMode.REAL` aus. Ohne `--manifest` oder ohne `--yes`
+verweigert der Befehl sofort, ohne irgendetwas zu lesen oder zu schreiben;
+mit beidem laeuft zuerst ein vollstaendiger Preflight, und erst bei
+`passed: true` wird ueberhaupt ein Adapter konstruiert. AP-SRV-070 W5-R01-C1
+implementiert und qualifiziert diese Engine vollstaendig mit injizierten
+Fake-Adaptern (`tests/unit/test_release_engine.py`,
+`tests/unit/test_release_adapters.py`) - sie fuehrt selbst keinen echten
+oeffentlichen Schreibvorgang aus, weil dafuer echte Zugangsdaten und eine
+echte Zielregistry noetig sind. W6 ruft dieselbe, hier bereits qualifizierte
+Engine mit echten Zugangsdaten auf, statt neue kritische Publikationslogik
+nach der RC-Qualifikation einzufuehren.
+
+`python release.py prepare-next-version [--minor|--major] [--apply]` ist die
+**zukuenftige** Versionsvorbereitung (`--minor`/`--major` wie im bisherigen
+Konzept) und bewusst vom aktuellen Publikationspfad getrennt: ohne `--apply`
+berechnet der Befehl nur die naechste Version, ohne `VERSION` zu schreiben.
+
+### RC-Manifest (AP-SRV-070 W5/W6)
+
+`release_tooling.rc_manifest` definiert das eine kanonische Format fuer
+einen Release-Kandidaten (`W5-RC1`, `W5-RC2`, ...): Produktversion,
+Quell-Commit/-Tree, Wheel-/Sdist-Datei plus SHA-256, Kroko-Free-/Pro-
+Fingerprint plus Artefakt-SHA-256, Free-/Pro-Image-Tag plus Image-ID,
+OCI-Version/-Revision, Qualifizierungszeitpunkt/-kontext und
+Freigabestatus - ohne jegliches Secret. W5-R02 friert genau ein solches
+Manifest ein; W6 darf nichts veroeffentlichen, das von den darin gebundenen
+Identitaeten abweicht.
+
+### Kein verschwendeter oeffentlicher Versionsstand
+
+Ein teilweiser Veroeffentlichungsfehler darf niemals automatisch eine neue
+Produktversion erzeugen. Gelingt W6 zum Beispiel PyPI, aber nicht GHCR, nimmt
+ein erneuter Lauf **dieselbe** Version wieder auf - niemals automatisch
+`2.0.1`. Nur eine bewusste menschliche Entscheidung vor Beginn der
+Veroeffentlichung darf die Version wechseln.
+
+### Freigabeprozess bis zum echten W6-Publish
+
+1. Version in `VERSION` aendern (`release.py prepare-next-version --apply`
+   fuer die naechste Version; der aktuelle Publikationspfad selbst aendert
+   `VERSION` nie).
+2. `RELEASE_NOTES.md` von `Unreleased` in einen Versionsabschnitt
    ueberfuehren.
-3. Unit-Tests, Paketbuild, `twine check` und relevante Realmodelltests
+3. `python release.py preflight` und `python release.py dry-run` pruefen.
+4. Unit-Tests, Paketbuild, `twine check` und relevante Realmodelltests
    ausfuehren.
-4. Git-Tag erst auf dem geprueften Commit setzen.
-5. Dockerimages mit unveraenderlicher Commit-/Versionsreferenz zusaetzlich zum
-   lokalen Betriebs-Tag versehen.
+5. W5-R02 friert das RC-Manifest fuer exakt diesen Commit ein.
+6. W6 fuehrt `python release.py publish --manifest <RC-Manifest> --yes`
+   gegen das eingefrorene Manifest aus; der Git-Tag entsteht erst nach
+   externer Verifikation. Vor diesem Lauf muessen
+   `VOICESTT_RELEASE_GHCR_REPO`/`VOICESTT_RELEASE_DOCKERHUB_REPO` gesetzt
+   und die Zugangsdaten der jeweiligen Werkzeuge (Twine, `docker login`,
+   Git-Credential-Helper, `gh auth login`) bereits vorhanden sein - keiner
+   dieser Werte wird von `release_tooling` selbst verwaltet oder gelesen.
 
-Das Repository besitzt aktuell keinen versionierten GitHub-Actions-Workflow.
-Build-, Test- und Releaseabnahme werden daher lokal beziehungsweise ueber die
-VPS-Automation ausgefuehrt und muessen im Release-Log nachvollziehbar bleiben.
+### GitHub Actions CI (AP-SRV-070 W5)
+
+`.github/workflows/ci.yml` ist der oeffentliche CI-Workflow: Checkout,
+Paketbuild (Wheel + Sdist), `twine check`, Installation aus dem gebauten
+Wheel (nie editable) samt `pip check`/Import-/Versions-/Console-Script-/
+Asset-Pruefung, sowie die schnelle Unit-/Guard-/Release-Tool-Suite
+(`python -m pytest -q tests/unit`) auf Windows und Ubuntu 24.04 mit
+Python 3.12. Der Workflow triggert auf Pull Requests, Pushes auf
+`main`/`feat/**`/`work/**` und `workflow_dispatch`; er verlangt kein
+Kroko-Pro-Runtime-Secret, baut kein natives Kroko und veroeffentlicht,
+taggt oder released nichts.
 
 ## Python-Paket bauen
 

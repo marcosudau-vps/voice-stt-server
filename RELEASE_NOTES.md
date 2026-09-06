@@ -2,8 +2,24 @@
 
 ## Unreleased
 
+## 2.0.0
+
 ### Added
 
+- Added the AP-SRV-070 W5 release infrastructure: a canonical repository-root
+  `release.py` entry point with read-only preflight and a true no-publish
+  dry-run over the fixed W6 publication order (PyPI, then GHCR, then Docker
+  Hub, then external artifact verification, then the Git tag, then the
+  GitHub Release), a non-secret resumable release-state contract so a
+  partial W6 run resumes the same product version instead of ever
+  advancing to a new one, a canonical RC manifest format that binds the
+  exact source, package, Kroko, and image identities a release candidate is
+  qualified against, and a public GitHub Actions CI workflow that builds
+  the wheel/sdist, validates them with `twine check`, installs from the
+  built wheel (never editable), and runs the fast unit/guard/release-tool
+  suite on Windows and Ubuntu 24.04 with Python 3.12. `release.py` performs
+  no public write in this release; W6 is the first run that actually
+  publishes anything.
 - Added a reusable Kroko runtime artifact pipeline (`VoiceSTT/kroko/`): the
   native Kroko build is pinned to an immutable upstream commit, described by a
   canonical build fingerprint, and cached in a persistent, configurable

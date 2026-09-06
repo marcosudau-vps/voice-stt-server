@@ -181,6 +181,11 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
+# AP-SRV-070 W5: non-secret, resumable release-orchestrator runtime state
+# (release_tooling.state / release.py). Not a Git authority - see
+# build/BUILD.md "Versions- und Releasepflege".
+/release_state/
+
 # Environments
 .env
 .venv
