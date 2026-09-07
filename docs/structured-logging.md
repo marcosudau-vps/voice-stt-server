@@ -175,6 +175,33 @@ from being generated, while `performance_log_mirror_enabled` controls only
 their optional calendar JSONL/stdout mirror. `realtime_log_detail` remains the
 source policy for high-volume realtime performance detail.
 
+### Store availability, failure and recovery
+
+The canonical store reports one overall availability state. It is what
+`hello.logAccess.available` and `replayAvailable` expose, what `/health` folds
+into `ok`, what `/api/logs/*` requires before answering, and what makes
+`/ws/logs` send `log.error(code=event_store_unavailable)` and close `1011`.
+
+Read capability and write capability are tracked separately, and the store is
+available only when neither is failing:
+
+- A failed canonical **write** (append/commit) makes the store unavailable. The
+  attempted event receives no cursor and never becomes canonical.
+- A failed canonical **read** also makes the store unavailable, because replay
+  and history cannot be served.
+- A successful read clears only a previous **read** failure. It never clears an
+  unresolved write failure: a successful `SELECT` shows that reads work and
+  says nothing about whether `INSERT`/commit works.
+- Only a canonical append that actually commits clears a **write** failure.
+  That is the moment recovery is announced to live subscribers.
+
+While canonical writes are unavailable, live logging stays unavailable. This is
+deliberate: newly generated events cannot be persisted, and a live stream that
+kept reporting itself healthy would silently drop them without any signal —
+`log.gap(reason=retention)` describes deleted history, not events that were
+never committed. `/ws/transcribe` audio and text operation is unaffected by a
+canonical store outage.
+
 History is available at:
 
 ```http

@@ -591,6 +591,149 @@ def test_event_hub_cursor_remains_unique_after_store_write_failure(tmp_path):
     hub.close()
 
 
+def test_event_hub_successful_read_never_clears_a_pending_write_failure(tmp_path):
+    # AP-SRV-070 W5-R02-C3-R1: an event only becomes canonical through a
+    # successful SQLite append, so a successful SELECT is no evidence that
+    # INSERT/commit works. Read and write capability are therefore tracked
+    # separately and a read must not report the store recovered while writes
+    # are still failing - otherwise the live log stream advertises itself as
+    # healthy while silently dropping every newly generated event, which the
+    # documented gap model (only retention represents missing data) excludes.
+    settings = LogSettings(
+        request_log_stdout=False,
+        request_log_path=str(tmp_path / "audit"),
+        performance_logging_enabled=False,
+        system_event_logging_enabled=True,
+        system_event_log_path=str(tmp_path / "system"),
+        event_store_enabled=True,
+        event_store_path=str(tmp_path / "events.sqlite3"),
+    )
+    hub = StructuredEventHub(settings)
+    received = []
+    subscription = hub.subscribe(received.append)
+    original_append = hub._store.append
+    baseline_id = hub.emit("audit", "session.accepted", sessionId="a")
+    hub.flush()
+    assert baseline_id is not None
+    baseline_cursor = hub.latest_cursor()
+
+    def always_fail(event):
+        raise OSError("simulated persistent write outage")
+
+    hub._store.append = always_fail
+
+    # T1 - the write fails, the store reports unavailable, and the attempted
+    # event never becomes canonical.
+    assert hub.emit("audit", "session.rejected", sessionId="a") is None
+    hub.flush()
+    assert hub.store_status()["state"] == "degraded"
+    assert hub.store_available() is False
+    assert hub.latest_cursor() == baseline_cursor
+    assert "session.rejected" not in {item["event"] for item in hub.query()}
+
+    # T2 - the central regression: reads keep working, and a successful
+    # canonical read must not clear the unresolved write failure.
+    read_back = hub.query()
+    assert [item["cursor"] for item in read_back] == [baseline_cursor]
+    assert hub.store_status()["state"] == "degraded"
+    assert hub.store_available() is False
+
+    # T3 - a second generated event still cannot be committed, and nothing is
+    # falsely exposed as canonical.
+    assert hub.emit("audit", "session.closed", sessionId="a") is None
+    hub.flush()
+    assert hub.store_status()["state"] == "degraded"
+    assert {item["event"] for item in hub.query()} == {"session.accepted"}
+
+    # No subscriber may ever have been told the store recovered while no
+    # write ever succeeded again. flush() drains the control queue first, so
+    # this negative assertion cannot pass merely because a control frame is
+    # still in flight.
+    hub.flush()
+    assert not any(
+        item.get("_logControl") == "store_recovered" for item in received
+    )
+    assert any(
+        item.get("_logControl") == "store_error"
+        and item.get("code") == "event_store_unavailable"
+        for item in received
+    )
+
+    # T4 - real write recovery: only an append that actually commits restores
+    # availability, and that transition is announced.
+    hub._store.append = original_append
+    recovered_id = hub.emit("audit", "session.reaccepted", sessionId="a")
+    hub.flush()
+    assert recovered_id is not None
+    assert hub.store_status()["state"] == "ready"
+    assert hub.store_available() is True
+    assert hub.latest_cursor() > baseline_cursor
+    assert any(
+        item.get("_logControl") == "store_recovered" for item in received
+    )
+    assert {item["event"] for item in hub.query()} == {
+        "session.accepted",
+        "session.reaccepted",
+    }
+    hub.unsubscribe(subscription)
+    hub.close()
+
+
+def test_event_hub_read_failure_is_cleared_by_a_successful_read(tmp_path):
+    # AP-SRV-070 W5-R02-C3-R1 (T5): the write-aware model must not make read
+    # health unrecoverable. A read failure degrades the store and a later
+    # successful read clears it again, as long as no write failure is
+    # outstanding.
+    settings = LogSettings(
+        request_log_stdout=False,
+        request_log_path=str(tmp_path / "audit"),
+        performance_logging_enabled=False,
+        system_event_logging_enabled=True,
+        system_event_log_path=str(tmp_path / "system"),
+        event_store_enabled=True,
+        event_store_path=str(tmp_path / "events.sqlite3"),
+    )
+    hub = StructuredEventHub(settings)
+    received = []
+    subscription = hub.subscribe(received.append)
+    assert hub.emit("audit", "session.accepted", sessionId="a") is not None
+    hub.flush()
+    assert hub.store_status()["state"] == "ready"
+
+    original_query = hub._store.query
+
+    def failing_query(**filters):
+        raise OSError("simulated read outage")
+
+    hub._store.query = failing_query
+    try:
+        hub.query()
+    except OSError:
+        pass
+    else:
+        raise AssertionError("the simulated read outage must propagate")
+    assert hub.store_status()["state"] == "degraded"
+    assert hub.store_available() is False
+
+    # Writes are unaffected by a read outage and still commit.
+    assert hub.emit("audit", "session.closed", sessionId="a") is not None
+    hub.flush()
+    assert hub.store_status()["state"] == "degraded", (
+        "a successful write must not clear an unresolved read failure"
+    )
+
+    hub._store.query = original_query
+    assert len(hub.query()) == 2
+    assert hub.store_status()["state"] == "ready"
+    assert hub.store_available() is True
+    hub.flush()
+    assert any(
+        item.get("_logControl") == "store_recovered" for item in received
+    )
+    hub.unsubscribe(subscription)
+    hub.close()
+
+
 def test_event_hub_optional_mirror_overload_never_loses_committed_events(tmp_path):
     settings = LogSettings(
         request_logging_enabled=False,

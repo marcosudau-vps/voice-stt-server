@@ -718,7 +718,12 @@ class StructuredEventHub:
             if store_path:
                 self._store = SQLiteEventStore(Path(store_path))
         self._cursor = self._store.latest_cursor() if self._store is not None else 0
-        self._store_state = "ready" if self._store is not None else "disabled"
+        # Read and write capability are tracked separately. An event only
+        # becomes canonical through a successful append, so a successful read
+        # proves nothing about persistence and must not clear an unresolved
+        # write failure. The reported state is derived from both.
+        self._store_write_failed = False
+        self._store_read_failed = False
         self._store_last_error_type = None
         self._store_last_transition_at = utc_timestamp()
         self._channel_config = {}
@@ -970,12 +975,15 @@ class StructuredEventHub:
                 logging.getLogger("voicestt.fastapi").exception(
                     "Kanonischer SQLite-Eventstore ist fehlgeschlagen"
                 )
-                self._set_store_state("degraded", error=exc)
+                self._set_store_state(
+                    "degraded", capability="write", error=exc
+                )
                 return None
             payload["cursor"] = cursor
             with self._cursor_lock:
                 self._cursor = cursor
-            self._set_store_state("ready")
+            # A committed append is the only proof that persistence works.
+            self._set_store_state("ready", capability="write")
             self._enqueue_control({
                 "_logControl": "commit",
                 "cursor": cursor,
@@ -1088,28 +1096,57 @@ class StructuredEventHub:
         except queue.Full:
             return False
 
-    def _set_store_state(self, state, *, error=None):
+    def _derived_store_state(self):
+        """Overall canonical-store state, derived from both capabilities.
+
+        Must be called with `_store_state_lock` held.
+        """
+        if self._store is None:
+            return "disabled"
+        if self._store_write_failed or self._store_read_failed:
+            return "degraded"
+        return "ready"
+
+    def _set_store_state(self, state, *, capability, error=None):
+        """Record the outcome of one canonical-store operation.
+
+        `capability` is `"write"` for append/commit outcomes and `"read"` for
+        query/cursor outcomes. A successful read clears only a read failure; an
+        unresolved write failure keeps the store unavailable until an append
+        actually succeeds again, because a successful SELECT is no evidence
+        that INSERT/commit works and no event becomes canonical without one.
+        """
         error_type = type(error).__name__ if error is not None else None
+        failed = state == "degraded"
         with self._store_state_lock:
+            previous = self._derived_store_state()
+            if capability == "write":
+                self._store_write_failed = failed
+            else:
+                self._store_read_failed = failed
+            current = self._derived_store_state()
             changed = (
-                state != self._store_state
+                current != previous
                 or (
-                    state == "degraded"
+                    failed
+                    and current == "degraded"
                     and error_type != self._store_last_error_type
                 )
             )
-            self._store_state = str(state)
-            self._store_last_error_type = error_type
+            if failed:
+                self._store_last_error_type = error_type
+            elif current == "ready":
+                self._store_last_error_type = None
             if changed:
                 self._store_last_transition_at = utc_timestamp()
         if not changed:
             return
-        if state == "degraded":
+        if current == "degraded":
             self._enqueue_control({
                 "_logControl": "store_error",
                 "code": "event_store_unavailable",
             }, critical=True)
-        elif state == "ready":
+        elif current == "ready":
             self._enqueue_control({
                 "_logControl": "store_recovered",
                 "cursor": self.latest_cursor(),
@@ -1184,9 +1221,11 @@ class StructuredEventHub:
         try:
             result = self._store.query(**filters)
         except Exception as exc:
-            self._set_store_state("degraded", error=exc)
+            self._set_store_state(
+                "degraded", capability="read", error=exc
+            )
             raise
-        self._set_store_state("ready")
+        self._set_store_state("ready", capability="read")
         return result
 
     def latest_cursor(self) -> int:
@@ -1194,7 +1233,9 @@ class StructuredEventHub:
             try:
                 cursor = self._store.latest_cursor()
             except Exception as exc:
-                self._set_store_state("degraded", error=exc)
+                self._set_store_state(
+                    "degraded", capability="read", error=exc
+                )
                 raise
             return cursor
         with self._cursor_lock:
@@ -1206,7 +1247,9 @@ class StructuredEventHub:
         try:
             cursor = self._store.oldest_cursor()
         except Exception as exc:
-            self._set_store_state("degraded", error=exc)
+            self._set_store_state(
+                "degraded", capability="read", error=exc
+            )
             raise
         return cursor
 
@@ -1216,7 +1259,9 @@ class StructuredEventHub:
         try:
             cursor = self._store.retention_cursor(**filters)
         except Exception as exc:
-            self._set_store_state("degraded", error=exc)
+            self._set_store_state(
+                "degraded", capability="read", error=exc
+            )
             raise
         return cursor
 
@@ -1228,11 +1273,14 @@ class StructuredEventHub:
                 oldest_cursor = self._store.oldest_cursor()
                 latest_cursor = self._store.latest_cursor()
             except Exception as exc:
-                self._set_store_state("degraded", error=exc)
+                self._set_store_state(
+                    "degraded", capability="read", error=exc
+                )
         with self._store_state_lock:
+            state = self._derived_store_state()
             return {
-                "state": self._store_state,
-                "available": self._store_state == "ready",
+                "state": state,
+                "available": state == "ready",
                 "lastErrorType": self._store_last_error_type,
                 "lastTransitionAt": self._store_last_transition_at,
                 "oldestCursor": oldest_cursor,
@@ -1241,7 +1289,7 @@ class StructuredEventHub:
 
     def store_available(self) -> bool:
         with self._store_state_lock:
-            return self._store_state == "ready"
+            return self._derived_store_state() == "ready"
 
     def drop_counts(self):
         with self._drop_lock:

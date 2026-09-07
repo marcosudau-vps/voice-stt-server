@@ -1788,21 +1788,82 @@ class FastAPIMultiUserWebSocketTests(unittest.TestCase):
                     self.assertIsNone(
                         events.emit("system", "outage.not_committed")
                     )
-                    error = logs.receive_json()
+                    # AP-SRV-070 W5-R02-C2: a second, equivalent timing
+                    # assumption to the one W5-R02-C1 fixed at the replay
+                    # boundary exists here at the live/outage boundary - a
+                    # log.event that was already committed and queued to this
+                    # live WebSocket before the store failure took effect may
+                    # legitimately arrive before the mandatory log.error,
+                    # exactly as real GitHub Actions exposed (run
+                    # 34135266167). Consume and prove any such frames instead
+                    # of assuming the very next frame is the error; bounded so
+                    # a genuine regression still fails fast instead of
+                    # hanging.
+                    #
+                    # AP-SRV-070 W5-R02-C3-R1: the canonical-identity proof
+                    # reads the store directly instead of going through
+                    # events.query(). EventHub.query() records read-capability
+                    # health, which is part of the very state this test is
+                    # exercising; the raw store read proves the same identity
+                    # without touching it.
+                    max_intervening_events = 50
+                    intervening_seen = 0
+                    while True:
+                        message = logs.receive_json()
+                        if message["type"] == "log.event":
+                            intervening_seen += 1
+                            if intervening_seen > max_intervening_events:
+                                self.fail(
+                                    "too many intervening log.event frames "
+                                    f"before log.error (bounded at "
+                                    f"{max_intervening_events}) - the "
+                                    "outage boundary is not converging"
+                                )
+                            event_cursor = int(message["event"]["cursor"])
+                            event_name = message["event"]["event"]
+                            self.assertGreater(
+                                event_cursor, replay_cursor,
+                                "intervening event cursor must strictly "
+                                "advance past the previously consumed "
+                                "cursor (no duplicate/out-of-order replay)",
+                            )
+                            self.assertNotEqual(
+                                event_name, "outage.not_committed",
+                                "the deliberately failed event must never "
+                                "be exposed as a committed log.event",
+                            )
+                            canonical = events._store.query(
+                                after_cursor=event_cursor - 1,
+                                until_cursor=event_cursor,
+                                limit=1,
+                            )
+                            self.assertEqual(
+                                len(canonical), 1,
+                                f"cursor {event_cursor} was delivered live "
+                                "but is not present in the canonical store",
+                            )
+                            self.assertEqual(canonical[0]["cursor"], event_cursor)
+                            self.assertEqual(canonical[0]["event"], event_name)
+                            replay_cursor = event_cursor
+                        elif message["type"] == "log.error":
+                            error = message
+                            break
+                        else:
+                            self.fail(
+                                "unexpected message type before the "
+                                f"outage error: {message['type']!r}"
+                            )
                     self.assertEqual(error["type"], "log.error")
                     self.assertEqual(error["code"], "event_store_unavailable")
                     with self.assertRaises(WebSocketDisconnect) as closed:
                         logs.receive_json()
                     self.assertEqual(closed.exception.code, 1011)
 
-                with client.websocket_connect("/ws/logs") as unavailable:
-                    error = unavailable.receive_json()
-                    self.assertEqual(error["type"], "log.error")
-                    self.assertEqual(error["code"], "event_store_unavailable")
-                    with self.assertRaises(WebSocketDisconnect) as closed:
-                        unavailable.receive_json()
-                    self.assertEqual(closed.exception.code, 1011)
-
+                # AP-SRV-070 W5-R02-C3-R1: the "new connection while the store
+                # is already degraded" contract has its own test below
+                # (test_new_log_stream_reports_degraded_store_and_closes), so
+                # it establishes and asserts its own precondition instead of
+                # inheriting one from this scenario.
                 events._store.append = original_append
                 self.assertIsNotNone(events.emit("system", "outage.recovered"))
                 self.assertTrue(events.store_available())
@@ -1835,6 +1896,156 @@ class FastAPIMultiUserWebSocketTests(unittest.TestCase):
                             break
                     self.assertIn("outage.recovered", replayed)
                     self.assertNotIn("outage.not_committed", replayed)
+
+    def _degraded_store_app(self, temp_dir):
+        settings = ServerSettings(
+            model_warmup=False,
+            data_root_path=temp_dir,
+            admin_api_key="test-admin-secret",
+            request_log_stdout=False,
+            performance_log_stdout=False,
+        )
+        return create_app(
+            settings,
+            scheduler_factory=AutoScheduler,
+            recorder_factory=FakeRecorder,
+        )
+
+    def _settle_startup(self, app):
+        # The service's own startup worker (VoiceSTTService.ready_thread) still
+        # emits server.ready and the models.loaded performance event on its own
+        # thread. EventHub.emit resolves _store.append and only then calls it,
+        # so an append resolved microseconds before the outage patch replaces
+        # it still commits afterwards - which is genuine write evidence and
+        # legitimately restores availability. Joining that exact thread is a
+        # deterministic barrier, not a sleep, a timeout or a retry. Measured on
+        # Ubuntu 24.04/Python 3.12 against the corrected store semantics:
+        # without the join 82/100 with 18 hangs, with the join 100/100.
+        service = app.state.voicestt_service
+        service.ready_thread.join(timeout=30)
+        self.assertFalse(
+            service.ready_thread.is_alive(),
+            "the server startup worker must have finished before the "
+            "canonical store outage is simulated",
+        )
+        return service
+
+    @staticmethod
+    def _break_canonical_writes(events):
+        original_append = events._store.append
+        events._store.append = lambda event: (_ for _ in ()).throw(
+            OSError("simulated outage")
+        )
+        return original_append
+
+    def _assert_degraded_fast_path(self, client):
+        with client.websocket_connect("/ws/logs") as unavailable:
+            error = unavailable.receive_json()
+            self.assertEqual(error["type"], "log.error")
+            self.assertEqual(error["code"], "event_store_unavailable")
+            with self.assertRaises(WebSocketDisconnect) as closed:
+                unavailable.receive_json()
+            self.assertEqual(closed.exception.code, 1011)
+
+    def test_new_log_stream_reports_degraded_store_and_closes(self):
+        # AP-SRV-070 W5-R02-C3-R1: a /ws/logs connection opened while the
+        # canonical store is unavailable must answer
+        # log.error(event_store_unavailable) and close 1011 without hanging.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = self._degraded_store_app(temp_dir)
+            with TestClient(app) as client:
+                events = self._settle_startup(app).events
+                original_append = self._break_canonical_writes(events)
+                try:
+                    self.assertIsNone(
+                        events.emit("system", "outage.not_committed")
+                    )
+                    self.assertFalse(
+                        events.store_available(),
+                        "precondition: the canonical store must actually be "
+                        "degraded before the new connection is opened",
+                    )
+                    self._assert_degraded_fast_path(client)
+                finally:
+                    events._store.append = original_append
+
+    def test_live_log_stays_unavailable_while_only_reads_recover(self):
+        # AP-SRV-070 W5-R02-C3-R1 (T6): the user-visible half of the corrected
+        # recovery semantics. Canonical writes fail persistently while reads
+        # keep working. A successful canonical read proves read capability
+        # only - it must not make the live log advertise itself as available,
+        # because every newly generated event is still being lost and the
+        # documented gap model has no way to signal that.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = self._degraded_store_app(temp_dir)
+            with TestClient(app) as client:
+                events = self._settle_startup(app).events
+                original_append = self._break_canonical_writes(events)
+                try:
+                    self.assertIsNone(
+                        events.emit("system", "outage.not_committed")
+                    )
+                    self.assertFalse(events.store_available())
+
+                    # A real canonical read, exactly as the live /ws/logs loop
+                    # and the history endpoint perform it.
+                    self.assertGreater(len(events.query(limit=1000)), 0)
+                    self.assertFalse(
+                        events.store_available(),
+                        "a successful canonical read must not clear an "
+                        "unresolved canonical write failure",
+                    )
+                    self.assertEqual(
+                        events.store_status()["state"], "degraded"
+                    )
+
+                    self._assert_degraded_fast_path(client)
+
+                    # The write path is still broken and still non-canonical.
+                    self.assertIsNone(
+                        events.emit("system", "outage.still_not_committed")
+                    )
+                    self.assertNotIn(
+                        "outage.still_not_committed",
+                        {
+                            event["event"]
+                            for event in events._store.query(limit=1000)
+                        },
+                    )
+                finally:
+                    events._store.append = original_append
+
+                # Only a genuinely committed append restores availability, and
+                # the recovered stream serves canonical history again.
+                self.assertIsNotNone(
+                    events.emit("system", "outage.write_recovered")
+                )
+                self.assertTrue(events.store_available())
+                with client.websocket_connect("/ws/logs") as recovered:
+                    recovered.send_json({
+                        "type": "subscribe",
+                        "accessToken": "test-admin-secret",
+                        "channels": ["system"],
+                        "afterCursor": 0,
+                    })
+                    self.assertEqual(
+                        recovered.receive_json()["type"],
+                        "log.hello",
+                    )
+                    self.assertEqual(
+                        recovered.receive_json()["type"],
+                        "log.subscribed",
+                    )
+                    replayed = []
+                    while True:
+                        message = recovered.receive_json()
+                        if message["type"] == "log.event":
+                            replayed.append(message["event"]["event"])
+                        elif message["type"] == "log.replay_completed":
+                            break
+                    self.assertIn("outage.write_recovered", replayed)
+                    self.assertNotIn("outage.not_committed", replayed)
+                    self.assertNotIn("outage.still_not_committed", replayed)
 
     def test_audio_transcription_continues_while_event_store_is_degraded(self):
         with tempfile.TemporaryDirectory() as temp_dir:
