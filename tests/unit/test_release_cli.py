@@ -255,5 +255,210 @@ class ManifestValidateCommandTests(unittest.TestCase):
             self.assertIn("INVALID", err.getvalue())
 
 
+class ManifestBuildCommandTests(unittest.TestCase):
+    """AP-SRV-070 W5-R02-C1 (D3): ``release.py manifest build`` against
+    real ``tools/build_production.py``-shaped input.
+
+    Uses the real ``tools.build_production.resolve_kroko_wheel()`` (with
+    a fake, no-Docker ``CommandRunner`` - the same pattern
+    ``tests/unit/test_build_production.py`` already uses to test that
+    function itself) to produce a genuinely production-code-shaped Kroko
+    artifact payload, then assembles a full free/pro build-manifest the
+    same way ``tools.build_production.run()`` does, and feeds that into
+    this CLI subcommand. This is deliberately not another hand-typed
+    synthetic fixture: the field this correction fixes (``wheelSha256``)
+    comes from calling the real producer function, not from typing the
+    key name into the test.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        import sys
+
+        repo_root = Path(__file__).resolve().parents[2]
+        tools_dir = repo_root / "tools"
+        if str(tools_dir) not in sys.path:
+            sys.path.insert(0, str(tools_dir))
+        import build_production as bp
+
+        cls.bp = bp
+
+    def _real_kroko_payload(self, tmp_path, *, variant, fingerprint, wheel_sha256):
+        from tests.unit.test_build_production import RecordingRunner, contains
+
+        store = tmp_path / f"store-{variant}"
+        work = tmp_path / f"work-{variant}"
+        wheel_name = f"kroko_onnx-1.12.9-1{variant}-cp312-cp312-linux_x86_64.whl"
+        wheel = store / variant / fingerprint / wheel_name
+        wheel.parent.mkdir(parents=True)
+        wheel.write_bytes(b"fake wheel bytes")
+
+        describe_payload = {
+            "variant": variant,
+            "fingerprint": fingerprint,
+            "inputs": {},
+            "artifactStore": "/artifact-store",
+            "artifactPresent": True,
+            "artifact": {
+                "fingerprint": fingerprint,
+                "variant": variant,
+                "wheelPath": f"/artifact-store/{variant}/{fingerprint}/{wheel_name}",
+                "wheelFilename": wheel_name,
+                "wheelSha256": wheel_sha256,
+            },
+        }
+        runner = RecordingRunner()
+        runner.respond(contains("--describe-artifact"), stdout=json.dumps(describe_payload))
+
+        # Real production code, no Docker involved: resolve_kroko_wheel()
+        # is the exact function tools.build_production.run() calls once
+        # per variant.
+        return self.bp.resolve_kroko_wheel(
+            variant=variant,
+            builder_image="voicestt-kroko-builder:test",
+            artifact_store_host=store,
+            work_dir_host=work,
+            runner=runner,
+        )
+
+    def _production_shaped_manifest(
+        self, tmp_path, *, variant, fingerprint, wheel_sha256, image_tag, image_id
+    ):
+        kroko_payload = self._real_kroko_payload(
+            tmp_path, variant=variant, fingerprint=fingerprint, wheel_sha256=wheel_sha256,
+        )
+        # Mirrors tools.build_production.run()'s own literal manifest
+        # shape (not a re-implementation of its logic) - see that
+        # module's `manifest["variants"][variant] = {...}` assignment.
+        return {
+            "target": variant,
+            "gitCommit": "a" * 40,
+            "gitDirty": False,
+            "voicesttVersion": "2.0.0",
+            "voicesttWheel": {
+                "path": "dist/voicestt/voicestt-2.0.0-py3-none-any.whl",
+                "name": "voicestt-2.0.0-py3-none-any.whl",
+                "bytes": 123,
+                "sha256": "b" * 64,
+            },
+            "toolVersions": {"docker": "27.0.0", "git": "git version 2.45.0"},
+            "variants": {
+                variant: {
+                    "kroko": kroko_payload,
+                    "image": {"versionTag": image_tag, "image": image_tag.split(":")[0]},
+                    "imageId": image_id,
+                    "imageLabels": {"org.opencontainers.image.version": "2.0.0"},
+                },
+            },
+        }
+
+    def _run_manifest_build(self, free_path, pro_path, out_path):
+        return cli.main([
+            "manifest", "build",
+            "--candidate-id", "W5-RC1",
+            "--free-build-manifest", str(free_path),
+            "--pro-build-manifest", str(pro_path),
+            "--source-tree", "c" * 40,
+            "--sdist-path", "voicestt-2.0.0.tar.gz",
+            "--sdist-sha256", "d" * 64,
+            "--qualification-timestamp", "2026-09-07T00:00:00Z",
+            "--qualification-context", "test",
+            "--qualification-evidence-ref", "test",
+            "--out", str(out_path),
+        ])
+
+    def test_manifest_build_succeeds_with_real_production_shaped_input(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            free_manifest = self._production_shaped_manifest(
+                tmp_path, variant="free", fingerprint="ab8986fd7fb93756",
+                wheel_sha256="e" * 64,
+                image_tag="voice-stt-server:2.0.0", image_id="sha256:" + "1" * 64,
+            )
+            pro_manifest = self._production_shaped_manifest(
+                tmp_path, variant="pro", fingerprint="36b440630c0a9475",
+                wheel_sha256="f" * 64,
+                image_tag="voice-stt-server-pro:2.0.0", image_id="sha256:" + "2" * 64,
+            )
+            free_path = tmp_path / "free-build-manifest.json"
+            pro_path = tmp_path / "pro-build-manifest.json"
+            free_path.write_text(json.dumps(free_manifest), encoding="utf-8")
+            pro_path.write_text(json.dumps(pro_manifest), encoding="utf-8")
+            out_path = tmp_path / "rc-manifest.json"
+
+            out = io.StringIO()
+            with redirect_stdout(out):
+                exit_code = self._run_manifest_build(free_path, pro_path, out_path)
+
+            self.assertEqual(exit_code, cli.EXIT_OK, out.getvalue())
+            self.assertTrue(out_path.is_file())
+            from release_tooling.rc_manifest import load_rc_manifest
+
+            written = load_rc_manifest(out_path)
+            self.assertEqual(written["kroko"]["free"]["fingerprint"], "ab8986fd7fb93756")
+            self.assertEqual(written["kroko"]["free"]["artifactSha256"], "e" * 64)
+            self.assertEqual(written["kroko"]["pro"]["fingerprint"], "36b440630c0a9475")
+            self.assertEqual(written["kroko"]["pro"]["artifactSha256"], "f" * 64)
+            self.assertEqual(written["sourceCommit"], "a" * 40)
+            self.assertEqual(written["sourceTree"], "c" * 40)
+            self.assertNotIn("KROKO_API_KEY", json.dumps(written))
+
+    def test_manifest_build_accepts_legacy_sha256_fallback_field(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            free_manifest = self._production_shaped_manifest(
+                tmp_path, variant="free", fingerprint="ff", wheel_sha256="e" * 64,
+                image_tag="voice-stt-server:2.0.0", image_id="sha256:" + "1" * 64,
+            )
+            # Simulate an older/legacy-shaped manifest that only carries
+            # the pre-correction field name.
+            artifact = free_manifest["variants"]["free"]["kroko"]["artifact"]
+            artifact["sha256"] = artifact.pop("wheelSha256")
+            pro_manifest = self._production_shaped_manifest(
+                tmp_path, variant="pro", fingerprint="pf", wheel_sha256="f" * 64,
+                image_tag="voice-stt-server-pro:2.0.0", image_id="sha256:" + "2" * 64,
+            )
+            free_path = tmp_path / "free-build-manifest.json"
+            pro_path = tmp_path / "pro-build-manifest.json"
+            free_path.write_text(json.dumps(free_manifest), encoding="utf-8")
+            pro_path.write_text(json.dumps(pro_manifest), encoding="utf-8")
+            out_path = tmp_path / "rc-manifest.json"
+
+            exit_code = self._run_manifest_build(free_path, pro_path, out_path)
+
+            self.assertEqual(exit_code, cli.EXIT_OK)
+            from release_tooling.rc_manifest import load_rc_manifest
+
+            written = load_rc_manifest(out_path)
+            self.assertEqual(written["kroko"]["free"]["artifactSha256"], "e" * 64)
+
+    def test_manifest_build_fails_closed_on_conflicting_dual_key_hashes(self):
+        with TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            free_manifest = self._production_shaped_manifest(
+                tmp_path, variant="free", fingerprint="ff", wheel_sha256="e" * 64,
+                image_tag="voice-stt-server:2.0.0", image_id="sha256:" + "1" * 64,
+            )
+            artifact = free_manifest["variants"]["free"]["kroko"]["artifact"]
+            artifact["sha256"] = "9" * 64  # deliberately disagrees with wheelSha256
+            pro_manifest = self._production_shaped_manifest(
+                tmp_path, variant="pro", fingerprint="pf", wheel_sha256="f" * 64,
+                image_tag="voice-stt-server-pro:2.0.0", image_id="sha256:" + "2" * 64,
+            )
+            free_path = tmp_path / "free-build-manifest.json"
+            pro_path = tmp_path / "pro-build-manifest.json"
+            free_path.write_text(json.dumps(free_manifest), encoding="utf-8")
+            pro_path.write_text(json.dumps(pro_manifest), encoding="utf-8")
+            out_path = tmp_path / "rc-manifest.json"
+
+            err = io.StringIO()
+            with redirect_stderr(err):
+                exit_code = self._run_manifest_build(free_path, pro_path, out_path)
+
+            self.assertEqual(exit_code, cli.EXIT_FAILED)
+            self.assertIn("conflicting hashes", err.getvalue())
+            self.assertFalse(out_path.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

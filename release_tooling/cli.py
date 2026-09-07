@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
 from . import config, gitinfo, pipeline, rc_manifest
-from .errors import ReleaseError
+from .errors import ManifestError, ReleaseError
 from .state import (
     default_state_path,
     ensure_same_identity,
@@ -187,6 +187,36 @@ def _cmd_manifest_validate(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _extract_kroko_artifact_sha256(build_manifest: Dict[str, Any], variant: str) -> str:
+    """Reads one variant's Kroko artifact SHA-256 out of a production
+    build manifest (as written by ``tools/build_production.py``).
+
+    AP-SRV-070 W5-R02-C1 (D3): the real producer writes the canonical
+    field ``wheelSha256`` inside ``variants.<variant>.kroko.artifact``.
+    A legacy/test-fixture ``sha256`` field at the same nested location is
+    still tolerated as a fallback for compatibility, but if both are
+    present they must agree - a silent choice between two disagreeing
+    hashes would defeat the entire point of an RC manifest, so this
+    fails closed instead.
+    """
+    artifact = build_manifest["variants"][variant]["kroko"]["artifact"]
+    canonical = artifact.get("wheelSha256")
+    legacy = artifact.get("sha256")
+    if canonical and legacy and canonical != legacy:
+        raise ManifestError(
+            f"kroko {variant} artifact manifest has conflicting hashes: "
+            f"wheelSha256={canonical!r} != sha256={legacy!r}"
+        )
+    resolved = canonical or legacy
+    if not resolved:
+        raise ManifestError(
+            f"kroko {variant} artifact manifest is missing both 'wheelSha256' "
+            "(canonical, as written by tools/build_production.py) and the "
+            "legacy 'sha256' fallback field"
+        )
+    return resolved
+
+
 def _cmd_manifest_build(args: argparse.Namespace) -> int:
     free_manifest = json.loads(Path(args.free_build_manifest).read_text(encoding="utf-8"))
     pro_manifest = json.loads(Path(args.pro_build_manifest).read_text(encoding="utf-8"))
@@ -209,9 +239,9 @@ def _cmd_manifest_build(args: argparse.Namespace) -> int:
         sdist_path=Path(args.sdist_path),
         sdist_sha256=args.sdist_sha256,
         kroko_free_fingerprint=free_manifest["variants"]["free"]["kroko"]["fingerprint"],
-        kroko_free_artifact_sha256=free_manifest["variants"]["free"]["kroko"]["artifact"]["sha256"],
+        kroko_free_artifact_sha256=_extract_kroko_artifact_sha256(free_manifest, "free"),
         kroko_pro_fingerprint=pro_manifest["variants"]["pro"]["kroko"]["fingerprint"],
-        kroko_pro_artifact_sha256=pro_manifest["variants"]["pro"]["kroko"]["artifact"]["sha256"],
+        kroko_pro_artifact_sha256=_extract_kroko_artifact_sha256(pro_manifest, "pro"),
         free_image_tag=free_manifest["variants"]["free"]["image"]["versionTag"],
         free_image_id=free_manifest["variants"]["free"]["imageId"],
         pro_image_tag=pro_manifest["variants"]["pro"]["image"]["versionTag"],

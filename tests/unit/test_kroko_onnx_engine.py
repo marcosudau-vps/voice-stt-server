@@ -169,6 +169,30 @@ class KrokoOnnxEngineTests(unittest.TestCase):
         path.write_bytes(b"placeholder")
         return temp_dir, path
 
+    def assertSameFile(self, actual, expected, msg=None):
+        """Asserts two path spellings identify the same file on disk.
+
+        The product's model resolver (VoiceSTT/transcription_engines/
+        model_resolver.py) legitimately returns a canonicalized/resolved
+        path. On some hosts (observed on GitHub-hosted Windows runners)
+        that resolved form uses the 8.3 short alias of a directory
+        component (e.g. RUNNER~1) while a path built directly from
+        tempfile.TemporaryDirectory() keeps the long form - two different
+        strings naming the identical file. Comparing raw strings is
+        therefore the wrong identity check; os.path.samefile() (both
+        sides must already exist) is the correct one and still fails for
+        a genuinely wrong file or directory.
+        """
+        actual_str = str(actual)
+        expected_str = str(expected)
+        same = os.path.samefile(actual_str, expected_str)
+        if not same:
+            failure_msg = self._formatMessage(
+                msg,
+                f"{actual_str!r} and {expected_str!r} do not identify the same file",
+            )
+            raise self.failureException(failure_msg)
+
     def capture_fd_output(self, callback):
         for stream in (sys.stdout, sys.stderr):
             try:
@@ -244,9 +268,9 @@ class KrokoOnnxEngineTests(unittest.TestCase):
             numpy_module=np,
         )
 
-        self.assertEqual(
+        self.assertSameFile(
             FakeKrokoRecognizer.transducer_calls[0]["model_path"],
-            str(model_path),
+            model_path,
         )
 
     def test_resolves_relative_model_under_download_root(self):
@@ -262,9 +286,9 @@ class KrokoOnnxEngineTests(unittest.TestCase):
             numpy_module=np,
         )
 
-        self.assertEqual(
+        self.assertSameFile(
             FakeKrokoRecognizer.transducer_calls[0]["model_path"],
-            str(model_path),
+            model_path,
         )
 
     def test_engine_option_model_path_overrides_config_model(self):
@@ -280,9 +304,9 @@ class KrokoOnnxEngineTests(unittest.TestCase):
             numpy_module=np,
         )
 
-        self.assertEqual(
+        self.assertSameFile(
             FakeKrokoRecognizer.transducer_calls[0]["model_path"],
-            str(model_path),
+            model_path,
         )
 
     def test_model_dir_selects_single_data_file(self):
@@ -298,7 +322,35 @@ class KrokoOnnxEngineTests(unittest.TestCase):
             numpy_module=np,
         )
 
-        self.assertEqual(backend.model_path, model_path)
+        self.assertSameFile(backend.model_path, model_path)
+
+    def test_alternate_path_spellings_of_the_same_file_are_identity_equivalent(self):
+        """AP-SRV-070 W5-R02-C1 (D1-Windows): a resolved path and an
+        unresolved path can legitimately spell the same file two
+        different ways (observed: 8.3-short vs long Windows path). The
+        assertSameFile() helper this test class uses instead of raw
+        string equality must accept that - this test proves it directly,
+        independent of the Kroko backend under test elsewhere in this
+        file.
+        """
+        temp_dir, model_path = self.make_model_file()
+        self.addCleanup(temp_dir.cleanup)
+
+        # os.path.relpath() cannot cross Windows drive letters (e.g. the
+        # temp dir on C: while the test runs from a checkout on P:), so
+        # compute the relative spelling from within the temp dir itself -
+        # still a different, legitimate string spelling of the same file.
+        original_cwd = os.getcwd()
+        os.chdir(temp_dir.name)
+        self.addCleanup(os.chdir, original_cwd)
+
+        long_spelling = str(model_path)
+        relative_spelling = model_path.name
+        self.assertNotEqual(
+            long_spelling, relative_spelling,
+            "test setup must produce two different string spellings",
+        )
+        self.assertSameFile(relative_spelling, long_spelling)
 
     def test_missing_model_path_reports_download_hint(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -1744,17 +1744,43 @@ class FastAPIMultiUserWebSocketTests(unittest.TestCase):
                 events = app.state.voicestt_service.events
                 original_append = events._store.append
                 with client.websocket_connect("/ws/logs") as logs:
+                    after_cursor = events.latest_cursor()
                     logs.send_json({
                         "type": "subscribe",
                         "accessToken": "test-admin-secret",
-                        "afterCursor": events.latest_cursor(),
+                        "afterCursor": after_cursor,
                     })
                     self.assertEqual(logs.receive_json()["type"], "log.hello")
                     self.assertEqual(logs.receive_json()["type"], "log.subscribed")
-                    self.assertEqual(
-                        logs.receive_json()["type"],
-                        "log.replay_completed",
-                    )
+                    # AP-SRV-070 W5-R02-C1 (D1-Ubuntu): afterCursor is a
+                    # client-side snapshot taken before the subscribe
+                    # message is even sent. A real event can legitimately
+                    # commit between that snapshot and the server's own
+                    # replay-window query, so zero or more log.event
+                    # frames may validly precede log.replay_completed -
+                    # this must not be asserted away as always-empty.
+                    # Mirrors the already-correct replay-consuming pattern
+                    # used later in this same test (recovered stream,
+                    # below) for the outage-recovery subscription.
+                    replay_cursor = after_cursor
+                    while True:
+                        message = logs.receive_json()
+                        if message["type"] == "log.event":
+                            event_cursor = int(message["event"]["cursor"])
+                            self.assertGreater(
+                                event_cursor, replay_cursor,
+                                "replayed event cursor must strictly advance "
+                                "past the previous cursor (no duplicate/"
+                                "out-of-order replay)",
+                            )
+                            replay_cursor = event_cursor
+                        elif message["type"] == "log.replay_completed":
+                            break
+                        else:
+                            self.fail(
+                                "unexpected message type before replay "
+                                f"completion: {message['type']!r}"
+                            )
 
                     events._store.append = lambda event: (_ for _ in ()).throw(
                         OSError("simulated outage")
