@@ -43,7 +43,7 @@ def maintained_markdown():
     for path in sorted(REPO_ROOT.rglob("*.md")):
         if ARCHIVE in path.parents or path == ARCHIVE:
             continue
-        if any(part in {".git", "node_modules", ".venv"} for part in path.parts):
+        if any(part in {".git", "node_modules"} or part.startswith(".venv") for part in path.parts):
             continue
         yield path
 
