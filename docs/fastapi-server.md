@@ -316,6 +316,55 @@ python api_fastapi_server/server.py \
   --language en
 ```
 
+Kroko-ONNX CPU with the same model for final and realtime:
+
+```powershell
+$model = "test-model-cache\kroko-onnx\Kroko-EN-Community-64-L-Streaming-001.data"
+python api_fastapi_server\server.py `
+  --engine kroko_onnx `
+  --model $model `
+  --realtime-engine kroko_onnx `
+  --realtime-model $model `
+  --device cpu `
+  --language en `
+  --engine-options '{"provider":"cpu","num_threads":2}' `
+  --realtime-engine-options '{"provider":"cpu","num_threads":1}'
+```
+
+Faster-Whisper final with Kroko-ONNX realtime:
+
+```powershell
+$model = "test-model-cache\kroko-onnx\Kroko-EN-Community-64-L-Streaming-001.data"
+python api_fastapi_server\server.py `
+  --engine faster_whisper `
+  --model small.en `
+  --realtime-engine kroko_onnx `
+  --realtime-model $model `
+  --device cpu `
+  --language en
+```
+
+Wake word mode with OpenWakeWord:
+
+```bash
+python api_fastapi_server/server.py \
+  --engine faster_whisper \
+  --model small.en \
+  --realtime-model tiny.en \
+  --wakeword-backend openwakeword \
+  --wake-words hey_jarvis \
+  --wake-words-sensitivity 0.7 \
+  --wake-word-timeout 5 \
+  --wake-word-followup-window 5
+```
+
+### Internal and experimental engine recipes
+
+The following recipes exercise internal/experimental adapters kept in the
+source tree for development and benchmarking. They are not part of the supported
+production surface (see
+[transcription-engines.md](transcription-engines.md#about-the-other-adapters-in-the-source-tree)):
+
 whisper.cpp CPU:
 
 ```bash
@@ -351,35 +400,6 @@ python api_fastapi_server/server.py \
   --realtime-engine-options '{"num_threads":2,"provider":"cpu"}' \
   --realtime-processing-pause 0.8 \
   --realtime-use-syllable-boundaries
-```
-
-Kroko-ONNX CPU with the same model for final and realtime:
-
-```powershell
-$model = "test-model-cache\kroko-onnx\Kroko-EN-Community-64-L-Streaming-001.data"
-python api_fastapi_server\server.py `
-  --engine kroko_onnx `
-  --model $model `
-  --realtime-engine kroko_onnx `
-  --realtime-model $model `
-  --device cpu `
-  --language en `
-  --engine-options '{"provider":"cpu","num_threads":2}' `
-  --realtime-engine-options '{"provider":"cpu","num_threads":1}'
-```
-
-Kroko-ONNX final transcription with a lighter realtime engine:
-
-```powershell
-$model = "test-model-cache\kroko-onnx\Kroko-EN-Community-64-L-Streaming-001.data"
-python api_fastapi_server\server.py `
-  --engine kroko_onnx `
-  --model $model `
-  --realtime-engine whisper_cpp `
-  --realtime-model tiny.en `
-  --device cpu `
-  --language en `
-  --engine-options '{"provider":"cpu","num_threads":2}'
 ```
 
 Parakeet final transcription with a small realtime model:
@@ -418,20 +438,6 @@ forwarding is active.
 This recipe targets `api_fastapi_server/server.py` from a source checkout,
 not the installed `stt-server` console script. Check `stt-server --help`
 separately for the installed CLI's supported options.
-
-Wake word mode with OpenWakeWord:
-
-```bash
-python api_fastapi_server/server.py \
-  --engine faster_whisper \
-  --model small.en \
-  --realtime-model tiny.en \
-  --wakeword-backend openwakeword \
-  --wake-words hey_jarvis \
-  --wake-words-sensitivity 0.7 \
-  --wake-word-timeout 5 \
-  --wake-word-followup-window 5
-```
 
 ## WebSocket Protocol (legacy v1: `/ws/transcribe`)
 

@@ -17,11 +17,19 @@ from typing import List, Optional
 from . import config, gitinfo, rc_manifest
 from .errors import ManifestError
 from .state import default_state_path, load_state
-from VoiceSTT._version import read_version_file, DISTRIBUTION_NAME  # noqa: E402
+from VoiceSTT._version import read_version_file  # noqa: E402
 
 PASS = "PASS"
 FAIL = "FAIL"
 WARN = "WARN"
+
+#: A drive-letter path (``P:\\...``/``C:/...``) is the concrete shape of the
+#: "release depends on Marco's PC" failure mode section 9 forbids.
+#: The leading word boundary matters: without it this also matches the ``s:/``
+#: inside every ``https://`` URL, which would reject a perfectly portable
+#: manifest merely for naming its own upstream repository. A drive letter is a
+#: *single* letter, so a word boundary before it is exactly the distinction.
+_WINDOWS_ABSOLUTE_PATH_RE = re.compile(r"\b[A-Za-z]:[\\/][^\"\s]*")
 
 
 @dataclass(frozen=True)
@@ -125,39 +133,124 @@ def _check_manifest(manifest_path: Optional[Path]) -> CheckResult:
     return CheckResult("rc_manifest_complete", PASS, f"RC manifest at {manifest_path} is complete and valid")
 
 
+def _check_manifest_version(
+    manifest_path: Optional[Path],
+    expected_version: str,
+) -> CheckResult:
+    """Verifies that candidate manifest productVersion equals the expected version (B6)."""
+    if manifest_path is None:
+        return CheckResult("rc_manifest_version_matches", WARN, "no RC manifest given")
+    try:
+        manifest = rc_manifest.load_rc_manifest(manifest_path)
+    except ManifestError as exc:
+        return CheckResult("rc_manifest_version_matches", FAIL, f"unreadable manifest: {exc}")
+    product_version = manifest.get("productVersion")
+    if product_version != expected_version:
+        return CheckResult(
+            "rc_manifest_version_matches",
+            FAIL,
+            f"candidate manifest productVersion {product_version!r} does not match expected {expected_version!r}",
+        )
+    return CheckResult(
+        "rc_manifest_version_matches",
+        PASS,
+        f"candidate manifest productVersion {product_version!r} matches expected {expected_version!r}",
+    )
+
+
 def _check_tool_availability() -> List[CheckResult]:
     results = []
-    for tool in ("git", "docker", "twine"):
+    # ``twine`` is deliberately no longer in this list: the GitHub release path
+    # uses PyPI Trusted Publishing (OIDC) and holds no token, so requiring a
+    # local uploader would report a missing tool the release does not use.
+    for tool in ("git", "docker"):
         found = shutil.which(tool) is not None
         results.append(CheckResult(f"tool_available_{tool}", PASS if found else WARN, f"{tool} on PATH: {found}"))
     return results
 
 
 def _check_registry_identifiers() -> List[CheckResult]:
+    """Where the release will publish, and whether that is fully determined.
+
+    AP-SRV-070 W5-R04 removed one of the two mandatory operator variables. The
+    GHCR root is *derived* (``ghcr.io/<owner>``) because a GHCR package always
+    lives under the repository owner and the owner is known - that is a fact,
+    not a guess. The Docker Hub namespace genuinely cannot be derived from
+    anything the repository knows, so it stays operator-configured and this
+    check fails closed when it is missing instead of assuming one.
+    """
     ghcr = config.ghcr_repo_root()
     dockerhub = config.dockerhub_repo_root()
     results = [
         CheckResult(
-            "ghcr_repo_configured",
+            "ghcr_repo_derived",
             PASS if ghcr else FAIL,
-            f"{config.GHCR_REPO_ENV}={'<set>' if ghcr else '<unset>'}",
+            f"ghcr root = {ghcr or '<unresolved>'}",
         ),
         CheckResult(
             "dockerhub_repo_configured",
             PASS if dockerhub else FAIL,
-            f"{config.DOCKERHUB_REPO_ENV}={'<set>' if dockerhub else '<unset>'}",
+            f"{config.DOCKERHUB_NAMESPACE_ENV}="
+            f"{dockerhub or '<unset>'} (required: it cannot be derived)",
         ),
-        CheckResult("pypi_project_name", PASS, f"pypi project = {DISTRIBUTION_NAME}"),
     ]
+    for variant in sorted(config.DISTRIBUTION_NAMES):
+        results.append(
+            CheckResult(
+                f"pypi_project_{variant}",
+                PASS,
+                f"pypi project ({variant}) = {config.distribution_name_for(variant)}",
+            )
+        )
+        results.append(
+            CheckResult(
+                f"image_name_{variant}",
+                PASS,
+                f"image ({variant}) = {config.image_name_for(variant)}",
+            )
+        )
     return results
 
 
 def _check_credentials() -> List[CheckResult]:
+    """Boolean-only credential readiness. No secret value is ever read.
+
+    These are WARN rather than FAIL because preflight also runs in contexts
+    that legitimately hold no credentials at all - a dry-run, or the
+    qualification workflow, which must be able to prove it *cannot* publish.
+    The adapters themselves fail closed when a real write is attempted
+    without the credential the underlying tool needs.
+    """
     presence = config.credential_presence()
     return [
         CheckResult(f"credential_{name}", PASS if present else WARN, f"{name}={present}")
-        for name, present in presence.items()
+        for name, present in sorted(presence.items())
     ]
+
+
+def _check_no_local_path_dependency(rc_manifest_path: Optional[Path]) -> CheckResult:
+    """Refuses a candidate manifest that carries an operator-local path.
+
+    AP-SRV-070 W5-R04, section 9: release authority must not depend on a
+    specific machine. A manifest that recorded, say, a ``P:\\...`` wheel path
+    would make the candidate unpublishable from anywhere else, so it is
+    rejected here rather than at the moment publication needs the file.
+    """
+    if rc_manifest_path is None:
+        return CheckResult("no_local_path_dependency", WARN, "no RC manifest given")
+    try:
+        text = Path(rc_manifest_path).read_text(encoding="utf-8")
+    except OSError as exc:
+        return CheckResult("no_local_path_dependency", FAIL, f"unreadable manifest: {exc}")
+    offenders = _WINDOWS_ABSOLUTE_PATH_RE.findall(text)
+    if offenders:
+        return CheckResult(
+            "no_local_path_dependency", FAIL,
+            f"RC manifest contains operator-local absolute path(s): {sorted(set(offenders))[:3]}",
+        )
+    return CheckResult(
+        "no_local_path_dependency", PASS, "RC manifest carries no absolute local path"
+    )
 
 
 def _check_no_state_conflict(repo_root: Path, version: str) -> CheckResult:
@@ -171,6 +264,46 @@ def _check_no_state_conflict(repo_root: Path, version: str) -> CheckResult:
     return CheckResult("no_state_conflict", PASS, f"existing release state at {state_path} is state={state.state}, resumable")
 
 
+def _check_qualification(
+    manifest_path: Optional[Path],
+    require_qualified: bool = False,
+) -> CheckResult:
+    if manifest_path is None:
+        return CheckResult("candidate_qualification", WARN, "no RC manifest given")
+    try:
+        manifest = rc_manifest.load_rc_manifest(manifest_path)
+    except ManifestError as exc:
+        return CheckResult("candidate_qualification", FAIL, f"unreadable manifest: {exc}")
+
+    readiness = manifest.get("releaseReadiness")
+    evidence_ref = (manifest.get("qualification") or {}).get("evidenceRef")
+
+    if readiness == rc_manifest.READINESS_QUALIFIED:
+        if not evidence_ref or str(evidence_ref).strip() == "" or evidence_ref == "none":
+            return CheckResult(
+                "candidate_qualification",
+                FAIL,
+                "manifest is marked QUALIFIED but lacks valid qualification.evidenceRef",
+            )
+        return CheckResult(
+            "candidate_qualification",
+            PASS,
+            f"candidate is QUALIFIED (evidenceRef: {evidence_ref})",
+        )
+
+    if require_qualified:
+        return CheckResult(
+            "candidate_qualification",
+            FAIL,
+            f"candidate releaseReadiness={readiness!r} is not QUALIFIED (cannot publish)",
+        )
+    return CheckResult(
+        "candidate_qualification",
+        WARN,
+        f"candidate releaseReadiness={readiness!r} is not QUALIFIED",
+    )
+
+
 def run_preflight(
     *,
     repo_root: Path,
@@ -178,6 +311,7 @@ def run_preflight(
     expected_commit: Optional[str] = None,
     expected_tree: Optional[str] = None,
     rc_manifest_path: Optional[Path] = None,
+    require_qualified: bool = False,
 ) -> PreflightReport:
     """Runs every read-only preflight check and returns the aggregate report.
 
@@ -190,6 +324,9 @@ def run_preflight(
     checks.extend(_check_git(repo_root, expected_commit, expected_tree))
     checks.append(_check_tag_absence(repo_root, expected_version, expected_commit))
     checks.append(_check_manifest(rc_manifest_path))
+    checks.append(_check_manifest_version(rc_manifest_path, expected_version))
+    checks.append(_check_qualification(rc_manifest_path, require_qualified=require_qualified))
+    checks.append(_check_no_local_path_dependency(rc_manifest_path))
     checks.extend(_check_tool_availability())
     checks.extend(_check_registry_identifiers())
     checks.extend(_check_credentials())

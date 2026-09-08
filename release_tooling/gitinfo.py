@@ -76,23 +76,56 @@ def local_tag_commit(repo_root: Path, tag: str) -> Optional[str]:
     result = _run(["git", "rev-parse", f"refs/tags/{tag}^{{commit}}"], repo_root)
     if result.returncode != 0:
         return None
-    return result.stdout.strip()
+    commit = result.stdout.strip()
+    if len(commit) != 40:
+        raise GitError(f"local tag {tag!r} resolved to unusable commit {commit!r}")
+    return commit
 
 
 def remote_tag_commit(repo_root: Path, remote: str, tag: str) -> Optional[str]:
     """The commit ``tag`` points at on ``remote`` right now, or ``None``.
 
+    Handles both lightweight and annotated tags. ``git ls-remote`` reports an
+    annotated tag twice when asked for the exact ref and its peeled ``^{}''
+    companion: the exact ref points at the tag object while ``^{}''`` points
+    at the commit. The peeled commit is authoritative when present; otherwise
+    the exact ref is a lightweight tag and already is the commit.
+
     Read-only (``git ls-remote`` never mutates anything, local or remote).
-    Raises :class:`GitError` if the remote cannot be reached at all - the
-    caller must not treat "could not check" the same as "confirmed absent".
+    Raises :class:`GitError` if the remote cannot be reached or returns an
+    ambiguous/malformed result - callers must fail closed rather than treat
+    "could not check" as "confirmed absent".
     """
-    result = _run(["git", "ls-remote", "--tags", remote, f"refs/tags/{tag}"], repo_root)
+    exact_ref = f"refs/tags/{tag}"
+    peeled_ref = f"{exact_ref}^{{}}"
+    result = _run(
+        ["git", "ls-remote", "--tags", remote, exact_ref, peeled_ref],
+        repo_root,
+    )
     if result.returncode != 0:
         raise GitError(f"git ls-remote {remote} failed: {result.stderr.strip()}")
-    line = result.stdout.strip()
-    if not line:
+
+    lines = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if not lines:
         return None
-    return line.split()[0]
+
+    refs = {}
+    for line in lines:
+        parts = line.split()
+        if len(parts) != 2 or len(parts[0]) != 40:
+            raise GitError(f"git ls-remote returned malformed tag line for {tag!r}: {line!r}")
+        sha, ref = parts
+        if ref not in (exact_ref, peeled_ref):
+            raise GitError(f"git ls-remote returned unexpected ref for {tag!r}: {ref!r}")
+        if ref in refs and refs[ref] != sha:
+            raise GitError(f"git ls-remote returned ambiguous values for {ref!r}")
+        refs[ref] = sha
+
+    if peeled_ref in refs:
+        return refs[peeled_ref]
+    if exact_ref in refs:
+        return refs[exact_ref]
+    raise GitError(f"git ls-remote returned no usable ref for tag {tag!r}")
 
 
 def create_tag(repo_root: Path, tag: str, commit: str) -> None:

@@ -27,7 +27,12 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional
 
-from .errors import ConflictError, ReleaseError, VerificationUnavailableError
+from .errors import (
+    ConflictError,
+    ManifestError,
+    ReleaseError,
+    VerificationUnavailableError,
+)
 from .remote_checks import ABSENT, MATCH
 from .state import STATE_INDEX, STATE_ORDER, ReleaseState, advance
 
@@ -52,15 +57,30 @@ class StepDefinition:
     kind: StepKind
 
 
-#: The fixed W6 publication order (AP-SRV-070 W5, section 1.4), now as the
+#: The fixed publication order (AP-SRV-070 W5-R04, sections 15/20/21), as the
 #: one graph both dry-run and real publish walk.
+#:
+#: Three orderings here are load-bearing and are each enforced twice - once
+#: structurally by this tuple, and once defensively by a barrier the adapter
+#: asserts itself (see ``release_tooling.state``):
+#:
+#: 1. ``git_tag`` is **first**. Once 2.0.0 exists on PyPI or in a registry the
+#:    version is publicly reserved, so the immutable source anchor has to exist
+#:    before the first irreversible public write, not after it.
+#: 2. ``dockerhub`` precedes ``ghcr``, because GHCR is a promotion of the exact
+#:    Docker Hub manifest by digest rather than a second independent push.
+#: 3. ``aliases`` sits behind ``external_verification``, so a movable tag such
+#:    as ``latest`` can never point at an incomplete or failed release, and
+#:    ``github_release`` sits behind ``aliases``, so the GitHub Release stays
+#:    the last public success marker.
 STEP_DEFINITIONS: tuple = (
-    StepDefinition("pypi", "PREPARED", "PYPI_PUBLISHED", "Publish the qualified wheel + sdist to PyPI", StepKind.PUBLISH),
-    StepDefinition("ghcr", "PYPI_PUBLISHED", "GHCR_PUBLISHED", "Push the qualified Free + Pro images to GHCR", StepKind.PUBLISH),
-    StepDefinition("dockerhub", "GHCR_PUBLISHED", "DOCKERHUB_PUBLISHED", "Push the qualified Free + Pro images to Docker Hub", StepKind.PUBLISH),
-    StepDefinition("external_verification", "DOCKERHUB_PUBLISHED", "EXTERNAL_VERIFIED", "Verify the externally retrievable PyPI/GHCR/Docker Hub artifacts", StepKind.VERIFY_ONLY),
-    StepDefinition("git_tag", "EXTERNAL_VERIFIED", "TAGGED", "Create and push the Git version tag", StepKind.PUBLISH),
-    StepDefinition("github_release", "TAGGED", "GITHUB_RELEASED", "Create the GitHub Release", StepKind.PUBLISH),
+    StepDefinition("git_tag", "PREPARED", "TAGGED", "Create and push the immutable Git version tag for the qualified source commit", StepKind.PUBLISH),
+    StepDefinition("pypi", "TAGGED", "PYPI_PUBLISHED", "Publish the qualified voice-stt-server and voice-stt-server-pro wheels to PyPI", StepKind.PUBLISH),
+    StepDefinition("dockerhub", "PYPI_PUBLISHED", "DOCKERHUB_PUBLISHED", "Publish the qualified Free + Pro exact images to Docker Hub", StepKind.PUBLISH),
+    StepDefinition("ghcr", "DOCKERHUB_PUBLISHED", "GHCR_PUBLISHED", "Promote the exact Docker Hub manifests by digest to GHCR", StepKind.PUBLISH),
+    StepDefinition("external_verification", "GHCR_PUBLISHED", "EXTERNAL_VERIFIED", "Verify every externally retrievable PyPI/Docker Hub/GHCR artifact", StepKind.VERIFY_ONLY),
+    StepDefinition("aliases", "EXTERNAL_VERIFIED", "ALIASES_PUBLISHED", "Move the SemVer aliases in both registries onto the verified digests", StepKind.PUBLISH),
+    StepDefinition("github_release", "ALIASES_PUBLISHED", "GITHUB_RELEASED", "Create the GitHub Release - the last public success marker", StepKind.PUBLISH),
     StepDefinition("final_verification", "GITHUB_RELEASED", "FINAL_VERIFIED", "Run final end-to-end verification of every published surface", StepKind.VERIFY_ONLY),
     StepDefinition("complete", "FINAL_VERIFIED", "COMPLETE", "Mark the release COMPLETE", StepKind.LOCAL),
 )
@@ -69,11 +89,24 @@ assert [s.from_state for s in STEP_DEFINITIONS] == STATE_ORDER[:-1]
 assert [s.to_state for s in STEP_DEFINITIONS] == STATE_ORDER[1:]
 
 
-def plan_from(current_state: str) -> List[StepDefinition]:
-    """Every remaining step definition from ``current_state`` through ``COMPLETE``."""
+def plan_from(current_state: str, stop_after: Optional[str] = None) -> List[StepDefinition]:
+    """Every remaining step from ``current_state``, up to ``stop_after``.
+
+    ``stop_after`` is the boundary that lets one GitHub Actions job advance
+    exactly its own portion of the release while the graph, the order and the
+    barriers stay in this one place (AP-SRV-070 W5-R04, section 31). It can
+    only ever *shorten* the plan: it never reorders a step, never skips one,
+    and never permits a transition the fixed order forbids. A job that is
+    handed a ``stop_after`` it has already passed simply plans nothing.
+    """
     if current_state not in STATE_INDEX:
         raise ValueError(f"unknown state {current_state!r}; expected one of {STATE_ORDER}")
-    return list(STEP_DEFINITIONS[STATE_INDEX[current_state]:])
+    steps = list(STEP_DEFINITIONS[STATE_INDEX[current_state]:])
+    if stop_after is None:
+        return steps
+    if stop_after not in STATE_INDEX:
+        raise ValueError(f"unknown stop_after state {stop_after!r}; expected one of {STATE_ORDER}")
+    return [step for step in steps if STATE_INDEX[step.to_state] <= STATE_INDEX[stop_after]]
 
 
 @dataclass(frozen=True)
@@ -129,14 +162,20 @@ def run_engine(
     mode: ExecutionMode,
     adapters: Dict[str, Any],
     persist: Optional[PersistFn] = None,
+    stop_after: Optional[str] = None,
 ) -> EngineRunResult:
     """Walks :data:`STEP_DEFINITIONS` from ``state.state`` to ``COMPLETE``.
 
-    ``adapters`` maps each :class:`StepDefinition` ``key`` (``"pypi"``,
-    ``"ghcr"``, ``"dockerhub"``, ``"external_verification"``, ``"git_tag"``,
-    ``"github_release"``, ``"final_verification"``) to an object exposing
+    ``adapters`` maps each :class:`StepDefinition` ``key`` (``"git_tag"``,
+    ``"pypi"``, ``"dockerhub"``, ``"ghcr"``, ``"external_verification"``,
+    ``"aliases"``, ``"github_release"``, ``"final_verification"``) to an object exposing
     ``verify(manifest, state)``/``publish(manifest, state)`` - see
     ``release_tooling.adapters``. The ``"complete"`` step needs no adapter.
+
+    ``stop_after`` bounds how far this invocation may advance (see
+    :func:`plan_from`). It is how the GitHub publish workflow gives each job
+    only the credentials and permissions its own steps need without ever
+    forking the operation graph.
 
     In :data:`ExecutionMode.REAL`, a conflict, an unavailable verification,
     or a ``VERIFY_ONLY`` step that is not yet satisfied all stop the run
@@ -150,10 +189,32 @@ def run_engine(
     Nothing is ever persisted in dry-run mode: ``persist`` is only ever
     consulted when ``mode == REAL``.
     """
+    if mode == ExecutionMode.REAL:
+        readiness = manifest.get("releaseReadiness")
+        if readiness != "QUALIFIED":
+            raise ManifestError(
+                f"Candidate manifest readiness is {readiness!r}; only 'QUALIFIED' "
+                "candidates can be published."
+            )
+        qual = manifest.get("qualification") or {}
+        evidence_ref = qual.get("evidenceRef")
+        if not evidence_ref or str(evidence_ref).strip() == "" or evidence_ref == "none":
+            raise ManifestError(
+                "Candidate manifest lacks valid qualification evidenceRef; cannot publish without qualification evidence."
+            )
+        if state.sourceCommit != manifest.get("sourceCommit"):
+            raise ManifestError(
+                f"ReleaseState sourceCommit {state.sourceCommit} does not match manifest sourceCommit {manifest.get('sourceCommit')}"
+            )
+        if state.sourceTree != manifest.get("sourceTree"):
+            raise ManifestError(
+                f"ReleaseState sourceTree {state.sourceTree} does not match manifest sourceTree {manifest.get('sourceTree')}"
+            )
+
     working = state.clone()
     outcomes: List[StepOutcome] = []
 
-    for step in plan_from(working.state):
+    for step in plan_from(working.state, stop_after):
         if step.kind == StepKind.LOCAL:
             if mode == ExecutionMode.REAL:
                 working = advance(working, step.to_state)

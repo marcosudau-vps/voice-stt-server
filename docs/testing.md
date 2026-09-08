@@ -158,8 +158,11 @@ python -m unittest -v tests.unit.test_omnilingual_asr_engine
 These tests use fake Omnilingual runtime objects and do not install or import
 Meta's Omnilingual ASR package. This is a source-checkout command; it is not
 expected to work from a clean pip install unless the source tree and tests are
-present. For a pip-installed environment, use the file-based smoke test in
-[engines/omnilingual-asr.md](engines/omnilingual-asr.md).
+present. The Omnilingual adapter is internal/experimental and is not part of the
+supported production surface (see
+[transcription-engines.md](transcription-engines.md#about-the-other-adapters-in-the-source-tree));
+its own real-model smoke procedure is no longer maintained as public
+documentation.
 
 Real model smoke tests should run from Linux or WSL2 with Python 3.11.x and
 matching `torch` and `torchaudio` builds. Start with `omniASR_CTC_1B_v2`;
@@ -172,8 +175,8 @@ From a source checkout:
 python tests/voicestt_omnilingual_test.py --file-smoke --device cuda
 ```
 
-From a pip install, download the standalone script from the matching release
-branch as shown in [engines/omnilingual-asr.md](engines/omnilingual-asr.md).
+This is a source-checkout procedure for an internal/experimental adapter; it
+is not covered by the public distributions.
 
 ## FastAPI Multi-User Load Test
 

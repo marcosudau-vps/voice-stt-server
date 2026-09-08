@@ -1,11 +1,44 @@
 # Installation
 
-VoiceSTT uses install extras so each environment can install only the
-transcription engines and wake-word backends it needs.
+## The supported installation
+
+VoiceSTT is published as two complete, alternative distributions. Each one
+already contains the matching native Kroko runtime, the supported transcription
+engines and the server, so there is nothing to compile and no separate wheel to
+install afterwards:
+
+```bash
+pip install voice-stt-server        # Kroko Free runtime
+pip install voice-stt-server-pro    # Kroko Pro runtime
+```
+
+Supported targets are CPython 3.12 on Linux x86-64 and Windows x86-64 - the
+matrix the embedded native runtime is actually built and qualified for. Install
+one distribution or the other into an environment, never both. Both provide the
+same import package (`voice_stt_server`) and the same CLI (`voice-stt-server`).
+
+Optional wake-word backends stay an extra, because `openwakeword` pulls a
+`tflite-runtime` dependency that has no wheel on every supported target:
+
+```bash
+pip install "voice-stt-server[wake-words]"
+```
+
+See [release-process.md](release-process.md) for how those distributions are
+built and published.
+
+## The development distribution
+
+The rest of this page describes the **development** distribution built from
+this source checkout (`voicestt`), which uses install extras so a working
+environment can install only the pieces it needs. It is what the repository's
+own tests and CI use. Engines other than Faster-Whisper and Kroko-ONNX that
+appear in the tables below are internal/experimental adapters, not a supported
+product surface - see
+[transcription-engines.md](transcription-engines.md#about-the-other-adapters-in-the-source-tree).
 
 The canonical package, Docker and Kroko build procedures are maintained in
-[`build/BUILD.md`](../build/BUILD.md). This page focuses on Python install
-extras and supported environments.
+[`build/BUILD.md`](../build/BUILD.md).
 
 Recommended default local Whisper install:
 
@@ -124,7 +157,7 @@ New-Item -ItemType Directory -Path test-model-cache\kroko-onnx -Force
 python -c "from huggingface_hub import hf_hub_download; hf_hub_download(repo_id='Banafo/Kroko-ASR', filename='Kroko-EN-Community-64-L-Streaming-001.data', local_dir='test-model-cache/kroko-onnx')"
 ```
 
-See [engines/kroko-onnx.md](engines/kroko-onnx.md).
+See [kroko-onnx.md](kroko-onnx.md).
 All builder options, Community/Pro differences, Docker variants and rollback
 requirements are centralized in
 [`build/BUILD.md`](../build/BUILD.md#kroko-builder-cli).
@@ -216,14 +249,18 @@ Install only the engine stack you plan to use:
 | `moonshine` | `python -m pip install "VoiceSTT[moonshine]"` | Downloads Hugging Face model files automatically. English-only in this adapter. |
 | `sherpa_onnx_*` | `python -m pip install "VoiceSTT[sherpa-onnx]"` | Model bundles must be downloaded and extracted manually. |
 | `parakeet` | `python -m pip install -U "VoiceSTT[parakeet]"` | NeMo downloads from the configured model id/cache. Best on Linux or WSL2. |
-| [`omnilingual_asr`](engines/omnilingual-asr.md) | `python -m pip install "VoiceSTT[omnilingual]"` | Meta Omnilingual ASR downloads through its Linux/WSL fairseq2 cache. Use Python 3.11.x. The extra requires `omnilingual-asr>=0.2.0` for v2 model cards and constrains matching `torch`/`torchaudio` builds. Native Windows installs are not supported because `fairseq2n` has no Windows wheel. |
+| `omnilingual_asr` (internal/experimental) | `python -m pip install "VoiceSTT[omnilingual]"` | Meta Omnilingual ASR downloads through its Linux/WSL fairseq2 cache. Use Python 3.11.x. The extra requires `omnilingual-asr>=0.2.0` for v2 model cards and constrains matching `torch`/`torchaudio` builds. Native Windows installs are not supported because `fairseq2n` has no Windows wheel. |
 | `granite_speech` | `python -m pip install "VoiceSTT[granite]"` | Downloads Hugging Face model files automatically. |
 | `qwen3_asr` | `python -m pip install -U "VoiceSTT[qwen]"` | Downloads Qwen model files through the Qwen ASR package. |
 | `cohere_transcribe` | `python -m pip install "VoiceSTT[cohere]"` | Downloads Hugging Face model files; gated model access may be required. |
 | `kroko_onnx` | `python -m pip install "VoiceSTT[kroko-builder,silero-onnx-cpu]"`, then `stt-install-kroko --build --variant free` or `--variant pro` | Public Community models can auto-download or be downloaded with `huggingface_hub`; Pro/private models need a Pro runtime, a licensed `.data` file and a runtime key. `silero-onnx-cpu` provides the local VAD backend needed by recorder-based smoke tests and live microphone use. |
 
-Per-engine setup lives in [transcription-engines.md](transcription-engines.md)
-and the `docs/engines/` pages.
+Setup for the two supported production engines lives in
+[transcription-engines.md](transcription-engines.md),
+[faster-whisper.md](faster-whisper.md) and [kroko-onnx.md](kroko-onnx.md).
+The other rows in the table above are internal/experimental adapters that the
+public distributions neither install nor qualify - see
+[transcription-engines.md](transcription-engines.md#about-the-other-adapters-in-the-source-tree).
 
 ## Meta Omnilingual ASR Notes
 

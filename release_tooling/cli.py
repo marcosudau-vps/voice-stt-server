@@ -43,9 +43,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
+from . import candidate as candidate_module
 from . import config, gitinfo, pipeline, rc_manifest
 from .errors import ManifestError, ReleaseError
 from .state import (
+    STATE_ORDER,
     default_state_path,
     ensure_same_identity,
     ensure_same_version,
@@ -86,38 +88,71 @@ def _cmd_preflight(args: argparse.Namespace) -> int:
         expected_commit=expected_commit,
         expected_tree=expected_tree,
         rc_manifest_path=args.manifest,
+        require_qualified=getattr(args, "require_qualified", False),
     )
     _print_json(report.to_json_dict())
     return EXIT_OK if report.passed else EXIT_FAILED
 
 
 def _placeholder_manifest(*, version: str, commit: Optional[str], tree: Optional[str]) -> Dict[str, Any]:
-    """A schema-valid but clearly-fake RC manifest for planning purposes,
-    used only when the operator has not supplied a real one yet (there is
-    no frozen RC before W5-R02). Every identity in it is an obvious
-    placeholder - this is never mistaken for a real, W5-R02-qualified
-    manifest because ``validate_rc_manifest`` still requires the correct
-    shapes, and no placeholder value here could ever match a real remote
-    artifact identity."""
+    """A schema-valid but obviously-fake RC manifest, for planning only.
+
+    Used when the operator has not supplied a real manifest to ``dry-run``.
+    Every identity in it is a visible placeholder, and ``publish`` refuses to
+    run without an explicit ``--manifest``, so a placeholder can never reach a
+    real publication. No placeholder value here could match a real remote
+    artifact identity either, so a dry-run against one reports "would publish"
+    rather than a false "already published".
+    """
     commit = commit or ("0" * 40)
     tree = tree or ("0" * 40)
+    zero_sha = "0" * 64
+    zero_digest = "sha256:" + zero_sha
+
+    def _distribution(variant: str, name: str) -> Dict[str, Any]:
+        return {
+            "name": name,
+            "krokoVariant": variant,
+            "krokoFingerprint": "unresolved-placeholder",
+            "krokoArtifactSha256": zero_sha,
+            "wheels": [
+                {
+                    "filename": f"{name.replace('-', '_')}-{version}-cp312-cp312-linux_x86_64.whl",
+                    "sha256": zero_sha,
+                    "pythonTag": "cp312",
+                    "abiTag": "cp312",
+                    "platformTag": "linux_x86_64",
+                },
+                {
+                    "filename": f"{name.replace('-', '_')}-{version}-cp312-cp312-win_amd64.whl",
+                    "sha256": zero_sha,
+                    "pythonTag": "cp312",
+                    "abiTag": "cp312",
+                    "platformTag": "win_amd64",
+                },
+            ],
+        }
+
+    def _image(variant: str, digest_seed: str) -> Dict[str, Any]:
+        image = config.image_name_for(variant)
+        staging = config.staging_image_name_for(variant)
+        digest = "sha256:" + (digest_seed * 64)[:64]
+        return {
+            "tag": f"{image}:{version}",
+            "digest": digest,
+            "staging": f"{config.staging_repo_root()}/{staging}@{digest}",
+        }
+
     return rc_manifest.build_rc_manifest(
         candidate_id="W5-RC0",
         product_version=version,
         source_commit=commit,
         source_tree=tree,
-        wheel_path=Path(f"voicestt-{version}-py3-none-any.whl"),
-        wheel_sha256="0" * 64,
-        sdist_path=Path(f"voicestt-{version}.tar.gz"),
-        sdist_sha256="0" * 64,
-        kroko_free_fingerprint="unresolved",
-        kroko_free_artifact_sha256="0" * 64,
-        kroko_pro_fingerprint="unresolved",
-        kroko_pro_artifact_sha256="0" * 64,
-        free_image_tag=f"{config.image_name_for('free')}:{version}",
-        free_image_id="sha256:" + "0" * 64,
-        pro_image_tag=f"{config.image_name_for('pro')}:{version}",
-        pro_image_id="sha256:" + "0" * 64,
+        distributions={
+            variant: _distribution(variant, config.distribution_name_for(variant))
+            for variant in rc_manifest.VARIANTS
+        },
+        images={"free": _image("free", "0"), "pro": _image("pro", "1")},
         oci_version=version,
         oci_revision=commit,
         qualification_timestamp_utc=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -151,16 +186,16 @@ def _cmd_dry_run(args: argparse.Namespace) -> int:
             "dry-run reports the plan starting from PREPARED.",
             file=sys.stderr,
         )
+        identity = rc_manifest.state_identity(manifest)
         state = new_state(
             version=version,
             source_commit=manifest["sourceCommit"],
             source_tree=manifest["sourceTree"],
-            wheel=manifest["wheel"],
-            sdist=manifest["sdist"],
-            free_image=manifest["images"]["free"],
-            pro_image=manifest["images"]["pro"],
+            distributions=identity["distributions"],
+            images=identity["images"],
+            candidate=rc_manifest.candidate_identity(manifest),
         )
-    result = pipeline.dry_run(state, manifest)
+    result = pipeline.dry_run(state, manifest, stop_after=args.until)
     _print_json(result.to_json_dict())
     return EXIT_OK
 
@@ -187,74 +222,41 @@ def _cmd_manifest_validate(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
-def _extract_kroko_artifact_sha256(build_manifest: Dict[str, Any], variant: str) -> str:
-    """Reads one variant's Kroko artifact SHA-256 out of a production
-    build manifest (as written by ``tools/build_production.py``).
-
-    AP-SRV-070 W5-R02-C1 (D3): the real producer writes the canonical
-    field ``wheelSha256`` inside ``variants.<variant>.kroko.artifact``.
-    A legacy/test-fixture ``sha256`` field at the same nested location is
-    still tolerated as a fallback for compatibility, but if both are
-    present they must agree - a silent choice between two disagreeing
-    hashes would defeat the entire point of an RC manifest, so this
-    fails closed instead.
-    """
-    artifact = build_manifest["variants"][variant]["kroko"]["artifact"]
-    canonical = artifact.get("wheelSha256")
-    legacy = artifact.get("sha256")
-    if canonical and legacy and canonical != legacy:
-        raise ManifestError(
-            f"kroko {variant} artifact manifest has conflicting hashes: "
-            f"wheelSha256={canonical!r} != sha256={legacy!r}"
-        )
-    resolved = canonical or legacy
-    if not resolved:
-        raise ManifestError(
-            f"kroko {variant} artifact manifest is missing both 'wheelSha256' "
-            "(canonical, as written by tools/build_production.py) and the "
-            "legacy 'sha256' fallback field"
-        )
-    return resolved
-
-
 def _cmd_manifest_build(args: argparse.Namespace) -> int:
-    free_manifest = json.loads(Path(args.free_build_manifest).read_text(encoding="utf-8"))
-    pro_manifest = json.loads(Path(args.pro_build_manifest).read_text(encoding="utf-8"))
+    """Assembles the canonical RC manifest from one candidate output directory.
 
-    if free_manifest["gitCommit"] != pro_manifest["gitCommit"]:
-        print(
-            "ERROR: free and pro build manifests were built from different commits "
-            f"({free_manifest['gitCommit']} != {pro_manifest['gitCommit']})",
-            file=sys.stderr,
-        )
-        return EXIT_FAILED
-
-    manifest = rc_manifest.build_rc_manifest(
+    The assembly itself lives in ``release_tooling.candidate`` so that this
+    command and the GitHub candidate workflow's orchestrator
+    (``tools/release_candidate.py``) can never build it two different ways.
+    """
+    manifest = candidate_module.assemble_rc_manifest(
+        candidate_dir=Path(args.candidate_dir),
         candidate_id=args.candidate_id,
-        product_version=free_manifest["voicesttVersion"],
-        source_commit=free_manifest["gitCommit"],
         source_tree=args.source_tree,
-        wheel_path=Path(free_manifest["voicesttWheel"]["name"]),
-        wheel_sha256=free_manifest["voicesttWheel"]["sha256"],
-        sdist_path=Path(args.sdist_path),
-        sdist_sha256=args.sdist_sha256,
-        kroko_free_fingerprint=free_manifest["variants"]["free"]["kroko"]["fingerprint"],
-        kroko_free_artifact_sha256=_extract_kroko_artifact_sha256(free_manifest, "free"),
-        kroko_pro_fingerprint=pro_manifest["variants"]["pro"]["kroko"]["fingerprint"],
-        kroko_pro_artifact_sha256=_extract_kroko_artifact_sha256(pro_manifest, "pro"),
-        free_image_tag=free_manifest["variants"]["free"]["image"]["versionTag"],
-        free_image_id=free_manifest["variants"]["free"]["imageId"],
-        pro_image_tag=pro_manifest["variants"]["pro"]["image"]["versionTag"],
-        pro_image_id=pro_manifest["variants"]["pro"]["imageId"],
-        oci_version=free_manifest["voicesttVersion"],
-        oci_revision=free_manifest["gitCommit"],
         qualification_timestamp_utc=args.qualification_timestamp,
         qualification_context=args.qualification_context,
         qualification_evidence_ref=args.qualification_evidence_ref,
+        candidate_run=json.loads(args.candidate_run) if args.candidate_run else None,
         release_readiness=args.release_readiness,
     )
     rc_manifest.write_rc_manifest(Path(args.out), manifest)
     print(f"Wrote RC manifest: {args.out}")
+    return EXIT_OK
+
+
+def _cmd_manifest_qualify(args: argparse.Namespace) -> int:
+    """Transitions an RC manifest to QUALIFIED status (Option A)."""
+    manifest_path = Path(args.manifest)
+    manifest = rc_manifest.load_rc_manifest(manifest_path)
+    qualified = rc_manifest.qualify_manifest(
+        manifest,
+        evidence_ref=args.evidence_ref,
+        context=args.context,
+        timestamp_utc=args.timestamp,
+    )
+    out_path = Path(args.out) if args.out else manifest_path
+    rc_manifest.write_rc_manifest(out_path, qualified)
+    print(f"Qualified RC manifest written to: {out_path}")
     return EXIT_OK
 
 
@@ -292,6 +294,7 @@ def _cmd_publish(args: argparse.Namespace) -> int:
     from .adapters import build_default_adapters
     from .engine import ExecutionMode, run_engine
     from .preflight import run_preflight
+    from .state import STATE_ORDER
 
     if not args.manifest:
         print("ERROR: publish requires --manifest <path> - a real publish never runs against a placeholder identity.", file=sys.stderr)
@@ -305,7 +308,35 @@ def _cmd_publish(args: argparse.Namespace) -> int:
         return EXIT_USAGE
 
     manifest = rc_manifest.load_rc_manifest(Path(args.manifest))
+    if args.version and str(args.version).strip() != manifest["productVersion"]:
+        print(
+            f"ERROR: Expected version {args.version!r} does not match candidate "
+            f"manifest productVersion {manifest['productVersion']!r}.",
+            file=sys.stderr,
+        )
+        return EXIT_FAILED
+
+    readiness = manifest.get("releaseReadiness")
+    if readiness != rc_manifest.READINESS_QUALIFIED:
+        print(
+            f"ERROR: Cannot publish candidate with releaseReadiness={readiness!r}. "
+            f"Only {rc_manifest.READINESS_QUALIFIED!r} candidates may be published.",
+            file=sys.stderr,
+        )
+        return EXIT_FAILED
+    qual = manifest.get("qualification") or {}
+    evidence_ref = qual.get("evidenceRef")
+    if not evidence_ref or str(evidence_ref).strip() == "" or evidence_ref == "none":
+        print(
+            "ERROR: Candidate manifest lacks valid qualification evidenceRef; "
+            "cannot publish without qualification evidence.",
+            file=sys.stderr,
+        )
+        return EXIT_FAILED
+
     repo_root = config.REPO_ROOT
+    # The manifest is the release identity authority. ``--version`` above is
+    # only an operator/dispatch assertion that must agree with it.
     version = manifest["productVersion"]
 
     report = run_preflight(
@@ -314,23 +345,26 @@ def _cmd_publish(args: argparse.Namespace) -> int:
         expected_commit=manifest["sourceCommit"],
         expected_tree=manifest["sourceTree"],
         rc_manifest_path=Path(args.manifest),
+        require_qualified=True,
     )
     if not report.passed:
         print("Preflight failed; refusing to publish.", file=sys.stderr)
         _print_json(report.to_json_dict())
         return EXIT_FAILED
 
-    state_path = default_state_path(repo_root, version)
+    identity = rc_manifest.state_identity(manifest)
+    candidate = rc_manifest.candidate_identity(manifest)
+
+    state_path = Path(args.state_file) if args.state_file else default_state_path(repo_root, version)
     state = load_state(state_path)
     if state is None:
         state = new_state(
             version=version,
             source_commit=manifest["sourceCommit"],
             source_tree=manifest["sourceTree"],
-            wheel=manifest["wheel"],
-            sdist=manifest["sdist"],
-            free_image=manifest["images"]["free"],
-            pro_image=manifest["images"]["pro"],
+            distributions=identity["distributions"],
+            images=identity["images"],
+            candidate=candidate,
         )
     else:
         ensure_same_version(state, version)
@@ -338,20 +372,73 @@ def _cmd_publish(args: argparse.Namespace) -> int:
             state,
             source_commit=manifest["sourceCommit"],
             source_tree=manifest["sourceTree"],
-            wheel=manifest["wheel"],
-            sdist=manifest["sdist"],
-            free_image=manifest["images"]["free"],
-            pro_image=manifest["images"]["pro"],
+            distributions=identity["distributions"],
+            images=identity["images"],
+            candidate=candidate,
         )
 
-    adapters = build_default_adapters(dist_dir=args.dist_dir)
+    adapters = build_default_adapters(
+        dist_dir=args.dist_dir, trusted_publishing=args.trusted_publishing
+    )
 
     def persist(updated_state):
         save_state(state_path, updated_state)
 
-    result = run_engine(state, manifest, mode=ExecutionMode.REAL, adapters=adapters, persist=persist)
+    result = run_engine(
+        state,
+        manifest,
+        mode=ExecutionMode.REAL,
+        adapters=adapters,
+        persist=persist,
+        stop_after=args.until,
+    )
     _print_json(result.to_json_dict())
     return EXIT_FAILED if result.stoppedEarly else EXIT_OK
+
+
+def _cmd_precheck_pypi(args: argparse.Namespace) -> int:
+    """Read-only PyPI conflict check against candidate manifest (B4).
+
+    Fails closed if any conflict, hash mismatch, or unverifiable state is
+    detected. If --stage-dir is given, stages missing files per variant.
+    """
+    from . import remote_checks
+
+    manifest = rc_manifest.load_rc_manifest(Path(args.manifest))
+    report = remote_checks.precheck_pypi(manifest)
+
+    if args.stage_dir:
+        import hashlib
+        import shutil
+
+        stage_dir = Path(args.stage_dir)
+        dist_dir = Path(args.dist_dir) if args.dist_dir else config.REPO_ROOT / "dist"
+
+        for variant in ("free", "pro"):
+            v_report = report[variant]
+            v_stage_dir = stage_dir / variant
+            v_stage_dir.mkdir(parents=True, exist_ok=True)
+            for filename in v_report.get("absent", []):
+                src = dist_dir / filename
+                if not src.is_file():
+                    raise ManifestError(
+                        f"PyPI precheck reports {filename} absent on PyPI but wheel file not found in {dist_dir}"
+                    )
+                content = src.read_bytes()
+                sha256 = hashlib.sha256(content).hexdigest()
+                expected_sha256 = next(
+                    w["sha256"]
+                    for w in manifest["distributions"][variant]["wheels"]
+                    if w["filename"] == filename
+                )
+                if sha256 != expected_sha256:
+                    raise ManifestError(
+                        f"Wheel {filename} SHA-256 mismatch before PyPI upload: expected {expected_sha256}, got {sha256}"
+                    )
+                shutil.copy2(src, v_stage_dir / filename)
+
+    _print_json(report)
+    return EXIT_OK
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -367,6 +454,10 @@ def build_parser() -> argparse.ArgumentParser:
     preflight_parser.add_argument("--commit", default=None, help="Expected exact Git commit.")
     preflight_parser.add_argument("--tree", default=None, help="Expected exact Git tree.")
     preflight_parser.add_argument("--manifest", type=Path, default=None, help="RC manifest path to validate.")
+    preflight_parser.add_argument(
+        "--require-qualified", action="store_true", default=False,
+        help="Require candidate manifest to have releaseReadiness == 'QUALIFIED'.",
+    )
     preflight_parser.set_defaults(func=_cmd_preflight)
 
     dry_run_parser = subparsers.add_parser(
@@ -377,6 +468,10 @@ def build_parser() -> argparse.ArgumentParser:
     dry_run_parser.add_argument(
         "--manifest", type=Path, default=None,
         help="RC manifest to plan against (default: an obvious placeholder identity - no RC exists before W5-R02).",
+    )
+    dry_run_parser.add_argument(
+        "--until", default=None, choices=list(STATE_ORDER),
+        help="Plan only as far as this state (the same boundary publish uses).",
     )
     dry_run_parser.set_defaults(func=_cmd_dry_run)
 
@@ -392,18 +487,35 @@ def build_parser() -> argparse.ArgumentParser:
     validate_parser.add_argument("path", type=Path)
     validate_parser.set_defaults(func=_cmd_manifest_validate)
 
-    build_manifest_parser = manifest_subparsers.add_parser(
-        "build", help="Assemble a canonical RC manifest from Free/Pro build manifests (W5-R02)."
+    qualify_parser = manifest_subparsers.add_parser(
+        "qualify",
+        help="Transition an RC manifest to QUALIFIED status.",
     )
-    build_manifest_parser.add_argument("--candidate-id", required=True, help="e.g. W5-RC1")
-    build_manifest_parser.add_argument("--free-build-manifest", required=True, type=Path)
-    build_manifest_parser.add_argument("--pro-build-manifest", required=True, type=Path)
+    qualify_parser.add_argument("--manifest", required=True, type=Path, help="Path to RC manifest.")
+    qualify_parser.add_argument("--evidence-ref", required=True, help="Evidence URL or reference.")
+    qualify_parser.add_argument("--context", default=None, help="Optional qualification context description.")
+    qualify_parser.add_argument("--timestamp", default=None, help="Optional qualification timestamp ISO8601 UTC.")
+    qualify_parser.add_argument("--out", default=None, type=Path, help="Output manifest path (default: overwrite in-place).")
+    qualify_parser.set_defaults(func=_cmd_manifest_qualify)
+
+    build_manifest_parser = manifest_subparsers.add_parser(
+        "build",
+        help="Assemble the canonical RC manifest from a candidate output directory.",
+    )
+    build_manifest_parser.add_argument(
+        "--candidate-dir", required=True, type=Path,
+        help="Directory holding build-manifest-<variant>.json, "
+             "distribution-<variant>.json and staging-<variant>.json.",
+    )
+    build_manifest_parser.add_argument("--candidate-id", required=True, help="e.g. W5-RC1 or gh-<run-id>-<attempt>")
     build_manifest_parser.add_argument("--source-tree", required=True)
-    build_manifest_parser.add_argument("--sdist-path", required=True, type=Path)
-    build_manifest_parser.add_argument("--sdist-sha256", required=True)
     build_manifest_parser.add_argument("--qualification-timestamp", required=True)
     build_manifest_parser.add_argument("--qualification-context", required=True)
     build_manifest_parser.add_argument("--qualification-evidence-ref", required=True)
+    build_manifest_parser.add_argument(
+        "--candidate-run", default=None,
+        help="JSON object describing the workflow run that produced the candidate.",
+    )
     build_manifest_parser.add_argument(
         "--release-readiness", default=rc_manifest.READINESS_NOT_QUALIFIED, choices=rc_manifest.READINESS_STATES
     )
@@ -420,12 +532,43 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--apply", action="store_true", help="Actually write the new VERSION file.")
     prepare_parser.set_defaults(func=_cmd_prepare_next_version)
 
+    precheck_pypi_parser = subparsers.add_parser(
+        "precheck-pypi",
+        help="Run read-only PyPI precheck against candidate manifest and optionally stage absent files.",
+    )
+    precheck_pypi_parser.add_argument("--manifest", required=True, type=Path, help="Candidate manifest path.")
+    precheck_pypi_parser.add_argument("--dist-dir", type=Path, default=None, help="Directory holding candidate distribution wheels.")
+    precheck_pypi_parser.add_argument("--stage-dir", type=Path, default=None, help="Directory where absent wheels will be staged per variant.")
+    precheck_pypi_parser.set_defaults(func=_cmd_precheck_pypi)
+
     publish_parser = subparsers.add_parser(
         "publish", help="Walk the real release engine for real. Requires --manifest and --yes; fails closed on any conflict."
     )
     publish_parser.add_argument("--manifest", type=Path, default=None, required=False, help="The frozen RC manifest to publish (required).")
+    publish_parser.add_argument(
+        "--version", default=None,
+        help="Expected product version (validates that dispatch/operator version matches candidate manifest).",
+    )
     publish_parser.add_argument("--yes", action="store_true", help="Required to actually proceed past preflight.")
-    publish_parser.add_argument("--dist-dir", type=Path, default=None, help="Where the qualified wheel/sdist live (default: dist/).")
+    publish_parser.add_argument(
+        "--dist-dir", type=Path, default=None,
+        help="Where the qualified distribution wheels live (default: dist/).",
+    )
+    publish_parser.add_argument(
+        "--state-file", default=None, help="Explicit release-state file path.",
+    )
+    publish_parser.add_argument(
+        "--until", default=None,
+        help="Advance the canonical state machine only as far as this state. "
+             "Used by the GitHub publish workflow so each job holds only the "
+             "credentials its own steps need; the order and every barrier "
+             "still come from the one release graph.",
+    )
+    publish_parser.add_argument(
+        "--trusted-publishing", action="store_true",
+        help="PyPI uploads are performed by the official OIDC publish action; "
+             "the engine verifies them instead of holding a token.",
+    )
     publish_parser.set_defaults(func=_cmd_publish)
 
     return parser

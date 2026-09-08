@@ -111,7 +111,7 @@ engines, wake-word backends, and model runtimes are loaded lazily so importing
 | AP-SRV-050 settings domain | `tests/unit/test_settings_control_plane.py`, `tests/unit/test_settings_runtime_persistence.py` | Registry contract, atomic patch/revision rules, requested/effective per apply policy, watchdog cross-field validation, per-session revision isolation, server overlay and concurrency (20x); runtime config coexistence format both directions, restart restore and parallel writes. |
 | Structured logging | `tests/unit/test_server_operations.py`, `tests/unit/test_fastapi_server_multi_user.py`, `tests/unit/test_openai_compatible_endpoint.py`, `tests/unit/test_project_config.py` | Envelope, redaction, queues, calendar/SQLite persistence, history, session scope and `/data` paths. |
 | Manual and smoke scripts | `tests/voicestt_*.py`, `tests/*talk*.py`, `tests/feed_audio.py`, `tools/*` when present | Device, model, websocket, and real-audio workflows that are too expensive for fast unit tests. |
-| Docs | `docs/*.md`, `docs/engines/*.md` | User-facing setup, configuration, engine selection, troubleshooting, and refactoring guidance. |
+| Docs | `docs/*.md` | User-facing setup, configuration, engine selection, troubleshooting, and refactoring guidance. The maintained engine guides are `docs/faster-whisper.md` and `docs/kroko-onnx.md`. |
 
 ## Dependency Direction
 

@@ -1018,12 +1018,46 @@ class KrokoArtifactStore:
         return ArtifactRecord(metadata=metadata, wheel_path=stored_wheel, slot_dir=final)
 
 
+def installed_variant_from_embedded_manifest() -> Optional[str]:
+    """The Kroko variant an installed VoiceSTT *distribution* embeds.
+
+    AP-SRV-070 W5-R04: the two public distributions ship the qualified Kroko
+    runtime inside themselves, so there is no separately installed
+    ``kroko-onnx`` distribution whose WHEEL build tag could be read. The
+    distribution instead carries its own provenance file, written by
+    ``tools/build_distribution.py`` when it merged the qualified Kroko wheel.
+
+    This is the authoritative answer to "which runtime is installed", and it
+    is deliberately derived from the *installed distribution* rather than from
+    any license key: the key is a runtime credential for an already-installed
+    Pro runtime, never the thing that selects one.
+
+    Returns ``None`` in a development checkout, or when the running
+    environment has no merged distribution - the legacy separately installed
+    ``kroko-onnx`` path is then used as the fallback.
+    """
+    try:
+        from voice_stt_server._embedded import embedded_kroko_variant
+    except Exception:  # noqa: BLE001 - absent/rearranged package is not fatal
+        return None
+    try:
+        return embedded_kroko_variant()
+    except Exception:  # noqa: BLE001 - a broken manifest is "unknown", not a crash
+        return None
+
+
 def verify_installed_runtime(expected_variant: str) -> Dict[str, Any]:
     """Verifies the Kroko runtime *installed in this interpreter*.
 
     W4A-06 requires that consuming an artifact proves the module actually
     imports and that the installed runtime is the expected license variant -
     the checks that only become possible once the wheel is installed.
+
+    AP-SRV-070 W5-R04 added the merged-distribution case: the variant is read
+    from the installed distribution's own embedded provenance first, and only
+    falls back to the ``kroko-onnx`` distribution's WHEEL build tag for a
+    developer environment where the Kroko wheel really was installed
+    separately.
     """
     expected_variant = buildinputs.normalize_variant(expected_variant)
     result: Dict[str, Any] = {"expectedVariant": expected_variant}
@@ -1039,7 +1073,9 @@ def verify_installed_runtime(expected_variant: str) -> Dict[str, Any]:
         result["ok"] = False
         return result
 
-    installed_variant = None
+    installed_variant = installed_variant_from_embedded_manifest()
+    if installed_variant is not None:
+        result["variantSource"] = "embedded-distribution-manifest"
     try:
         from importlib import metadata as importlib_metadata
 
@@ -1047,11 +1083,14 @@ def verify_installed_runtime(expected_variant: str) -> Dict[str, Any]:
         for line in wheel_text.splitlines():
             if line.lower().startswith("build:"):
                 build_tag = line.partition(":")[2].strip().lower()
-                if buildinputs.VARIANT_PRO in build_tag:
-                    installed_variant = buildinputs.VARIANT_PRO
-                elif buildinputs.VARIANT_FREE in build_tag:
-                    installed_variant = buildinputs.VARIANT_FREE
                 result["installedBuildTag"] = build_tag
+                if installed_variant is None:
+                    if buildinputs.VARIANT_PRO in build_tag:
+                        installed_variant = buildinputs.VARIANT_PRO
+                        result["variantSource"] = "kroko-onnx-wheel-build-tag"
+                    elif buildinputs.VARIANT_FREE in build_tag:
+                        installed_variant = buildinputs.VARIANT_FREE
+                        result["variantSource"] = "kroko-onnx-wheel-build-tag"
     except Exception as exc:  # noqa: BLE001 - absence is reported, not fatal
         result["metadataError"] = f"{type(exc).__name__}: {exc}"
 
@@ -1086,6 +1125,7 @@ __all__ = [
     "sha256_of",
     "variant_of_wheel",
     "verify_artifact",
+    "installed_variant_from_embedded_manifest",
     "verify_installed_runtime",
     "wheel_platform_tag_matches_target",
 ]

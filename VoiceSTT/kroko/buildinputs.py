@@ -115,8 +115,18 @@ PATCH_SET_REVISION = 3
 #: artifact records revision 4 and must not be invalidated by a Linux-only
 #: retagging or host-toolchain correction.  Linux starts its own authority at
 #: revision 1 with W4AB-C1.
+#:
+#: Bumped Linux 1 -> 2 (AP-SRV-070 W5-R04, section 12): the Linux builder
+#: container is now a declared, source-controlled authority
+#: (:func:`linux_builder_declaration`) instead of an undeclared image that
+#: pulled a floating base tag and installed unpinned Python packaging tools.
+#: Pinning ``setuptools``/``wheel`` really does change how the produced Kroko
+#: wheel is built and tagged - exactly the reasoning that already applies to
+#: :data:`WINDOWS_PACKAGING_TOOLS` - so a previously stored Linux artifact must
+#: stop matching rather than be silently reused for a build that would now
+#: produce different bytes.
 WINDOWS_BUILDER_REVISION = 4
-LINUX_BUILDER_REVISION = 1
+LINUX_BUILDER_REVISION = 2
 
 #: Backwards-compatible name for callers that described the original,
 #: Windows-qualified builder before platform revisions were split.
@@ -146,6 +156,93 @@ LINUX_CMAKE_FLAGS = (
 #: Parallelism for the Linux build. Build-effective only in wall-clock terms,
 #: but kept declared so the recorded build inputs are complete.
 LINUX_MAKE_ARGS = "-j2"
+
+#: --------------------------------------------------------------------------
+#: The declared Linux/AMD64 builder container (AP-SRV-070 W5-R04, section 12)
+#: --------------------------------------------------------------------------
+#:
+#: Until W5-R04 the Linux Kroko wheel was compiled inside
+#: ``build/kroko-builder.Dockerfile``, which was not declared anywhere: it
+#: pulled the floating ``python:3.12-slim-bookworm`` tag and installed
+#: ``pip``/``setuptools``/``wheel`` unpinned. That was never a *correctness*
+#: hole the way Windows Finding J was - the Linux fingerprint probes the real
+#: ``cmake``/``cc``/``c++``/OpenSSL identity inside the container (see
+#: ``VoiceSTT.install_kroko.detect_linux_toolchain_identity``), so a materially
+#: different toolchain produces a different fingerprint and fails closed rather
+#: than reusing a wrong artifact. It was a *stability* hole: a moving base tag
+#: made the fingerprint drift for reasons nobody declared, which is exactly
+#: what destroys artifact reuse on a fresh GitHub runner.
+#:
+#: The container is therefore a declared authority now. Everything below is
+#: plain source-controlled data, so ``--describe-artifact`` still resolves a
+#: fingerprint offline without building an image or contacting a registry.
+#:
+#: **Update obligation:** changing any constant here is a build-effective
+#: change to the Linux builder authority and requires bumping
+#: :data:`LINUX_BUILDER_REVISION`. A guard test in
+#: ``tests/unit/test_kroko_fingerprint.py`` hashes this declaration together
+#: with the builder Dockerfile and fails if either changed without a bump, so
+#: the obligation is enforced rather than trusted.
+#:
+#: **Honest boundary (AP-SRV-070 W5-R04, section 12):** the base image and the
+#: Python packaging tools are immutable here, but the exact Debian *point*
+#: versions of the apt packages below are still resolved against the live
+#: bookworm archive at image-build time. Closing that would require a
+#: snapshot.debian.org pin, which the prompt explicitly declines to turn into a
+#: hermetic-build project. The fingerprint still fails closed on it, because a
+#: changed compiler or CMake version is probed and changes the fingerprint; and
+#: the qualified artifact itself - not a claim of bit-for-bit reproducibility -
+#: is what becomes publication authority.
+
+#: The builder base image, pinned by immutable manifest-index digest rather
+#: than by the floating ``3.12-slim-bookworm`` tag.
+LINUX_BUILDER_BASE_IMAGE = "python:3.12-slim-bookworm"
+LINUX_BUILDER_BASE_IMAGE_DIGEST = (
+    "sha256:782412e85d0f0984994c290652577d4018aff08145c85b262bb63dc0c7522254"
+)
+
+#: The apt packages the native Linux build needs: a C/C++ toolchain, CMake,
+#: git for the upstream checkout, and the OpenSSL/pybind11/zlib development
+#: headers sherpa-onnx links against.
+LINUX_BUILDER_APT_PACKAGES = (
+    "build-essential",
+    "cmake",
+    "git",
+    "libssl-dev",
+    "pybind11-dev",
+    "zlib1g-dev",
+)
+
+#: Python packaging tools installed into the builder image, pinned exactly
+#: because they decide how the produced wheel is built and tagged. ``wheel`` is
+#: held below 0.46 for the same reason as on Windows: upstream's
+#: ``cmake/cmake_extension.py`` imports ``wheel.bdist_wheel``, which 0.46
+#: removed, and silently falls back to ``bdist_wheel = None``.
+LINUX_BUILDER_PACKAGING_TOOLS = (
+    "pip==26.2.1",
+    "setuptools==75.8.2",
+    "wheel==0.45.1",
+)
+
+
+def linux_builder_base_image_ref() -> str:
+    """The fully pinned ``image@digest`` reference for the Linux builder."""
+    return "{0}@{1}".format(LINUX_BUILDER_BASE_IMAGE, LINUX_BUILDER_BASE_IMAGE_DIGEST)
+
+
+def linux_builder_declaration():
+    """The complete, declared Linux builder-container authority.
+
+    Pure data assembled from the constants above: no probing, no network, no
+    Docker - so an ordinary artifact REUSE stays cheap.
+    """
+    return {
+        "baseImage": LINUX_BUILDER_BASE_IMAGE,
+        "baseImageDigest": LINUX_BUILDER_BASE_IMAGE_DIGEST,
+        "baseImageRef": linux_builder_base_image_ref(),
+        "aptPackages": list(LINUX_BUILDER_APT_PACKAGES),
+        "packagingTools": list(LINUX_BUILDER_PACKAGING_TOOLS),
+    }
 
 #: The environment switch that makes the upstream build produce a Pro-capable
 #: runtime. This is a *build* switch, never a license key: the Pro runtime is
@@ -528,8 +625,14 @@ __all__ = [
     "KROKO_UPSTREAM_BRANCH_HINT",
     "KROKO_UPSTREAM_REPO",
     "KROKO_UPSTREAM_REVISION",
+    "LINUX_BUILDER_APT_PACKAGES",
+    "LINUX_BUILDER_BASE_IMAGE",
+    "LINUX_BUILDER_BASE_IMAGE_DIGEST",
+    "LINUX_BUILDER_PACKAGING_TOOLS",
     "LINUX_CMAKE_FLAGS",
     "LINUX_MAKE_ARGS",
+    "linux_builder_base_image_ref",
+    "linux_builder_declaration",
     "PATCHED_UPSTREAM_SOURCES",
     "PATCH_SET_REVISION",
     "PRO_BUILD_ENV_NAME",

@@ -1,0 +1,312 @@
+# AP-SRV-070 W5-R04: GitHub-native release publication.
+#
+# Publishes an ALREADY QUALIFIED candidate. It builds nothing: every job
+# consumes the exact bytes and OCI manifests the candidate workflow produced
+# and an external reviewer approved.
+#
+# The order below is not implemented here. It comes from the one canonical
+# release state machine (release_tooling/engine.py), and each job advances only
+# its own portion of it via `release.py publish --until <STATE>`:
+#
+#   PREPARED -> TAGGED -> PYPI_PUBLISHED -> DOCKERHUB_PUBLISHED
+#            -> GHCR_PUBLISHED -> EXTERNAL_VERIFIED -> ALIASES_PUBLISHED
+#            -> GITHUB_RELEASED -> FINAL_VERIFIED -> COMPLETE
+#
+# That split is what lets each job hold only the credentials and permissions
+# its own steps need (least privilege) without ever forking the operation
+# graph: the order, the barriers, the conflict/unknown fail-closed semantics
+# and the same-version resume all still live in exactly one place.
+#
+# Every job runs inside the protected `release` Environment, so a normal push
+# or a pull request - including one from a fork - can never reach a release
+# secret or a package-write permission. See docs/release-process.md for the
+# exact operator setup.
+name: Release publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      candidate_run_id:
+        description: "Run id of the release-candidate workflow that produced the qualified candidate"
+        required: true
+      version:
+        description: "Product version to publish (must match the candidate)"
+        required: true
+
+permissions: {}
+
+concurrency:
+  # Two publications of the same version must never race: they would both try
+  # to reserve the same immutable tags.
+  group: release-publish-${{ inputs.version }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+  CANDIDATE_DIR: ${{ github.workspace }}/candidate
+  STATE_FILE: ${{ github.workspace }}/release-state.json
+  DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+
+jobs:
+  # --------------------------------------------------------------------
+  # 1. Tag - the first publishing step, before any public artifact exists
+  # --------------------------------------------------------------------
+  tag:
+    name: Git tag (PREPARED -> TAGGED)
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      actions: read
+      contents: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          path: ${{ env.CANDIDATE_DIR }}
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          merge-multiple: true
+      - name: Validate candidate manifest version against workflow input
+        run: |
+          set -euo pipefail
+          python release.py preflight \
+            --manifest "$CANDIDATE_DIR/rc-manifest.json" \
+            --version "${{ inputs.version }}" \
+            --require-qualified
+      - name: Advance to TAGGED
+        run: |
+          set -euo pipefail
+          python release.py publish \
+            --manifest "$CANDIDATE_DIR/rc-manifest.json" \
+            --version "${{ inputs.version }}" \
+            --state-file "$STATE_FILE" \
+            --dist-dir "$CANDIDATE_DIR/dist" \
+            --until TAGGED --yes
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: release-state-tagged
+          path: ${{ env.STATE_FILE }}
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------
+  # 2. PyPI - both complete distributions, via Trusted Publishing (OIDC)
+  # --------------------------------------------------------------------
+  pypi:
+    name: PyPI (TAGGED -> PYPI_PUBLISHED)
+    needs: tag
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      # id-token is granted ONLY here, on the one job that needs OIDC.
+      actions: read
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          path: ${{ env.CANDIDATE_DIR }}
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          merge-multiple: true
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: release-state-tagged
+          path: ${{ github.workspace }}
+
+      # Precheck: inspect PyPI state BEFORE any public write.
+      # ABSENT   -> stage missing file for upload
+      # MATCH    -> skip file (safe same-version resume)
+      # CONFLICT -> hard STOP before OIDC write
+      # UNKNOWN  -> hard STOP before OIDC write
+      - name: PyPI remote precheck and artifact staging
+        id: pypi_precheck
+        run: |
+          set -euo pipefail
+          python release.py precheck-pypi \
+            --manifest "$CANDIDATE_DIR/rc-manifest.json" \
+            --dist-dir "$CANDIDATE_DIR/dist" \
+            --stage-dir upload
+          if [ -d upload/free ] && [ "$(ls -A upload/free)" ]; then
+            echo "upload_free=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "upload_free=false" >> "$GITHUB_OUTPUT"
+          fi
+          if [ -d upload/pro ] && [ "$(ls -A upload/pro)" ]; then
+            echo "upload_pro=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "upload_pro=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish voice-stt-server to PyPI
+        if: steps.pypi_precheck.outputs.upload_free == 'true'
+        uses: pypa/gh-action-pypi-publish@15c56dba361d8335944d31a2ecd17d700fc7bcbc # v1.12.2
+        with:
+          packages-dir: upload/free
+          skip-existing: true
+
+      - name: Publish voice-stt-server-pro to PyPI
+        if: steps.pypi_precheck.outputs.upload_pro == 'true'
+        uses: pypa/gh-action-pypi-publish@15c56dba361d8335944d31a2ecd17d700fc7bcbc # v1.12.2
+        with:
+          packages-dir: upload/pro
+          skip-existing: true
+
+      # The state only advances after the engine's own read-only check confirms
+      # the exact expected filenames and SHA-256 hashes are really on PyPI - an
+      # action exiting 0 is not, by itself, evidence of anything.
+      - name: Advance to PYPI_PUBLISHED
+        run: |
+          set -euo pipefail
+          python release.py publish \
+            --manifest "$CANDIDATE_DIR/rc-manifest.json" \
+            --version "${{ inputs.version }}" \
+            --state-file "$STATE_FILE" \
+            --dist-dir "$CANDIDATE_DIR/dist" \
+            --trusted-publishing \
+            --until PYPI_PUBLISHED --yes
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: release-state-pypi
+          path: ${{ env.STATE_FILE }}
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------
+  # 3. Registries - Docker Hub first, then GHCR by manifest promotion
+  # --------------------------------------------------------------------
+  registries:
+    name: Registries (PYPI_PUBLISHED -> EXTERNAL_VERIFIED)
+    needs: pypi
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3.7.1
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          path: ${{ env.CANDIDATE_DIR }}
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          merge-multiple: true
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: release-state-pypi
+          path: ${{ github.workspace }}
+
+      # GHCR uses the workflow's own GITHUB_TOKEN - no long-lived PAT.
+      - name: Log in to GHCR
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Docker Hub needs a write-capable PAT. Delete capability is NOT needed:
+      # the release never deletes or repoints an exact version tag.
+      - name: Log in to Docker Hub
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Advance to EXTERNAL_VERIFIED (Docker Hub, then GHCR promotion)
+        run: |
+          set -euo pipefail
+          python release.py publish \
+            --manifest "$CANDIDATE_DIR/rc-manifest.json" \
+            --version "${{ inputs.version }}" \
+            --state-file "$STATE_FILE" \
+            --dist-dir "$CANDIDATE_DIR/dist" \
+            --trusted-publishing \
+            --until EXTERNAL_VERIFIED --yes
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: release-state-registries
+          path: ${{ env.STATE_FILE }}
+          if-no-files-found: error
+
+  # --------------------------------------------------------------------
+  # 4. Aliases, then the GitHub Release, then final verification
+  # --------------------------------------------------------------------
+  finalize:
+    name: Aliases + GitHub Release (EXTERNAL_VERIFIED -> COMPLETE)
+    needs: registries
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions:
+      actions: read
+      contents: write
+      packages: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3.7.1
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          path: ${{ env.CANDIDATE_DIR }}
+          run-id: ${{ inputs.candidate_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          merge-multiple: true
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16 # v4.1.8
+        with:
+          name: release-state-registries
+          path: ${{ github.workspace }}
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Advance to COMPLETE
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          python release.py publish \
+            --manifest "$CANDIDATE_DIR/rc-manifest.json" \
+            --version "${{ inputs.version }}" \
+            --state-file "$STATE_FILE" \
+            --dist-dir "$CANDIDATE_DIR/dist" \
+            --trusted-publishing \
+            --until COMPLETE --yes
+
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: release-state-complete
+          path: ${{ env.STATE_FILE }}
+          if-no-files-found: error

@@ -31,6 +31,7 @@ die aktuelle Dokumentation eingeordnet:
 ## Einstiegspunkte
 
 - [Zentraler Build und Deployment](../build/BUILD.md)
+- [Releaseprozess und Operator-Einrichtung](release-process.md)
 - [Marcos VPS-Deployment](../build/vps/README.md)
 - [Quick Start](quick-start.md)
 - [Installation](installation.md)
@@ -38,11 +39,27 @@ die aktuelle Dokumentation eingeordnet:
 - [FastAPI-Server](fastapi-server.md)
 - [Windows-/CPU-Deployment](windows-cpu-deployment.md)
 - [Transkriptions-Engines](transcription-engines.md)
+- [Faster-Whisper](faster-whisper.md)
+- [Kroko-ONNX](kroko-onnx.md)
 - [STT-Modellverwaltung](stt-model-management.md)
 - [Wake Words](wake-words.md)
 - [Testing](testing.md)
 - [Troubleshooting](troubleshooting.md)
 - [Modulübersicht](module-map.md)
+
+## Produktflächen und Engines
+
+VoiceSTT wird als zwei vollständige, alternative Distributionen ausgeliefert:
+`voice-stt-server` (Kroko Free) und `voice-stt-server-pro` (Kroko Pro). Beide
+enthalten die passende native Laufzeit bereits, stellen dasselbe Importpaket
+`voice_stt_server` und dieselbe CLI `voice-stt-server` bereit und schließen
+einander aus. Welche Laufzeit installiert ist, entscheidet die Distribution -
+niemals ein Runtime-Key.
+
+Als unterstützte Produktions-STT-Engines sind ausschließlich **Faster-Whisper**
+und **Kroko-ONNX** dokumentiert und qualifiziert. Weitere Adapter im Quellbaum
+sind intern/experimentell und keine zugesagte Produktfläche; die Einordnung
+steht in [transcription-engines.md](transcription-engines.md).
 
 ## Cliententwicklung
 

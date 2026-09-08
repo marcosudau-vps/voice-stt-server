@@ -47,6 +47,23 @@ PRODUCTION_DOCKERFILE = REPO_ROOT / "Dockerfile"
 KROKO_BUILDER_DOCKERFILE = REPO_ROOT / "build" / "kroko-builder.Dockerfile"
 KROKO_BUILDER_IMAGE = "voicestt-kroko-builder:w4c"
 
+#: The production image base, pinned by immutable manifest-index digest
+#: (AP-SRV-070 W5-R04, section 12). Declared here rather than in
+#: ``VoiceSTT.kroko.buildinputs`` on purpose: that module is the *Kroko*
+#: build-input authority and everything in it is a Kroko fingerprint input,
+#: while this is the production-image authority (W4C) and must never move a
+#: Kroko fingerprint. ``tests/unit/test_production_docker_contract.py`` fails
+#: if ``Dockerfile`` and this declaration drift apart.
+PRODUCTION_BASE_IMAGE = "ubuntu:24.04"
+PRODUCTION_BASE_IMAGE_DIGEST = (
+    "sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517"
+)
+
+
+def production_base_image_ref() -> str:
+    """The fully pinned ``image@digest`` reference both stages must use."""
+    return f"{PRODUCTION_BASE_IMAGE}@{PRODUCTION_BASE_IMAGE_DIGEST}"
+
 VARIANT_FREE = "free"
 VARIANT_PRO = "pro"
 SUPPORTED_VARIANTS = (VARIANT_FREE, VARIANT_PRO)
@@ -186,6 +203,39 @@ def resolve_dirty(runner: CommandRunner = default_runner, cwd: Path = REPO_ROOT)
 def resolve_voicestt_version() -> str:
     """The one product version authority (see ``VoiceSTT._version``)."""
     return resolve_version()
+
+
+def resolve_source_build_date(
+    git_commit: str,
+    runner: CommandRunner = default_runner,
+    cwd: Path = REPO_ROOT,
+) -> str:
+    """The OCI ``created`` timestamp, derived from the *source*, not the clock.
+
+    AP-SRV-070 W5-R04, section 32: the previous implementation stamped
+    ``datetime.now()``, so two builds of the identical commit produced images
+    with different metadata and therefore different digests. That is harmless
+    for a single-shot build but actively hostile to the W5-R04 release model,
+    where a resumed or re-run candidate build must be able to produce the same
+    identity rather than a silently different "same" image.
+
+    The commit's own committer date is used instead (the ``SOURCE_DATE_EPOCH``
+    idea, expressed in the ISO-8601 UTC form the OCI label already used). It is
+    still a correct ``org.opencontainers.image.created`` value - it is the
+    instant the source this image contains came into existence - and it is a
+    pure function of the commit, so it is identical on every runner.
+    """
+    result = runner(
+        ["git", "show", "-s", "--format=%cI", git_commit], cwd=cwd, check=False
+    )
+    stamp = (result.stdout or "").strip()
+    if result.returncode != 0 or not stamp:
+        raise BuildError(
+            f"could not resolve the commit timestamp of {git_commit!r} for a "
+            f"source-derived BUILD_DATE: {(result.stderr or '').strip()}"
+        )
+    parsed = datetime.fromisoformat(stamp)
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 # --------------------------------------------------------------------------
@@ -399,12 +449,54 @@ def copy_kroko_wheel_to_context(
 # --------------------------------------------------------------------------
 
 
+#: Where the production Dockerfile's ``COPY dist/...`` instructions look for
+#: the staged wheels, relative to the build context (the repository root).
+DIST_DIR_IN_CONTEXT = "dist"
+
+
+def default_dist_dir(repo_root: Path = REPO_ROOT) -> Path:
+    """The only dist directory the production Dockerfile can actually read."""
+    return repo_root / DIST_DIR_IN_CONTEXT
+
+
+def require_dist_dir_inside_build_context(
+    dist_dir: Path, repo_root: Path = REPO_ROOT
+) -> Path:
+    """Fails closed unless ``dist_dir`` is the one the Dockerfile reads.
+
+    The production image is built with the repository root as its Docker build
+    context, and ``Dockerfile`` copies the staged wheels with literal
+    ``COPY dist/voicestt/*.whl`` / ``COPY dist/kroko/*.whl`` instructions. A
+    Docker build context cannot reach outside itself and ``COPY`` cannot be
+    parameterised by a build argument, so a ``--dist-dir`` pointing anywhere
+    else could never work - the orchestrator would run a full (potentially
+    ~30-minute) native Kroko build and only then fail at the image step with
+    an opaque ``lstat /dist/voicestt: no such file or directory``.
+
+    AP-SRV-070 W5-R04 found exactly that while proving the empty-artifact-store
+    build path. The option now fails immediately and says why, instead of
+    advertising flexibility the build contract does not have.
+    """
+    resolved = Path(dist_dir).resolve()
+    expected = default_dist_dir(repo_root).resolve()
+    if resolved != expected:
+        raise BuildError(
+            f"--dist-dir must be {expected} (the production Dockerfile copies "
+            f"the staged wheels from '{DIST_DIR_IN_CONTEXT}/...' relative to the "
+            f"repository-root build context, which cannot reach {resolved}). "
+            "Use --kroko-artifact-store / --kroko-work-dir to place the "
+            "expensive, reusable inputs elsewhere."
+        )
+    return resolved
+
+
 def build_production_image(
     *,
     variant: str,
     git_commit: str,
     voicestt_version: str,
     dist_dir: Path,
+    build_date: str,
     runner: CommandRunner = default_runner,
     extra_tags: Sequence[str] = (),
 ) -> Dict[str, str]:
@@ -420,7 +512,6 @@ def build_production_image(
     image = image_name_for(variant)
     version_tag = f"{image}:{voicestt_version}"
     commit_tag = f"{image}:{git_commit[:12]}"
-    build_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     if not list((dist_dir / "voicestt").glob("*.whl")):
         raise BuildError(f"no VoiceSTT wheel found under {dist_dir / 'voicestt'}")
@@ -450,6 +541,7 @@ def build_production_image(
         "versionTag": version_tag,
         "commitTag": commit_tag,
         "buildDate": build_date,
+        "buildDateSource": "git-commit-timestamp",
     }
 
 
@@ -480,8 +572,12 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         help="Which product identity to build.",
     )
     parser.add_argument(
-        "--dist-dir", type=Path, default=REPO_ROOT / "dist",
-        help="Build context output directory for the VoiceSTT/Kroko wheels.",
+        "--dist-dir", type=Path, default=None,
+        help=(
+            "Where the VoiceSTT/Kroko wheels are staged for the image build. "
+            "Must be the repository's own dist/ directory, because the "
+            "production Dockerfile copies them from inside the build context."
+        ),
     )
     parser.add_argument(
         "--kroko-artifact-store", type=Path, default=None,
@@ -495,13 +591,23 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         "--manifest-out", type=Path, default=None,
         help="Where to write the JSON build manifest (default: dist-dir/build-manifest.json).",
     )
+    parser.add_argument(
+        "--build-date", default=None,
+        help=(
+            "Explicit OCI created timestamp. Default: derived from the commit "
+            "timestamp, so a rebuild of the same source keeps the same image "
+            "identity (AP-SRV-070 W5-R04, section 32)."
+        ),
+    )
     return parser.parse_args(argv)
 
 
 def run(target: str, *, dist_dir: Path, kroko_artifact_store: Optional[Path] = None,
-        kroko_work_dir: Optional[Path] = None, runner: CommandRunner = default_runner) -> Dict[str, Any]:
+        kroko_work_dir: Optional[Path] = None, build_date: Optional[str] = None,
+        runner: CommandRunner = default_runner) -> Dict[str, Any]:
     """Runs the full orchestrated build for one target and returns the manifest."""
     variants = variants_for_target(target)
+    require_dist_dir_inside_build_context(dist_dir)
     artifact_store = kroko_artifact_store or kroko_artifacts.default_store_root()
     work_dir = kroko_work_dir or (dist_dir / "kroko-work")
 
@@ -509,6 +615,7 @@ def run(target: str, *, dist_dir: Path, kroko_artifact_store: Optional[Path] = N
     git_commit = resolve_git_commit(runner)
     dirty = resolve_dirty(runner)
     voicestt_version = resolve_voicestt_version()
+    resolved_build_date = build_date or resolve_source_build_date(git_commit, runner)
 
     dist_dir.mkdir(parents=True, exist_ok=True)
     wheel_path = build_voicestt_wheel(dist_dir=dist_dir, runner=runner)
@@ -520,6 +627,9 @@ def run(target: str, *, dist_dir: Path, kroko_artifact_store: Optional[Path] = N
         "gitCommit": git_commit,
         "gitDirty": dirty,
         "voicesttVersion": voicestt_version,
+        "buildDate": resolved_build_date,
+        "buildDateSource": "explicit" if build_date else "git-commit-timestamp",
+        "productionBaseImage": production_base_image_ref(),
         "voicesttWheel": {
             "path": str(wheel_path),
             "name": wheel_path.name,
@@ -548,6 +658,7 @@ def run(target: str, *, dist_dir: Path, kroko_artifact_store: Optional[Path] = N
             git_commit=git_commit,
             voicestt_version=voicestt_version,
             dist_dir=dist_dir,
+            build_date=resolved_build_date,
             runner=runner,
         )
         image_details = inspect_image(image_info["versionTag"], runner=runner)
@@ -566,15 +677,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     try:
         manifest = run(
             args.target,
-            dist_dir=args.dist_dir,
+            dist_dir=args.dist_dir or default_dist_dir(),
             kroko_artifact_store=args.kroko_artifact_store,
             kroko_work_dir=args.kroko_work_dir,
+            build_date=args.build_date,
         )
     except BuildError as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 
-    manifest_out = args.manifest_out or (args.dist_dir / "build-manifest.json")
+    manifest_out = args.manifest_out or (
+        (args.dist_dir or default_dist_dir()) / "build-manifest.json"
+    )
     manifest_out.parent.mkdir(parents=True, exist_ok=True)
     manifest_out.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"Wrote build manifest: {manifest_out}")

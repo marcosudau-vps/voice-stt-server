@@ -4,8 +4,9 @@ Build-, Docker- und Kroko-Pro-Probleme sind zusaetzlich in der zentralen
 [`build/BUILD.md`](../build/BUILD.md#fehlerdiagnose) erfasst.
 
 This page lists common VoiceSTT setup and runtime issues. Engine-specific
-notes live under [engines/](engines/) and the full install guide lives in
-[installation.md](installation.md).
+notes for the two supported production engines live in
+[faster-whisper.md](faster-whisper.md) and [kroko-onnx.md](kroko-onnx.md); the
+full install guide lives in [installation.md](installation.md).
 
 ## Install Errors
 

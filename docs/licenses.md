@@ -15,6 +15,19 @@ revision, API, and distribution path you use.
 The technical Community/Pro build separation and secret handling are
 documented centrally in [`build/BUILD.md`](../build/BUILD.md#community-und-pro).
 
+**Redistribution note (AP-SRV-070 W5-R04).** The two public distributions
+(`voice-stt-server` / `voice-stt-server-pro`) *embed* the Kroko-ONNX native
+runtime rather than depending on a separately installed package, so each wheel
+also ships Kroko's own license text inside its `.dist-info/licenses/`
+directory. Kroko Pro **models** additionally require a commercial license from
+Kroko/Banafo; the runtime key is a runtime credential and is never bundled.
+
+Only Faster-Whisper and Kroko-ONNX are supported production engines. The other
+engine families listed below still have adapters in the source tree, but they
+are internal/experimental, are not installed by the public distributions, and
+are not redistributed by this project - their notes are kept here because the
+adapters exist, not because the engines are shipped.
+
 ## Important Limits
 
 - "Commercial use" below means the cited upstream license or model card does

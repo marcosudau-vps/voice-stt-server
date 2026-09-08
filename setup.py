@@ -23,6 +23,69 @@ from wakeword_package_resources import bundled_package_data_files
 # deliberately not a second, independently maintained version constant.
 current_version = resolve_version()
 
+# ---------------------------------------------------------------------------
+# AP-SRV-070 W5-R04: the two public product distributions
+# ---------------------------------------------------------------------------
+#
+# Free and Pro Kroko are technically different, mutually non-interchangeable
+# native runtimes, so they are two complete alternative distributions rather
+# than one distribution plus an after-the-fact native build:
+#
+#     voice-stt-server      -> server code + Kroko Free native runtime
+#     voice-stt-server-pro  -> server code + Kroko Pro native runtime
+#
+# Both expose the same import package (voice_stt_server) and the same CLI
+# (voice-stt-server), so application code is identical on Free and Pro. They
+# are alternatives and must never be installed into the same environment.
+#
+# The native runtime is merged into the wheel afterwards by
+# tools/build_distribution.py, which also retags the wheel for the concrete
+# CPython/platform it is valid for. setup.py itself only decides the
+# distribution *identity* and the dependency/metadata surface.
+#
+# With the variable unset, this file still builds the historical development
+# distribution ("voicestt") unchanged, which is what every existing editable
+# install, test run and CI job uses.
+DISTRIBUTION_VARIANT_ENV = "VOICESTT_DISTRIBUTION_VARIANT"
+LEGACY_DISTRIBUTION_NAME = "voicestt"
+PUBLIC_DISTRIBUTION_NAMES = {
+    "free": "voice-stt-server",
+    "pro": "voice-stt-server-pro",
+}
+
+# The Kroko build authority produces cp312-only native wheels for
+# linux_x86_64 and win_amd64 (see VoiceSTT/kroko/buildinputs.py and the
+# artifact store's wheel tags). A distribution that *embeds* that runtime can
+# therefore only honestly claim CPython 3.12 - promising 3.11 as well would
+# advertise a platform on which the shipped runtime does not exist.
+PUBLIC_PYTHON_REQUIRES = ">=3.12,<3.13"
+LEGACY_PYTHON_REQUIRES = ">=3.11"
+
+
+def resolve_distribution_variant():
+    """"free"/"pro" for a public distribution build, else None."""
+    value = os.environ.get(DISTRIBUTION_VARIANT_ENV, "").strip().lower()
+    if not value:
+        return None
+    if value not in PUBLIC_DISTRIBUTION_NAMES:
+        raise SystemExit(
+            "%s must be one of %s, got %r"
+            % (
+                DISTRIBUTION_VARIANT_ENV,
+                sorted(PUBLIC_DISTRIBUTION_NAMES),
+                value,
+            )
+        )
+    return value
+
+
+distribution_variant = resolve_distribution_variant()
+distribution_name = (
+    PUBLIC_DISTRIBUTION_NAMES[distribution_variant]
+    if distribution_variant
+    else LEGACY_DISTRIBUTION_NAME
+)
+
 # AP-SRV-070: the exact, manifest-derived wake-word asset file list. Replaces
 # the previous broad "*.onnx"/"*.tflite" package_data globs, which would also
 # ship unmanifested historical wake-word variants that merely happen to live
@@ -301,18 +364,43 @@ extras_require = {
     ),
 }
 
+# AP-SRV-070 W5-R04: what "a complete installation" means for the two public
+# distributions. `pip install voice-stt-server` must produce a working server
+# with the supported production STT engines already present - the Kroko native
+# runtime because it is embedded in the wheel, Faster-Whisper and the packaged
+# Silero ONNX VAD because they are ordinary dependencies here rather than an
+# extra the user has to discover.
+#
+# The wake-word backends stay an extra on purpose and this is documented
+# honestly: `openwakeword` declares a `tflite-runtime` dependency that has no
+# wheel on several supported targets, so making it mandatory would turn a
+# perfectly good `pip install` into a hard failure. It is not part of the
+# no-native-build guarantee, which is about Kroko.
+public_install_requires = unique_requirements(
+    base_requirements
+    + faster_whisper_requirements
+    + silero_onnx_requirements
+    + server_requirements
+)
+
 # Read README.md
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
-long_description = INSTALL_GUIDE + long_description
+if distribution_variant is None:
+    long_description = INSTALL_GUIDE + long_description
 
 setuptools.setup(
-    name="voicestt",
+    name=distribution_name,
     version=current_version,
     author="Kolja Beigel",
     author_email="kolja.beigel@web.de",
-    description="A fast Voice Activity Detection and Transcription System",
+    description=(
+        "VoiceSTT speech-to-text server with an embedded Kroko %s runtime"
+        % distribution_variant
+        if distribution_variant
+        else "A fast Voice Activity Detection and Transcription System"
+    ),
     long_description=long_description,
     long_description_content_type="text/markdown",
     url="https://github.com/marcosudau-vps/voice-stt-server",
@@ -324,15 +412,24 @@ setuptools.setup(
             "VoiceSTT_server.*",
             "api_fastapi_server",
             "api_fastapi_server.*",
+            # AP-SRV-070 W5-R04: the canonical public import package. Both
+            # public distributions expose it, so `from voice_stt_server import
+            # AudioToTextRecorder` is identical on Free and Pro.
+            "voice_stt_server",
+            "voice_stt_server.*",
         ]
     ),
     # classifiers=[
     #     "Programming Language :: Python :: 3",
     #     "Operating System :: OS Independent",
     # ],
-    python_requires='>=3.11',
+    python_requires=(
+        PUBLIC_PYTHON_REQUIRES if distribution_variant else LEGACY_PYTHON_REQUIRES
+    ),
     license='MIT',
-    install_requires=base_requirements,
+    install_requires=(
+        public_install_requires if distribution_variant else base_requirements
+    ),
     extras_require=extras_require,
     keywords="real-time, audio, transcription, speech-to-text, voice-activity-detection, VAD, real-time-transcription, ambient-noise-detection, microphone-input, faster_whisper, speech-recognition, voice-assistants, audio-processing, buffered-transcription, pyaudio, ambient-noise-level, voice-deactivity",
     package_data={
@@ -356,9 +453,17 @@ setuptools.setup(
     cmdclass={"build_py": build_py},
     entry_points={
         'console_scripts': [
+            # AP-SRV-070 W5-R04: the canonical public CLI. The three short
+            # names below stay as compatibility aliases for existing scripts,
+            # service units and documentation; they are no longer the name the
+            # current documentation teaches.
+            'voice-stt-server=VoiceSTT_server.server:main',
             'stt-server=VoiceSTT_server.server:main',
             'stt-server-legacy=VoiceSTT_server.stt_server:main',
             'stt=VoiceSTT_server.stt_cli_client:main',
+            # Developer/release helper only. End users of the public
+            # distributions never build Kroko: their wheel already contains a
+            # qualified native runtime.
             'stt-install-kroko=VoiceSTT.install_kroko:main',
         ],
     },

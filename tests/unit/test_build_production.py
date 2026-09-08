@@ -226,6 +226,7 @@ def test_build_production_image_requires_voicestt_wheel(tmp_path):
             git_commit="a" * 40,
             voicestt_version="2.0.0",
             dist_dir=tmp_path,
+            build_date="2026-09-07T19:06:57Z",
             runner=RecordingRunner(),
         )
 
@@ -241,6 +242,7 @@ def test_build_production_image_requires_kroko_wheel(tmp_path):
             git_commit="a" * 40,
             voicestt_version="2.0.0",
             dist_dir=tmp_path,
+            build_date="2026-09-07T19:06:57Z",
             runner=RecordingRunner(),
         )
 
@@ -256,11 +258,11 @@ def test_build_production_image_tags_free_and_pro_distinctly(tmp_path):
 
     free_info = bp.build_production_image(
         variant="free", git_commit="a" * 40, voicestt_version="2.0.0",
-        dist_dir=tmp_path, runner=runner,
+        dist_dir=tmp_path, build_date="2026-09-07T19:06:57Z", runner=runner,
     )
     pro_info = bp.build_production_image(
         variant="pro", git_commit="a" * 40, voicestt_version="2.0.0",
-        dist_dir=tmp_path, runner=runner,
+        dist_dir=tmp_path, build_date="2026-09-07T19:06:57Z", runner=runner,
     )
 
     assert free_info["image"] == "voice-stt-server"
@@ -276,3 +278,97 @@ def test_build_production_image_tags_free_and_pro_distinctly(tmp_path):
         joined = " ".join(call)
         assert "KROKO_API_KEY" not in joined
         assert "KROKO_LICENSE" not in joined
+
+
+# ---------------------------------------------------------------------------
+# AP-SRV-070 W5-R04: GitHub-native build guards
+# ---------------------------------------------------------------------------
+
+
+def test_build_date_is_derived_from_the_commit_not_the_wall_clock():
+    """AP-SRV-070 W5-R04, section 32.
+
+    Two builds of the same commit must be able to produce the same image
+    identity. A wall-clock BUILD_DATE made that impossible, which is hostile
+    to a release model where publication consumes an already-qualified
+    candidate and a resume must re-derive rather than re-invent it.
+    """
+    runner = RecordingRunner()
+    runner.respond(
+        lambda cmd: tuple(cmd[:3]) == ("git", "show", "-s"),
+        stdout="2026-09-07T21:06:57+02:00\n",
+    )
+    first = bp.resolve_source_build_date("a" * 40, runner)
+    second = bp.resolve_source_build_date("a" * 40, runner)
+    assert first == second == "2026-09-07T19:06:57Z"
+
+
+def test_build_date_resolution_fails_closed_when_the_commit_is_unknown():
+    runner = RecordingRunner()
+    runner.respond(lambda cmd: tuple(cmd[:3]) == ("git", "show", "-s"), returncode=128, stdout="")
+    with pytest.raises(bp.BuildError, match="commit timestamp"):
+        bp.resolve_source_build_date("a" * 40, runner)
+
+
+def test_the_build_manifest_records_where_the_build_date_came_from():
+    runner = RecordingRunner()
+    runner.respond(lambda cmd: tuple(cmd[:2]) == ("docker", "build"), stdout="")
+    info = bp.build_production_image(
+        variant="free", git_commit="a" * 40, voicestt_version="2.0.0",
+        dist_dir=_staged_dist_dir(), build_date="2026-09-07T19:06:57Z", runner=runner,
+    )
+    assert info["buildDate"] == "2026-09-07T19:06:57Z"
+    assert info["buildDateSource"] == "git-commit-timestamp"
+
+
+def _staged_dist_dir():
+    """A dist directory with both wheels already staged."""
+    import tempfile
+
+    root = Path(tempfile.mkdtemp())
+    (root / "voicestt").mkdir()
+    (root / "voicestt" / "voicestt-2.0.0-py3-none-any.whl").write_bytes(b"x")
+    (root / "kroko").mkdir()
+    (root / "kroko" / "kroko_onnx-1.12.9-1free-cp312-cp312-linux_x86_64.whl").write_bytes(b"x")
+    return root
+
+
+def test_a_dist_dir_outside_the_build_context_fails_immediately(tmp_path):
+    """AP-SRV-070 W5-R04.
+
+    The production Dockerfile copies the staged wheels with literal
+    ``COPY dist/...`` instructions relative to the repository-root build
+    context, so a --dist-dir anywhere else can never work. Before this guard
+    the orchestrator would run a full native Kroko build first and only then
+    fail at the image step with an opaque ``lstat /dist/voicestt`` error -
+    which is exactly how W5-R04 discovered it.
+    """
+    with pytest.raises(bp.BuildError, match="--dist-dir must be"):
+        bp.require_dist_dir_inside_build_context(tmp_path)
+
+
+def test_the_repository_dist_dir_is_accepted():
+    assert bp.require_dist_dir_inside_build_context(bp.default_dist_dir()) == bp.default_dist_dir().resolve()
+
+
+def test_the_production_base_image_is_pinned_by_digest():
+    """W5R4-G12/section 12: an immutable base, not a floating tag."""
+    assert bp.PRODUCTION_BASE_IMAGE_DIGEST.startswith("sha256:")
+    assert len(bp.PRODUCTION_BASE_IMAGE_DIGEST) == len("sha256:") + 64
+    assert "@" in bp.production_base_image_ref()
+
+
+def test_build_production_never_uses_an_operator_local_path():
+    """W5R4-G07 / section 9: no absolute drive-letter path in build authority."""
+    import re
+
+    source = Path(bp.__file__).read_text(encoding="utf-8")
+    offenders = re.findall(r"\b[A-Za-z]:[\/][\w./\-]*", source)
+    assert not offenders, offenders
+
+
+def test_a_runtime_kroko_key_is_never_a_build_input():
+    """W5R4-G11/G50: the Pro build needs no key at all."""
+    source = Path(bp.__file__).read_text(encoding="utf-8")
+    for forbidden in ("KROKO_ONNX_KEY", "VOICESTT_KROKO_ONNX_KEY", "LICENSE_KEY"):
+        assert forbidden not in source, forbidden

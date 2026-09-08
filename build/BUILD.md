@@ -266,6 +266,62 @@ python release.py manifest validate <pfad>
 bzw. -Kompatibilitaet, Tool-Verfuegbarkeit sowie Registry-Konfiguration und
 Credential-*Praesenz* (nie den Wert selbst).
 
+### GitHub-nativer Build und Release (AP-SRV-070 W5-R04)
+
+Seit W5-R04 wird ein Release-Kandidat vollstaendig auf einem frischen,
+GitHub-gehosteten Linux-Runner aus einem exakten Quellcommit erzeugt. Kein
+Operator-Rechner, kein lokaler Kroko-Artefaktspeicher, kein vorgebautes Wheel,
+kein lokales Image und keine lokalen Registry-Zugangsdaten sind Teil der
+Release-Autoritaet.
+
+Zwei Workflows, beide ausschliesslich per `workflow_dispatch`:
+
+| Workflow | Zweck | Schreibrechte |
+| --- | --- | --- |
+| `.github/workflows/release-candidate.yml` | Kandidat bauen und qualifizieren | nur `packages: write` fuer **private** GHCR-Staging-Pakete |
+| `.github/workflows/release-publish.yml` | Kandidat veroeffentlichen | pro Job nur das noetige Recht, alles in der geschuetzten Umgebung `release` |
+
+Die gewoehnliche CI (`.github/workflows/ci.yml`) ist durchgehend
+`contents: read` und kann strukturell nichts veroeffentlichen.
+
+Zwei vollstaendige, alternative Distributionen werden dabei gebaut:
+
+```text
+exakter Commit/Tree
+  ├── Kroko Free  -> voice-stt-server      -> Image voice-stt-server
+  └── Kroko Pro   -> voice-stt-server-pro  -> Image voice-stt-server-pro
+```
+
+Jedes Distributions-Wheel enthaelt die passende native Kroko-Laufzeit bereits
+(`tools/build_distribution.py` fuegt das qualifizierte Kroko-Wheel byteweise
+ein und taggt das Ergebnis auf die reale Plattform um). Ein Endanwender baut
+Kroko also nie selbst. Es gibt bewusst **kein** separates oeffentliches
+Kroko-Paket und **keinen** sdist fuer diese beiden Distributionen - ein sdist
+koennte die native Laufzeit nicht transportieren und wuerde die
+Vollstaendigkeitsgarantie brechen.
+
+Kroko-Artefakte werden ueber den GitHub-Actions-Cache wiederverwendet, mit dem
+**autoritativen Fingerprint** als Schluessel, der im Buildcontainer aufgeloest
+wird. Free und Pro haben getrennte Schluessel und getrennte Namensraeume. Der
+Cache ist immer nur Optimierung: jedes wiederverwendete Artefakt wird gegen die
+bestehende Fingerprint-/Artefakt-Autoritaet revalidiert, und ein Cache-Miss
+baut aus der Quelle.
+
+Der lokale Orchestrator dafuer ist `tools/release_candidate.py`:
+
+```bash
+# Nur die autoritativen Fingerprints ausgeben (Cache-Schluessel)
+python tools/release_candidate.py --print-fingerprints
+
+# Vollstaendigen Kandidaten lokal bauen, ohne Staging-Push
+python tools/release_candidate.py --out-dir candidate --no-manifest
+```
+
+Vollstaendige Prozessbeschreibung, Zustandsreihenfolge, Resume-Semantik und die
+komplette Operator-Einrichtung (eine Repository-Variable, ein Repository-Secret,
+zwei PyPI Trusted Publisher, eine geschuetzte Umgebung):
+[`docs/release-process.md`](../docs/release-process.md).
+
 ### Eine Engine fuer Dry-Run und echte Publikation (AP-SRV-070 W5-R01-C1)
 
 `release_tooling/engine.py` ist die eine Stelle, an der die feste
@@ -273,9 +329,20 @@ W6-Publikationsreihenfolge als Daten kodiert ist (`STEP_DEFINITIONS`), nicht
 als verstreute Fallunterscheidung:
 
 ```text
-PRECHECK -> PyPI -> GHCR -> Docker Hub -> externe Verifikation
-  -> Git-Tag -> GitHub Release -> finale Verifikation -> COMPLETE
+PREPARED -> TAGGED -> PyPI (Free + Pro) -> Docker Hub -> GHCR
+  -> externe Verifikation -> bewegliche Aliase -> GitHub Release
+  -> finale Verifikation -> COMPLETE
 ```
+
+> **AP-SRV-070 W5-R04** hat diese Reihenfolge geaendert. Der Git-Tag entsteht
+> jetzt **zuerst**, nicht zuletzt: sobald `2.0.0` auf PyPI oder in einer
+> Registry existiert, ist die Version oeffentlich belegt, also muss der
+> unveraenderliche Quellanker bereits vorher existieren. Docker Hub steht vor
+> GHCR, weil GHCR dasselbe Manifest per Digest uebernimmt statt es erneut zu
+> bauen. Bewegliche Aliase (`2.0`, `2`, `latest`) bewegen sich erst nach
+> verifizierten exakten Artefakten in beiden Registries. Vollstaendige
+> Beschreibung und Operator-Einrichtung:
+> [`docs/release-process.md`](../docs/release-process.md).
 
 `python release.py dry-run` und `python release.py publish` rufen beide
 dieselbe Funktion `engine.run_engine()` mit demselben Adapter-Bundle auf -
@@ -288,10 +355,12 @@ strukturell unmoeglich, dass `publish()` jemals aufgerufen wird - das ist
 keine Konvention, sondern eine Eigenschaft der Engine-Schleife selbst
 (siehe `tests/unit/test_release_engine.py::DryRunNeverWritesTests`).
 
-`release_tooling/adapters.py` implementiert die fuenf echten,
-W6-faehigen Publikationsadapter (PyPI ueber Twine, GHCR/Docker Hub ueber
-`docker tag`/`docker push`, Git-Tag ueber `git tag`/`git push`, GitHub
-Release ueber `gh release create`) sowie zwei rein lesende
+`release_tooling/adapters.py` implementiert die echten Publikationsadapter
+(PyPI fuer **beide** Distributionen - auf dem GitHub-Weg ueber PyPI Trusted
+Publishing, lokal ueber Twine; Docker Hub und GHCR ueber
+`docker buildx imagetools create`, also Manifest-Promotion per Digest statt
+eines zweiten Builds; bewegliche Aliase; Git-Tag ueber `git tag`/`git push`;
+GitHub Release ueber `gh release create`) sowie zwei rein lesende
 Verifikationsadapter (externe/finale Verifikation, die verlangen, dass
 alle darunterliegenden Adapter `MATCH` melden). Kein Adapter liest, loggt
 oder speichert jemals einen Credential-Wert - jedes Werkzeug liest seinen
@@ -300,17 +369,22 @@ eigenen etablierten Zugangsdatenvertrag direkt aus der Prozessumgebung
 gits Credential-Helper, `gh`s `GH_TOKEN`/`GITHUB_TOKEN`) - dieser Code fasst
 den Wert nie an.
 
-Der Git-Tag entsteht bewusst spaet: sowohl die feste Schrittreihenfolge als
-auch `GitTagAdapter.publish()` selbst (`state.assert_tag_allowed()`)
-verhindern eine Tag-Erstellung vor erfolgreicher externer Verifikation.
-Ebenso verhindert `GitHubReleaseAdapter.publish()`
-(`state.assert_github_release_allowed()`) eine Release-Erstellung vor dem
-Tag. Ein Versuch, diese Reihenfolge zu umgehen, ist ein harter Fehler
-(`OrderError`), keine stille Ausnahme.
+Der Git-Tag entsteht bewusst **frueh** (W5-R04): sowohl die feste
+Schrittreihenfolge als auch `GitTagAdapter.publish()` selbst
+(`state.assert_tag_allowed()`) verhindern eine Tag-Erstellung, sobald bereits
+ein oeffentliches Artefakt existiert. Umgekehrt verlangt jeder unumkehrbare
+oeffentliche Schreibvorgang (PyPI, Docker Hub, GHCR, Aliase) ueber
+`state.assert_public_publication_allowed()`, dass der Tag bereits existiert.
+`state.assert_aliases_allowed()` verlangt zusaetzlich verifizierte exakte
+Artefakte in beiden Registries, und `assert_github_release_allowed()`
+verlangt gesetzte Aliase - das GitHub Release bleibt der letzte oeffentliche
+Erfolgsmarker. Ein Versuch, diese Reihenfolge zu umgehen, ist ein harter
+Fehler (`OrderError`), keine stille Ausnahme.
 
 Der Release-State (`release_state/<version>.json`, git-ignoriert, niemals
-Secrets) bindet die exakte Quell-Commit-/Tree-Identitaet sowie Wheel-,
-Sdist- und Image-Identitaeten an eine Version und laesst sich nach einem
+Secrets) bindet die exakte Quell-Commit-/Tree-Identitaet, beide
+Distributions-Wheels, beide Image-Manifest-Digests und die Identitaet des
+qualifizierten Kandidaten an eine Version und laesst sich nach einem
 Teilausfall wieder aufnehmen - ohne die Version automatisch zu wechseln
 (Abschnitt "Kein verschwendeter oeffentlicher Versionsstand" weiter unten).
 Ein bereits vorhandenes, abweichendes Remote-Artefakt (PyPI-Release,
@@ -746,9 +820,11 @@ Runtime-Konfiguration gemeinsam wiederhergestellt werden.
 
 ## Weiterfuehrende Referenzen
 
+- [`docs/release-process.md`](../docs/release-process.md): GitHub-nativer
+  Releaseprozess, Zustandsreihenfolge und vollstaendige Operator-Einrichtung
 - [`docs/installation.md`](../docs/installation.md): Extras und
   plattformspezifische Installation
-- [`docs/engines/kroko-onnx.md`](../docs/engines/kroko-onnx.md): Engine-Optionen
+- [`docs/kroko-onnx.md`](../docs/kroko-onnx.md): Engine-Optionen
   und Recorder-Nutzung
 - [`docs/testing.md`](../docs/testing.md): Teststufen und reale Modelltests
 - [`docs/fastapi-server.md`](../docs/fastapi-server.md): Serverprotokoll und

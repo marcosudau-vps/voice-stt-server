@@ -51,7 +51,68 @@ def test_production_dockerfile_installs_prebuilt_wheels_as_build_inputs():
 
 
 def test_production_dockerfile_runtime_targets_ubuntu_2404():
-    assert "FROM ubuntu:24.04 AS runtime" in DOCKERFILE
+    assert "FROM ubuntu:24.04@sha256:" in DOCKERFILE
+    assert "AS runtime" in DOCKERFILE
+
+
+def test_both_production_stages_pin_the_base_image_by_digest():
+    """AP-SRV-070 W5-R04, section 12.
+
+    A floating ``ubuntu:24.04`` tag means two builds of the same source can
+    start from different base bytes, which makes "the qualified candidate is
+    what gets published" weaker than it needs to be. Both stages are pinned to
+    an immutable manifest digest, and both must use the *same* one - a builder
+    and runtime that disagree would be a silent split base.
+    """
+    import sys
+
+    sys.path.insert(0, str(REPO_ROOT / "tools"))
+    import build_production as bp
+
+    from_lines = [line for line in DOCKERFILE.splitlines() if line.startswith("FROM ")]
+    assert len(from_lines) == 2, from_lines
+    for line in from_lines:
+        assert bp.production_base_image_ref() in line, line
+
+
+def test_the_dockerfile_and_the_declared_base_image_cannot_drift_apart():
+    """The declaration in ``tools/build_production.py`` is the authority."""
+    import re
+    import sys
+
+    sys.path.insert(0, str(REPO_ROOT / "tools"))
+    import build_production as bp
+
+    digests = set(re.findall(r"FROM \S+@(sha256:[0-9a-f]{64})", DOCKERFILE))
+    assert digests == {bp.PRODUCTION_BASE_IMAGE_DIGEST}, digests
+
+
+def test_the_kroko_builder_image_is_pinned_and_matches_its_declaration():
+    """The Linux Kroko builder container is a declared build authority.
+
+    Until W5-R04 it pulled a floating ``python:3.12-slim-bookworm`` tag and
+    installed unpinned packaging tools, so the fingerprint could drift for
+    reasons nobody had declared. The declaration now lives in
+    ``VoiceSTT/kroko/buildinputs.py`` and this test is what keeps the
+    Dockerfile honest about it.
+    """
+    from VoiceSTT.kroko import buildinputs
+
+    text = (REPO_ROOT / "build" / "kroko-builder.Dockerfile").read_text(encoding="utf-8")
+    declaration = buildinputs.linux_builder_declaration()
+
+    assert f"FROM {declaration['baseImageRef']}" in text
+    for package in declaration["aptPackages"]:
+        assert package in text, package
+    for tool in declaration["packagingTools"]:
+        assert f'"{tool}"' in text, tool
+
+
+def test_the_kroko_builder_never_receives_a_runtime_license_key():
+    """W5R4-G11/G50: a Pro *build* needs no key; the key is runtime-only."""
+    text = (REPO_ROOT / "build" / "kroko-builder.Dockerfile").read_text(encoding="utf-8")
+    for forbidden in ("KROKO_ONNX_KEY", "VOICESTT_KROKO_ONNX_KEY", "LICENSE_KEY"):
+        assert forbidden not in text, forbidden
 
 
 def test_production_dockerfile_runs_as_non_root():

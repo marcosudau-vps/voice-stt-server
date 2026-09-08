@@ -36,6 +36,7 @@ def dry_run(
     state: ReleaseState,
     manifest: Dict[str, Any],
     adapters: Optional[Dict[str, Any]] = None,
+    stop_after: Optional[str] = None,
 ) -> EngineRunResult:
     """Walks the real release engine in :data:`ExecutionMode.DRY_RUN`.
 
@@ -51,7 +52,9 @@ def dry_run(
         from .adapters import build_default_adapters
 
         adapters = build_default_adapters()
-    return run_engine(state, manifest, mode=ExecutionMode.DRY_RUN, adapters=adapters)
+    return run_engine(
+        state, manifest, mode=ExecutionMode.DRY_RUN, adapters=adapters, stop_after=stop_after
+    )
 
 
 __all__ = [

@@ -6,6 +6,51 @@
 
 ### Added
 
+- VoiceSTT is now published as two complete, alternative distributions
+  (AP-SRV-070 W5-R04): `voice-stt-server` embeds the Kroko Free native
+  runtime and `voice-stt-server-pro` embeds the Kroko Pro one. Each wheel
+  contains its runtime, so `pip install voice-stt-server` needs no native
+  Kroko build, no `stt-install-kroko`, no Docker and no separate wheel.
+  Both expose the same import package `voice_stt_server` and the same CLI
+  `voice-stt-server` (with `stt-server`, `stt-server-legacy` and `stt` kept
+  as compatibility aliases), so application code is identical on Free and
+  Pro. The two distributions are alternatives and must not be installed
+  into the same environment, and the installed distribution - never a
+  runtime licence key - decides which native runtime is present. Supported
+  targets are CPython 3.12 on Linux x86-64 and Windows x86-64, which is the
+  matrix the embedded runtime is actually built and qualified for. No sdist
+  is published for these distributions, because an sdist cannot carry a
+  native runtime and would break that guarantee.
+- Added the GitHub-native release infrastructure (AP-SRV-070 W5-R04): a
+  dispatch-only candidate workflow that builds and qualifies a complete
+  release candidate on a clean GitHub-hosted runner from an exact source
+  commit, and a dispatch-only publish workflow gated by a protected
+  environment that publishes the already-qualified candidate without
+  rebuilding it. The canonical publication order now creates the immutable
+  Git tag *before* the first irreversible public write, publishes both
+  distributions to PyPI via Trusted Publishing (no stored token), publishes
+  the exact Free and Pro images to Docker Hub and then promotes the same OCI
+  manifests to GHCR by digest, moves the `2.0`/`2`/`latest` aliases only
+  after every exact artifact is verified in both registries, and creates the
+  GitHub Release last. See `docs/release-process.md`.
+
+### Changed
+
+- The public documentation surface now names only Faster-Whisper and
+  Kroko-ONNX as supported production STT engines. `docs/engines/` was
+  removed; the two retained guides moved to `docs/faster-whisper.md` and
+  `docs/kroko-onnx.md`, and the README was rewritten. The other engine
+  adapters remain in the source tree but are internal/experimental and are
+  no longer advertised as product features.
+- The Kroko Linux builder container is now a declared, source-controlled
+  build authority (base image pinned by digest, declared apt package set,
+  exactly pinned packaging tools), and the production image base is pinned
+  by digest. The OCI `created` timestamp is derived from the commit rather
+  than the wall clock, so rebuilding the same source keeps the same image
+  identity.
+
+### Added (earlier in this version)
+
 - Added the AP-SRV-070 W5 release infrastructure: a canonical repository-root
   `release.py` entry point with read-only preflight and a true no-publish
   dry-run over the fixed W6 publication order (PyPI, then GHCR, then Docker

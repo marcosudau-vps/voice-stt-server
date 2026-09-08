@@ -1,17 +1,19 @@
 # AP-SRV-070 W5: public CI for VoiceSTT.
 #
-# Scope (see build/BUILD.md "Versions- und Releasepflege" and the AP-SRV-070
-# W5 archive plan): ordinary correctness/packaging CI for an open-source
-# repository. It builds the wheel/sdist, proves the wheel installs and runs
-# standalone (never from an editable/source checkout), and runs the fast
-# unit/guard/release-tool suite on the two mandatory release-qualification
-# platforms.
+# Scope (see build/BUILD.md and docs/release-process.md): ordinary
+# correctness/packaging CI for an open-source repository. It builds the
+# development wheel, proves the wheel installs and runs standalone (never from
+# an editable/source checkout), and runs the fast unit/guard/release-tool suite
+# on the two mandatory release-qualification platforms.
 #
-# This workflow intentionally does NOT publish anything (no PyPI/GHCR/Docker
-# Hub upload, no Git tag, no GitHub Release), does NOT require any Kroko Pro
-# runtime secret, and does NOT perform a native Kroko build - that stays a
-# separate, opt-in, secret-bearing path outside ordinary CI. release.py
-# (AP-SRV-070 W5) owns the actual publication order and never runs it here.
+# This workflow intentionally publishes NOTHING: no PyPI/GHCR/Docker Hub
+# upload, no Git tag, no GitHub Release, not even a private staging push. It
+# needs no Kroko Pro runtime secret and performs no native Kroko build - that
+# is the separate, dispatch-only release-candidate workflow.
+#
+# W5-R04: every third-party action is pinned to a full immutable commit SHA
+# (section 23). tests/unit/test_release_workflows.py fails the build if a tag
+# reference is ever reintroduced here or in either release workflow.
 name: CI
 
 on:
@@ -23,8 +25,13 @@ on:
       - "work/**"
   workflow_dispatch: {}
 
+# Read-only. A normal push or pull request must not be able to write anything.
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   PYTHON_VERSION: "3.12"
@@ -37,15 +44,17 @@ jobs:
       matrix:
         os: [ubuntu-24.04, windows-latest]
     runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
     defaults:
       run:
         shell: bash
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Set up Python ${{ env.PYTHON_VERSION }}
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
@@ -59,9 +68,9 @@ jobs:
         run: python -m pip install --upgrade pip build twine
 
       # ------------------------------------------------------------------
-      # 1. Package build + wheel/sdist metadata validation (W5P-G18)
+      # 1. Package build + wheel metadata validation
       # ------------------------------------------------------------------
-      - name: Build wheel + sdist
+      - name: Build wheel + sdist (development distribution)
         run: python -m build --outdir dist
 
       - name: List built artifacts
@@ -72,7 +81,6 @@ jobs:
 
       # ------------------------------------------------------------------
       # 2. Fresh-install smoke test from the built wheel, never editable
-      #    (W5P-G19 / W5P-G20)
       # ------------------------------------------------------------------
       - name: Create install-smoke virtual environment
         run: python -m venv .venv-install-smoke
@@ -100,6 +108,7 @@ jobs:
           "$OLDPWD/$PY" - <<'PYEOF'
           import importlib.metadata as metadata
           import VoiceSTT_server  # noqa: F401 - proves the installed distribution imports
+          import voice_stt_server  # noqa: F401 - the canonical public import package
           from VoiceSTT._version import resolve_version
 
           installed_version = metadata.version("voicestt")
@@ -107,6 +116,7 @@ jobs:
           print(f"installed distribution version: {installed_version}")
           print(f"resolve_version(): {resolved_version}")
           assert installed_version == resolved_version, "installed metadata and resolve_version() disagree"
+          assert voice_stt_server.get_version() == resolved_version, "voice_stt_server disagrees on the version"
           PYEOF
 
       - name: Console-script availability (installed distribution)
@@ -118,7 +128,7 @@ jobs:
             BIN_DIR=".venv-install-smoke/bin"
             EXT=""
           fi
-          for script in stt-server stt-server-legacy stt stt-install-kroko; do
+          for script in voice-stt-server stt-server stt-server-legacy stt stt-install-kroko; do
             test -f "${BIN_DIR}/${script}${EXT}" || { echo "missing console script: ${script}"; exit 1; }
             echo "found console script: ${script}"
           done
@@ -148,7 +158,7 @@ jobs:
           PYEOF
 
       # ------------------------------------------------------------------
-      # 3. Fast unit/guard/packaging/release-tool tests (W5P-G21)
+      # 3. Fast unit/guard/packaging/release-tool tests
       # ------------------------------------------------------------------
       - name: Install development/test dependencies (source checkout)
         run: |

@@ -13,8 +13,15 @@
 #   dist/kroko/*.whl      - the resolved Linux/AMD64 Kroko wheel (free/pro)
 #
 # Runtime target: Ubuntu 24.04, linux/amd64, CPU-only.
+#
+# AP-SRV-070 W5-R04, section 12: both stages pin the base image by immutable
+# manifest-index digest instead of the floating `ubuntu:24.04` tag, so a
+# rebuild of the same source on a fresh GitHub-hosted runner starts from
+# exactly the same base bytes. The digest is declared once in
+# tools/build_production.py (PRODUCTION_BASE_IMAGE_DIGEST) and a guard test
+# fails if this file and that declaration drift apart.
 
-FROM ubuntu:24.04 AS builder
+FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
@@ -48,7 +55,7 @@ RUN VOICESTT_WHEEL="$(ls /build/dist/voicestt/*.whl)" && \
     python -m pip check
 
 
-FROM ubuntu:24.04 AS runtime
+FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517 AS runtime
 
 ARG VOICESTT_VERSION=unknown
 ARG VOICESTT_GIT_COMMIT=unknown

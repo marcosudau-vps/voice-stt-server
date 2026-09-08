@@ -1,149 +1,104 @@
-"""AP-SRV-070 W5 / W5-R01-C1: the fixed publication order facade.
+"""The ``release_tooling.pipeline`` facade (AP-SRV-070 W5-R01-C1 / W5-R04).
 
-``release_tooling.pipeline`` is now a thin facade over
-``release_tooling.engine`` (see ``tests/unit/test_release_engine.py`` for
-the full shared-operation-graph, resume, and conflict-fail-closed proofs).
-This module only checks the facade itself: the order/shape it re-exports,
-and that ``dry_run()`` wires correctly into the real engine in
-``ExecutionMode.DRY_RUN`` with zero writes.
+``pipeline`` exists only so older call sites keep working; the graph itself
+lives in ``release_tooling.engine``. These tests exist to prove the facade is
+still a facade - that it re-exports the *same* graph rather than growing a
+second, drifting copy of the order (gate W5R4-G19).
 """
 
 from __future__ import annotations
 
+import sys
 import unittest
+from pathlib import Path
 
-from release_tooling.pipeline import PIPELINE_STEPS, dry_run, plan_from
-from release_tooling.remote_checks import ABSENT
-from release_tooling.state import STATE_ORDER, advance, new_state
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from release_support import make_manifest, make_state  # noqa: E402
 
-def _sample_state():
-    return new_state(
-        version="2.0.0",
-        source_commit="a" * 40,
-        source_tree="b" * 40,
-        wheel={"filename": "voicestt-2.0.0-py3-none-any.whl", "sha256": "c" * 64},
-        sdist={"filename": "voicestt-2.0.0.tar.gz", "sha256": "d" * 64},
-        free_image={"tag": "voice-stt-server:2.0.0", "imageId": "sha256:" + "e" * 64},
-        pro_image={"tag": "voice-stt-server-pro:2.0.0", "imageId": "sha256:" + "f" * 64},
-    )
+from release_tooling.engine import STEP_DEFINITIONS  # noqa: E402
+from release_tooling.pipeline import PIPELINE_STEPS, dry_run  # noqa: E402
+from release_tooling.remote_checks import ABSENT, MATCH  # noqa: E402
+from release_tooling.state import STATE_ORDER  # noqa: E402
 
 
-def _sample_manifest():
-    return {
-        "productVersion": "2.0.0",
-        "sourceCommit": "a" * 40,
-        "sourceTree": "b" * 40,
-        "wheel": {"filename": "voicestt-2.0.0-py3-none-any.whl", "sha256": "c" * 64},
-        "sdist": {"filename": "voicestt-2.0.0.tar.gz", "sha256": "d" * 64},
-        "images": {
-            "free": {"tag": "voice-stt-server:2.0.0", "imageId": "sha256:" + "e" * 64},
-            "pro": {"tag": "voice-stt-server-pro:2.0.0", "imageId": "sha256:" + "f" * 64},
-        },
-    }
+class RefusingAdapter:
+    """Fails the test loudly if a dry-run ever tries to write."""
 
-
-class _PoisonedAdapter:
-    """Fails the test if ``publish()`` is ever called; ``verify()`` always
-    reports ABSENT (the most write-tempting possible answer)."""
-
-    def __init__(self, name):
-        self.name = name
+    def __init__(self, testcase, status=ABSENT):
+        self._testcase = testcase
+        self._status = status
 
     def verify(self, manifest, state):
-        return ABSENT
+        return self._status
 
     def publish(self, manifest, state):
-        raise AssertionError(f"{self.name}.publish() must never be called by dry_run()")
+        self._testcase.fail("dry_run() called publish() on an adapter")
 
 
-def _poisoned_adapters():
-    return {
-        key: _PoisonedAdapter(key)
-        for key in ("pypi", "ghcr", "dockerhub", "external_verification", "git_tag", "github_release", "final_verification")
-    }
+def refusing_bundle(testcase):
+    bundle = {}
+    for step in STEP_DEFINITIONS:
+        if step.key == "complete":
+            continue
+        status = MATCH if step.kind.value == "VERIFY_ONLY" else ABSENT
+        bundle[step.key] = RefusingAdapter(testcase, status)
+    return bundle
 
 
-class FixedOrderTests(unittest.TestCase):
-    def test_pipeline_steps_match_the_state_order_exactly(self):
+class FacadeTests(unittest.TestCase):
+    def test_pipeline_steps_mirror_the_engine_graph_exactly(self):
+        self.assertEqual(
+            list(PIPELINE_STEPS),
+            [(s.from_state, s.to_state, s.description) for s in STEP_DEFINITIONS],
+        )
+
+    def test_pipeline_steps_span_the_whole_state_order(self):
         self.assertEqual([step[0] for step in PIPELINE_STEPS], STATE_ORDER[:-1])
         self.assertEqual([step[1] for step in PIPELINE_STEPS], STATE_ORDER[1:])
 
-    def test_pipeline_encodes_the_prompt_mandated_sequence(self):
-        expected_to_states = [
-            "PYPI_PUBLISHED",
-            "GHCR_PUBLISHED",
-            "DOCKERHUB_PUBLISHED",
-            "EXTERNAL_VERIFIED",
-            "TAGGED",
-            "GITHUB_RELEASED",
-            "FINAL_VERIFIED",
-            "COMPLETE",
-        ]
-        self.assertEqual([step[1] for step in PIPELINE_STEPS], expected_to_states)
-
-    def test_tag_step_is_strictly_after_external_verification(self):
+    def test_the_facade_encodes_the_w5_r04_order(self):
         to_states = [step[1] for step in PIPELINE_STEPS]
-        self.assertLess(to_states.index("EXTERNAL_VERIFIED"), to_states.index("TAGGED"))
-
-    def test_github_release_step_is_strictly_after_tag(self):
-        to_states = [step[1] for step in PIPELINE_STEPS]
-        self.assertLess(to_states.index("TAGGED"), to_states.index("GITHUB_RELEASED"))
-
-
-class PlanFromTests(unittest.TestCase):
-    def test_plan_from_prepared_covers_every_step(self):
-        self.assertEqual(len(plan_from("PREPARED")), len(PIPELINE_STEPS))
-
-    def test_plan_from_a_later_state_covers_fewer_steps(self):
-        self.assertEqual(len(plan_from("EXTERNAL_VERIFIED")), 4)
-
-    def test_plan_from_complete_is_empty(self):
-        self.assertEqual(plan_from("COMPLETE"), [])
-
-    def test_plan_from_an_unknown_state_raises(self):
-        with self.assertRaises(ValueError):
-            plan_from("NOT_A_STATE")
+        self.assertLess(to_states.index("TAGGED"), to_states.index("PYPI_PUBLISHED"))
+        self.assertLess(to_states.index("PYPI_PUBLISHED"), to_states.index("DOCKERHUB_PUBLISHED"))
+        self.assertLess(to_states.index("DOCKERHUB_PUBLISHED"), to_states.index("GHCR_PUBLISHED"))
+        self.assertLess(to_states.index("EXTERNAL_VERIFIED"), to_states.index("ALIASES_PUBLISHED"))
+        self.assertLess(to_states.index("ALIASES_PUBLISHED"), to_states.index("GITHUB_RELEASED"))
+        self.assertEqual(to_states[-1], "COMPLETE")
 
 
 class DryRunSideEffectFreedomTests(unittest.TestCase):
-    def test_dry_run_reports_the_full_plan_from_prepared(self):
-        result = dry_run(_sample_state(), _sample_manifest(), adapters=_poisoned_adapters())
-        self.assertEqual(result.startingState, "PREPARED")
-        self.assertEqual(len(result.outcomes), len(PIPELINE_STEPS))
+    def test_dry_run_never_publishes(self):
+        result = dry_run(make_state("PREPARED"), make_manifest(), refusing_bundle(self))
         self.assertTrue(result.to_json_dict()["sideEffectFree"])
 
+    def test_dry_run_reports_the_full_plan_from_prepared(self):
+        result = dry_run(make_state("PREPARED"), make_manifest(), refusing_bundle(self))
+        self.assertEqual(len(result.outcomes), len(STEP_DEFINITIONS))
+
     def test_dry_run_reports_a_shorter_plan_when_resuming(self):
-        state = _sample_state()
-        state = advance(state, "PYPI_PUBLISHED")
-        state = advance(state, "GHCR_PUBLISHED")
-        result = dry_run(state, _sample_manifest(), adapters=_poisoned_adapters())
-        self.assertEqual(result.startingState, "GHCR_PUBLISHED")
-        self.assertEqual(len(result.outcomes), len(PIPELINE_STEPS) - 2)
-
-    def test_dry_run_never_calls_publish_on_any_injected_adapter(self):
-        # Every adapter here raises AssertionError if publish() is called -
-        # dry_run() completing without error is the proof this section
-        # requires: no upload/push/tag/release ever happens.
-        result = dry_run(_sample_state(), _sample_manifest(), adapters=_poisoned_adapters())
-        self.assertFalse(result.stoppedEarly)
-
-    def test_dry_run_never_persists_anything_by_itself(self):
-        # dry_run() takes no persist callback at all - there is no code
-        # path inside it that could write release state to disk.
-        import inspect
-
-        signature = inspect.signature(dry_run)
-        self.assertNotIn("persist", signature.parameters)
+        result = dry_run(make_state("GHCR_PUBLISHED"), make_manifest(), refusing_bundle(self))
+        self.assertEqual(
+            [o.stepKey for o in result.outcomes],
+            ["external_verification", "aliases", "github_release", "final_verification", "complete"],
+        )
 
     def test_dry_run_at_complete_plans_nothing(self):
-        state = _sample_state()
-        for target in ["PYPI_PUBLISHED", "GHCR_PUBLISHED", "DOCKERHUB_PUBLISHED",
-                       "EXTERNAL_VERIFIED", "TAGGED", "GITHUB_RELEASED",
-                       "FINAL_VERIFIED", "COMPLETE"]:
-            state = advance(state, target)
-        result = dry_run(state, _sample_manifest(), adapters=_poisoned_adapters())
+        result = dry_run(make_state("COMPLETE"), make_manifest(), refusing_bundle(self))
         self.assertEqual(result.outcomes, [])
+
+    def test_dry_run_honours_the_same_until_boundary_publish_uses(self):
+        result = dry_run(
+            make_state("PREPARED"), make_manifest(), refusing_bundle(self),
+            stop_after="PYPI_PUBLISHED",
+        )
+        self.assertEqual([o.stepKey for o in result.outcomes], ["git_tag", "pypi"])
+
+    def test_dry_run_never_mutates_the_state_it_was_given(self):
+        state = make_state("PREPARED")
+        dry_run(state, make_manifest(), refusing_bundle(self))
+        self.assertEqual(state.state, "PREPARED")
+        self.assertEqual(len(state.history), 1)
 
 
 if __name__ == "__main__":

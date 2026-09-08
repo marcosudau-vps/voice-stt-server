@@ -121,28 +121,25 @@ if __name__ == "__main__":
 For file streams, websocket clients, and process pipelines, see
 [external-audio.md](external-audio.md).
 
-## CPU-Friendly Engine Example
+## Low-Latency CPU Example
 
-The recommended `faster_whisper` path is installed with
-`VoiceSTT[faster-whisper]`. For CPU-focused local testing with whisper.cpp:
-
-```bash
-python -m pip install "VoiceSTT[whisper-cpp]"
-```
+Both supported production engines are already present in the public
+distributions. `faster_whisper` is the default; `kroko_onnx` is the local
+streaming engine, which is the better choice when live partial results matter:
 
 ```python
-from VoiceSTT import AudioToTextRecorder
+from voice_stt_server import AudioToTextRecorder
 
 if __name__ == "__main__":
     recorder = AudioToTextRecorder(
-        transcription_engine="whisper_cpp",
-        model="tiny.en",
+        transcription_engine="kroko_onnx",
         device="cpu",
-        beam_size=1,
+        enable_realtime_transcription=True,
     )
     print(recorder.text())
     recorder.shutdown()
 ```
 
-See [transcription-engines.md](transcription-engines.md) before choosing an
-engine for production.
+See [transcription-engines.md](transcription-engines.md) for the engine
+comparison, [faster-whisper.md](faster-whisper.md) and
+[kroko-onnx.md](kroko-onnx.md) for the per-engine options.

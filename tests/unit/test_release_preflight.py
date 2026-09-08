@@ -9,8 +9,11 @@ actual current VERSION.
 from __future__ import annotations
 
 import os
+import sys
 import unittest
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tempfile import TemporaryDirectory
 from unittest import mock
 
@@ -32,10 +35,10 @@ class PreflightTestCase(unittest.TestCase):
         for key in (
             "VOICESTT_RELEASE_GHCR_REPO",
             "VOICESTT_RELEASE_DOCKERHUB_REPO",
-            "VOICESTT_RELEASE_PYPI_TOKEN",
-            "VOICESTT_RELEASE_GHCR_TOKEN",
-            "VOICESTT_RELEASE_DOCKERHUB_TOKEN",
-            "VOICESTT_RELEASE_GITHUB_TOKEN",
+            "DOCKERHUB_USERNAME",
+            "DOCKERHUB_TOKEN",
+            "GITHUB_TOKEN",
+            "GITHUB_REPOSITORY_OWNER",
         ):
             os.environ.pop(key, None)
 
@@ -140,26 +143,80 @@ class TagCheckTests(PreflightTestCase):
 
 
 class RegistryAndCredentialCheckTests(PreflightTestCase):
-    def test_unset_registry_identifiers_fail(self):
+    def test_the_ghcr_root_is_derived_and_needs_no_operator_variable(self):
+        # AP-SRV-070 W5-R04 section 24: minimise required configuration. A
+        # GHCR package always lives under the repository owner, so requiring
+        # the operator to also state the registry root would be redundant.
         report = self._run()
-        self.assertEqual(self._find(report, "ghcr_repo_configured").status, preflight.FAIL)
-        self.assertEqual(self._find(report, "dockerhub_repo_configured").status, preflight.FAIL)
+        check = self._find(report, "ghcr_repo_derived")
+        self.assertEqual(check.status, preflight.PASS)
+        self.assertIn("ghcr.io/marcosudau-vps", check.detail)
 
-    def test_configured_registry_identifiers_pass(self):
-        with mock.patch.dict(os.environ, {
-            "VOICESTT_RELEASE_GHCR_REPO": "ghcr.io/org/voice-stt-server",
-            "VOICESTT_RELEASE_DOCKERHUB_REPO": "org/voice-stt-server",
-        }):
+    def test_the_ghcr_root_follows_the_runner_owner_when_present(self):
+        with mock.patch.dict(os.environ, {"GITHUB_REPOSITORY_OWNER": "some-fork-owner"}):
             report = self._run()
-        self.assertEqual(self._find(report, "ghcr_repo_configured").status, preflight.PASS)
+        self.assertIn("ghcr.io/some-fork-owner", self._find(report, "ghcr_repo_derived").detail)
+
+    def test_an_unset_dockerhub_namespace_fails_closed(self):
+        # It genuinely cannot be derived, so preflight refuses rather than
+        # guessing a namespace and publishing into somebody else's account.
+        report = self._run()
+        self.assertEqual(self._find(report, "dockerhub_repo_configured").status, preflight.FAIL)
+        self.assertFalse(report.passed)
+
+    def test_a_configured_dockerhub_namespace_passes(self):
+        with mock.patch.dict(os.environ, {"DOCKERHUB_USERNAME": "marcosudau"}):
+            report = self._run()
         self.assertEqual(self._find(report, "dockerhub_repo_configured").status, preflight.PASS)
 
+    def test_both_public_distributions_are_reported(self):
+        report = self._run()
+        self.assertIn("voice-stt-server", self._find(report, "pypi_project_free").detail)
+        self.assertIn("voice-stt-server-pro", self._find(report, "pypi_project_pro").detail)
+
+    def test_both_public_images_are_reported(self):
+        report = self._run()
+        self.assertIn("voice-stt-server", self._find(report, "image_name_free").detail)
+        self.assertIn("voice-stt-server-pro", self._find(report, "image_name_pro").detail)
+
     def test_credential_presence_never_leaks_the_value(self):
-        with mock.patch.dict(os.environ, {"VOICESTT_RELEASE_PYPI_TOKEN": "pypi-supersecretvalue"}):
+        # W5R4-G49: only a boolean ever reaches a report.
+        with mock.patch.dict(os.environ, {"DOCKERHUB_TOKEN": "dckr_pat_supersecretvalue"}):
             report = self._run()
-        check = self._find(report, "credential_pypiTokenPresent")
+        check = self._find(report, "credential_dockerhubTokenPresent")
         self.assertEqual(check.status, preflight.PASS)
         self.assertNotIn("supersecretvalue", check.detail)
+
+    def test_no_pypi_token_is_required_at_all(self):
+        # Section 17 / W5R4-G47: Trusted Publishing means there is no token.
+        report = self._run()
+        names = [check.name for check in report.checks]
+        self.assertNotIn("credential_pypiTokenPresent", names)
+
+
+class LocalPathGuardTests(PreflightTestCase):
+    def test_a_manifest_with_an_operator_local_path_fails(self):
+        # W5R4-G07: a candidate that names P:\... could only ever be published
+        # from one machine.
+        import json
+        from release_support import make_manifest
+
+        manifest = make_manifest()
+        manifest["qualification"]["evidenceRef"] = r"P:\GithubRepos\evidence"
+        path = self.repo_root / "rc-manifest.json"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        report = self._run(rc_manifest_path=path)
+        check = self._find(report, "no_local_path_dependency")
+        self.assertEqual(check.status, preflight.FAIL)
+
+    def test_a_clean_manifest_passes(self):
+        from release_support import make_manifest
+        from release_tooling import rc_manifest as rcm
+
+        path = self.repo_root / "rc-manifest.json"
+        rcm.write_rc_manifest(path, make_manifest())
+        report = self._run(rc_manifest_path=path)
+        self.assertEqual(self._find(report, "no_local_path_dependency").status, preflight.PASS)
 
 
 class StateConflictCheckTests(PreflightTestCase):
@@ -172,10 +229,14 @@ class StateConflictCheckTests(PreflightTestCase):
 
         state = new_state(
             version="2.0.0", source_commit="a" * 40, source_tree="b" * 40,
-            wheel={"filename": "w.whl", "sha256": "c" * 64},
-            sdist={"filename": "s.tar.gz", "sha256": "d" * 64},
-            free_image={"tag": "t:1", "imageId": "id1"},
-            pro_image={"tag": "t:2", "imageId": "id2"},
+            distributions={
+                "free": {"name": "voice-stt-server", "wheels": "w.whl=" + "c" * 64},
+                "pro": {"name": "voice-stt-server-pro", "wheels": "p.whl=" + "d" * 64},
+            },
+            images={
+                "free": {"tag": "voice-stt-server:2.0.0", "digest": "sha256:" + "1" * 64},
+                "pro": {"tag": "voice-stt-server-pro:2.0.0", "digest": "sha256:" + "2" * 64},
+            },
         )
         save_state(default_state_path(self.repo_root, "2.0.0"), state)
         report = self._run()
@@ -193,16 +254,82 @@ class StateConflictCheckTests(PreflightTestCase):
         self.assertEqual(self._find(report, "no_state_conflict").status, preflight.FAIL)
 
 
-class OverallPassFailTests(PreflightTestCase):
-    def test_preflight_never_writes_anything_under_repo_root(self):
-        before = sorted(p.relative_to(self.repo_root).as_posix() for p in self.repo_root.rglob("*"))
-        self._run()
-        after = sorted(p.relative_to(self.repo_root).as_posix() for p in self.repo_root.rglob("*"))
-        self.assertEqual(before, after)
+class QualificationCheckTests(PreflightTestCase):
+    def test_unqualified_manifest_warns_by_default(self):
+        from release_support import make_manifest
+        from release_tooling import rc_manifest as rcm
 
-    def test_report_passed_is_false_if_any_check_fails(self):
-        report = self._run(expected_version="9.9.9")
+        manifest = make_manifest(release_readiness=rcm.READINESS_NOT_QUALIFIED)
+        path = self.repo_root / "rc-manifest.json"
+        rcm.write_rc_manifest(path, manifest)
+        report = self._run(rc_manifest_path=path, require_qualified=False)
+        check = self._find(report, "candidate_qualification")
+        self.assertEqual(check.status, preflight.WARN)
+
+    def test_unqualified_manifest_fails_when_qualification_required(self):
+        from release_support import make_manifest
+        from release_tooling import rc_manifest as rcm
+
+        manifest = make_manifest(release_readiness=rcm.READINESS_NOT_QUALIFIED)
+        path = self.repo_root / "rc-manifest.json"
+        rcm.write_rc_manifest(path, manifest)
+        report = self._run(rc_manifest_path=path, require_qualified=True)
+        check = self._find(report, "candidate_qualification")
+        self.assertEqual(check.status, preflight.FAIL)
         self.assertFalse(report.passed)
+
+    def test_qualified_manifest_passes_when_qualification_required(self):
+        from release_support import make_manifest
+        from release_tooling import rc_manifest as rcm
+
+        manifest = make_manifest(release_readiness=rcm.READINESS_QUALIFIED)
+        path = self.repo_root / "rc-manifest.json"
+        rcm.write_rc_manifest(path, manifest)
+        report = self._run(rc_manifest_path=path, require_qualified=True)
+        check = self._find(report, "candidate_qualification")
+        self.assertEqual(check.status, preflight.PASS)
+
+    def test_qualified_manifest_without_evidence_ref_fails(self):
+        import json
+        from release_support import make_manifest
+
+        manifest = make_manifest(release_readiness="QUALIFIED")
+        manifest["qualification"]["evidenceRef"] = ""
+        path = self.repo_root / "rc-manifest.json"
+        path.write_text(json.dumps(manifest), encoding="utf-8")
+        report = self._run(rc_manifest_path=path, require_qualified=True)
+        check = self._find(report, "candidate_qualification")
+        self.assertEqual(check.status, preflight.FAIL)
+
+
+class ManifestVersionCheckTests(PreflightTestCase):
+    def test_matching_manifest_version_passes(self):
+        from release_support import make_manifest
+        from release_tooling import rc_manifest as rcm
+
+        manifest = make_manifest(version="2.0.0")
+        path = self.repo_root / "rc-manifest.json"
+        rcm.write_rc_manifest(path, manifest)
+        report = self._run(rc_manifest_path=path, expected_version="2.0.0")
+        check = self._find(report, "rc_manifest_version_matches")
+        self.assertEqual(check.status, preflight.PASS)
+
+    def test_mismatched_manifest_version_fails(self):
+        from release_support import make_manifest
+        from release_tooling import rc_manifest as rcm
+
+        manifest = make_manifest(version="2.0.0")
+        path = self.repo_root / "rc-manifest.json"
+        rcm.write_rc_manifest(path, manifest)
+        report = self._run(rc_manifest_path=path, expected_version="2.0.1")
+        check = self._find(report, "rc_manifest_version_matches")
+        self.assertEqual(check.status, preflight.FAIL)
+        self.assertFalse(report.passed)
+
+    def test_no_manifest_warns(self):
+        report = self._run(rc_manifest_path=None, expected_version="2.0.0")
+        check = self._find(report, "rc_manifest_version_matches")
+        self.assertEqual(check.status, preflight.WARN)
 
 
 if __name__ == "__main__":

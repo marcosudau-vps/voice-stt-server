@@ -6,7 +6,7 @@ Kroko/Banafo streaming `.data` models. The adapter is lazy-loaded, so normal
 VoiceSTT installs and tests do not require Kroko-ONNX.
 
 Build and licensing procedures are centralized in
-[`build/BUILD.md`](../../build/BUILD.md#kroko-im-detail). This engine page
+[`build/BUILD.md`](../build/BUILD.md#kroko-im-detail). This engine page
 describes runtime configuration and tests; if a command here conflicts with
 the central build guide, the build guide is authoritative.
 
@@ -310,7 +310,7 @@ python -m unittest -v tests.unit.test_kroko_onnx_engine.KrokoOnnxGoldenTranscrip
 Pip-only users usually do not have the repository's `tests.unit` package. For a
 standalone install smoke test, use the Kroko test script from the same branch or
 tag as the docs you are reading:
-[tests/realtimestt_kroko_test.py](../../tests/realtimestt_kroko_test.py).
+[tests/realtimestt_kroko_test.py](../tests/realtimestt_kroko_test.py).
 
 Run the repository script in init-only mode:
 
@@ -338,7 +338,7 @@ files, shell logs, and generated reports.
   `stt-install-kroko --build --variant pro` or Docker
   `KROKO_VARIANT=pro` as documented in the central build guide.
 - The validated VPS runtime must share one Pro-16 recognizer between final and
-  realtime; see [`build/vps`](../../build/vps/README.md). This is a documented
+  realtime; see [`build/vps`](../build/vps/README.md). This is a documented
   server/runtime constraint, not a general limit of the adapter API.
 - CUDA runs require both CUDA-capable hardware and a Kroko-ONNX build with CUDA
   provider support.

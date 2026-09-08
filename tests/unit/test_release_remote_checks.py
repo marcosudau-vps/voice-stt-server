@@ -1,126 +1,222 @@
-"""AP-SRV-070 W5: read-only remote-artifact conflict detection.
+"""Read-only remote identity checks (AP-SRV-070 W5-R04).
 
-Every test here uses an injected fake fetcher/runner - none makes a real
-network call (section 17: "Do not use real public publishing as a test").
+Gates W5R4-G25 (exact identities verified), G26 (conflict hard-stops) and G27
+(unverifiable state hard-stops). Every check here is offline: the PyPI fetcher
+and the registry runner are both injected.
 """
 
 from __future__ import annotations
 
-import json
+import sys
 import unittest
+from pathlib import Path
 
-from release_tooling.errors import ConflictError, VerificationUnavailableError
-from release_tooling.remote_checks import (
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from release_support import RecordingRunner, digest_response, failed, ok, pypi_fetcher  # noqa: E402
+
+from release_tooling.errors import ConflictError, VerificationUnavailableError  # noqa: E402
+from release_tooling.remote_checks import (  # noqa: E402
     ABSENT,
     MATCH,
-    CommandResult,
     check_pypi_release,
+    check_registry_alias,
     check_registry_image,
+    inspect_pypi_release,
+    precheck_pypi,
+    remote_manifest_digest,
 )
 
+DIGEST = "sha256:" + "a1" * 32
+OTHER_DIGEST = "sha256:" + "b2" * 32
 
-class PyPIConflictTests(unittest.TestCase):
-    def test_absent_release_is_safe_to_publish(self):
-        result = check_pypi_release("voicestt", "2.0.0", {"voicestt-2.0.0.tar.gz": "a" * 64}, fetch=lambda url: None)
-        self.assertEqual(result, ABSENT)
 
-    def test_identical_existing_release_resumes_as_match(self):
-        payload = {
-            "releases": {
-                "2.0.0": [
-                    {"filename": "voicestt-2.0.0.tar.gz", "digests": {"sha256": "a" * 64}},
-                    {"filename": "voicestt-2.0.0-py3-none-any.whl", "digests": {"sha256": "b" * 64}},
-                ]
+class PyPICheckTests(unittest.TestCase):
+    def test_an_unpublished_project_is_absent(self):
+        status = check_pypi_release(
+            "voice-stt-server", "2.0.0", {"w.whl": "a" * 64}, fetch=pypi_fetcher({})
+        )
+        self.assertEqual(status, ABSENT)
+
+    def test_identical_files_resume_as_match(self):
+        # W5R4-G28: a rerun after a partial failure must not re-upload.
+        # B5: Verified using the official PyPI release API shape with top-level 'urls'.
+        fetch = pypi_fetcher({"voice-stt-server": {"w.whl": "a" * 64}})
+        self.assertEqual(
+            check_pypi_release("voice-stt-server", "2.0.0", {"w.whl": "a" * 64}, fetch=fetch),
+            MATCH,
+        )
+
+    def test_current_release_specific_urls_shape_yields_match(self):
+        # B5: Official PyPI endpoint https://pypi.org/pypi/<project>/<version>/json
+        # returns {"info": {...}, "urls": [{"filename": "...", "digests": {"sha256": "..."}}]}.
+        def official_fetch(url: str):
+            return {
+                "info": {"name": "voice-stt-server", "version": "2.0.0"},
+                "urls": [
+                    {"filename": "voice_stt_server-2.0.0-cp312-cp312-linux_x86_64.whl", "digests": {"sha256": "aa" * 32}},
+                    {"filename": "voice_stt_server-2.0.0-cp312-cp312-win_amd64.whl", "digests": {"sha256": "bb" * 32}},
+                ],
             }
+
+        expected = {
+            "voice_stt_server-2.0.0-cp312-cp312-linux_x86_64.whl": "aa" * 32,
+            "voice_stt_server-2.0.0-cp312-cp312-win_amd64.whl": "bb" * 32,
         }
-        result = check_pypi_release(
-            "voicestt",
-            "2.0.0",
-            {"voicestt-2.0.0.tar.gz": "a" * 64, "voicestt-2.0.0-py3-none-any.whl": "b" * 64},
-            fetch=lambda url: payload,
-        )
-        self.assertEqual(result, MATCH)
+        res = inspect_pypi_release("voice-stt-server", "2.0.0", expected, fetch=official_fetch)
+        self.assertEqual(res["status"], MATCH)
+        self.assertEqual(set(res["matched"]), set(expected.keys()))
+        self.assertEqual(res["absent"], [])
+        self.assertEqual(res["conflicts"], [])
 
-    def test_conflicting_hash_fails_closed(self):
-        payload = {"releases": {"2.0.0": [{"filename": "voicestt-2.0.0.tar.gz", "digests": {"sha256": "different"}}]}}
+    def test_a_hash_mismatch_is_a_hard_conflict(self):
+        # PyPI files are immutable, so a differing hash can never be resolved
+        # by re-uploading - it must stop the release.
+        fetch = pypi_fetcher({"voice-stt-server": {"w.whl": "b" * 64}})
+        with self.assertRaises(ConflictError) as caught:
+            check_pypi_release("voice-stt-server", "2.0.0", {"w.whl": "a" * 64}, fetch=fetch)
+        self.assertIn("sha256 mismatch", str(caught.exception))
+
+    def test_a_missing_expected_file_is_a_hard_conflict(self):
+        fetch = pypi_fetcher({"voice-stt-server": {"other.whl": "a" * 64}})
         with self.assertRaises(ConflictError):
-            check_pypi_release("voicestt", "2.0.0", {"voicestt-2.0.0.tar.gz": "a" * 64}, fetch=lambda url: payload)
+            check_pypi_release("voice-stt-server", "2.0.0", {"w.whl": "a" * 64}, fetch=fetch)
 
-    def test_missing_expected_file_fails_closed(self):
-        payload = {"releases": {"2.0.0": []}}
-        with self.assertRaises(ConflictError):
-            check_pypi_release("voicestt", "2.0.0", {"voicestt-2.0.0.tar.gz": "a" * 64}, fetch=lambda url: payload)
-
-    def test_fetcher_receives_the_expected_url(self):
-        seen = {}
-
-        def fetch(url):
-            seen["url"] = url
-            return None
-
-        check_pypi_release("voicestt", "2.0.0", {}, fetch=fetch)
-        self.assertEqual(seen["url"], "https://pypi.org/pypi/voicestt/2.0.0/json")
-
-
-class RegistryConflictTests(unittest.TestCase):
-    def _runner(self, returncode: int, stdout: str, stderr: str = ""):
-        def runner(cmd):
-            return CommandResult(args=list(cmd), returncode=returncode, stdout=stdout, stderr=stderr)
-
-        return runner
-
-    def test_absent_tag_is_safe_to_publish(self):
-        # A real "docker manifest inspect" against a tag that does not exist
-        # yet exits non-zero with a "no such manifest" style message - that
-        # specific shape is what distinguishes a genuine absence from the
-        # registry being unreachable (see test_unavailable_tool_fails_closed).
-        result = check_registry_image(
-            "ghcr.io/org/voice-stt-server:2.0.0",
-            "sha256:" + "a" * 64,
-            runner=self._runner(1, "", stderr="no such manifest: ghcr.io/org/voice-stt-server:2.0.0"),
+    def test_the_two_distributions_are_checked_independently(self):
+        # Free published, Pro not: exactly the resume case the new authority
+        # names (section 6).
+        fetch = pypi_fetcher({"voice-stt-server": {"free.whl": "a" * 64}})
+        self.assertEqual(
+            check_pypi_release("voice-stt-server", "2.0.0", {"free.whl": "a" * 64}, fetch=fetch),
+            MATCH,
         )
-        self.assertEqual(result, ABSENT)
+        self.assertEqual(
+            check_pypi_release("voice-stt-server-pro", "2.0.0", {"pro.whl": "c" * 64}, fetch=fetch),
+            ABSENT,
+        )
 
-    def test_unavailable_tool_fails_closed_instead_of_claiming_absent(self):
-        # A missing/unreachable docker binary or daemon must never be
-        # silently treated as "safe to publish".
+    def test_partial_candidate_files_yields_partial_status(self):
+        # B5: When some files match and others are absent, inspect returns PARTIAL
+        # so staging can selectively upload only the missing ones.
+        fetch = pypi_fetcher({"voice-stt-server": {"linux.whl": "aa" * 32}})
+        expected = {"linux.whl": "aa" * 32, "win.whl": "bb" * 32}
+        res = inspect_pypi_release("voice-stt-server", "2.0.0", expected, fetch=fetch)
+        self.assertEqual(res["status"], "PARTIAL")
+        self.assertEqual(res["matched"], ["linux.whl"])
+        self.assertEqual(res["absent"], ["win.whl"])
+        self.assertEqual(res["conflicts"], [])
+
+    def test_response_without_usable_urls_fails_closed(self):
+        # B5: Response missing top-level 'urls' must fail closed with VerificationUnavailableError
+        # rather than being mistakenly treated as a safe empty release.
+        malformed = lambda url: {"info": {"version": "2.0.0"}}  # missing urls key
+        with self.assertRaises(VerificationUnavailableError) as caught:
+            inspect_pypi_release("voice-stt-server", "2.0.0", {"w.whl": "a" * 64}, fetch=malformed)
+        self.assertIn("missing or invalid 'urls' list", str(caught.exception))
+
+        non_list = lambda url: {"urls": "invalid"}  # not a list
         with self.assertRaises(VerificationUnavailableError):
-            check_registry_image(
-                "ghcr.io/org/voice-stt-server:2.0.0",
-                "sha256:" + "a" * 64,
-                runner=self._runner(127, "", stderr="docker: command not found"),
-            )
+            inspect_pypi_release("voice-stt-server", "2.0.0", {"w.whl": "a" * 64}, fetch=non_list)
 
-    def test_identical_remote_manifest_resumes_as_match(self):
-        payload = json.dumps({"config": {"digest": "sha256:" + "a" * 64}})
-        result = check_registry_image(
-            "ghcr.io/org/voice-stt-server:2.0.0", "sha256:" + "a" * 64, runner=self._runner(0, payload)
+    def test_response_with_malformed_file_entry_fails_closed(self):
+        # B5: File entry missing sha256 or filename fails closed
+        missing_hash = lambda url: {"urls": [{"filename": "w.whl", "digests": {}}]}
+        with self.assertRaises(VerificationUnavailableError):
+            inspect_pypi_release("voice-stt-server", "2.0.0", {"w.whl": "a" * 64}, fetch=missing_hash)
+
+    def test_empty_urls_list_yields_absent(self):
+        # B5: A release existing on PyPI but having no distribution files uploaded yet
+        # returns 'urls': [] and reports all expected files as absent.
+        empty_urls = lambda url: {"info": {"name": "voice-stt-server"}, "urls": []}
+        res = inspect_pypi_release("voice-stt-server", "2.0.0", {"w.whl": "a" * 64}, fetch=empty_urls)
+        self.assertEqual(res["status"], ABSENT)
+        self.assertEqual(res["matched"], [])
+        self.assertEqual(res["absent"], ["w.whl"])
+
+
+
+class RegistryDigestTests(unittest.TestCase):
+    def test_a_missing_reference_reads_back_as_none(self):
+        runner = RecordingRunner()
+        self.assertIsNone(remote_manifest_digest("ghcr.io/x/y:2.0.0", runner=runner))
+
+    def test_a_present_reference_returns_its_manifest_digest(self):
+        runner = RecordingRunner([("imagetools inspect", digest_response(DIGEST))])
+        self.assertEqual(remote_manifest_digest("ghcr.io/x/y:2.0.0", runner=runner), DIGEST)
+
+    def test_the_check_is_read_only(self):
+        # It must never pull, push, tag or create anything.
+        runner = RecordingRunner([("imagetools inspect", digest_response(DIGEST))])
+        remote_manifest_digest("ghcr.io/x/y:2.0.0", runner=runner)
+        runner.assert_no_writes(self)
+        self.assertEqual(len(runner.calls), 1)
+        self.assertIn("inspect", runner.commands[0])
+
+    def test_an_unreadable_registry_is_unavailable_not_absent(self):
+        # W5R4-G27: "cannot check" must never be mistaken for "safe to
+        # publish". A missing docker binary is the classic instance.
+        runner = RecordingRunner(default=failed("docker: command not found", 127))
+        with self.assertRaises(VerificationUnavailableError):
+            remote_manifest_digest("ghcr.io/x/y:2.0.0", runner=runner)
+
+    def test_a_garbled_digest_is_unavailable(self):
+        runner = RecordingRunner([("imagetools inspect", ok("not-a-digest\n"))])
+        with self.assertRaises(VerificationUnavailableError):
+            remote_manifest_digest("ghcr.io/x/y:2.0.0", runner=runner)
+
+
+class ExactTagCheckTests(unittest.TestCase):
+    def test_absent_tag_is_safe_to_publish(self):
+        self.assertEqual(
+            check_registry_image("docker.io/x/y:2.0.0", DIGEST, runner=RecordingRunner()),
+            ABSENT,
         )
-        self.assertEqual(result, MATCH)
 
-    def test_conflicting_remote_digest_fails_closed(self):
-        payload = json.dumps({"config": {"digest": "sha256:" + "b" * 64}})
-        with self.assertRaises(ConflictError):
-            check_registry_image(
-                "ghcr.io/org/voice-stt-server:2.0.0", "sha256:" + "a" * 64, runner=self._runner(0, payload)
-            )
+    def test_matching_digest_resumes(self):
+        runner = RecordingRunner([("imagetools inspect", digest_response(DIGEST))])
+        self.assertEqual(check_registry_image("docker.io/x/y:2.0.0", DIGEST, runner=runner), MATCH)
 
-    def test_non_json_manifest_fails_closed(self):
-        with self.assertRaises(ConflictError):
-            check_registry_image(
-                "ghcr.io/org/voice-stt-server:2.0.0", "sha256:" + "a" * 64, runner=self._runner(0, "not json")
-            )
+    def test_a_different_digest_on_an_exact_tag_is_a_hard_conflict(self):
+        # W5R4-G33: an exact version tag is immutable and is never repointed.
+        runner = RecordingRunner([("imagetools inspect", digest_response(OTHER_DIGEST))])
+        with self.assertRaises(ConflictError) as caught:
+            check_registry_image("docker.io/x/y:2.0.0", DIGEST, runner=runner)
+        self.assertIn("expected", str(caught.exception))
 
-    def test_runner_never_receives_a_push_or_tag_command(self):
-        calls = []
+    def test_a_candidate_without_a_digest_cannot_be_verified(self):
+        # The pre-W5-R04 manifest recorded a local image Id here, which is not
+        # a registry-checkable identity. Refusing is the honest answer.
+        runner = RecordingRunner()
+        with self.assertRaises(VerificationUnavailableError):
+            check_registry_image("docker.io/x/y:2.0.0", "", runner=runner)
+        with self.assertRaises(VerificationUnavailableError):
+            check_registry_image("docker.io/x/y:2.0.0", "sha256:not-hex", runner=runner)
 
-        def runner(cmd):
-            calls.append(cmd)
-            return CommandResult(args=list(cmd), returncode=1, stdout="", stderr="no such manifest")
 
-        check_registry_image("ghcr.io/org/voice-stt-server:2.0.0", "sha256:" + "a" * 64, runner=runner)
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0][:3], ["docker", "manifest", "inspect"])
+class AliasCheckTests(unittest.TestCase):
+    def test_an_alias_pointing_elsewhere_is_absent_not_a_conflict(self):
+        # An alias is *meant* to move; only exact tags are immutable.
+        runner = RecordingRunner([("imagetools inspect", digest_response(OTHER_DIGEST))])
+        self.assertEqual(
+            check_registry_alias("docker.io/x/y:latest", DIGEST, runner=runner), ABSENT
+        )
+
+    def test_an_alias_already_on_the_expected_digest_matches(self):
+        runner = RecordingRunner([("imagetools inspect", digest_response(DIGEST))])
+        self.assertEqual(
+            check_registry_alias("docker.io/x/y:latest", DIGEST, runner=runner), MATCH
+        )
+
+    def test_a_missing_alias_is_absent(self):
+        self.assertEqual(
+            check_registry_alias("docker.io/x/y:latest", DIGEST, runner=RecordingRunner()),
+            ABSENT,
+        )
+
+    def test_alias_checks_are_read_only(self):
+        runner = RecordingRunner([("imagetools inspect", digest_response(DIGEST))])
+        check_registry_alias("docker.io/x/y:latest", DIGEST, runner=runner)
+        runner.assert_no_writes(self)
 
 
 if __name__ == "__main__":

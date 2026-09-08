@@ -13,6 +13,8 @@ import builtins
 import contextlib
 import hashlib
 import inspect
+import json
+import pathlib
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -1424,3 +1426,92 @@ class RootFindingLMWindowsToolchainAuthorityTests(RootFindingJWindowsToolchainAu
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LinuxBuilderContainerAuthorityTests(unittest.TestCase):
+    """The Linux builder container is a declared build authority (W5-R04).
+
+    Until W5-R04 the Linux Kroko wheel was compiled inside a container that
+    nothing declared: it pulled the floating ``python:3.12-slim-bookworm`` tag
+    and installed ``pip``/``setuptools``/``wheel`` unpinned. That was never a
+    *correctness* hole the way Windows Finding J was - the Linux fingerprint
+    probes the real cmake/cc/c++/OpenSSL identity inside the container, so a
+    materially different toolchain produces a different fingerprint and fails
+    closed rather than reusing a wrong artifact. It was a *stability* hole: a
+    moving base tag makes the fingerprint drift for undeclared reasons, which
+    destroys artifact reuse on a fresh GitHub runner.
+
+    The container is therefore declared, and these tests are what keep the
+    declaration, the Dockerfile and ``LINUX_BUILDER_REVISION`` in step.
+    """
+
+    #: sha256(canonical declaration || normalised Dockerfile text).
+    EXPECTED_LINUX_CONTAINER_DIGEST = (
+        "81479366c510152c76d6d0c4eb3fa831c5527b19cd5145e2f6596c549c3fa2d4"
+    )
+
+    def _container_digest(self):
+        dockerfile = (
+            pathlib.Path(__file__).resolve().parents[2]
+            / "build" / "kroko-builder.Dockerfile"
+        ).read_text(encoding="utf-8")
+        digest = hashlib.sha256()
+        digest.update(
+            fingerprint.canonical_json(buildinputs.linux_builder_declaration()).encode("utf-8")
+        )
+        digest.update(dockerfile.replace("\r\n", "\n").encode("utf-8"))
+        return digest.hexdigest()
+
+    def test_the_container_authority_matches_its_declared_revision(self):
+        self.assertEqual(
+            self._container_digest(),
+            self.EXPECTED_LINUX_CONTAINER_DIGEST,
+            "The Linux Kroko builder container changed (its declaration in "
+            "VoiceSTT/kroko/buildinputs.py, or build/kroko-builder.Dockerfile). "
+            "That can change the produced wheel, so bump LINUX_BUILDER_REVISION "
+            "- which correctly invalidates stored Linux artifacts - and update "
+            "EXPECTED_LINUX_CONTAINER_DIGEST here.",
+        )
+
+    def test_the_declared_revision_is_the_one_w5_r04_established(self):
+        self.assertEqual(buildinputs.LINUX_BUILDER_REVISION, 2)
+
+    def test_the_windows_authority_was_not_disturbed(self):
+        # The already-qualified Windows artifact must not be invalidated by a
+        # Linux-only correction.
+        self.assertEqual(buildinputs.WINDOWS_BUILDER_REVISION, 4)
+
+    def test_the_base_image_is_pinned_by_an_immutable_digest(self):
+        declaration = buildinputs.linux_builder_declaration()
+        self.assertRegex(declaration["baseImageDigest"], r"^sha256:[0-9a-f]{64}$")
+        self.assertIn("@sha256:", declaration["baseImageRef"])
+
+    def test_every_packaging_tool_is_pinned_to_an_exact_version(self):
+        # These decide how the produced wheel is built and tagged, which is the
+        # same reasoning that already applies to WINDOWS_PACKAGING_TOOLS.
+        for tool in buildinputs.LINUX_BUILDER_PACKAGING_TOOLS:
+            with self.subTest(tool=tool):
+                self.assertIn("==", tool)
+
+    def test_wheel_stays_below_the_version_that_breaks_upstream(self):
+        # Upstream's cmake_extension.py imports wheel.bdist_wheel, which 0.46
+        # removed; it then silently falls back to bdist_wheel = None and tags
+        # the wheel differently.
+        pins = dict(
+            tool.split("==") for tool in buildinputs.LINUX_BUILDER_PACKAGING_TOOLS
+        )
+        major, minor = (int(part) for part in pins["wheel"].split(".")[:2])
+        self.assertTrue((major, minor) < (0, 46), pins["wheel"])
+
+    def test_the_declaration_is_pure_data(self):
+        # ``--describe-artifact`` must stay offline: no Docker, no registry.
+        json.dumps(buildinputs.linux_builder_declaration())
+
+    def test_changing_the_linux_container_declaration_would_be_visible(self):
+        original = buildinputs.LINUX_BUILDER_BASE_IMAGE_DIGEST
+        with mock.patch.object(
+            buildinputs, "LINUX_BUILDER_BASE_IMAGE_DIGEST", "sha256:" + "0" * 64
+        ):
+            changed = self._container_digest()
+        self.assertNotEqual(changed, self._container_digest())
+        self.assertEqual(buildinputs.LINUX_BUILDER_BASE_IMAGE_DIGEST, original)
