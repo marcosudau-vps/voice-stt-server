@@ -38,6 +38,7 @@ jobs:
       - name: Compile release helpers
         run: >-
           python -m compileall -q
+          VoiceSTT/transcription_engines/model_resolver.py
           tools/check_v1_release_package.py
           tools/v1_kroko_release.py
           tools/v1_release_manifest.py
@@ -56,6 +57,7 @@ jobs:
       - name: Verify V1 release contracts
         run: >-
           python -m pytest -q
+          tests/test_v1_model_resolution.py
           tests/test_v1_kroko_release.py
           tests/test_v1_release_candidate_contract.py
           tests/test_v1_release_publish.py
