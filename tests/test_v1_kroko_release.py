@@ -56,6 +56,22 @@ def test_windows_openssl_patch_is_pinned_and_has_native_contract(tmp_path):
     assert "ENV OPENSSL_ROOT_DIR=/opt/openssl-win64/app" in text
 
 
+def test_windows_output_ownership_patch_reuses_pinned_builder(tmp_path):
+    script = tmp_path / "build_windows.sh"
+    script.write_text(
+        '#!/bin/bash\n    rm -rf "$host_out"\necho done\n', encoding="utf-8"
+    )
+
+    kr._patch_windows_output_ownership(tmp_path)
+    text = script.read_text(encoding="utf-8")
+
+    assert '--entrypoint chown' in text
+    assert '-v "$host_out:/out"' in text
+    assert '"$IMAGE" -R "$(id -u):$(id -g)" /out' in text
+    assert text.index("--entrypoint chown") < text.index('rm -rf "$host_out"')
+    assert text.count('rm -rf "$host_out"') == 1
+
+
 def test_runtime_key_rejected_before_build(monkeypatch, tmp_path):
     monkeypatch.setenv(kr.RUNTIME_CREDENTIAL_ENV, "secret-must-not-enter-build")
     with pytest.raises(kr.ReleaseKrokoError, match="runtime-only"):

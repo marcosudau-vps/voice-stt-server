@@ -11,7 +11,24 @@ allgemeingueltiger Teil des Projekts.
 
 ## Schnellstart
 
-### Lokale Python-Installation
+### V1.0.0 Published-Wheel-Installation
+
+Normale Nutzer installieren unter CPython 3.12 genau eines der beiden
+plattformgebundenen Produkte:
+
+```bash
+pip install voice-stt-server
+# oder alternativ mit lizenzfaehiger Pro-Runtime
+pip install voice-stt-server-pro
+```
+
+Diese finalen Linux-x86_64-/Windows-AMD64-Wheels enthalten bereits die
+passende native Kroko-Runtime. Es wird weder ein zweites Kroko-Wheel installiert
+noch Kroko beim Nutzer kompiliert. Kroko-`.data`-Modelle und Pro-Credentials
+bleiben getrennte Laufzeitdaten. Der genaue V1-Vertrag steht in
+[`docs/v1-preservation-release.md`](../docs/v1-preservation-release.md).
+
+### Lokale Source-/Entwicklerinstallation
 
 Linux-Voraussetzungen installieren, virtuelle Umgebung anlegen und VoiceSTT
 mit der empfohlenen CPU-Ausstattung installieren:
@@ -27,7 +44,8 @@ python -m pip install -e '.[recommended,server]'
 python -m pip check
 ```
 
-Fuer Kroko Community kommt danach der Runtime-Build hinzu:
+Nur bei einer Source-/Entwicklerinstallation kommt danach der Runtime-Build
+hinzu:
 
 ```bash
 python -m pip install -e '.[kroko-builder,silero-onnx-cpu,server]'
@@ -47,6 +65,10 @@ nicht in Shell-Historien, Images, Compose-Dateien oder Git abgelegt werden.
 
 ### Docker mit Community-Kroko
 
+Dieser allgemeine Compose-Pfad baut aus dem Source-Checkout. Der V1-Releasepfad
+verwendet stattdessen `build/v1-release.Dockerfile` mit genau einem bereits
+qualifizierten finalen Linux-Produktwheel.
+
 Modellpfade in `config.yaml` pruefen und den portablen Compose-Launcher nutzen:
 
 ```bash
@@ -60,6 +82,10 @@ curl -fsS http://127.0.0.1:8010/health
 CPU-Image und mountet vorhandene Modellverzeichnisse read-only.
 
 ### Docker mit Kroko Pro
+
+Auch dies ist der Source-/Entwicklerpfad. Das spätere öffentliche
+`voice-stt-server-pro:1.0.0`-Image installiert ausschließlich das qualifizierte
+`voice-stt-server-pro`-Linux-Wheel und baut Kroko nicht erneut.
 
 Den Pro-Build immer explizit ausloesen und den Lizenz-Key erst beim Start als
 Environment-Secret bereitstellen:
@@ -76,11 +102,15 @@ unter [`build/vps`](vps/README.md) festgelegt.
 ### Vor einem Release pruefen
 
 ```bash
-python -m pytest -q tests/unit
+python -m pytest -q
+python -m pytest -q tests/test_v1_*.py
 python -m pip check
-python -m build
 python tools/compose.py config --quiet
 ```
+
+Ein generisches `python -m build` ist kein V1-Releasebuild. Die vier finalen
+V1-Produktwheels entstehen ausschließlich über `tools/v1_kroko_release.py` und
+`tools/v1_product_wheel.py`; ein öffentlicher V1-sdist ist verboten.
 
 Reale Engine-Tests benoetigen die jeweilige optionale Runtime und lokale
 Modelle. Die vollstaendige Testmatrix steht in
@@ -110,8 +140,9 @@ Runtime uebergeben werden. Eine Free-Runtime kann Pro-Modelle nicht laden.
 | Ziel | Befehl | Ergebnis |
 | --- | --- | --- |
 | Editierbare Entwicklung | `python -m pip install -e '.[recommended,server]'` | Quellcheckout wird direkt importiert |
-| Wheel und sdist | `python -m build` | Artefakte unter `dist/` |
-| Legacy-Paketbuild | `python setup.py sdist bdist_wheel` | Gleiches Paket ueber `setup.py`; nur noch Kompatibilitaetspfad |
+| Generisches Entwicklerpaket (nicht V1 public) | `python -m build` | Basisartefakte unter `dist/`; darf nicht als V1-Produkt veröffentlicht werden |
+| Legacy-Entwicklerpaket | `python setup.py sdist bdist_wheel` | Nur Kompatibilitaetspfad; kein öffentlicher V1-sdist |
+| V1 Free/Pro Produktwheels | `python tools/v1_product_wheel.py build ...` | Je ein natives cp312-Produktwheel aus exakt einem passenden Kroko-Intermediate |
 | Kroko Community | `stt-install-kroko --build --variant free` | Community-faehige Kroko-Runtime im aktiven Python |
 | Kroko Pro | `stt-install-kroko --build --variant pro` | Lizenzfaehige Kroko-Runtime im aktiven Python |
 | Kroko-Wheel ohne Installation | `stt-install-kroko --build --skip-install --work-dir DIR` | Wheel im Kroko-Artefaktverzeichnis |
@@ -120,7 +151,10 @@ Runtime uebergeben werden. Eine Free-Runtime kann Pro-Modelle nicht laden.
 | Nur Kroko-Builder | `docker build --target kroko-builder --build-arg KROKO_VARIANT=pro -t voicestt:kroko-builder-pro .` | Wiederverwendbarer Builder/Cache |
 | Pro-Wheel-Upgrade | `docker build -f Dockerfile.pro-upgrade -t voicestt-cpu:pro-upgrade .` | Bestehendes Image plus bereits gebautes Pro-Wheel |
 
-`setup.py` ist aktuell die kanonische Paketmetadatenquelle. Eine spaetere
+`setup.py` ist die kanonische Basis-Metadatenquelle. Der V1-Produktwheel-Helper
+setzt darauf die Distribution (`voice-stt-server` oder
+`voice-stt-server-pro`), den nativen Tag, die eingebettete Runtime und den
+Variant-Marker. Eine spaetere
 Migration auf `pyproject.toml` muss Extras, Console-Scripts, den angepassten
 `build_py`-Ausschluss und Paketdaten vollstaendig uebernehmen; sie ist nicht
 Teil des derzeitigen Buildverfahrens. Setuptools behandelt `build/` als
@@ -220,11 +254,15 @@ Projekt-Release muss mindestens folgende Stellen konsistent halten:
 5. Dockerimages mit unveraenderlicher Commit-/Versionsreferenz zusaetzlich zum
    lokalen Betriebs-Tag versehen.
 
-Das Repository besitzt aktuell keinen versionierten GitHub-Actions-Workflow.
-Build-, Test- und Releaseabnahme werden daher lokal beziehungsweise ueber die
-VPS-Automation ausgefuehrt und muessen im Release-Log nachvollziehbar bleiben.
+Die versionierten GitHub-Actions-Workflows trennen normale Korrektur-/Build-CI
+von den ausschließlich manuellen Candidate- und Publish-Phasen. Candidate und
+Publish dürfen während der Korrekturabnahme nicht gestartet werden.
 
-## Python-Paket bauen
+## Generisches Source-Paket bauen (nicht öffentlicher V1-Vertrag)
+
+Der folgende PEP-517-Pfad bleibt für Entwickler erhalten. Seine Ausgabe ist
+kein öffentliches V1.0.0-Releaseartefakt; insbesondere wird der dabei mögliche
+sdist nicht in Candidate oder Publish übernommen.
 
 Empfohlen ist der isolierte PEP-517-Build ueber `build`:
 
@@ -251,7 +289,8 @@ Wichtige Paketbesonderheiten:
   im Wheel.
 - `stt-install-kroko` wird als Console-Script aus
   `VoiceSTT.install_kroko:main` registriert.
-- Kroko-ONNX selbst ist keine Standardabhaengigkeit und wird separat gebaut.
+- Im Source-/Entwicklerpfad wird Kroko-ONNX separat gebaut. Die finalen
+  V1.0.0-Produktwheels betten die passende Free-/Pro-Runtime dagegen direkt ein.
 
 ## Kroko im Detail
 
@@ -368,6 +407,11 @@ Prozessende mit Exit 139. Das ist eine serverseitig beobachtete Einschraenkung,
 keine allgemeine Zusage ueber alle Kroko-Versionen.
 
 ### Docker-Build
+
+Der nachfolgende allgemeine Docker-Build ist der Source-/Entwicklerpfad. Für
+V1.0.0 ist `build/v1-release.Dockerfile` verbindlich: Es installiert genau ein
+bereits gebautes Free- oder Pro-Linux-Produktwheel und kein separates
+Kroko-Wheel.
 
 `Dockerfile` hat zwei Stages:
 

@@ -19,6 +19,9 @@ def test_pro_missing_model_is_fail_closed_with_guidance(monkeypatch,tmp_path):
  text=str(exc.value);assert 'never' in text.lower() and 'download' in text.lower();assert 'Community models are not used' in text;assert model_resolver.KROKO_ROOT_ENV in text and 'KROKO_API_KEY' in text and 'https://kroko.ai/' in text
 def test_pro_explicit_local_model_is_allowed(monkeypatch,tmp_path):
  monkeypatch.setattr(model_resolver,'BAKED_KROKO_VARIANT','pro');model=tmp_path/'licensed.data';model.write_bytes(b'licensed');assert model_resolver.resolve_kroko_model(str(model))==str(model.resolve())
+def test_pro_model_directory_never_selects_community_fallback(monkeypatch,tmp_path):
+ monkeypatch.setattr(model_resolver,'BAKED_KROKO_VARIANT','pro');community=tmp_path/'Kroko-DE-Community-64-L-Streaming-001.data';community.write_bytes(b'community')
+ with pytest.raises(TranscriptionEngineError,match='Community models are not used'):model_resolver.resolve_kroko_model('missing-pro.data',options={'model_dir':str(tmp_path)})
 def test_free_remote_source_is_pinned_and_custom_sources_are_rejected(monkeypatch,tmp_path):
  monkeypatch.setattr(model_resolver,'BAKED_KROKO_VARIANT','free');monkeypatch.setenv(model_resolver.KROKO_ROOT_ENV,str(tmp_path));name='Kroko-DE-Community-64-L-Streaming-001.data'
  options={}; assert model_resolver.resolve_kroko_model(name,options=options).endswith(name); assert options['model_repo_id']==model_resolver.KROKO_FREE_REPO; assert options['model_revision']==model_resolver.KROKO_FREE_REVISION

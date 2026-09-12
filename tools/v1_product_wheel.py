@@ -29,6 +29,11 @@ SERVER_REQUIREMENTS = [
     "fastapi>=0.115", "uvicorn[standard]>=0.30", "python-multipart",
     "sse-starlette", "httpx", "PyYAML>=6.0", "tzdata", "numpy",
 ]
+CREDENTIAL_PATTERNS = {
+    "pypi-token": re.compile(rb"pypi-[A-Za-z0-9_-]{20,}"),
+    "github-token": re.compile(rb"gh[pousr]_[A-Za-z0-9]{20,}"),
+    "openai-style-token": re.compile(rb"sk-[A-Za-z0-9_-]{20,}"),
+}
 
 class ProductWheelError(RuntimeError):
     pass
@@ -167,6 +172,25 @@ def _write_wheel(files: dict[str, bytes], dist_info: str, out: Path) -> None:
         for name in sorted(files): zf.writestr(name, files[name])
 
 
+def _record_is_valid(zf: zipfile.ZipFile, record_name: str) -> bool:
+    names = {name for name in zf.namelist() if not name.endswith("/")}
+    rows = list(csv.reader(io.StringIO(zf.read(record_name).decode("utf-8"))))
+    if {row[0] for row in rows} != names:
+        return False
+    for row in rows:
+        if len(row) != 3:
+            return False
+        name, digest, size = row
+        if name == record_name:
+            if digest or size:
+                return False
+            continue
+        data = zf.read(name)
+        if digest != _record_hash(data) or size != str(len(data)):
+            return False
+    return True
+
+
 def inspect_product_wheel(path: Path) -> dict:
     with zipfile.ZipFile(path) as zf:
         names = zf.namelist()
@@ -175,10 +199,19 @@ def inspect_product_wheel(path: Path) -> dict:
         metadata = email.message_from_bytes(zf.read(metadata_name))
         wheel_text = zf.read(wheel_name).decode("utf-8")
         marker = zf.read("VoiceSTT/_release_variant.py").decode("utf-8")
+        record_name = next(n for n in names if n.endswith(".dist-info/RECORD"))
         nested = [n for n in names if n.lower().endswith(".whl")]
         kroko_dist_infos = [n for n in names if re.search(r"(^|/)kroko_onnx-.*\.dist-info/", n, re.I)]
         natives = [n for n in names if n.endswith((".so", ".pyd", ".dll")) or ".libs/" in n]
         licenses = [n for n in names if n.startswith("__voicestt_third_party__/kroko_onnx/")]
+        models = [n for n in names if n.lower().endswith(".data")]
+        credential_matches = []
+        for name in names:
+            data = zf.read(name)
+            for label, pattern in CREDENTIAL_PATTERNS.items():
+                if pattern.search(data):
+                    credential_matches.append({"entry": name, "pattern": label})
+        record_valid = _record_is_valid(zf, record_name)
     tags = [line.split(":", 1)[1].strip() for line in wheel_text.splitlines() if line.startswith("Tag:")]
     pure_line = next((line.split(":", 1)[1].strip().lower() for line in wheel_text.splitlines() if line.startswith("Root-Is-Purelib:")), None)
     root_is_purelib = pure_line == "true"
@@ -189,6 +222,12 @@ def inspect_product_wheel(path: Path) -> dict:
         "bytes": path.stat().st_size, "sha256": sha256_file(path),
         "krokoNativePayload": sorted(natives), "licensePayload": sorted(licenses),
         "nestedWheels": nested, "krokoDistInfoEntries": kroko_dist_infos,
+        "variantMarkerPresent": variant != "unknown",
+        "embeddedKrokoRuntimePackage": any(n.startswith("kroko_onnx/") for n in names),
+        "embeddedKrokoNativePayload": bool(natives),
+        "modelPayloadEntries": sorted(models),
+        "obviousCredentialPatternMatches": credential_matches,
+        "recordValid": record_valid,
         "topLevel": sorted({n.split("/", 1)[0] for n in names}),
     }
 
@@ -213,7 +252,11 @@ def build_product_wheel(variant: str, platform: str, kroko_wheel: Path, out_dir:
     report = inspect_product_wheel(out)
     if report["variant"] != variant or report["distribution"] != DISTRIBUTIONS[variant]:
         raise ProductWheelError(f"final product identity mismatch: {report}")
-    if report["rootIsPurelib"] or report["nestedWheels"] or report["krokoDistInfoEntries"] or not report["krokoNativePayload"]:
+    if (report["rootIsPurelib"] or report["nestedWheels"] or
+            report["krokoDistInfoEntries"] or not report["krokoNativePayload"] or
+            not report["variantMarkerPresent"] or not report["recordValid"] or
+            report["modelPayloadEntries"] or
+            report["obviousCredentialPatternMatches"]):
         raise ProductWheelError(f"invalid embedded Kroko payload/metadata: {report}")
     return report
 

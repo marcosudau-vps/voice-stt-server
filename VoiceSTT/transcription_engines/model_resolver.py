@@ -36,7 +36,7 @@ def default_kroko_model_root():
 def validate_kroko_download_policy(filename,options=None):
  options=options or {}; variant=installed_kroko_variant(options)
  if variant=="pro":raise TranscriptionEngineError("Kroko Pro models are never downloaded automatically; provision the licensed model locally.")
- if filename not in KROKO_FREE_MODEL_REGISTRY:raise TranscriptionEngineError("Automatic Kroko Community download only accepts registered V1 Community models.")
+ if filename not in KROKO_FREE_MODEL_REGISTRY:raise TranscriptionEngineError("Automatic Kroko Community download only accepts registered V1 Community models from Banafo/Kroko-ASR.")
  if options.get("model_download_url"):raise TranscriptionEngineError("Custom Kroko model_download_url is not allowed by the V1 Community download policy; use an explicit local .data file instead.")
  repo=options.get("model_repo_id") or options.get("hf_repo_id")
  if repo and repo!=KROKO_FREE_REPO:raise TranscriptionEngineError("Custom Kroko Hugging Face repositories are not allowed by the V1 Community download policy; use an explicit local .data file instead.")
@@ -78,7 +78,8 @@ def resolve_faster_whisper_model(model,download_root=None,options=None):
      checked.append(str(candidate)); resolved=_snapshot_model(candidate)
      if resolved is not None:return str(resolved.resolve())
  locations=", ".join(checked) if checked else value
- if offline_models_enabled(options) or not faster_whisper_auto_download_enabled(options):raise TranscriptionEngineError("faster-whisper model '%s' was not found locally and automatic model download is disabled by default. Checked: %s. Set %s to the mounted CTranslate2 model root or pass an absolute model directory. To opt in to a reviewed model download, set engine option auto_download_model=true or %s=1."%(value,locations,FASTER_WHISPER_ROOT_ENV,FASTER_WHISPER_AUTO_DOWNLOAD_ENV))
+ if offline_models_enabled(options):raise TranscriptionEngineError("Offline model mode is enabled and faster-whisper model '%s' was not found. Checked: %s. Set %s to the mounted CTranslate2 model root or pass an absolute model directory."%(value,locations,FASTER_WHISPER_ROOT_ENV))
+ if not faster_whisper_auto_download_enabled(options):raise TranscriptionEngineError("faster-whisper model '%s' was not found locally and automatic model download is disabled by default. Checked: %s. Set %s to the mounted CTranslate2 model root or pass an absolute model directory. To opt in to a reviewed model download, set engine option auto_download_model=true or %s=1."%(value,locations,FASTER_WHISPER_ROOT_ENV,FASTER_WHISPER_AUTO_DOWNLOAD_ENV))
  alias=_normalized_faster_whisper_alias(value); repo_id=FASTER_WHISPER_MODEL_REGISTRY.get(alias)
  if repo_id is None:raise TranscriptionEngineError("Automatic faster-whisper download only accepts reviewed aliases: %s. Requested '%s'. Use a local absolute model directory for any other model."%(", ".join(FASTER_WHISPER_MODEL_REGISTRY),value))
  return repo_id
@@ -96,6 +97,14 @@ def resolve_kroko_model(model,download_root=None,options=None):
   if candidate.is_file():
    if variant=="pro" and path.name in KROKO_FREE_MODEL_REGISTRY and not explicit:continue
    return str(candidate.resolve())
+  # A configured model directory may intentionally omit a filename. Preserve
+  # that V1 UX, but select only one variant-compatible payload: a registered
+  # Community model for Free, or a non-Community operator-provisioned file for
+  # Pro. Never treat a Community model as a Pro fallback.
+  if options.get("model_dir") and root_value==options.get("model_dir") and root.is_dir():
+   files=sorted(root.glob("*.data"))
+   compatible=[item for item in files if (item.name in KROKO_FREE_MODEL_REGISTRY)==(variant=="free")]
+   if len(compatible)==1:return str(compatible[0].resolve())
  locations=", ".join(dict.fromkeys(checked)) if checked else str(path)
  if variant=="pro":raise TranscriptionEngineError("Kroko Pro runtime is installed, but no compatible licensed Pro model was found. The runtime is already present; Pro models are never downloaded automatically and Community models are not used as a Pro fallback. Expected local model: %s. Default model directory: %s. Set %s or pass engine_options['model_path']. KROKO_API_KEY is a runtime credential only. Checked: %s. Kroko licensing/model source: %s"%(path.name,default_root,KROKO_ROOT_ENV,locations,KROKO_HOME_URL))
  if offline_models_enabled(options):raise TranscriptionEngineError("Offline model mode is enabled and Kroko Community model '%s' was not found. Checked: %s. Set %s or pass an absolute .data file."%(path.name,locations,KROKO_ROOT_ENV))

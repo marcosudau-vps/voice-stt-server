@@ -26,13 +26,16 @@ def target_platform():
 def clean_venv(variant,wheel,work,log):
  venv=work/f'venv-{variant}'
  if venv.exists(): shutil.rmtree(venv)
- run([sys.executable,'-m','venv',str(venv)],log=log)
+ selector_env=os.environ.copy(); selector_env.pop('VOICESTT_KROKO_VARIANT',None); selector_env.pop('KROKO_API_KEY',None)
+ Path(log).parent.mkdir(parents=True,exist_ok=True)
+ with Path(log).open('a',encoding='utf-8') as handle: handle.write('selector_env_absent=true\n')
+ run([sys.executable,'-m','venv',str(venv)],env=selector_env,log=log)
  py=venv/('Scripts/python.exe' if os.name=='nt' else 'bin/python'); stt=venv/('Scripts/stt-server.exe' if os.name=='nt' else 'bin/stt-server')
- run([py,'-m','pip','install','--upgrade','pip'],log=log); run([py,'-m','pip','install',str(wheel)],log=log)
- run([py,'-c',"import VoiceSTT, VoiceSTT_server.server, kroko_onnx; from VoiceSTT._release_variant import KROKO_VARIANT; print('variant='+KROKO_VARIANT); assert KROKO_VARIANT == '"+variant+"'"],log=log)
- run([stt,'--help'],log=log); run([py,'-m','pip','check'],log=log); run([py,'-m','pip','list'],log=log)
+ run([py,'-m','pip','install','--upgrade','pip'],env=selector_env,log=log); run([py,'-m','pip','install',str(wheel)],env=selector_env,log=log)
+ run([py,'-c',"import VoiceSTT, VoiceSTT_server.server, kroko_onnx; from VoiceSTT._release_variant import KROKO_VARIANT; print('variant='+KROKO_VARIANT); assert KROKO_VARIANT == '"+variant+"'"],env=selector_env,log=log)
+ run([stt,'--help'],env=selector_env,log=log); run([py,'-m','pip','check'],env=selector_env,log=log); run([py,'-m','pip','list'],env=selector_env,log=log)
  if variant=='pro':
-  env=os.environ.copy(); env.pop('VOICESTT_KROKO_VARIANT',None); env.pop('KROKO_API_KEY',None); env['VOICESTT_KROKO_MODEL_ROOT']=str(work/'definitely-empty-pro-model-root'); Path(env['VOICESTT_KROKO_MODEL_ROOT']).mkdir(exist_ok=True)
+  env=selector_env.copy(); env['VOICESTT_KROKO_MODEL_ROOT']=str(work/'definitely-empty-pro-model-root'); Path(env['VOICESTT_KROKO_MODEL_ROOT']).mkdir(exist_ok=True)
   code="from VoiceSTT._release_variant import KROKO_VARIANT; from VoiceSTT.transcription_engines.model_resolver import default_kroko_model_root,resolve_kroko_model; from VoiceSTT.transcription_engines.base import TranscriptionEngineError; print('variant='+KROKO_VARIANT); print('default_root='+str(default_kroko_model_root()));\ntry: resolve_kroko_model('Kroko-DE-Pro-64-L-Streaming-001.data')\nexcept TranscriptionEngineError as e: print(str(e)); raise SystemExit(2)\nraise SystemExit(99)"
   cp=run([py,'-c',code],env=env,log=log,expect=2)
   if 'Traceback' in cp.stdout or 'Community models are not used' not in cp.stdout or 'KROKO_API_KEY' not in cp.stdout: raise SystemExit('Pro missing-model UX evidence failed')
@@ -45,7 +48,8 @@ def main(argv=None):
  work.mkdir(parents=True,exist_ok=True); summary={'platform':target,'python':sys.version,'commit':subprocess.check_output(['git','rev-parse','HEAD'],cwd=ROOT,text=True).strip(),'variants':{}}
  for variant in ('free','pro'):
   log=work/f'{target}-{variant}.log'; kroko_dir=work/'kroko'/variant; product_dir=work/'product'/variant
-  run([sys.executable,'tools/v1_kroko_release.py','build','--variant',variant,'--platform',target,'--out-dir',kroko_dir],log=log)
+  build_env=os.environ.copy(); build_env.pop('KROKO_API_KEY',None)
+  run([sys.executable,'tools/v1_kroko_release.py','build','--variant',variant,'--platform',target,'--out-dir',kroko_dir],env=build_env,log=log)
   kroko_wheels=list(kroko_dir.glob('*.whl'))
   if len(kroko_wheels)!=1: raise SystemExit(f'expected one Kroko wheel: {kroko_wheels}')
   report=product_dir/'product.json'; run([sys.executable,'tools/v1_product_wheel.py','build','--variant',variant,'--platform',target,'--kroko-wheel',kroko_wheels[0],'--out-dir',product_dir,'--report',report],log=log)

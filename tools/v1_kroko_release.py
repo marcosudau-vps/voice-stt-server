@@ -214,6 +214,31 @@ RUN apt-get update && apt-get install -y --no-install-recommends \\
     )
 
 
+def _patch_windows_output_ownership(repo: Path) -> None:
+    """Make upstream's Docker-created temporary output removable by the host.
+
+    The pinned ``build_windows.sh`` writes its bind-mounted output as root.
+    On Linux release runners its final ``rm -rf`` therefore fails after the
+    native wheel was built successfully.  Reuse the already-built, pinned
+    builder image to restore the invoking uid/gid immediately before cleanup.
+    """
+
+    path = repo / "build_windows.sh"
+    text = path.read_text(encoding="utf-8", errors="replace")
+    cleanup = '    rm -rf "$host_out"'
+    if cleanup not in text:
+        raise ReleaseKrokoError(
+            "could not locate Windows temporary-output cleanup in build_windows.sh"
+        )
+    replacement = '''    docker run --rm --platform linux/amd64 \\
+        --entrypoint chown \\
+        -v "$host_out:/out" \\
+        "$IMAGE" -R "$(id -u):$(id -g)" /out
+    rm -rf "$host_out"'''
+    path.write_text(text.replace(cleanup, replacement, 1), encoding="utf-8")
+    print("Patched build_windows.sh to normalize Docker output ownership.")
+
+
 def _wheel_tags(wheel: Path) -> list[str]:
     with zipfile.ZipFile(wheel) as zf:
         name = next(n for n in zf.namelist() if n.endswith(".dist-info/WHEEL"))
@@ -278,6 +303,7 @@ def _build(variant: str, platform: str, out_dir: Path) -> dict[str, Any]:
             # moving OpenSSL download with a release-pinned binary dependency.
             installer.prepare_windows_checkout(repo)
             _patch_windows_openssl_source(repo)
+            _patch_windows_output_ownership(repo)
             if os.name == "nt":
                 _run(
                     [

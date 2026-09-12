@@ -4,7 +4,7 @@ from tools import v1_release_manifest as rm
 
 def _wheel(variant,platform):
     dist=rm.DISTRIBUTIONS[variant]; name=dist.replace('-','_')+f"-1.0.0-cp312-cp312-{platform}.whl"
-    return {"filename":name,"distribution":dist,"version":"1.0.0","variant":variant,"tags":[f"cp312-cp312-{platform}"],"rootIsPurelib":False,"bytes":123,"sha256":"a"*64,"krokoNativePayload":["kroko_onnx/native"],"licensePayload":["license"],"nestedWheels":[],"krokoDistInfoEntries":[],"topLevel":[]}
+    return {"filename":name,"distribution":dist,"version":"1.0.0","variant":variant,"tags":[f"cp312-cp312-{platform}"],"rootIsPurelib":False,"bytes":123,"sha256":"a"*64,"krokoNativePayload":["kroko_onnx/native"],"licensePayload":["license"],"nestedWheels":[],"krokoDistInfoEntries":[],"variantMarkerPresent":True,"recordValid":True,"modelPayloadEntries":[],"obviousCredentialPatternMatches":[],"topLevel":[]}
 
 def _manifest():
     python={}; kroko={}; images={}
@@ -20,6 +20,8 @@ def test_manifest_requires_two_distributions_and_four_native_wheels():
 
 def test_missing_pro_or_pure_wheel_is_rejected():
     m=_manifest(); del m["python"]["pro"]
+    with pytest.raises(rm.CandidateManifestError): rm.validate_candidate(m)
+    m=_manifest(); m["python"]["pro"]["wheels"]["win_amd64"]["recordValid"]=False
     with pytest.raises(rm.CandidateManifestError): rm.validate_candidate(m)
     m=_manifest(); m["python"]["free"]["wheels"]["linux_x86_64"]["filename"]="x-py3-none-any.whl"
     with pytest.raises(rm.CandidateManifestError): rm.validate_candidate(m)

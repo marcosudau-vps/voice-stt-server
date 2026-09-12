@@ -30,6 +30,12 @@ def test_final_product_wheel_embeds_runtime_and_native_tag(monkeypatch,tmp_path,
     assert report["rootIsPurelib"] is False
     assert report["tags"]==[f"cp312-cp312-{platform}"]
     assert report["krokoNativePayload"] and report["licensePayload"]
+    assert report["embeddedKrokoRuntimePackage"] is True
+    assert report["embeddedKrokoNativePayload"] is True
+    assert report["variantMarkerPresent"] is True
+    assert report["recordValid"] is True
+    assert report["modelPayloadEntries"] == []
+    assert report["obviousCredentialPatternMatches"] == []
     assert report["nestedWheels"]==[] and report["krokoDistInfoEntries"]==[]
     assert not report["filename"].endswith("py3-none-any.whl")
 
