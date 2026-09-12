@@ -8,8 +8,22 @@ from .base import TranscriptionEngineError
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
 FASTER_WHISPER_ROOT_ENV = "VOICESTT_FASTER_WHISPER_MODEL_ROOT"
+FASTER_WHISPER_AUTO_DOWNLOAD_ENV = "VOICESTT_FASTER_WHISPER_AUTO_DOWNLOAD"
 KROKO_ROOT_ENV = "VOICESTT_KROKO_MODEL_ROOT"
 OFFLINE_MODELS_ENV = "VOICESTT_OFFLINE_MODELS"
+
+# V1.0.0 intentionally exposes a small, reviewed download allowlist. Local
+# absolute model directories remain valid regardless of this registry. The
+# registry only governs network-backed resolution when the operator explicitly
+# opts in to automatic download.
+FASTER_WHISPER_MODEL_REGISTRY = {
+    "tiny": "Systran/faster-whisper-tiny",
+    "base": "Systran/faster-whisper-base",
+    "small": "Systran/faster-whisper-small",
+    "medium": "Systran/faster-whisper-medium",
+    "large": "Systran/faster-whisper-large-v3",
+    "large_turbo": "deepdml/faster-whisper-large-v3-turbo-ct2",
+}
 
 
 def _bool(value, default=False):
@@ -31,6 +45,21 @@ def offline_models_enabled(options=None):
     return _bool(os.getenv(OFFLINE_MODELS_ENV), False)
 
 
+def faster_whisper_auto_download_enabled(options=None):
+    """Return whether a reviewed faster-whisper alias may be downloaded.
+
+    V1.0.0 defaults this to *disabled*. Network-backed resolution therefore
+    requires an explicit per-engine option or the dedicated environment flag.
+    """
+
+    options = options or {}
+    if "auto_download_model" in options:
+        return _bool(options["auto_download_model"], False)
+    if "download_model" in options:
+        return _bool(options["download_model"], False)
+    return _bool(os.getenv(FASTER_WHISPER_AUTO_DOWNLOAD_ENV), False)
+
+
 def _is_ctranslate2_model(path):
     return path.is_dir() and (path / "config.json").is_file() and (path / "model.bin").is_file()
 
@@ -44,6 +73,15 @@ def _snapshot_model(path):
             if _is_ctranslate2_model(candidate):
                 return candidate
     return None
+
+
+def _normalized_faster_whisper_alias(value):
+    alias = str(value).strip().lower().replace("-", "_")
+    if alias == "large_v3":
+        return "large"
+    if alias in {"large_v3_turbo", "large_turbo"}:
+        return "large_turbo"
+    return alias
 
 
 def _model_aliases(model):
@@ -64,7 +102,12 @@ def _model_aliases(model):
 
 
 def resolve_faster_whisper_model(model, download_root=None, options=None):
-    """Resolve a faster-whisper name against a mounted local model root."""
+    """Resolve a faster-whisper model without implicit network access.
+
+    Existing local model directories are always accepted. If no local model is
+    found, V1.0.0 fails closed by default. An operator may explicitly opt into
+    download, but only for aliases in :data:`FASTER_WHISPER_MODEL_REGISTRY`.
+    """
 
     options = dict(options or {})
     value = str(model).strip()
@@ -99,15 +142,31 @@ def resolve_faster_whisper_model(model, download_root=None, options=None):
                     if resolved is not None:
                         return str(resolved.resolve())
 
-    if offline_models_enabled(options):
-        locations = ", ".join(checked) if checked else value
+    locations = ", ".join(checked) if checked else value
+    if offline_models_enabled(options) or not faster_whisper_auto_download_enabled(options):
         raise TranscriptionEngineError(
-            "Offline model mode is enabled and faster-whisper model "
-            f"'{value}' was not found. Checked: {locations}. Set "
-            f"{FASTER_WHISPER_ROOT_ENV} to the mounted CTranslate2 model root "
-            "or pass an absolute model directory."
+            "faster-whisper model '%s' was not found locally and automatic model "
+            "download is disabled by default. Checked: %s. Set %s to the mounted "
+            "CTranslate2 model root or pass an absolute model directory. To opt "
+            "in to a reviewed model download, set engine option "
+            "auto_download_model=true or %s=1." % (
+                value,
+                locations,
+                FASTER_WHISPER_ROOT_ENV,
+                FASTER_WHISPER_AUTO_DOWNLOAD_ENV,
+            )
         )
-    return value
+
+    alias = _normalized_faster_whisper_alias(value)
+    repo_id = FASTER_WHISPER_MODEL_REGISTRY.get(alias)
+    if repo_id is None:
+        allowed = ", ".join(FASTER_WHISPER_MODEL_REGISTRY)
+        raise TranscriptionEngineError(
+            "Automatic faster-whisper download only accepts reviewed aliases: %s. "
+            "Requested '%s'. Use a local absolute model directory for any other model."
+            % (allowed, value)
+        )
+    return repo_id
 
 
 def resolve_kroko_model(model, download_root=None, options=None):
