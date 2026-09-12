@@ -39,12 +39,16 @@ jobs:
           python -m compileall -q
           tools/check_v1_release_package.py
           tools/v1_kroko_release.py
+          tools/v1_release_manifest.py
 
       - name: Build and inspect V1 wheel and sdist
         run: python tools/check_v1_release_package.py
 
-      - name: Verify Kroko release-input contract
-        run: python -m pytest -q tests/test_v1_kroko_release.py
+      - name: Verify V1 release contracts
+        run: >-
+          python -m pytest -q
+          tests/test_v1_kroko_release.py
+          tests/test_v1_release_candidate_contract.py
 
   source-identity:
     name: V1 source identity guard
