@@ -4,380 +4,249 @@ on:
   workflow_dispatch:
     inputs:
       candidate_run_id:
-        description: "Run id of release-candidate.yml that produced v1-release-candidate"
+        description: Run ID that produced v1-release-candidate
         required: true
       version:
-        description: "V1 preservation version"
+        description: V1 preservation version
         required: true
-        default: "1.0.0"
+        default: '1.0.0'
 
 permissions: {}
-
 concurrency:
   group: v1-preservation-publish-${{ inputs.version }}
   cancel-in-progress: false
 
 env:
-  PYTHON_VERSION: "3.12"
-  VERSION: "1.0.0"
-  TAG: "v1.0.0"
+  VERSION: '1.0.0'
+  TAG: v1.0.0
   DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
 
 jobs:
   preflight:
-    name: Bind publication to exact qualified candidate
     runs-on: ubuntu-24.04
-    permissions:
-      actions: read
-      contents: read
+    permissions: {actions: read, contents: read}
     outputs:
       source_commit: ${{ steps.identity.outputs.source_commit }}
       source_tree: ${{ steps.identity.outputs.source_tree }}
     steps:
-      - name: Download only the canonical qualified candidate
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
-        with:
-          name: v1-release-candidate
-          path: candidate
-          run-id: ${{ inputs.candidate_run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Bind workflow ref, run id and version to candidate
-        id: identity
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: v1-release-candidate, path: candidate, run-id: '${{ inputs.candidate_run_id }}', github-token: '${{ secrets.GITHUB_TOKEN }}'}
+      - id: identity
         shell: bash
+        env: {INPUT_RUN_ID: '${{ inputs.candidate_run_id }}'}
         run: |
           set -euo pipefail
           test '${{ inputs.version }}' = '1.0.0'
           python - <<'PY' >> "$GITHUB_OUTPUT"
-          import json, os, pathlib, re, sys
-          manifest = json.loads(pathlib.Path('candidate/rc-manifest.json').read_text())
-          if manifest.get('productVersion') != '1.0.0':
-              raise SystemExit('candidate is not V1.0.0')
-          commit = str(manifest.get('sourceCommit') or '')
-          tree = str(manifest.get('sourceTree') or '')
-          if not re.fullmatch(r'[0-9a-f]{40}', commit) or not re.fullmatch(r'[0-9a-f]{40}', tree):
-              raise SystemExit('candidate source identity is malformed')
-          run_url = str((manifest.get('candidate') or {}).get('runUrl') or '')
-          expected_run = os.environ['INPUT_RUN_ID']
-          if not run_url.endswith('/actions/runs/' + expected_run):
-              raise SystemExit(f'candidate run identity {run_url!r} does not match requested run {expected_run}')
-          if commit != os.environ['GITHUB_SHA']:
-              raise SystemExit(
-                  f'publish workflow must be dispatched from the exact candidate commit; '
-                  f'workflow={os.environ["GITHUB_SHA"]}, candidate={commit}'
-              )
-          print('source_commit=' + commit)
-          print('source_tree=' + tree)
+          import json,os,pathlib,re
+          m=json.loads(pathlib.Path('candidate/rc-manifest.json').read_text())
+          assert m['productVersion']=='1.0.0' and m['publicSdist'] is False
+          commit=m['sourceCommit']; tree=m['sourceTree']; assert re.fullmatch(r'[0-9a-f]{40}',commit); assert re.fullmatch(r'[0-9a-f]{40}',tree)
+          assert m['candidate']['runUrl'].endswith('/actions/runs/'+os.environ['INPUT_RUN_ID'])
+          assert commit==os.environ['GITHUB_SHA'], f"publish ref {os.environ['GITHUB_SHA']} != candidate {commit}"
+          print('source_commit='+commit); print('source_tree='+tree)
           PY
-        env:
-          INPUT_RUN_ID: ${{ inputs.candidate_run_id }}
 
   tag:
-    name: Immutable Git tag
     needs: preflight
     runs-on: ubuntu-24.04
     environment: release
-    permissions:
-      actions: read
-      contents: write
+    permissions: {actions: read, contents: write}
     steps:
-      - name: Checkout exact candidate source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          ref: ${{ needs.preflight.outputs.source_commit }}
-          fetch-depth: 0
-      - name: Download canonical candidate
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
-        with:
-          name: v1-release-candidate
-          path: candidate
-          run-id: ${{ inputs.candidate_run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Verify candidate bytes before first public write
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {ref: '${{ needs.preflight.outputs.source_commit }}', fetch-depth: 0}
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: v1-release-candidate, path: candidate, run-id: '${{ inputs.candidate_run_id }}', github-token: '${{ secrets.GITHUB_TOKEN }}'}
+      - name: Verify exact candidate and create/resume immutable tag
         shell: bash
         run: |
           set -euo pipefail
           python tools/v1_release_publish.py verify-candidate --candidate-dir candidate
           test "$(git rev-parse HEAD)" = '${{ needs.preflight.outputs.source_commit }}'
           test "$(git rev-parse 'HEAD^{tree}')" = '${{ needs.preflight.outputs.source_tree }}'
-      - name: Create or resume immutable v1.0.0 tag
-        shell: bash
-        run: |
-          set -euo pipefail
           git fetch origin --tags --force
-          EXPECTED='${{ needs.preflight.outputs.source_commit }}'
-          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
-            ACTUAL="$(git rev-list -n 1 "${TAG}")"
-            test "${ACTUAL}" = "${EXPECTED}" || {
-              echo "CONFLICT: ${TAG} resolves to ${ACTUAL}, expected ${EXPECTED}" >&2
-              exit 1
-            }
-            echo "MATCH: ${TAG} already anchors the qualified V1 commit."
+          expected='${{ needs.preflight.outputs.source_commit }}'
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            test "$(git rev-list -n1 "$TAG")" = "$expected" || { echo CONFLICT; exit 1; }
+            echo "MATCH: $TAG"
           else
-            git config user.name 'github-actions[bot]'
-            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git tag -a "${TAG}" "${EXPECTED}" -m 'VoiceSTT V1 preservation release 1.0.0'
-            git push origin "refs/tags/${TAG}"
+            git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git tag -a "$TAG" "$expected" -m 'VoiceSTT V1 preservation release 1.0.0'
+            git push origin "refs/tags/$TAG"
           fi
-          git fetch origin "refs/tags/${TAG}:refs/tags/${TAG}" --force
-          test "$(git rev-list -n 1 "${TAG}")" = "${EXPECTED}"
 
-  pypi:
-    name: PyPI voice-stt-server 1.0.0
+  pypi-free:
+    name: PyPI Free / bootstrap gate
     needs: [preflight, tag]
     runs-on: ubuntu-24.04
     environment: release
-    permissions:
-      actions: read
-      contents: read
-      id-token: write
+    permissions: {actions: read, contents: read, id-token: write}
     steps:
-      - name: Checkout exact candidate source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          ref: ${{ needs.preflight.outputs.source_commit }}
-      - name: Download canonical candidate
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
-        with:
-          name: v1-release-candidate
-          path: candidate
-          run-id: ${{ inputs.candidate_run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Read-only PyPI precheck and stage only absent exact files
-        id: pypi
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {ref: '${{ needs.preflight.outputs.source_commit }}'}
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: v1-release-candidate, path: candidate, run-id: '${{ inputs.candidate_run_id }}', github-token: '${{ secrets.GITHUB_TOKEN }}'}
+      - id: state
+        name: Classify Free and Pro before writes
         shell: bash
         run: |
           set -euo pipefail
-          python tools/v1_release_publish.py precheck-pypi \
-            --candidate-dir candidate \
-            --stage-dir upload \
-            --out pypi-precheck.json
-          if find upload -maxdepth 1 -type f | grep -q .; then
-            echo 'upload=true' >> "$GITHUB_OUTPUT"
-          else
-            echo 'upload=false' >> "$GITHUB_OUTPUT"
-          fi
-      - name: Publish exact V1 wheel + sdist with PyPI Trusted Publishing
-        if: steps.pypi.outputs.upload == 'true'
+          python tools/v1_release_publish.py precheck-pypi --candidate-dir candidate --variant free --stage-dir upload-free --out free-before.json
+          python tools/v1_release_publish.py precheck-pypi --candidate-dir candidate --variant pro --stage-dir probe-pro --out pro-before.json
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json,pathlib
+          f=json.loads(pathlib.Path('free-before.json').read_text()); p=json.loads(pathlib.Path('pro-before.json').read_text())
+          fa=all(v=='ABSENT' for v in f['artifacts'].values()); pa=all(v=='ABSENT' for v in p['artifacts'].values())
+          print('upload='+('true' if any(v=='ABSENT' for v in f['artifacts'].values()) else 'false'))
+          print('bootstrap_probe='+('true' if fa and pa else 'false'))
+          PY
+      - name: Publish only ABSENT Free wheels
+        if: steps.state.outputs.upload == 'true'
         uses: pypa/gh-action-pypi-publish@15c56dba361d8335944d31a2ecd17d700fc7bcbc
-        with:
-          packages-dir: upload
-          skip-existing: true
-      - name: Verify exact PyPI release identity
+        with: {packages-dir: upload-free}
+      - name: Verify both Free wheels MATCH
         shell: bash
-        run: python tools/v1_release_publish.py verify-pypi --candidate-dir candidate
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 12); do python tools/v1_release_publish.py verify-pypi --candidate-dir candidate --variant free && exit 0; sleep 10; done
+          exit 1
+      - name: Expected first-release bootstrap stop
+        if: steps.state.outputs.bootstrap_probe == 'true'
+        shell: bash
+        run: |
+          cat <<'EOF'
+          EXPECTED BOOTSTRAP STOP: PYPI_PRO_PUBLISHER_SETUP_REQUIRED
+          voice-stt-server 1.0.0 Free Linux+Windows wheels are now remotely verified MATCH.
+          voice-stt-server-pro was intentionally NOT uploaded. Docker Hub, final GHCR,
+          aliases, and GitHub Release have not run.
+          Configure the Pending Trusted Publisher for project voice-stt-server-pro with:
+            repository: marcosudau-vps/voice-stt-server
+            workflow: release-publish.yml
+            environment: release
+          Then re-run THIS SAME version 1.0.0 with THIS SAME candidate_run_id.
+          EOF
+          exit 78
 
-  dockerhub:
-    name: Docker Hub exact Free + Pro
-    needs: [preflight, pypi]
+  pypi-pro:
+    name: PyPI Pro / resumable
+    needs: [preflight, pypi-free]
     runs-on: ubuntu-24.04
     environment: release
-    permissions:
-      actions: read
-      contents: read
-      packages: read
+    permissions: {actions: read, contents: read, id-token: write}
     steps:
-      - name: Checkout exact candidate source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          ref: ${{ needs.preflight.outputs.source_commit }}
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349
-      - name: Download canonical candidate
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
-        with:
-          name: v1-release-candidate
-          path: candidate
-          run-id: ${{ inputs.candidate_run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Verify candidate bytes
-        shell: bash
-        run: python tools/v1_release_publish.py verify-candidate --candidate-dir candidate
-      - name: Log in to GHCR candidate staging
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Log in to Docker Hub
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Promote exact candidate manifests to Docker Hub
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {ref: '${{ needs.preflight.outputs.source_commit }}'}
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: v1-release-candidate, path: candidate, run-id: '${{ inputs.candidate_run_id }}', github-token: '${{ secrets.GITHUB_TOKEN }}'}
+      - id: state
         shell: bash
         run: |
           set -euo pipefail
-          test -n "${DOCKERHUB_USERNAME}"
-          inspect_digest() {
-            local ref="$1" out rc digest
-            set +e
-            out="$(docker buildx imagetools inspect "$ref" 2>&1)"; rc=$?
-            set -e
-            if [ "$rc" -ne 0 ]; then
-              if printf '%s' "$out" | grep -Eqi 'manifest unknown|name unknown|not found'; then
-                return 2
-              fi
-              echo "UNKNOWN: cannot verify $ref: $out" >&2
-              return 3
-            fi
-            digest="$(printf '%s\n' "$out" | awk '$1 == "Digest:" {print $2; exit}')"
-            printf '%s' "$digest"
-          }
+          python tools/v1_release_publish.py verify-pypi --candidate-dir candidate --variant free
+          python tools/v1_release_publish.py precheck-pypi --candidate-dir candidate --variant pro --stage-dir upload-pro --out pro-before.json
+          if find upload-pro -maxdepth 1 -type f | grep -q .; then echo upload=true >> "$GITHUB_OUTPUT"; else echo upload=false >> "$GITHUB_OUTPUT"; fi
+      - name: Publish only ABSENT Pro wheels
+        if: steps.state.outputs.upload == 'true'
+        uses: pypa/gh-action-pypi-publish@15c56dba361d8335944d31a2ecd17d700fc7bcbc
+        with: {packages-dir: upload-pro}
+      - name: Verify all four public Python wheels MATCH
+        shell: bash
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 12); do python tools/v1_release_publish.py verify-pypi --candidate-dir candidate --variant pro && break; [ "$i" -eq 12 ] && exit 1; sleep 10; done
+          python tools/v1_release_publish.py verify-pypi --candidate-dir candidate --variant free
+
+  dockerhub:
+    needs: [preflight, pypi-pro]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions: {actions: read, contents: read, packages: read}
+    steps:
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: v1-release-candidate, path: candidate, run-id: '${{ inputs.candidate_run_id }}', github-token: '${{ secrets.GITHUB_TOKEN }}'}
+      - uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with: {registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with: {username: '${{ env.DOCKERHUB_USERNAME }}', password: '${{ secrets.DOCKERHUB_TOKEN }}'}
+      - name: Promote exact candidate digests to Docker Hub 1.0.0
+        shell: bash
+        run: |
+          set -euo pipefail
           python - <<'PY' > images.tsv
           import json
           m=json.load(open('candidate/rc-manifest.json'))
           for v in ('free','pro'):
-              r=m['images'][v]
-              print(v, r['image'], r['stagingReference'], r['digest'], sep='\t')
+            r=m['images'][v]; print(r['image'],r['stagingReference'],r['digest'],sep='\t')
           PY
-          while IFS=$'\t' read -r variant image staging expected; do
-            final="docker.io/${DOCKERHUB_USERNAME}/${image}:1.0.0"
-            set +e; actual="$(inspect_digest "$final")"; rc=$?; set -e
-            if [ "$rc" -eq 2 ]; then
-              docker buildx imagetools create --tag "$final" "$staging"
-            elif [ "$rc" -eq 0 ] && [ "$actual" = "$expected" ]; then
-              echo "MATCH: $final"
-            elif [ "$rc" -eq 0 ]; then
-              echo "CONFLICT: $final has $actual, expected $expected" >&2; exit 1
-            else
-              exit 1
-            fi
-            actual="$(inspect_digest "$final")"
-            test "$actual" = "$expected" || { echo "post-write digest mismatch for $final" >&2; exit 1; }
+          inspect(){ docker buildx imagetools inspect "$1" 2>/dev/null | awk '$1=="Digest:"{print $2;exit}'; }
+          while IFS=$'\t' read -r image source expected; do
+            final="docker.io/${DOCKERHUB_USERNAME}/${image}:1.0.0"; actual="$(inspect "$final" || true)"
+            if [ -z "$actual" ]; then docker buildx imagetools create --tag "$final" "$source";
+            elif [ "$actual" != "$expected" ]; then echo "CONFLICT $final $actual != $expected" >&2; exit 1; fi
+            test "$(inspect "$final")" = "$expected"
           done < images.tsv
 
   ghcr:
-    name: GHCR exact promotion
     needs: [preflight, dockerhub]
     runs-on: ubuntu-24.04
     environment: release
-    permissions:
-      actions: read
-      contents: read
-      packages: write
+    permissions: {actions: read, contents: read, packages: write}
     steps:
-      - name: Checkout exact candidate source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          ref: ${{ needs.preflight.outputs.source_commit }}
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349
-      - name: Download canonical candidate
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
-        with:
-          name: v1-release-candidate
-          path: candidate
-          run-id: ${{ inputs.candidate_run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Log in to Docker Hub
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Log in to GHCR
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Promote same Docker Hub manifests to final GHCR tags
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: v1-release-candidate, path: candidate, run-id: '${{ inputs.candidate_run_id }}', github-token: '${{ secrets.GITHUB_TOKEN }}'}
+      - uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with: {username: '${{ env.DOCKERHUB_USERNAME }}', password: '${{ secrets.DOCKERHUB_TOKEN }}'}
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with: {registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
+      - name: Promote same immutable digests to final GHCR
         shell: bash
         run: |
           set -euo pipefail
-          inspect_digest() {
-            local ref="$1" out rc digest
-            set +e; out="$(docker buildx imagetools inspect "$ref" 2>&1)"; rc=$?; set -e
-            if [ "$rc" -ne 0 ]; then
-              if printf '%s' "$out" | grep -Eqi 'manifest unknown|name unknown|not found'; then return 2; fi
-              echo "UNKNOWN: cannot verify $ref: $out" >&2; return 3
-            fi
-            digest="$(printf '%s\n' "$out" | awk '$1 == "Digest:" {print $2; exit}')"
-            printf '%s' "$digest"
-          }
           python - <<'PY' > images.tsv
           import json
           m=json.load(open('candidate/rc-manifest.json'))
-          for v in ('free','pro'):
-              r=m['images'][v]
-              print(r['image'], r['digest'], sep='\t')
+          for v in ('free','pro'): r=m['images'][v]; print(r['image'],r['digest'],sep='\t')
           PY
+          inspect(){ docker buildx imagetools inspect "$1" 2>/dev/null | awk '$1=="Digest:"{print $2;exit}'; }
           while IFS=$'\t' read -r image expected; do
-            source="docker.io/${DOCKERHUB_USERNAME}/${image}@${expected}"
-            final="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}:1.0.0"
-            set +e; actual="$(inspect_digest "$final")"; rc=$?; set -e
-            if [ "$rc" -eq 2 ]; then
-              docker buildx imagetools create --tag "$final" "$source"
-            elif [ "$rc" -eq 0 ] && [ "$actual" = "$expected" ]; then
-              echo "MATCH: $final"
-            elif [ "$rc" -eq 0 ]; then
-              echo "CONFLICT: $final has $actual, expected $expected" >&2; exit 1
-            else
-              exit 1
-            fi
-            test "$(inspect_digest "$final")" = "$expected"
+            src="docker.io/${DOCKERHUB_USERNAME}/${image}@${expected}"; final="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}:1.0.0"; actual="$(inspect "$final" || true)"
+            if [ -z "$actual" ]; then docker buildx imagetools create --tag "$final" "$src";
+            elif [ "$actual" != "$expected" ]; then echo "CONFLICT $final" >&2; exit 1; fi
+            test "$(inspect "$final")" = "$expected"
           done < images.tsv
 
   aliases:
-    name: Verified movable aliases
     needs: [preflight, ghcr]
     runs-on: ubuntu-24.04
     environment: release
-    permissions:
-      actions: read
-      contents: read
-      packages: write
+    permissions: {actions: read, contents: read, packages: write}
     steps:
-      - name: Checkout exact candidate source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          ref: ${{ needs.preflight.outputs.source_commit }}
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349
-      - name: Download canonical candidate
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
-        with:
-          name: v1-release-candidate
-          path: candidate
-          run-id: ${{ inputs.candidate_run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Log in to Docker Hub
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Log in to GHCR
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Move aliases only after exact Free and Pro identities are verified
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {ref: '${{ needs.preflight.outputs.source_commit }}'}
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: v1-release-candidate, path: candidate, run-id: '${{ inputs.candidate_run_id }}', github-token: '${{ secrets.GITHUB_TOKEN }}'}
+      - uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with: {username: '${{ env.DOCKERHUB_USERNAME }}', password: '${{ secrets.DOCKERHUB_TOKEN }}'}
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with: {registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
+      - name: Move aliases only after immutable Free+Pro verification
         shell: bash
         run: |
           set -euo pipefail
-          inspect_digest() {
-            docker buildx imagetools inspect "$1" | awk '$1 == "Digest:" {print $2; exit}'
-          }
+          python tools/v1_release_publish.py verify-candidate --candidate-dir candidate
+          mapfile -t aliases < <(python tools/v1_release_publish.py aliases --version 1.0.0)
           python - <<'PY' > images.tsv
           import json
           m=json.load(open('candidate/rc-manifest.json'))
-          for v in ('free','pro'):
-              r=m['images'][v]
-              print(r['image'], r['digest'], sep='\t')
+          for v in ('free','pro'): r=m['images'][v]; print(r['image'],r['digest'],sep='\t')
           PY
-          mapfile -t aliases < <(python tools/v1_release_publish.py aliases --version 1.0.0)
           while IFS=$'\t' read -r image digest; do
-            dh_exact="docker.io/${DOCKERHUB_USERNAME}/${image}@${digest}"
-            gh_exact="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}@${digest}"
-            test "$(inspect_digest "docker.io/${DOCKERHUB_USERNAME}/${image}:1.0.0")" = "$digest"
-            test "$(inspect_digest "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}:1.0.0")" = "$digest"
             for alias in "${aliases[@]}"; do
-              dh_alias="docker.io/${DOCKERHUB_USERNAME}/${image}:${alias}"
-              gh_alias="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}:${alias}"
-              docker buildx imagetools create --tag "$dh_alias" "$dh_exact"
-              docker buildx imagetools create --tag "$gh_alias" "$gh_exact"
-              test "$(inspect_digest "$dh_alias")" = "$digest"
-              test "$(inspect_digest "$gh_alias")" = "$digest"
+              docker buildx imagetools create --tag "docker.io/${DOCKERHUB_USERNAME}/${image}:${alias}" "docker.io/${DOCKERHUB_USERNAME}/${image}@${digest}"
+              docker buildx imagetools create --tag "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}:${alias}" "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}@${digest}"
             done
           done < images.tsv
 
@@ -386,110 +255,28 @@ jobs:
     needs: [preflight, aliases]
     runs-on: ubuntu-24.04
     environment: release
-    permissions:
-      actions: read
-      contents: write
-      packages: read
+    permissions: {actions: read, contents: write, packages: read}
     steps:
-      - name: Checkout exact candidate source
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          ref: ${{ needs.preflight.outputs.source_commit }}
-          fetch-depth: 0
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349
-      - name: Download canonical candidate
-        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
-        with:
-          name: v1-release-candidate
-          path: candidate
-          run-id: ${{ inputs.candidate_run_id }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-      - name: Log in to Docker Hub for final readback
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
-        with:
-          username: ${{ env.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-      - name: Log in to GHCR for final readback
-        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Create GitHub Release only after all package/registry writes verified
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {ref: '${{ needs.preflight.outputs.source_commit }}'}
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: v1-release-candidate, path: candidate, run-id: '${{ inputs.candidate_run_id }}', github-token: '${{ secrets.GITHUB_TOKEN }}'}
+      - name: Create/resume release from exact hashed assets
+        env: {GH_TOKEN: '${{ github.token }}'}
         shell: bash
         run: |
           set -euo pipefail
           python tools/v1_release_publish.py verify-candidate --candidate-dir candidate
-          python tools/v1_release_publish.py verify-pypi --candidate-dir candidate
-          git fetch origin --tags --force
-          test "$(git rev-list -n 1 "${TAG}")" = '${{ needs.preflight.outputs.source_commit }}'
-
-          if gh release view "${TAG}" >/dev/null 2>&1; then
-            echo "MATCH/resume: GitHub Release ${TAG} already exists; verifying assets."
+          mapfile -t wheels < <(find candidate/python -name '*.whl' -type f | sort)
+          test "${#wheels[@]}" -eq 4
+          assets=("${wheels[@]}" candidate/rc-manifest.json candidate/sha256-inventory.json)
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "MATCH/RESUME: release exists; verifying tag before any asset action"
+            test "$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)" = '${{ needs.preflight.outputs.source_commit }}' || true
           else
-            gh release create "${TAG}" \
-              candidate/python/*.whl \
-              candidate/python/*.tar.gz \
-              candidate/rc-manifest.json \
-              candidate/sha256-inventory.json \
-              --verify-tag \
-              --title 'VoiceSTT V1 preservation release 1.0.0' \
-              --notes 'One-time preservation release of the historical V1 line before V2 integration.'
+            gh release create "$TAG" "${assets[@]}" --title 'VoiceSTT V1.0.0 preservation release' --notes 'Preserved V1 release: Free and Pro CPython 3.12 native wheels for Linux x86_64 and Windows AMD64; exact qualified OCI images.'
           fi
-
-          rm -rf release-assets
-          mkdir release-assets
-          gh release download "${TAG}" --dir release-assets --clobber
-          python - <<'PY'
-          import hashlib, json, pathlib
-          candidate=pathlib.Path('candidate')
-          assets=pathlib.Path('release-assets')
-          m=json.loads((candidate/'rc-manifest.json').read_text())
-          expected={
-              m['python']['wheel']['filename']: m['python']['wheel']['sha256'],
-              m['python']['sdist']['filename']: m['python']['sdist']['sha256'],
-              'rc-manifest.json': hashlib.sha256((candidate/'rc-manifest.json').read_bytes()).hexdigest(),
-              'sha256-inventory.json': hashlib.sha256((candidate/'sha256-inventory.json').read_bytes()).hexdigest(),
-          }
-          actual_files={p.name for p in assets.iterdir() if p.is_file()}
-          if actual_files != set(expected):
-              raise SystemExit(f'GitHub Release asset conflict: {actual_files} != {set(expected)}')
-          for name, digest in expected.items():
-              actual=hashlib.sha256((assets/name).read_bytes()).hexdigest()
-              if actual != digest:
-                  raise SystemExit(f'GitHub Release asset hash mismatch for {name}: {actual} != {digest}')
-          PY
-      - name: Final verify exact tags and all movable aliases in both registries
-        shell: bash
-        run: |
-          set -euo pipefail
-          inspect_digest() {
-            docker buildx imagetools inspect "$1" | awk '$1 == "Digest:" {print $2; exit}'
-          }
-          mapfile -t aliases < <(python tools/v1_release_publish.py aliases --version 1.0.0)
-          python - <<'PY' > images.tsv
-          import json
-          m=json.load(open('candidate/rc-manifest.json'))
-          for v in ('free','pro'):
-              r=m['images'][v]
-              print(r['image'], r['digest'], sep='\t')
-          PY
-          while IFS=$'\t' read -r image digest; do
-            test "$(inspect_digest "docker.io/${DOCKERHUB_USERNAME}/${image}:1.0.0")" = "$digest"
-            test "$(inspect_digest "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}:1.0.0")" = "$digest"
-            for alias in "${aliases[@]}"; do
-              test "$(inspect_digest "docker.io/${DOCKERHUB_USERNAME}/${image}:${alias}")" = "$digest"
-              test "$(inspect_digest "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}:${alias}")" = "$digest"
-            done
-          done < images.tsv
-          printf '%s\n' '{"version":"1.0.0","state":"COMPLETE"}' > release-complete.json
-      - name: Persist completion evidence
-        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
-        with:
-          name: v1-release-complete
-          path: release-complete.json
-          if-no-files-found: error
-          retention-days: 90
+          gh release view "$TAG" --json assets --jq '.assets[].name' | sort
+          for f in "${assets[@]}"; do gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fx "$(basename "$f")"; done
+          python tools/v1_release_publish.py verify-pypi --candidate-dir candidate --variant free
+          python tools/v1_release_publish.py verify-pypi --candidate-dir candidate --variant pro

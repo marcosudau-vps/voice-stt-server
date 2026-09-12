@@ -15,6 +15,27 @@ The central build and deployment reference is
 [`build/BUILD.md`](build/BUILD.md). Server-specific files for Marcos VPS are
 kept separately under [`build/vps`](build/vps/README.md).
 
+## V1.0.0 preservation packages
+
+The preserved V1.0.0 public products target **CPython 3.12** on Linux x86_64
+and Windows AMD64:
+
+```bash
+pip install voice-stt-server
+# or, for the licensed Pro runtime:
+pip install voice-stt-server-pro
+```
+
+These published platform wheels already contain the matching Kroko native
+runtime. End users do **not** compile Kroko and do not install a second Kroko
+wheel. Kroko `.data` model files remain separate. The Free package uses the
+Community model path; the Pro package never auto-downloads a private model and
+requires a separately provisioned licensed model plus runtime credential.
+
+See [V1 preservation release](docs/v1-preservation-release.md) for the exact
+release contract. `stt-install-kroko --build` remains available for developers
+and source builds only.
+
 ## Support VoiceSTT
 
 If VoiceSTT saved you time, one GitHub star is a simple way to help make it more stable.
@@ -32,33 +53,27 @@ Stars improve visibility and visibility brings more users, more real-world testi
 VoiceSTT includes native support for `kroko_onnx`, the local streaming ASR
 engine from the Kroko/Banafo team.
 
-This integration has been on my wishlist for a long time. Kroko is a strong fit
-for VoiceSTT's goals: fast, accurate local speech recognition.
-
-Start with the public Community models for local testing, or see Kroko/Banafo's
-commercial model options if you need production licensing and higher-end models.
+For normal V1.0.0 consumers, Kroko is already embedded by the public package
+shown above. The builder flow below is specifically for source/developer work:
 
 ```bash
-pip install "VoiceSTT[kroko-builder,silero-onnx-cpu]"
+pip install "voice-stt-server[kroko-builder,silero-onnx-cpu]"
 stt-install-kroko --build --variant free
 ```
 
-The `silero-onnx-cpu` extra gives `AudioToTextRecorder` a local VAD backend for
-recorder-based smoke tests and live microphone use.
-
-Use `--variant pro` only for licensed Pro models; the key is supplied at
-runtime, not during the build. See the complete
+Use `--variant pro` only when intentionally building a licensed Pro runtime;
+the API/license key is supplied at runtime, not as a build input. See the
 [build guide](build/BUILD.md#kroko-im-detail),
-[Kroko-ONNX engine guide](docs/engines/kroko-onnx.md),
-[Kroko ASR docs](https://docs.kroko.ai/on-premise/), and
-[kroko-onnx on GitHub](https://github.com/kroko-ai/kroko-onnx).
+[Kroko-ONNX engine guide](docs/engines/kroko-onnx.md), and
+[Kroko ASR docs](https://docs.kroko.ai/on-premise/).
 
 ## Install
 
-Use Python 3.11 or newer for the current pinned dependency set.
+For the V1 preservation release, use Python 3.12 and one of the two product
+packages above. Optional backends remain available as extras, for example:
 
 ```bash
-pip install "VoiceSTT[faster-whisper]"
+pip install "voice-stt-server[faster-whisper]"
 ```
 
 On Linux, install PortAudio headers before installing the package:
@@ -79,9 +94,6 @@ For the tested Windows venv and Docker setup, see
 
 ## Microphone Example
 
-This waits for speech, stops after the detected utterance, and prints the final
-transcript:
-
 ```python
 from VoiceSTT import AudioToTextRecorder
 
@@ -96,9 +108,6 @@ Windows, because VoiceSTT uses multiprocessing for model work.
 
 ## Automatic Recording Loop
 
-For continuous dictation, pass a callback to `text()` so transcription work can
-complete asynchronously while your loop keeps listening:
-
 ```python
 from VoiceSTT import AudioToTextRecorder
 
@@ -109,7 +118,6 @@ def process_text(text):
 
 if __name__ == "__main__":
     recorder = AudioToTextRecorder()
-
     while True:
         recorder.text(process_text)
 ```
@@ -125,10 +133,8 @@ from VoiceSTT import AudioToTextRecorder
 
 if __name__ == "__main__":
     recorder = AudioToTextRecorder(use_microphone=False)
-
     with open("audio_chunk.pcm", "rb") as audio_file:
         recorder.feed_audio(audio_file.read(), original_sample_rate=16000)
-
     print(recorder.text())
     recorder.shutdown()
 ```
@@ -157,61 +163,40 @@ audio, logging, and executor injection.
 - Voice activity detection with WebRTC VAD and Silero VAD.
 - Final and realtime transcription with selectable engines.
 - Optional wake word activation through Porcupine or OpenWakeWord.
-- Session-local OpenWakeWord selection for FastAPI WebSocket clients without
-  changing the server baseline or other sessions.
+- Session-local OpenWakeWord selection for FastAPI WebSocket clients without changing the server baseline or other sessions.
 - Direct microphone input or application-fed audio chunks.
-- Event callbacks for recording, VAD, realtime text, transcription, and wake
-  word state.
-- A FastAPI browser streaming server example with multi-user session isolation,
-  shared inference resources, metrics, and health endpoints.
-- Four SQLite-first structured server event channels with calendar JSONL
-  mirrors, indexed history, session-scoped client access, server-wide Admin
-  history/live access, and a separate replayable log WebSocket.
+- Event callbacks for recording, VAD, realtime text, transcription, and wake word state.
+- A FastAPI browser streaming server example with multi-user session isolation, shared inference resources, metrics, and health endpoints.
+- Four SQLite-first structured server event channels with calendar JSONL mirrors, indexed history, session-scoped client access, server-wide Admin history/live access, and a separate replayable log WebSocket.
 
 ## Documentation
 
-- [Build and deployment](build/BUILD.md): canonical package, Docker and Kroko
-  build paths, validation and rollback.
-- [Marcos VPS deployment](build/vps/README.md): server-only paths,
-  configuration and release automation.
-- [Documentation overview](docs/README.md): authoritative guides, client
-  contract, and the archive process for larger changes.
-
-- [Quick start](docs/quick-start.md): shortest demos and common recording
-  patterns.
-- [Windows CPU deployment](docs/windows-cpu-deployment.md): the supported venv,
-  mounted models, Docker, concurrency and OpenAI-compatible API.
-- [Configuration](docs/configuration.md): complete `AudioToTextRecorder`
-  parameter reference.
-- [Transcription engines](docs/transcription-engines.md): engine selection and
-  setup links.
-- [Wake words](docs/wake-words.md): Porcupine and OpenWakeWord setup.
-- [External audio](docs/external-audio.md): feeding audio without a microphone.
-- [Testing](docs/testing.md): maintained unit and opt-in golden test workflow.
-- [Test scripts](docs/test-scripts.md): demos, manual tests, regressions, and
-  legacy experiments under `tests/`.
-- [FastAPI server](docs/fastapi-server.md): browser server configuration,
-  protocol, metrics, and deployment notes.
-- [Structured logging](docs/structured-logging.md): event channels, daily
-  JSONL layout, history API, realtime measurements, and live log WebSocket.
-- [Session-local Wake Word](docs/session-wakeword-erweiterung.md): architecture,
-  handshake contract, fallbacks, isolation and live PowerShell verification.
-- [Troubleshooting](docs/troubleshooting.md): common install, audio, model,
-  dependency, and runtime errors.
-- [Engine licenses](docs/licenses.md): license notes for optional engine
-  runtimes and model families.
+- [V1 preservation release](docs/v1-preservation-release.md): exact V1.0.0 packaging, qualification, and publication contract.
+- [Build and deployment](build/BUILD.md): canonical package, Docker and Kroko build paths, validation and rollback.
+- [Marcos VPS deployment](build/vps/README.md): server-only paths, configuration and release automation.
+- [Documentation overview](docs/README.md): authoritative guides, client contract, and archive process.
+- [Quick start](docs/quick-start.md)
+- [Windows CPU deployment](docs/windows-cpu-deployment.md)
+- [Configuration](docs/configuration.md)
+- [Transcription engines](docs/transcription-engines.md)
+- [Wake words](docs/wake-words.md)
+- [External audio](docs/external-audio.md)
+- [Testing](docs/testing.md)
+- [Test scripts](docs/test-scripts.md)
+- [FastAPI server](docs/fastapi-server.md)
+- [Structured logging](docs/structured-logging.md)
+- [Session-local Wake Word](docs/session-wakeword-erweiterung.md)
+- [Troubleshooting](docs/troubleshooting.md)
+- [Engine licenses](docs/licenses.md)
 
 ### Process for larger changes
 
 Larger changes to architecture, public protocols or APIs, persisted formats,
 security boundaries, deployment structure, or cross-module behavior must be
-registered in the
-[archive for larger change actions](docs/.archiv/README.md) before
-implementation begins. Every action requires a dated overall plan before the
-change and a separate dated plan-versus-implementation review afterward.
-Material deviations require their own dated rationale file. The archive is a
-historical record; the current reference documentation under `docs/` must
-still be updated as part of the same action.
+registered in the [archive for larger change actions](docs/.archiv/README.md)
+before implementation begins. Every action requires a dated overall plan and a
+later plan-versus-implementation review. Material deviations require their own
+rationale file.
 
 Engine-specific references:
 
@@ -241,8 +226,8 @@ python .\tools\compose.py up --build -d
 This is the portable development path. Marcos VPS uses the separate,
 Pro-aware release process under [build/vps](build/vps/README.md). Open
 `http://localhost:8010` for the local setup. See
-[docs/fastapi-server.md](docs/fastapi-server.md)
-for engine recipes, websocket protocol details, health checks, and metrics.
+[docs/fastapi-server.md](docs/fastapi-server.md) for engine recipes, websocket
+protocol details, health checks, and metrics.
 
 ## Contributing
 

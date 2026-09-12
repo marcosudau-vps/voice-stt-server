@@ -1,159 +1,195 @@
-name: V1 release build validation
+name: V1 correction native build validation
 
 on:
   push:
     branches:
-      - review/v1-release-prep-dirty
-    paths:
-      - '.github/workflows/v1-release-build-validation.yml'
-      - 'VERSION'
-      - 'setup.py'
-      - 'MANIFEST.in'
-      - 'VoiceSTT/install_kroko.py'
-      - 'build/v1-kroko-builder.Dockerfile'
-      - 'build/v1-release.Dockerfile'
-      - 'tools/v1_kroko_release.py'
-      - 'api_fastapi_server/requirements.txt'
+      - review/v1-release-prep-correction-1
+  workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
-  end-to-end-build:
-    name: V1 ${{ matrix.variant }} build + runtime smoke
+  kroko-runtime:
+    name: Kroko ${{ matrix.variant }} / ${{ matrix.platform }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
         variant: [free, pro]
+        platform: [linux_x86_64, win_amd64]
     steps:
-      - name: Checkout exact commit
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with:
-          fetch-depth: 0
-      - name: Set up Python 3.12
-        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
-        with:
-          python-version: '3.12'
-      - name: Install validation tooling
-        shell: bash
-        run: python -m pip install --upgrade 'pip<26' setuptools wheel build huggingface_hub
-      - name: Resolve Kroko fingerprint
-        id: kroko
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with: {python-version: '3.12'}
+      - name: Install native build prerequisites
         shell: bash
         run: |
           set -euo pipefail
-          FP="$(python tools/v1_kroko_release.py fingerprint --variant '${{ matrix.variant }}')"
-          echo "fingerprint=${FP}" >> "$GITHUB_OUTPUT"
-      - name: Restore Kroko build cache
-        id: cache
-        uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a
-        with:
-          path: .v1-kroko-cache/${{ matrix.variant }}
-          key: v1-kroko-linux-${{ matrix.variant }}-${{ steps.kroko.outputs.fingerprint }}
-      - name: Verify cache hit
-        if: steps.cache.outputs.cache-hit == 'true'
-        shell: bash
-        run: >-
-          python tools/v1_kroko_release.py verify
-          --variant '${{ matrix.variant }}'
-          --artifact-dir '.v1-kroko-cache/${{ matrix.variant }}'
-      - name: Build exact Kroko wheel on cache miss
-        if: steps.cache.outputs.cache-hit != 'true'
+          sudo apt-get update
+          sudo apt-get install -y cmake libssl-dev pybind11-dev zlib1g-dev
+          python -m pip install --upgrade 'pip<26' setuptools==75.8.2 wheel==0.45.1
+      - name: Build pinned Kroko native wheel
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p '.v1-kroko-cache/${{ matrix.variant }}'
-          docker build -f build/v1-kroko-builder.Dockerfile \
-            -t "voicestt-v1-kroko-builder:${GITHUB_SHA}" .
-          docker run --rm --platform linux/amd64 \
-            -v "${PWD}/.v1-kroko-cache/${{ matrix.variant }}:/out" \
-            "voicestt-v1-kroko-builder:${GITHUB_SHA}" \
-            build --variant '${{ matrix.variant }}' --out-dir /out
-          python tools/v1_kroko_release.py verify \
-            --variant '${{ matrix.variant }}' \
-            --artifact-dir '.v1-kroko-cache/${{ matrix.variant }}'
-      - name: Build V1 Python wheel
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p release-inputs/python release-inputs/kroko
-          python -m build --wheel --outdir release-inputs/python
-          cp .v1-kroko-cache/${{ matrix.variant }}/*.whl release-inputs/kroko/
-      - name: Build wheel-consuming production image
-        shell: bash
-        run: |
-          set -euo pipefail
-          if [ '${{ matrix.variant }}' = free ]; then IMAGE=voice-stt-server; else IMAGE=voice-stt-server-pro; fi
-          echo "IMAGE=${IMAGE}" >> "$GITHUB_ENV"
-          docker build -f build/v1-release.Dockerfile \
-            --build-arg VOICESTT_VERSION=1.0.0 \
-            --build-arg VOICESTT_GIT_COMMIT="${GITHUB_SHA}" \
-            --build-arg KROKO_VARIANT='${{ matrix.variant }}' \
-            --build-arg IMAGE_TITLE="${IMAGE}" \
-            --build-arg BUILD_DATE="$(git show -s --format=%cI HEAD)" \
-            -t "${IMAGE}:validation" .
-      - name: Import and CLI smoke
-        shell: bash
-        run: |
-          set -euo pipefail
-          docker run --rm --entrypoint python "${IMAGE}:validation" -c \
-            'import VoiceSTT, VoiceSTT_server.server, kroko_onnx; print("imports-ok")'
-          docker run --rm --entrypoint stt-server "${IMAGE}:validation" --help >/dev/null
-          test "$(docker inspect --format '{{ index .Config.Labels "com.voicestt.kroko-variant" }}' "${IMAGE}:validation")" = '${{ matrix.variant }}'
-      - name: Download public tiny model for ephemeral health smoke
-        shell: bash
-        run: |
-          set -euo pipefail
+          test -z "${KROKO_API_KEY:-}"
+          out="evidence-input/kroko/${{ matrix.variant }}/${{ matrix.platform }}"
+          python tools/v1_kroko_release.py build --variant '${{ matrix.variant }}' --platform '${{ matrix.platform }}' --out-dir "$out"
+          python tools/v1_kroko_release.py verify --variant '${{ matrix.variant }}' --platform '${{ matrix.platform }}' --artifact-dir "$out"
           python - <<'PY'
-          from huggingface_hub import snapshot_download
-          snapshot_download(
-              repo_id='Systran/faster-whisper-tiny',
-              local_dir='model-smoke/tiny',
-          )
+          import json,pathlib
+          p=pathlib.Path('evidence-input/kroko/${{ matrix.variant }}/${{ matrix.platform }}/artifact.json'); d=json.loads(p.read_text()); print(json.dumps(d,indent=2)); assert d['wheel']['bytes']>0
           PY
-          test -f model-smoke/tiny/config.json
-          test -f model-smoke/tiny/model.bin
-      - name: Start server with mounted model and require healthy readiness
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with: {name: 'v1-kroko-${{ matrix.variant }}-${{ matrix.platform }}', path: 'evidence-input/kroko/${{ matrix.variant }}/${{ matrix.platform }}/', if-no-files-found: error, retention-days: 14}
+
+  product-wheel:
+    name: Product ${{ matrix.variant }} / ${{ matrix.platform }}
+    needs: kroko-runtime
+    runs-on: ubuntu-24.04
+    strategy: {fail-fast: false, matrix: {variant: [free, pro], platform: [linux_x86_64, win_amd64]}}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with: {python-version: '3.12'}
+      - run: python -m pip install --upgrade 'pip<26' setuptools wheel build twine
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: 'v1-kroko-${{ matrix.variant }}-${{ matrix.platform }}', path: kroko-input}
+      - name: Assemble final product wheel
         shell: bash
         run: |
           set -euo pipefail
-          cleanup() { docker rm -f v1-health-smoke >/dev/null 2>&1 || true; }
-          trap cleanup EXIT
-          docker run -d --name v1-health-smoke -p 18010:8010 \
-            -v "${PWD}/model-smoke/tiny:/models/ctranslate2/tiny:ro" \
-            "${IMAGE}:validation" \
-            python -m VoiceSTT_server.server \
-              --host 0.0.0.0 --port 8010 \
-              --device cpu --compute-type int8 \
-              --model tiny --realtime-model tiny \
-              --engine-options '{"local_files_only":true}' \
-              --realtime-engine-options '{"local_files_only":true}'
-          ok=0
-          for _ in $(seq 1 90); do
-            if python - <<'PY'
-          import json, urllib.request
-          try:
-              value=json.load(urllib.request.urlopen('http://127.0.0.1:18010/health', timeout=3))
-              if value.get('ok') and value.get('ready'):
-                  print(json.dumps(value, sort_keys=True))
-                  raise SystemExit(0)
-          except Exception:
-              pass
-          raise SystemExit(1)
+          test "$(find kroko-input -maxdepth 1 -name '*.whl' | wc -l)" -eq 1
+          out="evidence-input/product/${{ matrix.variant }}/${{ matrix.platform }}"
+          python tools/v1_product_wheel.py build --variant '${{ matrix.variant }}' --platform '${{ matrix.platform }}' --kroko-wheel "$(find kroko-input -maxdepth 1 -name '*.whl')" --out-dir "$out" --report "$out/product.json"
+          python -m twine check "$out"/*.whl
+          test -z "$(find "$out" -name '*py3-none-any.whl' -print -quit)"
+          test -z "$(find "$out" -name '*.tar.gz' -print -quit)"
+          ls -lh "$out"/*.whl
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with: {name: 'v1-product-${{ matrix.variant }}-${{ matrix.platform }}', path: 'evidence-input/product/${{ matrix.variant }}/${{ matrix.platform }}/', if-no-files-found: error, retention-days: 14}
+
+  linux-clean-install:
+    name: Linux clean install / ${{ matrix.variant }}
+    needs: product-wheel
+    runs-on: ubuntu-24.04
+    strategy: {fail-fast: false, matrix: {variant: [free, pro]}}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with: {python-version: '3.12'}
+      - run: sudo apt-get update && sudo apt-get install -y portaudio19-dev libsndfile1
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: 'v1-product-${{ matrix.variant }}-linux_x86_64', path: product}
+      - name: Real clean install and CLI smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence-input/logs
+          if [ '${{ matrix.variant }}' = free ]; then log=evidence-input/logs/10_clean_install_linux_free.txt; else log=evidence-input/logs/11_clean_install_linux_pro.txt; fi
+          { python -m venv clean-venv; clean-venv/bin/python -m pip install --upgrade pip; clean-venv/bin/python -m pip install product/*.whl; clean-venv/bin/python -c "import VoiceSTT, VoiceSTT_server.server, kroko_onnx; from VoiceSTT._release_variant import KROKO_VARIANT; print('variant='+KROKO_VARIANT); assert KROKO_VARIANT == '${{ matrix.variant }}'"; clean-venv/bin/stt-server --help; clean-venv/bin/python -m pip check; clean-venv/bin/python -m pip list; } 2>&1 | tee "$log"
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with: {name: 'v1-linux-log-${{ matrix.variant }}', path: 'evidence-input/logs/*.txt', if-no-files-found: error, retention-days: 14}
+
+  windows-clean-install:
+    name: Windows clean install / ${{ matrix.variant }}
+    needs: product-wheel
+    runs-on: windows-latest
+    strategy: {fail-fast: false, matrix: {variant: [free, pro]}}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with: {python-version: '3.12', architecture: x64}
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: 'v1-product-${{ matrix.variant }}-win_amd64', path: product}
+      - name: Real clean install and CLI smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'; New-Item -ItemType Directory -Force evidence-input/logs | Out-Null
+          $log=if('${{ matrix.variant }}'-eq'free'){'evidence-input/logs/12_clean_install_windows_free.txt'}else{'evidence-input/logs/13_clean_install_windows_pro.txt'}
+          $wheel=(Get-ChildItem product/*.whl).FullName; python -m venv clean-venv
+          & .\clean-venv\Scripts\python.exe -m pip install --upgrade pip *>&1 | Tee-Object -FilePath $log
+          & .\clean-venv\Scripts\python.exe -m pip install $wheel *>&1 | Tee-Object -FilePath $log -Append
+          & .\clean-venv\Scripts\python.exe -c "import VoiceSTT, VoiceSTT_server.server, kroko_onnx; from VoiceSTT._release_variant import KROKO_VARIANT; print('variant='+KROKO_VARIANT); assert KROKO_VARIANT == '${{ matrix.variant }}'" *>&1 | Tee-Object -FilePath $log -Append
+          & .\clean-venv\Scripts\stt-server.exe --help *>&1 | Tee-Object -FilePath $log -Append
+          & .\clean-venv\Scripts\python.exe -m pip check *>&1 | Tee-Object -FilePath $log -Append
+          & .\clean-venv\Scripts\python.exe -m pip list *>&1 | Tee-Object -FilePath $log -Append
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with: {name: 'v1-windows-log-${{ matrix.variant }}', path: 'evidence-input/logs/*.txt', if-no-files-found: error, retention-days: 14}
+
+  docker-smoke:
+    name: Docker final wheel / ${{ matrix.variant }}
+    needs: [product-wheel, linux-clean-install]
+    runs-on: ubuntu-24.04
+    strategy: {fail-fast: false, matrix: {variant: [free, pro]}}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {fetch-depth: 0}
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: 'v1-product-${{ matrix.variant }}-linux_x86_64', path: release-inputs/python}
+      - name: Build and smoke exact product-wheel image
+        shell: bash
+        run: |
+          set -euo pipefail; mkdir -p evidence-input/logs
+          if [ '${{ matrix.variant }}' = free ]; then log=evidence-input/logs/17_docker_free.txt; image=voice-stt-server:correction-1; else log=evidence-input/logs/18_docker_pro.txt; image=voice-stt-server-pro:correction-1; fi
+          wheel="$(find release-inputs/python -name '*.whl')"
+          { sha256sum "$wheel"; docker build -f build/v1-release.Dockerfile --build-arg VOICESTT_VERSION=1.0.0 --build-arg VOICESTT_GIT_COMMIT="$GITHUB_SHA" --build-arg KROKO_VARIANT='${{ matrix.variant }}' --build-arg IMAGE_TITLE="${image%%:*}" --build-arg BUILD_DATE="$(git show -s --format=%cI HEAD)" -t "$image" .; docker image inspect "$image" --format '{{.Id}}'; docker run --rm --entrypoint python "$image" -c "import VoiceSTT, VoiceSTT_server.server, kroko_onnx; from VoiceSTT._release_variant import KROKO_VARIANT; print(KROKO_VARIANT); assert KROKO_VARIANT == '${{ matrix.variant }}'"; docker run --rm --entrypoint stt-server "$image" --help; ! docker history --no-trunc "$image" | grep -E 'KROKO_API_KEY=[^ ]+|pypi-|ghp_|sk-[A-Za-z0-9]'; } 2>&1 | tee "$log"
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with: {name: 'v1-docker-log-${{ matrix.variant }}', path: 'evidence-input/logs/*.txt', if-no-files-found: error, retention-days: 14}
+
+  evidence:
+    name: Assemble mandatory correction evidence
+    needs: [kroko-runtime, product-wheel, linux-clean-install, windows-clean-install, docker-smoke]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with: {python-version: '3.12'}
+      - run: python -m pip install --upgrade pytest
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {pattern: 'v1-kroko-*', path: evidence-input/kroko-flat}
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {pattern: 'v1-product-*', path: evidence-input/product-flat}
+      - name: Normalize artifact directory layout
+        shell: bash
+        run: |
+          set -euo pipefail
+          for v in free pro; do for p in linux_x86_64 win_amd64; do mkdir -p "evidence-input/kroko/$v/$p" "evidence-input/product/$v/$p"; cp -a "evidence-input/kroko-flat/v1-kroko-$v-$p/." "evidence-input/kroko/$v/$p/"; cp -a "evidence-input/product-flat/v1-product-$v-$p/." "evidence-input/product/$v/$p/"; done; done
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {pattern: 'v1-*-log-*', path: evidence-input/log-artifacts, merge-multiple: true}
+      - name: Collect model-policy and Pro-missing-model evidence
+        shell: bash
+        run: |
+          set -euo pipefail; mkdir -p evidence-input/logs; cp evidence-input/log-artifacts/*.txt evidence-input/logs/
+          python -m pytest -vv tests/test_v1_model_resolution.py 2>&1 | tee evidence-input/logs/15_model_policy_evidence.txt
+          python -m venv pro-model-test
+          pro-model-test/bin/python -m pip install --no-deps evidence-input/product/pro/linux_x86_64/*.whl >/dev/null
+          set +e
+          pro-model-test/bin/python - <<'PY' > evidence-input/logs/16_pro_missing_model_test.txt 2>&1
+          import os
+          os.environ.pop('VOICESTT_KROKO_VARIANT',None); os.environ.pop('KROKO_API_KEY',None)
+          from VoiceSTT._release_variant import KROKO_VARIANT
+          from VoiceSTT.transcription_engines.model_resolver import default_kroko_model_root,resolve_kroko_model
+          from VoiceSTT.transcription_engines.base import TranscriptionEngineError
+          print('variant='+KROKO_VARIANT); print('default_root='+str(default_kroko_model_root()))
+          try: resolve_kroko_model('Kroko-DE-Pro-64-L-Streaming-001.data')
+          except TranscriptionEngineError as exc: print(str(exc)); raise SystemExit(2)
+          raise SystemExit(99)
           PY
-            then
-              ok=1
-              break
-            fi
-            if ! docker ps --format '{{.Names}}' | grep -qx v1-health-smoke; then
-              docker logs v1-health-smoke || true
-              exit 1
-            fi
-            sleep 2
-          done
-          if [ "$ok" -ne 1 ]; then
-            docker logs v1-health-smoke || true
-            echo 'Server never reached ready health state.' >&2
-            exit 1
-          fi
+          rc=$?; set -e; echo "exit_code=$rc" >> evidence-input/logs/16_pro_missing_model_test.txt; test "$rc" -eq 2; ! grep -q '^Traceback' evidence-input/logs/16_pro_missing_model_test.txt
+      - name: Record CI identity and no-publication guard
+        env: {GH_TOKEN: '${{ github.token }}'}
+        shell: bash
+        run: |
+          set -euo pipefail
+          { echo '# CI runs'; echo "Run ID: $GITHUB_RUN_ID"; echo "Workflow: $GITHUB_WORKFLOW"; echo "Commit SHA: $GITHUB_SHA"; gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --jq '.jobs[] | [.id,.name,.status,.conclusion] | @tsv'; gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --jq '.artifacts[] | [.id,.name,.size_in_bytes] | @tsv' || true; } > evidence-input/logs/24_ci_runs.md
+          { echo '# No-publication guard'; echo "main=$(git ls-remote origin refs/heads/main | cut -f1)"; echo "clean=$(git ls-remote origin refs/heads/review/v1-release-prep-clean | cut -f1)"; echo "dirty=$(git ls-remote origin refs/heads/review/v1-release-prep-dirty | cut -f1)"; test "$(git ls-remote origin refs/heads/main | cut -f1)" = '13c162950b944dc715fdd81983a7465f8eb0fd79'; test "$(git ls-remote origin refs/heads/review/v1-release-prep-clean | cut -f1)" = '7b8d940133e8f566fb28742f4fc9fde5cc4eccaa'; test "$(git ls-remote origin refs/heads/review/v1-release-prep-dirty | cut -f1)" = 'de683acb1e8e7725a72b6bc7c96555c5aa4a890d'; test -z "$(git ls-remote origin refs/tags/v1.0.0 | cut -f1)"; test "$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq 'length')" -eq 0; echo "candidate_runs_for_head=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-candidate.yml/runs?head_sha=$GITHUB_SHA" --jq '.total_count')"; echo "publish_runs_for_head=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-publish.yml/runs?head_sha=$GITHUB_SHA" --jq '.total_count')"; test "$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-candidate.yml/runs?head_sha=$GITHUB_SHA" --jq '.total_count')" -eq 0; test "$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-publish.yml/runs?head_sha=$GITHUB_SHA" --jq '.total_count')" -eq 0; echo 'Tag absent; GitHub Release absent; Candidate/Publish not started on correction HEAD.'; echo 'This validation workflow contains no PyPI, Docker Hub final, or final GHCR publication step.'; } > evidence-input/logs/25_no_publication_guard.md
+      - name: Generate and checksum evidence pack
+        run: python tools/v1_evidence_pack.py --input-root evidence-input --out v1-correction-1-evidence
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with: {name: v1-correction-1-evidence, path: 'v1-correction-1-evidence/', if-no-files-found: error, retention-days: 30}
