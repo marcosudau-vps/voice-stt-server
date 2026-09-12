@@ -1,0 +1,159 @@
+name: V1 release build validation
+
+on:
+  push:
+    branches:
+      - review/v1-release-prep-dirty
+    paths:
+      - '.github/workflows/v1-release-build-validation.yml'
+      - 'VERSION'
+      - 'setup.py'
+      - 'MANIFEST.in'
+      - 'VoiceSTT/install_kroko.py'
+      - 'build/v1-kroko-builder.Dockerfile'
+      - 'build/v1-release.Dockerfile'
+      - 'tools/v1_kroko_release.py'
+      - 'api_fastapi_server/requirements.txt'
+
+permissions:
+  contents: read
+
+jobs:
+  end-to-end-build:
+    name: V1 ${{ matrix.variant }} build + runtime smoke
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [free, pro]
+    steps:
+      - name: Checkout exact commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Set up Python 3.12
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with:
+          python-version: '3.12'
+      - name: Install validation tooling
+        shell: bash
+        run: python -m pip install --upgrade 'pip<26' setuptools wheel build huggingface_hub
+      - name: Resolve Kroko fingerprint
+        id: kroko
+        shell: bash
+        run: |
+          set -euo pipefail
+          FP="$(python tools/v1_kroko_release.py fingerprint --variant '${{ matrix.variant }}')"
+          echo "fingerprint=${FP}" >> "$GITHUB_OUTPUT"
+      - name: Restore Kroko build cache
+        id: cache
+        uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a
+        with:
+          path: .v1-kroko-cache/${{ matrix.variant }}
+          key: v1-kroko-linux-${{ matrix.variant }}-${{ steps.kroko.outputs.fingerprint }}
+      - name: Verify cache hit
+        if: steps.cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: >-
+          python tools/v1_kroko_release.py verify
+          --variant '${{ matrix.variant }}'
+          --artifact-dir '.v1-kroko-cache/${{ matrix.variant }}'
+      - name: Build exact Kroko wheel on cache miss
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p '.v1-kroko-cache/${{ matrix.variant }}'
+          docker build -f build/v1-kroko-builder.Dockerfile \
+            -t "voicestt-v1-kroko-builder:${GITHUB_SHA}" .
+          docker run --rm --platform linux/amd64 \
+            -v "${PWD}/.v1-kroko-cache/${{ matrix.variant }}:/out" \
+            "voicestt-v1-kroko-builder:${GITHUB_SHA}" \
+            build --variant '${{ matrix.variant }}' --out-dir /out
+          python tools/v1_kroko_release.py verify \
+            --variant '${{ matrix.variant }}' \
+            --artifact-dir '.v1-kroko-cache/${{ matrix.variant }}'
+      - name: Build V1 Python wheel
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release-inputs/python release-inputs/kroko
+          python -m build --wheel --outdir release-inputs/python
+          cp .v1-kroko-cache/${{ matrix.variant }}/*.whl release-inputs/kroko/
+      - name: Build wheel-consuming production image
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ '${{ matrix.variant }}' = free ]; then IMAGE=voice-stt-server; else IMAGE=voice-stt-server-pro; fi
+          echo "IMAGE=${IMAGE}" >> "$GITHUB_ENV"
+          docker build -f build/v1-release.Dockerfile \
+            --build-arg VOICESTT_VERSION=1.0.0 \
+            --build-arg VOICESTT_GIT_COMMIT="${GITHUB_SHA}" \
+            --build-arg KROKO_VARIANT='${{ matrix.variant }}' \
+            --build-arg IMAGE_TITLE="${IMAGE}" \
+            --build-arg BUILD_DATE="$(git show -s --format=%cI HEAD)" \
+            -t "${IMAGE}:validation" .
+      - name: Import and CLI smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint python "${IMAGE}:validation" -c \
+            'import VoiceSTT, VoiceSTT_server.server, kroko_onnx; print("imports-ok")'
+          docker run --rm --entrypoint stt-server "${IMAGE}:validation" --help >/dev/null
+          test "$(docker inspect --format '{{ index .Config.Labels "com.voicestt.kroko-variant" }}' "${IMAGE}:validation")" = '${{ matrix.variant }}'
+      - name: Download public tiny model for ephemeral health smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from huggingface_hub import snapshot_download
+          snapshot_download(
+              repo_id='Systran/faster-whisper-tiny',
+              local_dir='model-smoke/tiny',
+          )
+          PY
+          test -f model-smoke/tiny/config.json
+          test -f model-smoke/tiny/model.bin
+      - name: Start server with mounted model and require healthy readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          cleanup() { docker rm -f v1-health-smoke >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          docker run -d --name v1-health-smoke -p 18010:8010 \
+            -v "${PWD}/model-smoke/tiny:/models/ctranslate2/tiny:ro" \
+            "${IMAGE}:validation" \
+            python -m VoiceSTT_server.server \
+              --host 0.0.0.0 --port 8010 \
+              --device cpu --compute-type int8 \
+              --model tiny --realtime-model tiny \
+              --engine-options '{"local_files_only":true}' \
+              --realtime-engine-options '{"local_files_only":true}'
+          ok=0
+          for _ in $(seq 1 90); do
+            if python - <<'PY'
+          import json, urllib.request
+          try:
+              value=json.load(urllib.request.urlopen('http://127.0.0.1:18010/health', timeout=3))
+              if value.get('ok') and value.get('ready'):
+                  print(json.dumps(value, sort_keys=True))
+                  raise SystemExit(0)
+          except Exception:
+              pass
+          raise SystemExit(1)
+          PY
+            then
+              ok=1
+              break
+            fi
+            if ! docker ps --format '{{.Names}}' | grep -qx v1-health-smoke; then
+              docker logs v1-health-smoke || true
+              exit 1
+            fi
+            sleep 2
+          done
+          if [ "$ok" -ne 1 ]; then
+            docker logs v1-health-smoke || true
+            echo 'Server never reached ready health state.' >&2
+            exit 1
+          fi

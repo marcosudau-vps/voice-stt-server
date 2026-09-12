@@ -1,11 +1,13 @@
 import os
 import re
+from pathlib import Path
 
 import setuptools
 from setuptools.command.build_py import build_py as _build_py
 
 
-current_version = "1.0.2"
+REPO_ROOT = Path(__file__).resolve().parent
+current_version = (REPO_ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
 
 INSTALL_GUIDE = """
@@ -14,20 +16,20 @@ want to install.
 
 Recommended default local Whisper install:
 
-    pip install "voicestt[recommended]"
+    pip install "voice-stt-server[recommended]"
 
 Main ASR backend only, without the faster packaged Silero ONNX Runtime VAD:
 
-    pip install "voicestt[faster-whisper]"
+    pip install "voice-stt-server[faster-whisper]"
 
 Core package only, without a transcription engine or wake-word backend:
 
-    pip install voicestt
+    pip install voice-stt-server
 
 Install multiple extras by separating them with commas:
 
-    pip install "voicestt[faster-whisper,porcupine]"
-    pip install "voicestt[whisper-cpp,openwakeword]"
+    pip install "voice-stt-server[faster-whisper,porcupine]"
+    pip install "voice-stt-server[whisper-cpp,openwakeword]"
 
 Available extras include:
 
@@ -63,7 +65,7 @@ releases.
 For live Kroko-ONNX usage, install the builder helper and then build Kroko in
 the same Python environment:
 
-    pip install "voicestt[kroko-builder,silero-onnx-cpu]"
+    pip install "voice-stt-server[kroko-builder,silero-onnx-cpu]"
     stt-install-kroko --build --variant free
 
 The complete build reference, including the required distinction between
@@ -98,8 +100,8 @@ model after the builder finishes:
 
 """
 
-# Get the absolute path of requirements.txt
-req_path = os.path.join(os.path.dirname(__file__), "requirements.txt")
+req_path = REPO_ROOT / "requirements.txt"
+
 
 def parse_requirements(filename):
     parsed = {}
@@ -273,14 +275,13 @@ extras_require = {
     ),
 }
 
-# Read README.md
-with open("README.md", "r", encoding="utf-8") as fh:
+with open(REPO_ROOT / "README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
 long_description = INSTALL_GUIDE + long_description
 
 setuptools.setup(
-    name="voicestt",
+    name="voice-stt-server",
     version=current_version,
     author="Kolja Beigel",
     author_email="kolja.beigel@web.de",
@@ -298,12 +299,8 @@ setuptools.setup(
             "api_fastapi_server.*",
         ]
     ),
-    # classifiers=[
-    #     "Programming Language :: Python :: 3",
-    #     "Operating System :: OS Independent",
-    # ],
-    python_requires='>=3.11',
-    license='MIT',
+    python_requires=">=3.11",
+    license="MIT",
     install_requires=base_requirements,
     extras_require=extras_require,
     keywords="real-time, audio, transcription, speech-to-text, voice-activity-detection, VAD, real-time-transcription, ambient-noise-detection, microphone-input, faster_whisper, speech-recognition, voice-assistants, audio-processing, buffered-transcription, pyaudio, ambient-noise-level, voice-deactivity",
@@ -314,11 +311,11 @@ setuptools.setup(
     include_package_data=True,
     cmdclass={"build_py": build_py},
     entry_points={
-        'console_scripts': [
-            'stt-server=VoiceSTT_server.server:main',
-            'stt-server-legacy=VoiceSTT_server.stt_server:main',
-            'stt=VoiceSTT_server.stt_cli_client:main',
-            'stt-install-kroko=VoiceSTT.install_kroko:main',
+        "console_scripts": [
+            "stt-server=VoiceSTT_server.server:main",
+            "stt-server-legacy=VoiceSTT_server.stt_server:main",
+            "stt=VoiceSTT_server.stt_cli_client:main",
+            "stt-install-kroko=VoiceSTT.install_kroko:main",
         ],
     },
 )

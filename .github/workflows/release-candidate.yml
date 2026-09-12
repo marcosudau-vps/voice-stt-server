@@ -1,0 +1,311 @@
+name: V1 preservation release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_private_confirmed:
+        description: "I confirmed the GHCR *-v1-staging packages are private candidate storage"
+        required: true
+        type: boolean
+        default: false
+      qualification_context:
+        description: "Qualification note recorded with the candidate"
+        required: false
+        default: "V1.0.0 preservation candidate qualification"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: v1-preservation-candidate-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+  CANDIDATE_ID: v1-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  guard:
+    name: Candidate safety guard
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Require explicit private-staging confirmation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ inputs.staging_private_confirmed }}" != "true" ]; then
+            echo "Refusing candidate build: confirm the GHCR V1 staging packages are private." >&2
+            exit 1
+          fi
+
+  python-package:
+    name: Build V1 Python wheel + sdist
+    needs: guard
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout exact candidate commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Set up Python 3.12
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install packaging tools
+        shell: bash
+        run: python -m pip install --upgrade "pip<26" setuptools wheel build twine
+      - name: Verify source identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat VERSION)" = "1.0.0"
+          test -z "$(git status --porcelain)"
+          git rev-parse HEAD
+          git rev-parse 'HEAD^{tree}'
+      - name: Build exact V1 Python artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p candidate/python
+          python -m build --wheel --sdist --outdir candidate/python
+          python -m twine check candidate/python/*
+          python tools/v1_release_manifest.py python \
+            --dist-dir candidate/python \
+            --out candidate/python/python-artifact.json
+      - name: Upload exact Python candidate bytes
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with:
+          name: v1-python-candidate
+          path: candidate/python/
+          if-no-files-found: error
+          retention-days: 7
+
+  kroko:
+    name: Kroko ${{ matrix.variant }} candidate
+    needs: guard
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [free, pro]
+    steps:
+      - name: Checkout exact candidate commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Set up Python 3.12
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Resolve authoritative Kroko cache fingerprint
+        id: fingerprint
+        shell: bash
+        run: |
+          set -euo pipefail
+          FP="$(python tools/v1_kroko_release.py fingerprint --variant '${{ matrix.variant }}')"
+          echo "value=$FP" >> "$GITHUB_OUTPUT"
+          echo "Kroko ${{ matrix.variant }} fingerprint: $FP"
+      - name: Restore Kroko candidate cache
+        id: cache
+        uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a
+        with:
+          path: .v1-kroko-cache/${{ matrix.variant }}
+          key: v1-kroko-linux-${{ matrix.variant }}-${{ steps.fingerprint.outputs.value }}
+      - name: Validate restored Kroko artifact
+        if: steps.cache.outputs.cache-hit == 'true'
+        shell: bash
+        run: >-
+          python tools/v1_kroko_release.py verify
+          --variant '${{ matrix.variant }}'
+          --artifact-dir '.v1-kroko-cache/${{ matrix.variant }}'
+      - name: Build pinned Kroko artifact on cache miss
+        if: steps.cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p '.v1-kroko-cache/${{ matrix.variant }}'
+          docker build \
+            --file build/v1-kroko-builder.Dockerfile \
+            --tag "voicestt-v1-kroko-builder:${GITHUB_SHA}" \
+            .
+          docker run --rm --platform linux/amd64 \
+            -v "${PWD}/.v1-kroko-cache/${{ matrix.variant }}:/out" \
+            "voicestt-v1-kroko-builder:${GITHUB_SHA}" \
+            build --variant '${{ matrix.variant }}' --out-dir /out
+          python tools/v1_kroko_release.py verify \
+            --variant '${{ matrix.variant }}' \
+            --artifact-dir '.v1-kroko-cache/${{ matrix.variant }}'
+      - name: Upload exact Kroko candidate artifact
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with:
+          name: v1-kroko-${{ matrix.variant }}
+          path: .v1-kroko-cache/${{ matrix.variant }}/
+          if-no-files-found: error
+          retention-days: 7
+
+  image:
+    name: V1 ${{ matrix.variant }} OCI candidate
+    needs: [guard, python-package, kroko]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [free, pro]
+    steps:
+      - name: Checkout exact candidate commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349
+      - name: Download Python candidate
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: v1-python-candidate
+          path: release-inputs/python
+      - name: Download Kroko candidate
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: v1-kroko-${{ matrix.variant }}
+          path: release-inputs/kroko
+      - name: Log in to private GHCR candidate staging
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and smoke-test exact V1 image candidate
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ '${{ matrix.variant }}' = 'free' ]; then
+            IMAGE_NAME='voice-stt-server'
+          else
+            IMAGE_NAME='voice-stt-server-pro'
+          fi
+          LOCAL_TAG="${IMAGE_NAME}:candidate"
+          BUILD_DATE="$(git show -s --format=%cI HEAD)"
+          docker build \
+            --file build/v1-release.Dockerfile \
+            --platform linux/amd64 \
+            --build-arg VOICESTT_VERSION=1.0.0 \
+            --build-arg VOICESTT_GIT_COMMIT="${GITHUB_SHA}" \
+            --build-arg KROKO_VARIANT='${{ matrix.variant }}' \
+            --build-arg IMAGE_TITLE="${IMAGE_NAME}" \
+            --build-arg BUILD_DATE="${BUILD_DATE}" \
+            --tag "${LOCAL_TAG}" \
+            .
+
+          docker run --rm --entrypoint python "${LOCAL_TAG}" -c \
+            'import VoiceSTT, VoiceSTT_server.server, kroko_onnx; print("V1 imports OK")'
+          test "$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.version" }}' "${LOCAL_TAG}")" = '1.0.0'
+          test "$(docker inspect --format '{{ index .Config.Labels "org.opencontainers.image.revision" }}' "${LOCAL_TAG}")" = "${GITHUB_SHA}"
+          test "$(docker inspect --format '{{ index .Config.Labels "com.voicestt.kroko-variant" }}' "${LOCAL_TAG}")" = '${{ matrix.variant }}'
+          if docker history --no-trunc "${LOCAL_TAG}" | grep -E 'KROKO_API_KEY=|KROKO_LICENSE_KEY='; then
+            echo 'Runtime Kroko credential leaked into image history.' >&2
+            exit 1
+          fi
+
+          STAGING_REPO="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${IMAGE_NAME}-v1-staging"
+          STAGING_TAG="${STAGING_REPO}:${CANDIDATE_ID}"
+          docker tag "${LOCAL_TAG}" "${STAGING_TAG}"
+          docker push "${STAGING_TAG}"
+          DIGEST="$(docker buildx imagetools inspect "${STAGING_TAG}" | awk '$1 == "Digest:" {print $2; exit}')"
+          test -n "${DIGEST}"
+          echo "${DIGEST}" | grep -Eq '^sha256:[0-9a-f]{64}$'
+          mkdir -p candidate/images
+          VARIANT='${{ matrix.variant }}' IMAGE_NAME="${IMAGE_NAME}" STAGING_TAG="${STAGING_TAG}" DIGEST="${DIGEST}" \
+            python - <<'PY'
+          import json, os, pathlib
+          tag = os.environ['STAGING_TAG']
+          repo = tag.rsplit(':', 1)[0]
+          data = {
+              'variant': os.environ['VARIANT'],
+              'image': os.environ['IMAGE_NAME'],
+              'stagingTag': tag,
+              'digest': os.environ['DIGEST'],
+              'stagingReference': repo + '@' + os.environ['DIGEST'],
+          }
+          pathlib.Path('candidate/images/' + os.environ['VARIANT'] + '.json').write_text(
+              json.dumps(data, indent=2, sort_keys=True) + '\n', encoding='utf-8'
+          )
+          PY
+      - name: Upload digest-bound image identity
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with:
+          name: v1-image-${{ matrix.variant }}
+          path: candidate/images/${{ matrix.variant }}.json
+          if-no-files-found: error
+          retention-days: 7
+
+  qualify:
+    name: Assemble immutable qualified V1 candidate
+    needs: [python-package, kroko, image]
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact candidate commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          fetch-depth: 0
+      - name: Set up Python 3.12
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Download Python identity and bytes
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: v1-python-candidate
+          path: candidate/python
+      - name: Download Kroko Free identity and bytes
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: v1-kroko-free
+          path: candidate/kroko/free
+      - name: Download Kroko Pro identity and bytes
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: v1-kroko-pro
+          path: candidate/kroko/pro
+      - name: Download Free image identity
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: v1-image-free
+          path: candidate/images
+      - name: Download Pro image identity
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: v1-image-pro
+          path: candidate/images
+      - name: Assemble and validate canonical candidate manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(cat VERSION)" = '1.0.0'
+          test -z "$(git status --porcelain)"
+          TREE="$(git rev-parse 'HEAD^{tree}')"
+          RUN_URL="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          python tools/v1_release_manifest.py assemble \
+            --candidate-dir candidate \
+            --candidate-id "${CANDIDATE_ID}" \
+            --source-commit "${GITHUB_SHA}" \
+            --source-tree "${TREE}" \
+            --run-url "${RUN_URL}" \
+            --evidence-ref "${RUN_URL} :: ${{ inputs.qualification_context }}" \
+            --out candidate/rc-manifest.json
+          python tools/v1_release_manifest.py validate candidate/rc-manifest.json
+          python tools/v1_release_manifest.py inventory \
+            --candidate-dir candidate \
+            --out candidate/sha256-inventory.json
+      - name: Upload one qualified candidate for later publication
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with:
+          name: v1-release-candidate
+          path: candidate/
+          if-no-files-found: error
+          retention-days: 30
