@@ -90,9 +90,12 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p evidence-input/logs
-          if [ '${{ matrix.variant }}' = free ]; then log=evidence-input/logs/10_clean_install_linux_free.txt; else log=evidence-input/logs/11_clean_install_linux_pro.txt; fi
+          if [ '${{ matrix.variant }}' = free ]; then log="$GITHUB_WORKSPACE/evidence-input/logs/10_clean_install_linux_free.txt"; else log="$GITHUB_WORKSPACE/evidence-input/logs/11_clean_install_linux_pro.txt"; fi
+          wheel="$(realpath product/*.whl)"
+          smoke_dir="$RUNNER_TEMP/v1-clean-install-${{ matrix.variant }}"
+          mkdir -p "$smoke_dir"
           unset VOICESTT_KROKO_VARIANT KROKO_API_KEY
-          { test -z "${VOICESTT_KROKO_VARIANT:-}"; test -z "${KROKO_API_KEY:-}"; echo selector_env_absent=true; python -m venv clean-venv; clean-venv/bin/python -m pip install --upgrade pip; clean-venv/bin/python -m pip install product/*.whl; clean-venv/bin/python -c "import VoiceSTT, VoiceSTT_server.server, kroko_onnx; from VoiceSTT._release_variant import KROKO_VARIANT; print('variant='+KROKO_VARIANT); assert KROKO_VARIANT == '${{ matrix.variant }}'"; clean-venv/bin/stt-server --help; clean-venv/bin/python -m pip check; clean-venv/bin/python -m pip list; } 2>&1 | tee "$log"
+          { test -z "${VOICESTT_KROKO_VARIANT:-}"; test -z "${KROKO_API_KEY:-}"; echo selector_env_absent=true; python -m venv "$smoke_dir/venv"; "$smoke_dir/venv/bin/python" -m pip install --upgrade pip; "$smoke_dir/venv/bin/python" -m pip install "$wheel"; cd "$smoke_dir"; "$smoke_dir/venv/bin/python" -c "import VoiceSTT, VoiceSTT_server.server, kroko_onnx; from VoiceSTT._release_variant import KROKO_VARIANT; print('variant='+KROKO_VARIANT); print('package='+VoiceSTT.__file__); assert KROKO_VARIANT == '${{ matrix.variant }}'; assert '$GITHUB_WORKSPACE' not in VoiceSTT.__file__"; "$smoke_dir/venv/bin/stt-server" --help; "$smoke_dir/venv/bin/python" -m pip check; "$smoke_dir/venv/bin/python" -m pip list; } 2>&1 | tee "$log"
       - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
         with: {name: 'v1-linux-log-${{ matrix.variant }}', path: 'evidence-input/logs/*.txt', if-no-files-found: error, retention-days: 14}
 
@@ -111,17 +114,23 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference='Stop'; New-Item -ItemType Directory -Force evidence-input/logs | Out-Null
-          $log=if('${{ matrix.variant }}'-eq'free'){'evidence-input/logs/12_clean_install_windows_free.txt'}else{'evidence-input/logs/13_clean_install_windows_pro.txt'}
+          $relativeLog=if('${{ matrix.variant }}'-eq'free'){'evidence-input/logs/12_clean_install_windows_free.txt'}else{'evidence-input/logs/13_clean_install_windows_pro.txt'}
+          $log=Join-Path $env:GITHUB_WORKSPACE $relativeLog
+          $smokeDir=Join-Path $env:RUNNER_TEMP 'v1-clean-install-${{ matrix.variant }}'; New-Item -ItemType Directory -Force $smokeDir | Out-Null
           Remove-Item Env:VOICESTT_KROKO_VARIANT -ErrorAction SilentlyContinue; Remove-Item Env:KROKO_API_KEY -ErrorAction SilentlyContinue
           if((Test-Path Env:VOICESTT_KROKO_VARIANT) -or (Test-Path Env:KROKO_API_KEY)){throw 'variant selector env cleanup failed'}
           'selector_env_absent=true' | Tee-Object -FilePath $log
-          $wheel=(Get-ChildItem product/*.whl).FullName; python -m venv clean-venv
-          & .\clean-venv\Scripts\python.exe -m pip install --upgrade pip *>&1 | Tee-Object -FilePath $log -Append
-          & .\clean-venv\Scripts\python.exe -m pip install $wheel *>&1 | Tee-Object -FilePath $log -Append
-          & .\clean-venv\Scripts\python.exe -c "import VoiceSTT, VoiceSTT_server.server, kroko_onnx; from VoiceSTT._release_variant import KROKO_VARIANT; print('variant='+KROKO_VARIANT); assert KROKO_VARIANT == '${{ matrix.variant }}'" *>&1 | Tee-Object -FilePath $log -Append
-          & .\clean-venv\Scripts\stt-server.exe --help *>&1 | Tee-Object -FilePath $log -Append
-          & .\clean-venv\Scripts\python.exe -m pip check *>&1 | Tee-Object -FilePath $log -Append
-          & .\clean-venv\Scripts\python.exe -m pip list *>&1 | Tee-Object -FilePath $log -Append
+          $wheel=(Get-ChildItem product/*.whl).FullName; $venv=Join-Path $smokeDir 'venv'; python -m venv $venv
+          $python=Join-Path $venv 'Scripts/python.exe'; $stt=Join-Path $venv 'Scripts/stt-server.exe'
+          & $python -m pip install --upgrade pip *>&1 | Tee-Object -FilePath $log -Append
+          & $python -m pip install $wheel *>&1 | Tee-Object -FilePath $log -Append
+          Push-Location $smokeDir
+          try {
+            & $python -c "import VoiceSTT, VoiceSTT_server.server, kroko_onnx; from VoiceSTT._release_variant import KROKO_VARIANT; print('variant='+KROKO_VARIANT); print('package='+VoiceSTT.__file__); assert KROKO_VARIANT == '${{ matrix.variant }}'; assert r'$env:GITHUB_WORKSPACE'.lower() not in VoiceSTT.__file__.lower()" *>&1 | Tee-Object -FilePath $log -Append
+            & $stt --help *>&1 | Tee-Object -FilePath $log -Append
+            & $python -m pip check *>&1 | Tee-Object -FilePath $log -Append
+            & $python -m pip list *>&1 | Tee-Object -FilePath $log -Append
+          } finally { Pop-Location }
       - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
         with: {name: 'v1-windows-log-${{ matrix.variant }}', path: 'evidence-input/logs/*.txt', if-no-files-found: error, retention-days: 14}
 

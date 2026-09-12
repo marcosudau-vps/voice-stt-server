@@ -65,9 +65,12 @@ def test_build_validation_is_real_native_linux_windows_and_evidence_pack():
     assert 'windows-latest' in text
     assert 'python tools/v1_kroko_release.py build' in text
     assert 'python tools/v1_product_wheel.py build' in text
-    assert 'pip install product/*.whl' in text
-    assert 'stt-server.exe --help' in text
+    assert 'pip install "$wheel"' in text
+    assert '& $stt --help' in text
     assert text.count('selector_env_absent=true') == 2
+    assert text.count('v1-clean-install-${{ matrix.variant }}') == 2
+    assert text.count("print('package='+VoiceSTT.__file__)") == 2
+    assert text.count('not in VoiceSTT.__file__') == 2
     assert 'Remove-Item Env:KROKO_API_KEY' in text
     assert 'unset VOICESTT_KROKO_VARIANT KROKO_API_KEY' in text
     assert 'build/v1-release.Dockerfile' in text
