@@ -12,7 +12,7 @@ def read(name):
 
 
 def refs(text):
-    return re.findall(r'(?m)^\s*uses:\s*[^\s@]+@([^\s#]+)', text)
+    return re.findall(r'(?m)^\s*-\s*uses:\s*[^\s@]+@([^\s#]+)', text)
 
 
 def test_candidate_manual_only_four_product_matrix_no_sdist():
