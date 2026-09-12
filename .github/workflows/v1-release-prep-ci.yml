@@ -32,7 +32,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install release-test tooling
-        run: python -m pip install --upgrade "pip<26" setuptools wheel build twine pytest
+        run: python -m pip install --upgrade "pip<26" setuptools wheel build twine pytest PyYAML
 
       - name: Compile release helpers
         run: >-
@@ -40,6 +40,14 @@ jobs:
           tools/check_v1_release_package.py
           tools/v1_kroko_release.py
           tools/v1_release_manifest.py
+          tools/v1_release_publish.py
+
+      - name: Parse release workflow YAML
+        run: >-
+          python -c "import pathlib,yaml;
+          [yaml.safe_load(p.read_text(encoding='utf-8')) for p in
+          [pathlib.Path('.github/workflows/release-candidate.yml'),
+          pathlib.Path('.github/workflows/release-publish.yml')]]"
 
       - name: Build and inspect V1 wheel and sdist
         run: python tools/check_v1_release_package.py
@@ -49,6 +57,8 @@ jobs:
           python -m pytest -q
           tests/test_v1_kroko_release.py
           tests/test_v1_release_candidate_contract.py
+          tests/test_v1_release_publish.py
+          tests/test_v1_release_workflows.py
 
   source-identity:
     name: V1 source identity guard
