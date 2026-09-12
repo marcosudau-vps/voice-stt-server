@@ -10,7 +10,9 @@ TRUE_VALUES = {"1", "true", "yes", "on"}
 FASTER_WHISPER_ROOT_ENV = "VOICESTT_FASTER_WHISPER_MODEL_ROOT"
 FASTER_WHISPER_AUTO_DOWNLOAD_ENV = "VOICESTT_FASTER_WHISPER_AUTO_DOWNLOAD"
 KROKO_ROOT_ENV = "VOICESTT_KROKO_MODEL_ROOT"
+KROKO_VARIANT_ENV = "VOICESTT_KROKO_VARIANT"
 OFFLINE_MODELS_ENV = "VOICESTT_OFFLINE_MODELS"
+KROKO_HOME_URL = "https://kroko.ai/"
 
 # V1.0.0 intentionally exposes a small, reviewed download allowlist. Local
 # absolute model directories remain valid regardless of this registry. The
@@ -170,7 +172,13 @@ def resolve_faster_whisper_model(model, download_root=None, options=None):
 
 
 def resolve_kroko_model(model, download_root=None, options=None):
-    """Resolve a Kroko .data model against its dedicated mounted root."""
+    """Resolve a Kroko .data model against its dedicated mounted root.
+
+    Pro runtime images are identified explicitly by ``VOICESTT_KROKO_VARIANT``
+    (or ``runtime_variant`` in engine options). Missing Pro/private model data
+    is never auto-downloaded: the caller receives an actionable provisioning
+    error before the Kroko backend's download path is reached.
+    """
 
     options = dict(options or {})
     value = options.get("model_path") or options.get("model_file") or model
@@ -194,8 +202,22 @@ def resolve_kroko_model(model, download_root=None, options=None):
         if candidate.is_file():
             return str(candidate.resolve())
 
+    runtime_variant = str(
+        options.get("runtime_variant") or os.getenv(KROKO_VARIANT_ENV) or "free"
+    ).strip().lower()
+    locations = ", ".join(checked) if checked else str(path)
+    if runtime_variant == "pro":
+        raise TranscriptionEngineError(
+            "Kroko Pro runtime is installed, but the Pro/private model file '%s' "
+            "was not found. Pro models are never downloaded automatically. "
+            "Provision the licensed .data model locally, set %s to its model "
+            "directory (or pass engine_options['model_path']), and provide the "
+            "runtime license/API key through KROKO_API_KEY or the documented "
+            "Kroko key option. Checked: %s. Kroko: %s"
+            % (path.name, KROKO_ROOT_ENV, locations, KROKO_HOME_URL)
+        )
+
     if offline_models_enabled(options):
-        locations = ", ".join(checked) if checked else str(path)
         raise TranscriptionEngineError(
             "Offline model mode is enabled and Kroko model "
             f"'{path.name}' was not found. Checked: {locations}. Set "
