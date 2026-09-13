@@ -9,7 +9,7 @@ ROOT=Path(__file__).resolve().parents[1]
 
 def run(cmd,*,cwd=ROOT,env=None,log=None,expect=None):
  printable=subprocess.list2cmdline([str(x) for x in cmd]); print('+',printable)
- cp=subprocess.run([str(x) for x in cmd],cwd=str(cwd),env=env,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
+ cp=subprocess.run([str(x) for x in cmd],cwd=str(cwd),env=env,text=True,encoding='utf-8',errors='replace',stdout=subprocess.PIPE,stderr=subprocess.STDOUT)
  print(cp.stdout,end='')
  if log:
   with Path(log).open('a',encoding='utf-8') as f: f.write('+ '+printable+'\n'+cp.stdout+'\nexit_code='+str(cp.returncode)+'\n')

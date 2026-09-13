@@ -26,10 +26,12 @@ BUILDER_DOCKERFILE = ROOT / "build" / "v1-kroko-builder.Dockerfile"
 UPSTREAM_REPO = "https://github.com/kroko-ai/kroko-onnx.git"
 UPSTREAM_REVISION = "8657e655192623b98d7708e742a72987f953d3a2"
 PYTHON_TAG = "cp312"
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 SUPPORTED_VARIANTS = ("free", "pro")
 SUPPORTED_PLATFORMS = ("linux_x86_64", "win_amd64")
 RUNTIME_CREDENTIAL_ENV = "KROKO_API_KEY"
+LINUX_CONTAINER_ENV = "VOICESTT_KROKO_LINUX_CONTAINER"
+LINUX_BUILDER_IMAGE = "voicestt-v1-kroko-linux-builder"
 
 # The upstream Windows cross-build originally downloaded OpenSSL from moving
 # Slproweb filenames. That is not suitable release authority: patch versions
@@ -54,6 +56,13 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             h.update(chunk)
     return h.hexdigest()
+
+
+def sha256_release_text(path: Path) -> str:
+    """Hash source-controlled text with canonical LF line endings."""
+
+    data = Path(path).read_bytes().replace(b"\r\n", b"\n")
+    return _sha256_bytes(data)
 
 
 def _normalize(value: str, allowed: tuple[str, ...], label: str) -> str:
@@ -85,9 +94,9 @@ def fingerprint_payload(variant: str, platform: str = "linux_x86_64") -> dict[st
         "pythonTag": PYTHON_TAG,
         "upstreamRepo": UPSTREAM_REPO,
         "upstreamRevision": UPSTREAM_REVISION,
-        "v1InstallerSha256": sha256_file(INSTALLER),
-        "builderDockerfileSha256": sha256_file(BUILDER_DOCKERFILE),
-        "buildMode": "linux-native-wheel"
+        "v1InstallerSha256": sha256_release_text(INSTALLER),
+        "builderDockerfileSha256": sha256_release_text(BUILDER_DOCKERFILE),
+        "buildMode": "linux-bookworm-container-wheel"
         if platform == "linux_x86_64"
         else "windows-docker-cross-wheel",
     }
@@ -149,6 +158,71 @@ def _materialize_pinned_checkout(work_dir: Path) -> Path:
     if actual != UPSTREAM_REVISION:
         raise ReleaseKrokoError(f"pinned checkout resolved to {actual}")
     return repo
+
+
+def _build_linux_in_container(variant: str, out_dir: Path) -> None:
+    """Build the Linux wheel against the same pinned Bookworm ABI as OCI.
+
+    GitHub's Ubuntu 24.04 runner has a newer glibc than the V1 runtime image.
+    Building natively on that host creates a ``linux_x86_64`` wheel which
+    cannot be imported by Debian Bookworm.  The source-controlled builder uses
+    the exact pinned Python/Bookworm base image from ``BUILDER_DOCKERFILE``.
+    """
+
+    image = f"{LINUX_BUILDER_IMAGE}:{fingerprint_for(variant, 'linux_x86_64')[:16]}"
+    _run(
+        [
+            "docker",
+            "build",
+            "--platform",
+            "linux/amd64",
+            "--file",
+            str(BUILDER_DOCKERFILE),
+            "--tag",
+            image,
+            str(ROOT),
+        ]
+    )
+    mount = f"{out_dir}:/out"
+    _run(
+        [
+            "docker",
+            "run",
+            "--rm",
+            "--platform",
+            "linux/amd64",
+            "--env",
+            f"{LINUX_CONTAINER_ENV}=1",
+            "--volume",
+            mount,
+            image,
+            "build",
+            "--variant",
+            variant,
+            "--platform",
+            "linux_x86_64",
+            "--out-dir",
+            "/out",
+        ]
+    )
+    if hasattr(os, "getuid") and hasattr(os, "getgid"):
+        _run(
+            [
+                "docker",
+                "run",
+                "--rm",
+                "--platform",
+                "linux/amd64",
+                "--entrypoint",
+                "chown",
+                "--volume",
+                mount,
+                image,
+                "-R",
+                f"{os.getuid()}:{os.getgid()}",
+                "/out",
+            ]
+        )
 
 
 def _patch_windows_openssl_source(repo: Path) -> None:
@@ -289,6 +363,10 @@ def _build(variant: str, platform: str, out_dir: Path) -> dict[str, Any]:
     manifest_path = out_dir / "artifact.json"
     if manifest_path.exists():
         manifest_path.unlink()
+
+    if platform == "linux_x86_64" and os.environ.get(LINUX_CONTAINER_ENV) != "1":
+        _build_linux_in_container(variant, out_dir)
+        return verify_artifact(variant, out_dir, platform)
 
     installer = _load_installer()
     with tempfile.TemporaryDirectory(

@@ -23,3 +23,31 @@
   und Risk Register ausdrücklich offenlegen.
 - Status: Historische Evidenz; manuelle Candidate- und Publish-Dispatches
   bleiben bis zur späteren Autorisierung gesperrt.
+
+## Quellcheckout überschattete den Pro-Wheel-Marker
+
+- Grund: Der erste Linux-Clean-Install-Smoke wurde aus dem Repository-Root
+  ausgeführt. Python importierte dadurch den absichtlich auf Free gesetzten
+  Entwicklungsmarker statt des frisch installierten Pro-Wheels.
+- Auswirkung: Beide Linux-Smokes des Runs `34714943188` schlugen fehl, obwohl
+  Wheel-Inventar und Windows-Clean-Installs erfolgreich waren.
+- Entscheidung: Sämtliche Linux- und Windows-Clean-Install-Importe laufen aus
+  einem temporären Verzeichnis außerhalb des Checkouts und protokollieren den
+  tatsächlichen Paketpfad. Der lokale Acceptance-Runner verwendet dieselbe
+  Trennung.
+- Status: Behoben und lokal sowie auf dem VPS gegen Free/Pro reproduziert; die
+  abschließende CI-Gegenprüfung bleibt Bestandteil des Release-Gates.
+
+## Neuere Runner-GLIBC war nicht Bookworm-kompatibel
+
+- Grund: Der erste Linux-Kroko-Build lief nativ auf Ubuntu 24.04. Sein
+  `linux_x86_64`-Wheel verlangte GLIBC 2.38, während das gepinnte
+  Debian-Bookworm-Laufzeitimage GLIBC 2.36 bereitstellt.
+- Auswirkung: Der isolierte VPS-Docker-Preflight konnte `kroko_onnx` nicht
+  importieren und stoppte vor Containerstart; Produktion war nicht betroffen.
+- Entscheidung: Der Linux-Release-Build läuft in einem source-controlled
+  Bookworm-Builder mit exakt demselben gepinnten Basisimage-Digest wie das
+  Runtime-Dockerfile. Textbasierte Fingerprint-Eingaben werden unabhängig von
+  CRLF/LF kanonisch gehasht.
+- Status: Implementiert; realer Bookworm-Import, finale CI-Docker-Smokes und
+  Operator-Abnahmen werden vor Abschluss dokumentiert.

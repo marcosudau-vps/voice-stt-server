@@ -23,12 +23,47 @@ def test_fingerprints_bind_variant_and_platform():
     assert len(values) == 4
     win = kr.fingerprint_payload("pro", "win_amd64")
     assert win["buildMode"] == "windows-docker-cross-wheel"
+    linux = kr.fingerprint_payload("pro", "linux_x86_64")
+    assert linux["buildMode"] == "linux-bookworm-container-wheel"
     assert win["windowsOpenSsl"] == {
         "package": "openssl-native",
         "version": "3.5.5",
         "url": kr.WINDOWS_OPENSSL_URL,
     }
     assert "windowsOpenSsl" not in kr.fingerprint_payload("pro", "linux_x86_64")
+
+
+def test_release_text_fingerprint_is_line_ending_independent(tmp_path):
+    crlf = tmp_path / "crlf.txt"
+    lf = tmp_path / "lf.txt"
+    crlf.write_bytes(b"one\r\ntwo\r\n")
+    lf.write_bytes(b"one\ntwo\n")
+    assert kr.sha256_release_text(crlf) == kr.sha256_release_text(lf)
+
+
+def test_linux_builder_and_runtime_share_exact_base_image():
+    builder = kr.BUILDER_DOCKERFILE.read_text(encoding="utf-8")
+    runtime = (kr.ROOT / "build" / "v1-release.Dockerfile").read_text(encoding="utf-8")
+    builder_from = next(line for line in builder.splitlines() if line.startswith("FROM "))
+    runtime_from = next(line for line in runtime.splitlines() if line.startswith("FROM "))
+    assert builder_from == runtime_from
+    assert "@sha256:" in builder_from
+
+
+def test_linux_container_build_uses_pinned_builder_and_restores_ownership(monkeypatch, tmp_path):
+    commands = []
+    monkeypatch.setattr(kr, "_run", lambda command, cwd=None, env=None: commands.append(command))
+    monkeypatch.setattr(kr, "fingerprint_for", lambda variant, platform: "a" * 64)
+
+    kr._build_linux_in_container("pro", tmp_path)
+
+    assert commands[0][:4] == ["docker", "build", "--platform", "linux/amd64"]
+    assert str(kr.BUILDER_DOCKERFILE) in commands[0]
+    build_run = commands[1]
+    assert f"{kr.LINUX_CONTAINER_ENV}=1" in build_run
+    assert "--variant" in build_run and "pro" in build_run
+    if hasattr(kr.os, "getuid"):
+        assert commands[2][commands[2].index("--entrypoint") + 1] == "chown"
 
 
 def test_windows_openssl_patch_is_pinned_and_has_native_contract(tmp_path):

@@ -64,6 +64,7 @@ def test_build_validation_is_real_native_linux_windows_and_evidence_pack():
     assert 'linux_x86_64' in text and 'win_amd64' in text
     assert 'windows-latest' in text
     assert 'python tools/v1_kroko_release.py build' in text
+    assert 'docker version' in text
     assert 'python tools/v1_product_wheel.py build' in text
     assert 'pip install "$wheel"' in text
     assert '& $stt --help' in text

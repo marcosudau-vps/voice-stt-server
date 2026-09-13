@@ -341,6 +341,15 @@ Checkout aus. Mit `--build` laeuft folgender Prozess:
 6. Bei `--variant pro` setzt der Builder `KROKO_LICENSE=ON`; `free` setzt die
    lizenzierte Runtime nicht frei.
 
+Der öffentliche V1-Releasepfad verwendet zusätzlich
+`tools/v1_kroko_release.py`. Linux wird dort nicht gegen die jeweils aktuelle
+Host-Distribution gebaut, sondern innerhalb von
+`build/v1-kroko-builder.Dockerfile`. Builder und Laufzeit sind auf dasselbe
+Python-3.12-/Debian-Bookworm-Basisimage mit identischem Digest gepinnt. Dadurch
+bleibt das native `linux_x86_64`-Wheel im späteren V1-Container importierbar,
+auch wenn der GitHub-Runner eine neuere GLIBC-Version besitzt. Der Builder
+läuft ohne `KROKO_API_KEY`; die Lizenzdatei wird erst zur Laufzeit eingebunden.
+
 Alle Optionen:
 
 | Option | Standard | Bedeutung |

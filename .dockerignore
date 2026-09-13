@@ -21,7 +21,11 @@ htmlcov
 pytest.ini
 dist
 build
+!build/
+build/*
+!build/v1-kroko-builder.Dockerfile
 *.egg-info
 .dockerignore
 docker-compose.yml
 Dockerfile
+/voice-stt-server/

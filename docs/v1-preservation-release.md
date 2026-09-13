@@ -17,6 +17,12 @@ Each project publishes exactly two CPython 3.12 wheels:
 - Linux x86_64, with a native tag at least as restrictive as the embedded Kroko runtime.
 - Windows AMD64, with a native tag at least as restrictive as the embedded Kroko runtime.
 
+The Linux Kroko intermediate is compiled inside the source-controlled,
+digest-pinned Python 3.12 Debian Bookworm builder. The runtime Dockerfile uses
+that same base-image digest. This is part of the artifact identity and prevents
+a newer hosted-runner GLIBC from making the Linux wheel unusable in the V1
+container.
+
 No V1.0.0 public sdist is produced. No public final wheel may be
 `py3-none-any`. The final product wheel contains the actual `kroko_onnx`
 payload (native extension plus bundled runtime libraries/DLL payload) directly;
@@ -109,6 +115,11 @@ Pushes to `review/v1-release-prep-correction-1` run real build validation:
 9. create `v1-correction-1-evidence` with hashes, sizes, content dumps, logs,
    variant proof, model-policy evidence, secret/license evidence, CI identity,
    no-publication guard, and remaining-risk register.
+
+All clean-install import and CLI checks change into a temporary directory
+outside the checkout first. This prevents the source tree's intentional Free
+development marker from shadowing the marker embedded in an installed Pro
+wheel.
 
 ## Local acceptance before Candidate
 
