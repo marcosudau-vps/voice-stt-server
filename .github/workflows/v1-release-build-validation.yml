@@ -197,12 +197,102 @@ jobs:
           PY
           rc=$?; set -e; echo "exit_code=$rc" >> evidence-input/logs/16_pro_missing_model_test.txt; test "$rc" -eq 2; ! grep -q '^Traceback' evidence-input/logs/16_pro_missing_model_test.txt
       - name: Record CI identity and no-publication guard
-        env: {GH_TOKEN: '${{ github.token }}'}
+        env:
+          GH_TOKEN: '${{ github.token }}'
         shell: bash
         run: |
           set -euo pipefail
-          { echo '# CI runs'; echo "Run ID: $GITHUB_RUN_ID"; echo "Workflow: $GITHUB_WORKFLOW"; echo "Commit SHA: $GITHUB_SHA"; gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" --jq '.jobs[] | [.id,.name,.status,.conclusion] | @tsv'; gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" --jq '.artifacts[] | [.id,.name,.size_in_bytes] | @tsv' || true; } > evidence-input/logs/24_ci_runs.md
-          { echo '# No-publication guard'; echo "main=$(git ls-remote origin refs/heads/main | cut -f1)"; echo "clean=$(git ls-remote origin refs/heads/review/v1-release-prep-clean | cut -f1)"; echo "dirty=$(git ls-remote origin refs/heads/review/v1-release-prep-dirty | cut -f1)"; test "$(git ls-remote origin refs/heads/main | cut -f1)" = '13c162950b944dc715fdd81983a7465f8eb0fd79'; test "$(git ls-remote origin refs/heads/review/v1-release-prep-clean | cut -f1)" = '7b8d940133e8f566fb28742f4fc9fde5cc4eccaa'; test "$(git ls-remote origin refs/heads/review/v1-release-prep-dirty | cut -f1)" = 'de683acb1e8e7725a72b6bc7c96555c5aa4a890d'; test -z "$(git ls-remote origin refs/tags/v1.0.0 | cut -f1)"; test "$(gh api "repos/$GITHUB_REPOSITORY/releases" --jq 'length')" -eq 0; candidate_head_runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-candidate.yml/runs?head_sha=$GITHUB_SHA" --jq '.total_count'); publish_head_runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-publish.yml/runs?head_sha=$GITHUB_SHA" --jq '.total_count'); candidate_dispatches=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-candidate.yml/runs?branch=review%2Fv1-release-prep-correction-1&event=workflow_dispatch" --jq '.total_count'); publish_dispatches=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/release-publish.yml/runs?branch=review%2Fv1-release-prep-correction-1&event=workflow_dispatch" --jq '.total_count'); echo "candidate_runs_for_head=$candidate_head_runs"; echo "publish_runs_for_head=$publish_head_runs"; echo "candidate_manual_dispatches_for_branch=$candidate_dispatches"; echo "publish_manual_dispatches_for_branch=$publish_dispatches"; test "$candidate_head_runs" -eq 0; test "$publish_head_runs" -eq 0; test "$candidate_dispatches" -eq 0; test "$publish_dispatches" -eq 0; echo 'v1.0.0 tag absent; GitHub Release absent; Candidate/Publish never manually dispatched.'; echo 'Historical disclosure: GitHub recorded parse-only push run 34703916749 for an earlier invalid release-candidate.yml; it had no jobs and no publication.'; echo 'This validation workflow contains no PyPI, Docker Hub final, or final GHCR publication step.'; } > evidence-input/logs/25_no_publication_guard.md
+
+          {
+            echo '# CI runs'
+            echo "Run ID: $GITHUB_RUN_ID"
+            echo "Workflow: $GITHUB_WORKFLOW"
+            echo "Commit SHA: $GITHUB_SHA"
+
+            gh api \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/jobs" \
+              --jq '.jobs[] | [.id,.name,.status,.conclusion] | @tsv'
+
+            gh api \
+              "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts" \
+              --jq '.artifacts[] | [.id,.name,.size_in_bytes] | @tsv' \
+              || true
+          } > evidence-input/logs/24_ci_runs.md
+
+          main_sha="$(git ls-remote origin refs/heads/main | cut -f1)"
+          clean_sha="$(git ls-remote origin refs/heads/review/v1-release-prep-clean | cut -f1)"
+          dirty_sha="$(git ls-remote origin refs/heads/review/v1-release-prep-dirty | cut -f1)"
+          tag_sha="$(git ls-remote origin refs/tags/v1.0.0 | cut -f1)"
+
+          candidate_head_runs="$(
+            gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$GITHUB_SHA&per_page=100" \
+              --jq '.workflow_runs[]
+                    | select(.path == ".github/workflows/release-candidate.yml")
+                    | .id' \
+              | wc -l
+          )"
+
+          publish_head_runs="$(
+            gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/runs?head_sha=$GITHUB_SHA&per_page=100" \
+              --jq '.workflow_runs[]
+                    | select(.path == ".github/workflows/release-publish.yml")
+                    | .id' \
+              | wc -l
+          )"
+
+          candidate_dispatches="$(
+            gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/runs?branch=review%2Fv1-release-prep-correction-1&event=workflow_dispatch&per_page=100" \
+              --jq '.workflow_runs[]
+                    | select(.path == ".github/workflows/release-candidate.yml")
+                    | .id' \
+              | wc -l
+          )"
+
+          publish_dispatches="$(
+            gh api --paginate \
+              "repos/$GITHUB_REPOSITORY/actions/runs?branch=review%2Fv1-release-prep-correction-1&event=workflow_dispatch&per_page=100" \
+              --jq '.workflow_runs[]
+                    | select(.path == ".github/workflows/release-publish.yml")
+                    | .id' \
+              | wc -l
+          )"
+
+          release_count="$(
+            gh api \
+              "repos/$GITHUB_REPOSITORY/releases" \
+              --jq 'length'
+          )"
+
+          {
+            echo '# No-publication guard'
+            echo "main=$main_sha"
+            echo "clean=$clean_sha"
+            echo "dirty=$dirty_sha"
+
+            test "$main_sha" = '13c162950b944dc715fdd81983a7465f8eb0fd79'
+            test "$clean_sha" = '7b8d940133e8f566fb28742f4fc9fde5cc4eccaa'
+            test "$dirty_sha" = 'de683acb1e8e7725a72b6bc7c96555c5aa4a890d'
+
+            test -z "$tag_sha"
+            test "$release_count" -eq 0
+
+            echo "candidate_runs_for_head=$candidate_head_runs"
+            echo "publish_runs_for_head=$publish_head_runs"
+            echo "candidate_manual_dispatches_for_branch=$candidate_dispatches"
+            echo "publish_manual_dispatches_for_branch=$publish_dispatches"
+
+            test "$candidate_head_runs" -eq 0
+            test "$publish_head_runs" -eq 0
+            test "$candidate_dispatches" -eq 0
+            test "$publish_dispatches" -eq 0
+
+            echo 'v1.0.0 tag absent; GitHub Release absent; Candidate/Publish never manually dispatched.'
+            echo 'Historical disclosure: GitHub recorded parse-only push run 34703916749 for an earlier invalid release-candidate.yml; it had no jobs and no publication.'
+            echo 'This validation workflow contains no PyPI, Docker Hub final, or final GHCR publication step.'
+          } > evidence-input/logs/25_no_publication_guard.md
       - name: Generate and checksum evidence pack
         run: python tools/v1_evidence_pack.py --input-root evidence-input --out v1-correction-1-evidence
       - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
