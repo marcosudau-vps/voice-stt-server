@@ -76,6 +76,8 @@ EVIDENCE_SOURCES = {
 def scope_reason(path: str) -> str:
     if path.startswith(".github/workflows/"):
         return "V1 native build, Candidate, publish/resume, or validation contract."
+    if path == ".dockerignore":
+        return "V1 Docker build-context filtering required for deterministic release image inputs."
     if path in {"README.md", "RELEASE_NOTES.md", "setup.py", "build/BUILD.md", "docs/v1-preservation-release.md"}:
         return "Directly release-facing install, packaging, or build documentation/metadata."
     if path.startswith("docs/.archiv/"):
