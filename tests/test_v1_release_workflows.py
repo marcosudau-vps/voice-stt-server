@@ -110,3 +110,24 @@ def test_dockerfile_consumes_only_final_product_wheel():
     assert 'release-inputs/kroko' not in text
     assert 'pip install /tmp/kroko' not in text
     assert 'stt-install-kroko --build' not in text
+
+
+def test_cpu_only_torch_bootstrap_precedes_wheel_install():
+    cpu_index = 'https://download.pytorch.org/whl/cpu'
+
+    dockerfile = (ROOT / 'build' / 'v1-release.Dockerfile').read_text(encoding='utf-8')
+    assert dockerfile.count(cpu_index) == 1
+    assert dockerfile.index(cpu_index) < dockerfile.index('python -m pip install "/tmp/voicestt/$(basename')
+    assert 'CPU_ONLY_OK=true' in dockerfile
+
+    build_validation = read('v1-release-build-validation.yml')
+    assert build_validation.count(cpu_index) == 2
+    assert build_validation.index(cpu_index) < build_validation.index('pip install "$wheel"')
+    assert build_validation.rindex(cpu_index) < build_validation.index('pip install $wheel')
+    assert build_validation.count('CPU_ONLY_OK=true') == 2
+
+    candidate = read('release-candidate.yml')
+    assert candidate.count(cpu_index) == 2
+    assert candidate.index(cpu_index) < candidate.index('pip install product/*.whl')
+    assert candidate.rindex(cpu_index) < candidate.index('pip install $wheel')
+    assert candidate.count('CPU_ONLY_OK=true') == 2

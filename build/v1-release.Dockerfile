@@ -40,12 +40,14 @@ COPY release-inputs/python/*.whl /tmp/voicestt/
 RUN test "${KROKO_VARIANT}" = "free" -o "${KROKO_VARIANT}" = "pro" && \
     test "$(find /tmp/voicestt -maxdepth 1 -name '*.whl' | wc -l)" -eq 1 && \
     python -m pip install --upgrade pip setuptools wheel && \
+    python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu && \
     python -m pip install "/tmp/voicestt/$(basename /tmp/voicestt/*.whl)[faster-whisper,silero-onnx-cpu]" \
       scikit-learn requests && \
     python -m pip install --no-deps 'openwakeword==0.6.0' && \
     sed -i '/^Requires-Dist: tflite-runtime/d' \
       /usr/local/lib/python3.12/site-packages/openwakeword-*.dist-info/METADATA && \
     python -c "import VoiceSTT, VoiceSTT_server.server, kroko_onnx; from VoiceSTT._release_variant import KROKO_VARIANT; assert KROKO_VARIANT == '${KROKO_VARIANT}'" && \
+    python -c "import torch, importlib.metadata as m; assert torch.version.cuda is None, torch.version.cuda; bad=[d.metadata['Name'] for d in m.distributions() if d.metadata.get('Name') and (d.metadata['Name'].lower().startswith('nvidia-') or d.metadata['Name'].lower() == 'triton')]; assert not bad, bad; print('CPU_ONLY_OK=true')" && \
     python -m pip check && \
     apt-mark manual libportaudio2 libasound2 libjack-jackd2-0 libgomp1 && \
     apt-get purge -y --auto-remove build-essential portaudio19-dev && \

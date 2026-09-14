@@ -94,7 +94,7 @@ jobs:
           smoke_dir="$RUNNER_TEMP/v1-clean-install-${{ matrix.variant }}"
           mkdir -p "$smoke_dir"
           unset VOICESTT_KROKO_VARIANT KROKO_API_KEY
-          { test -z "${VOICESTT_KROKO_VARIANT:-}"; test -z "${KROKO_API_KEY:-}"; echo selector_env_absent=true; python -m venv "$smoke_dir/venv"; "$smoke_dir/venv/bin/python" -m pip install --upgrade pip; "$smoke_dir/venv/bin/python" -m pip install "$wheel"; cd "$smoke_dir"; "$smoke_dir/venv/bin/python" -c "import VoiceSTT, VoiceSTT_server.server, kroko_onnx; from VoiceSTT._release_variant import KROKO_VARIANT; print('variant='+KROKO_VARIANT); print('package='+VoiceSTT.__file__); assert KROKO_VARIANT == '${{ matrix.variant }}'; assert '$GITHUB_WORKSPACE' not in VoiceSTT.__file__"; "$smoke_dir/venv/bin/stt-server" --help; "$smoke_dir/venv/bin/python" -m pip check; "$smoke_dir/venv/bin/python" -m pip list; } 2>&1 | tee "$log"
+          { test -z "${VOICESTT_KROKO_VARIANT:-}"; test -z "${KROKO_API_KEY:-}"; echo selector_env_absent=true; python -m venv "$smoke_dir/venv"; "$smoke_dir/venv/bin/python" -m pip install --upgrade pip; "$smoke_dir/venv/bin/python" -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu; "$smoke_dir/venv/bin/python" -m pip install "$wheel"; cd "$smoke_dir"; "$smoke_dir/venv/bin/python" -c "import VoiceSTT, VoiceSTT_server.server, kroko_onnx; from VoiceSTT._release_variant import KROKO_VARIANT; print('variant='+KROKO_VARIANT); print('package='+VoiceSTT.__file__); assert KROKO_VARIANT == '${{ matrix.variant }}'; assert '$GITHUB_WORKSPACE' not in VoiceSTT.__file__"; "$smoke_dir/venv/bin/python" -c "import torch, importlib.metadata as m; assert torch.version.cuda is None, torch.version.cuda; bad=[d.metadata['Name'] for d in m.distributions() if d.metadata.get('Name') and (d.metadata['Name'].lower().startswith('nvidia-') or d.metadata['Name'].lower() == 'triton')]; assert not bad, bad; print('CPU_ONLY_OK=true')"; "$smoke_dir/venv/bin/stt-server" --help; "$smoke_dir/venv/bin/python" -m pip check; "$smoke_dir/venv/bin/python" -m pip list; } 2>&1 | tee "$log"
       - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
         with: {name: 'v1-linux-log-${{ matrix.variant }}', path: 'evidence-input/logs/*.txt', if-no-files-found: error, retention-days: 14}
 
@@ -122,10 +122,12 @@ jobs:
           $wheel=(Get-ChildItem product/*.whl).FullName; $venv=Join-Path $smokeDir 'venv'; python -m venv $venv
           $python=Join-Path $venv 'Scripts/python.exe'; $stt=Join-Path $venv 'Scripts/stt-server.exe'
           & $python -m pip install --upgrade pip *>&1 | Tee-Object -FilePath $log -Append
+          & $python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu *>&1 | Tee-Object -FilePath $log -Append
           & $python -m pip install $wheel *>&1 | Tee-Object -FilePath $log -Append
           Push-Location $smokeDir
           try {
             & $python -c "import VoiceSTT, VoiceSTT_server.server, kroko_onnx; from VoiceSTT._release_variant import KROKO_VARIANT; print('variant='+KROKO_VARIANT); print('package='+VoiceSTT.__file__); assert KROKO_VARIANT == '${{ matrix.variant }}'; assert r'$env:GITHUB_WORKSPACE'.lower() not in VoiceSTT.__file__.lower()" *>&1 | Tee-Object -FilePath $log -Append
+            & $python -c "import torch, importlib.metadata as m; assert torch.version.cuda is None, torch.version.cuda; bad=[d.metadata['Name'] for d in m.distributions() if d.metadata.get('Name') and (d.metadata['Name'].lower().startswith('nvidia-') or d.metadata['Name'].lower() == 'triton')]; assert not bad, bad; print('CPU_ONLY_OK=true')" *>&1 | Tee-Object -FilePath $log -Append
             & $stt --help *>&1 | Tee-Object -FilePath $log -Append
             & $python -m pip check *>&1 | Tee-Object -FilePath $log -Append
             & $python -m pip list *>&1 | Tee-Object -FilePath $log -Append

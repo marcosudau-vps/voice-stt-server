@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from email import message_from_bytes
 import zipfile
 from pathlib import Path
 import pytest
@@ -26,6 +27,20 @@ def _kroko(tmp: Path, platform: str) -> Path:
 def test_final_product_wheel_embeds_runtime_and_native_tag(monkeypatch,tmp_path,variant,distribution,platform):
     base=_base(tmp_path); kroko=_kroko(tmp_path,platform); monkeypatch.setattr(pw,"_build_base_wheel",lambda _tmp:base)
     report=pw.build_product_wheel(variant,platform,kroko,tmp_path/"out")
+
+    product_wheel = tmp_path / "out" / report["filename"]
+
+    with zipfile.ZipFile(product_wheel) as zf:
+        wheel_name = next(
+            name for name in zf.namelist()
+            if name.endswith(".dist-info/WHEEL")
+        )
+        wheel_metadata = message_from_bytes(zf.read(wheel_name))
+
+    assert wheel_metadata["Root-Is-Purelib"] == "false"
+    assert wheel_metadata.get_all("Tag") == [f"cp312-cp312-{platform}"]
+    assert wheel_metadata.get_payload() == ""
+
     assert report["distribution"]==distribution and report["variant"]==variant
     assert report["rootIsPurelib"] is False
     assert report["tags"]==[f"cp312-cp312-{platform}"]
