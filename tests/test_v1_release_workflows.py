@@ -117,6 +117,8 @@ def test_cpu_only_torch_bootstrap_precedes_wheel_install():
 
     dockerfile = (ROOT / 'build' / 'v1-release.Dockerfile').read_text(encoding='utf-8')
     assert dockerfile.count(cpu_index) == 1
+    assert "'torch==2.9.1+cpu'" in dockerfile
+    assert "'torchaudio==2.9.1+cpu'" in dockerfile
     assert dockerfile.index(cpu_index) < dockerfile.index('python -m pip install "/tmp/voicestt/$(basename')
     assert 'CPU_ONLY_OK=true' in dockerfile
 

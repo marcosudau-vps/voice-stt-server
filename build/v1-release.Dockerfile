@@ -37,10 +37,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY release-inputs/python/*.whl /tmp/voicestt/
 
+# silero-vad 6.2.x constrains torchaudio to <2.10. Installing an unconstrained
+# newer CPU pair first lets pip replace it with PyPI's CUDA-enabled 2.9.1 pair
+# while resolving the product extras. Pin the matching CPU pair explicitly so
+# the subsequent resolver keeps it and no nvidia-* or triton wheels enter V1.
 RUN test "${KROKO_VARIANT}" = "free" -o "${KROKO_VARIANT}" = "pro" && \
     test "$(find /tmp/voicestt -maxdepth 1 -name '*.whl' | wc -l)" -eq 1 && \
     python -m pip install --upgrade pip setuptools wheel && \
-    python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu && \
+    python -m pip install 'torch==2.9.1+cpu' 'torchaudio==2.9.1+cpu' \
+      --index-url https://download.pytorch.org/whl/cpu && \
     python -m pip install "/tmp/voicestt/$(basename /tmp/voicestt/*.whl)[faster-whisper,silero-onnx-cpu]" \
       scikit-learn requests && \
     python -m pip install --no-deps 'openwakeword==0.6.0' && \

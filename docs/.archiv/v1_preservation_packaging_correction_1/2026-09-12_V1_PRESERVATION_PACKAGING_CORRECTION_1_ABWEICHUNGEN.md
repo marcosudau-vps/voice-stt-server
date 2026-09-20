@@ -66,3 +66,19 @@
 - Status: Behoben; der vollständige Pro-Build erzeugte auf dem Windows-PC ein
   Wheel und einen NSIS-Installer, CMake erkannte OpenSSL 3.5.5 und das Wheel
   ließ sich in einer frischen CPython-3.12-Umgebung installieren/importieren.
+
+## Silero-Auflösung ersetzte CPU-Torch im finalen Image
+
+- Grund: Der Docker-Build installierte zunächst das jeweils neueste CPU-Torch,
+  während `silero-vad 6.2.x` für sein ONNX-Extra `torchaudio < 2.10` verlangt.
+  Beim anschließenden Extras-Install ersetzte pip das neuere CPU-Paar deshalb
+  durch das CUDA-fähige PyPI-Paar 2.9.1 samt `nvidia-*` und `triton`.
+- Auswirkung: Alle nativen Builds, Produkt-Wheels und Clean-Installs des Runs
+  `35534641862` bestanden, beide finalen Docker-Jobs stoppten jedoch korrekt am
+  CPU-only-Guard (`torch.version.cuda == 12.8`).
+- Entscheidung: Das finale V1-Image pinnt das zusammenpassende CPU-Paar
+  `torch==2.9.1+cpu` / `torchaudio==2.9.1+cpu` aus dem offiziellen CPU-Index.
+- Status: Lokal mit dem exakten Pro-Linux-Produkt-Wheel aus Run
+  `35534641862` bestanden: Image-Build, `pip check`, CPU-/CUDA-Guard,
+  Pro-Lizenz-Warmup und eine echte HTTP-Transkription waren erfolgreich. Die
+  erneute CI-Abnahme bleibt vor Candidate erforderlich.
