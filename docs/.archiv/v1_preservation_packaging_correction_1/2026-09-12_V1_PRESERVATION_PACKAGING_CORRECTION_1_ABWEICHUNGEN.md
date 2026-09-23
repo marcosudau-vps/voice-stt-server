@@ -82,3 +82,28 @@
   `35534641862` bestanden: Image-Build, `pip check`, CPU-/CUDA-Guard,
   Pro-Lizenz-Warmup und eine echte HTTP-Transkription waren erfolgreich. Die
   erneute CI-Abnahme bleibt vor Candidate erforderlich.
+
+## Evidence-Pack kannte den nativen Installerpfad nicht
+
+- Grund: `VoiceSTT/install_kroko.py` wurde für den reproduzierbaren
+  Windows-OpenSSL-Bezug geändert, war aber noch nicht in der geschlossenen
+  Scope-Zuordnung des Evidence-Packers enthalten.
+- Auswirkung: Run `35538173163` bestand sämtliche 14 nativen Build-,
+  Produkt-Wheel-, Clean-Install- und Docker-Jobs; ausschließlich das finale
+  Zusammenstellen des Beweispakets stoppte mit `unmapped scope path`.
+- Entscheidung: Der Installerpfad erhält eine explizite fachliche Zuordnung
+  und einen Regressionstest. Binärartefakte oder Laufzeitverhalten ändern sich
+  dadurch nicht.
+
+## Lokale vollständige Wake-Word-Abnahme
+
+- Grund: Der erste lokale Pro-Stack hatte keine OpenWakeWord-Assets im
+  zentralen Modellordner und deaktivierte Wake Word deshalb vollständig.
+- Korrektur: Die gepinnten ONNX-Modelle `hey_jarvis` und `alexa` sowie
+  Melspektrogramm- und Embedding-Pipeline aus openWakeWord `v0.5.1` wurden mit
+  SHA-256-Provenienz extern unter `MODELS/openwakeword` bereitgestellt und
+  read-only in den Teststack eingebunden; sie bleiben aus allen Release-
+  Artefakten ausgeschlossen.
+- Status: Der reale Desktop-Client erhielt für beide Modelle `hello` und
+  `ready: true`; Mikrofon, sessiongebundener Eventstream und Kroko-Pro-Modell
+  liefen gleichzeitig im isolierten lokalen Stack.

@@ -84,6 +84,8 @@ def scope_reason(path: str) -> str:
         return "Mandatory repository change-action audit trail required by AGENTS.md."
     if path == "VoiceSTT/_release_variant.py":
         return "Source-controlled baked Free/Pro distribution identity."
+    if path == "VoiceSTT/install_kroko.py":
+        return "Pinned cross-platform Kroko native build and bundled runtime installer."
     if path == "VoiceSTT/transcription_engines/model_resolver.py":
         return "Consumes baked identity while preserving the V1 model policy."
     if path == "build/v1-release.Dockerfile":

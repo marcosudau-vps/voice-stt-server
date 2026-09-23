@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tools.v1_evidence_pack import scope_reason
+
 ROOT = Path(__file__).resolve().parents[1]
 WF = ROOT / '.github' / 'workflows'
 
@@ -102,6 +104,12 @@ def test_release_authority_does_not_depend_on_vps_or_operator_paths():
     )
     assert 'build/vps' not in combined
     assert re.search(r'[A-Za-z]:\\', combined) is None
+
+
+def test_evidence_scope_maps_native_kroko_installer():
+    reason = scope_reason('VoiceSTT/install_kroko.py')
+    assert 'Kroko' in reason
+    assert 'native' in reason
 
 
 def test_dockerfile_consumes_only_final_product_wheel():
