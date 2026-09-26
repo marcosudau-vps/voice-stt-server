@@ -32,6 +32,8 @@ jobs:
           tools/v1_product_wheel.py
           tools/v1_release_manifest.py
           tools/v1_release_publish.py
+          tools/v1_registry_probe.py
+          tools/v1_dockerhub_scope_check.py
           tools/v1_local_acceptance.py
           tools/v1_evidence_pack.py
           tools/v1_wakeword_bundle.py
@@ -39,7 +41,7 @@ jobs:
         run: >-
           python -c "import pathlib,yaml;
           [yaml.safe_load(pathlib.Path(p).read_text(encoding='utf-8')) for p in
-          ['.github/workflows/release-candidate.yml','.github/workflows/release-publish.yml','.github/workflows/v1-release-build-validation.yml','.github/workflows/v1-release-prep-ci.yml']]"
+          ['.github/workflows/release-candidate.yml','.github/workflows/release-publish.yml','.github/workflows/v1-release-build-validation.yml','.github/workflows/v1-release-prep-ci.yml','.github/workflows/v1-release-infrastructure-preflight.yml']]"
       - name: Run corrected V1 contract tests
         run: >-
           python -m pytest -q
@@ -50,6 +52,8 @@ jobs:
           tests/test_v1_product_wheel.py
           tests/test_v1_release_candidate_contract.py
           tests/test_v1_release_publish.py
+          tests/test_v1_registry_probe.py
+          tests/test_v1_dockerhub_scope_check.py
           tests/test_v1_release_workflows.py
 
   source-identity:

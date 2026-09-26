@@ -276,7 +276,7 @@ jobs:
             echo "clean=$clean_sha"
             echo "dirty=$dirty_sha"
 
-            test "$main_sha" = '13c162950b944dc715fdd81983a7465f8eb0fd79'
+            test "$main_sha" = '0582bb13535f754c895438ffc4b1c2ce144e13bb'
             test "$clean_sha" = '7b8d940133e8f566fb28742f4fc9fde5cc4eccaa'
             test "$dirty_sha" = 'de683acb1e8e7725a72b6bc7c96555c5aa4a890d'
 

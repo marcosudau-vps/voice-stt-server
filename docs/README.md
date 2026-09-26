@@ -10,8 +10,9 @@ Referenz nicht.
 - [Finaler V1-Release- und Publikationsplan](v1-release-final-plan.md):
   Freigabegates, Candidate, PyPI Free/Pro, Docker Hub, GHCR, Git-Tag,
   GitHub Release und anschließender separater Client-Release.
-- [V1/V2-Historienübergang](v1-v2-history-transition.md): warum V1 als
-  einzelner Commit auf `main` liegt und wie der spätere V2-Merge beide
+- [V1/V2-Historienübergang](v1-v2-history-transition.md): warum die
+  V1-Vorbereitung als einzelner Commit plus eng begrenzter
+  Veröffentlichungsschutz auf `main` liegt und wie der spätere V2-Merge beide
   Historien bewahrt, ohne den qualifizierten V2-Dateibaum zu vermischen.
 - [V1-Produktvertrag](v1-preservation-release.md): Free/Pro-Wheels,
   Modelle, Wakewords, Docker und Qualifikation.

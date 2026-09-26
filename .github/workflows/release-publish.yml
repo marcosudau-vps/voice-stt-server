@@ -52,14 +52,58 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git rev-parse 'HEAD^{tree}')" = '${{ steps.identity.outputs.source_tree }}'
           git fetch origin --tags --force
           if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
             test "$(git rev-list -n1 "$TAG")" = '${{ steps.identity.outputs.source_commit }}' || { echo "CONFLICT: $TAG points to another commit" >&2; exit 1; }
           fi
+      - name: Classify GitHub Release availability before public writes
+        env: {GH_TOKEN: '${{ github.token }}'}
+        shell: bash
+        run: python tools/v1_release_publish.py release-state --tag "$TAG"
+
+  registry-preflight:
+    name: Authenticate and classify registries before PyPI
+    needs: preflight
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions: {actions: read, contents: read, packages: read}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {ref: '${{ needs.preflight.outputs.source_commit }}'}
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: v1-release-candidate, path: candidate, run-id: '${{ inputs.candidate_run_id }}', github-token: '${{ secrets.GITHUB_TOKEN }}'}
+      - uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with: {registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with: {username: '${{ env.DOCKERHUB_USERNAME }}', password: '${{ secrets.DOCKERHUB_TOKEN }}'}
+      - name: Prove Docker Hub pull/push scope without writing
+        env: {DOCKERHUB_TOKEN: '${{ secrets.DOCKERHUB_TOKEN }}'}
+        run: python tools/v1_dockerhub_scope_check.py
+      - name: Read-only candidate and target registry preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/v1_release_publish.py verify-candidate --candidate-dir candidate
+          python - <<'PY' > images.tsv
+          import json
+          m=json.load(open('candidate/rc-manifest.json'))
+          for v in ('free','pro'):
+            r=m['images'][v]; print(r['image'],r['stagingReference'],r['digest'],sep='\t')
+          PY
+          while IFS=$'\t' read -r image source expected; do
+            python tools/v1_registry_probe.py "$source" "$expected" --require-match
+            for registry in "docker.io/${DOCKERHUB_USERNAME}" "ghcr.io/${GITHUB_REPOSITORY_OWNER}"; do
+              for tag in 1.0.0 1.0 1 latest; do
+                python tools/v1_registry_probe.py "${registry}/${image}:${tag}" "$expected"
+              done
+            done
+          done < images.tsv
 
   pypi-free:
     name: PyPI Free / first-release setup window
-    needs: preflight
+    needs: [preflight, registry-preflight]
     runs-on: ubuntu-24.04
     environment: release
     permissions: {actions: read, contents: read, id-token: write}
@@ -146,6 +190,8 @@ jobs:
     environment: release
     permissions: {actions: read, contents: read, packages: read}
     steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {ref: '${{ needs.preflight.outputs.source_commit }}'}
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with: {name: v1-release-candidate, path: candidate, run-id: '${{ inputs.candidate_run_id }}', github-token: '${{ secrets.GITHUB_TOKEN }}'}
       - uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349
@@ -163,12 +209,12 @@ jobs:
           for v in ('free','pro'):
             r=m['images'][v]; print(r['image'],r['stagingReference'],r['digest'],sep='\t')
           PY
-          inspect(){ docker buildx imagetools inspect "$1" 2>/dev/null | awk '$1=="Digest:"{print $2;exit}'; }
           while IFS=$'\t' read -r image source expected; do
-            final="docker.io/${DOCKERHUB_USERNAME}/${image}:1.0.0"; actual="$(inspect "$final" || true)"
-            if [ -z "$actual" ]; then docker buildx imagetools create --tag "$final" "$source";
-            elif [ "$actual" != "$expected" ]; then echo "CONFLICT $final $actual != $expected" >&2; exit 1; fi
-            test "$(inspect "$final")" = "$expected"
+            python tools/v1_registry_probe.py "$source" "$expected" --require-match
+            final="docker.io/${DOCKERHUB_USERNAME}/${image}:1.0.0"
+            state="$(python tools/v1_registry_probe.py "$final" "$expected")"
+            if [ "$state" = ABSENT ]; then docker buildx imagetools create --tag "$final" "$source"; fi
+            python tools/v1_registry_probe.py "$final" "$expected" --require-match
           done < images.tsv
 
   ghcr:
@@ -177,6 +223,8 @@ jobs:
     environment: release
     permissions: {actions: read, contents: read, packages: write}
     steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {ref: '${{ needs.preflight.outputs.source_commit }}'}
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with: {name: v1-release-candidate, path: candidate, run-id: '${{ inputs.candidate_run_id }}', github-token: '${{ secrets.GITHUB_TOKEN }}'}
       - uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349
@@ -193,12 +241,13 @@ jobs:
           m=json.load(open('candidate/rc-manifest.json'))
           for v in ('free','pro'): r=m['images'][v]; print(r['image'],r['digest'],sep='\t')
           PY
-          inspect(){ docker buildx imagetools inspect "$1" 2>/dev/null | awk '$1=="Digest:"{print $2;exit}'; }
           while IFS=$'\t' read -r image expected; do
-            src="docker.io/${DOCKERHUB_USERNAME}/${image}@${expected}"; final="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}:1.0.0"; actual="$(inspect "$final" || true)"
-            if [ -z "$actual" ]; then docker buildx imagetools create --tag "$final" "$src";
-            elif [ "$actual" != "$expected" ]; then echo "CONFLICT $final" >&2; exit 1; fi
-            test "$(inspect "$final")" = "$expected"
+            src="docker.io/${DOCKERHUB_USERNAME}/${image}@${expected}"
+            python tools/v1_registry_probe.py "$src" "$expected" --require-match
+            final="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}:1.0.0"
+            state="$(python tools/v1_registry_probe.py "$final" "$expected")"
+            if [ "$state" = ABSENT ]; then docker buildx imagetools create --tag "$final" "$src"; fi
+            python tools/v1_registry_probe.py "$final" "$expected" --require-match
           done < images.tsv
 
   aliases:
@@ -227,14 +276,13 @@ jobs:
           m=json.load(open('candidate/rc-manifest.json'))
           for v in ('free','pro'): r=m['images'][v]; print(r['image'],r['digest'],sep='\t')
           PY
-          inspect(){ docker buildx imagetools inspect "$1" 2>/dev/null | awk '$1=="Digest:"{print $2;exit}'; }
           # Detect every conflicting alias before creating the first new one.
           while IFS=$'\t' read -r image digest; do
-            for alias in "${aliases[@]}"; do
-              for registry in "docker.io/${DOCKERHUB_USERNAME}" "ghcr.io/${GITHUB_REPOSITORY_OWNER}"; do
+            for registry in "docker.io/${DOCKERHUB_USERNAME}" "ghcr.io/${GITHUB_REPOSITORY_OWNER}"; do
+              python tools/v1_registry_probe.py "${registry}/${image}:1.0.0" "$digest" --require-match
+              for alias in "${aliases[@]}"; do
                 ref="${registry}/${image}:${alias}"
-                actual="$(inspect "$ref" || true)"
-                test -z "$actual" || test "$actual" = "$digest" || { echo "CONFLICT $ref $actual != $digest" >&2; exit 1; }
+                python tools/v1_registry_probe.py "$ref" "$digest"
               done
             done
           done < images.tsv
@@ -242,13 +290,11 @@ jobs:
             for alias in "${aliases[@]}"; do
               for registry in "docker.io/${DOCKERHUB_USERNAME}" "ghcr.io/${GITHUB_REPOSITORY_OWNER}"; do
                 ref="${registry}/${image}:${alias}"
-                actual="$(inspect "$ref" || true)"
-                if [ -z "$actual" ]; then
+                state="$(python tools/v1_registry_probe.py "$ref" "$digest")"
+                if [ "$state" = ABSENT ]; then
                   docker buildx imagetools create --tag "$ref" "${registry}/${image}@${digest}"
-                elif [ "$actual" != "$digest" ]; then
-                  echo "CONFLICT $ref $actual != $digest" >&2; exit 1
                 fi
-                test "$(inspect "$ref")" = "$digest"
+                python tools/v1_registry_probe.py "$ref" "$digest" --require-match
               done
             done
           done < images.tsv
@@ -281,12 +327,10 @@ jobs:
           m=json.load(open('candidate/rc-manifest.json'))
           for v in ('free','pro'): r=m['images'][v]; print(r['image'],r['digest'],sep='\t')
           PY
-          inspect(){ docker buildx imagetools inspect "$1" 2>/dev/null | awk '$1=="Digest:"{print $2;exit}'; }
           while IFS=$'\t' read -r image expected; do
             for tag in 1.0.0 1.0 1 latest; do
               for ref in "docker.io/${DOCKERHUB_USERNAME}/${image}:${tag}" "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}:${tag}"; do
-                actual="$(inspect "$ref")"
-                test "$actual" = "$expected" || { echo "CONFLICT $ref $actual != $expected" >&2; exit 1; }
+                python tools/v1_registry_probe.py "$ref" "$expected" --require-match
               done
             done
           done < images.tsv
@@ -345,7 +389,8 @@ jobs:
           test "$(git rev-list -n1 "$TAG")" = "$expected" || { echo 'CONFLICT: Git tag points to another commit'; exit 1; }
           verify_dir="$(mktemp -d)"
           trap 'rm -rf -- "$verify_dir"' EXIT
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          release_state="$(python tools/v1_release_publish.py release-state --tag "$TAG")"
+          if [ "$release_state" = MATCH ]; then
             echo "MATCH/RESUME: release exists; checking each existing asset before upload"
             existing_assets="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
             for f in "${assets[@]}"; do
@@ -362,7 +407,7 @@ jobs:
               fi
             done
           else
-            gh release create "$TAG" "${assets[@]}" --title 'VoiceSTT V1.0.0 preservation release' --notes 'Preserved V1 release: Free and Pro CPython 3.12 native wheels for Linux x86_64 and Windows AMD64; exact qualified OCI images.'
+            gh release create "$TAG" "${assets[@]}" --verify-tag --title 'VoiceSTT V1.0.0 preservation release' --notes 'Preserved V1 release: Free and Pro CPython 3.12 native wheels for Linux x86_64 and Windows AMD64; exact qualified OCI images.'
           fi
           for f in "${assets[@]}"; do
             name="$(basename "$f")"

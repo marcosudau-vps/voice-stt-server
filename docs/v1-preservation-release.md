@@ -8,6 +8,11 @@ historical safeguards are in [v1-release-final-plan.md](v1-release-final-plan.md
 The manual publish workflow must also be present on the repository default
 branch before GitHub can dispatch it; pushing only the preparation branch
 does not activate publication.
+After the single V1 preservation commit reached `main`, the final publication
+audit found a registry UNKNOWN/ABSENT conflation. One separately approved,
+narrow publish-safety commit is required before Candidate. Candidate and tag
+must use the **final** qualified Main HEAD; neither the first preservation
+commit nor normal-CI wheels are public release bytes.
 
 ## Public Python product contract
 
@@ -165,7 +170,17 @@ persists private GHCR staging images, and emits one immutable
 
 `.github/workflows/release-publish.yml` is manual-only, protected by the
 `release` environment, consumes exact candidate bytes, and contains no build
-step. Publication order is:
+step.
+
+Before step 1, a read-only registry preflight authenticates to Docker Hub and
+GHCR, verifies both immutable private candidate staging references, and
+classifies every Free/Pro exact and alias destination. Ambiguous registry
+errors are UNKNOWN, never ABSENT. Registry write jobs repeat these probes
+immediately before each write. A release-page read failure is also UNKNOWN;
+unexpected extra files under PyPI 1.0.0 are CONFLICT. The GitHub release
+creation step requires an existing verified tag and cannot create one itself.
+
+Publication order is:
 
 1. publish/resume `voice-stt-server` Linux + Windows wheels;
 2. on the first run, wait four minutes after both Free wheels match so the Pro

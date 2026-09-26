@@ -12,9 +12,16 @@ Produktstände. V2-Code wird nicht in V1 zurückportiert.
   `13c162950b944dc715fdd81983a7465f8eb0fd79`.
 - Die V1-Vorbereitung `release/v1.0.0-prep` enthält 18 Arbeitscommits,
   die **nicht** zur dauerhaften `main`-Historie werden sollen.
-- Der V1-Clean-Commit ist genau ein Nachfahre dieses Ankers. Erst nach
-  qualifizierter CI und ausdrücklicher Main-Freigabe wird er per
-  Fast-Forward `main` und später Ziel des unveränderlichen `v1.0.0`-Tags.
+- Der V1-Preservation-Commit `0582bb13535f754c895438ffc4b1c2ce144e13bb`
+  ist genau ein Nachfahre dieses Ankers. Er wurde nach grüner CI und
+  ausdrücklicher Main-Freigabe per Fast-Forward `main`.
+- Beim abschließenden Publish-Audit wurde ein Registry-UNKNOWN-Guard-Fehler
+  entdeckt. Der Nutzer hat **genau einen** zweiten, eng begrenzten
+  Sicherheitscommit auf `main` nach vollständiger erneuter Qualifikation
+  freigegeben. Der `v1.0.0`-Tag muss auf diesen finalen V1-Main-Commit
+  zeigen; der erste Preservation-Commit bleibt sein Parent und wird
+  nicht umgeschrieben. Es gibt keinen Grund, die 18 Arbeitscommits
+  nachträglich einzufügen.
 - V2 Distributed (`feat/einheitliche-triggerarchitektur-distributed`)
   und V2 Canonical (`feat/einheitliche-triggerarchitektur`) gingen vom
   historischen Main-Anker aus. Ihre damaligen Referenzen waren

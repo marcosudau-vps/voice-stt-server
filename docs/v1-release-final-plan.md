@@ -27,6 +27,15 @@ genannten historischen Dokumente waren **Ideenquellen, keine Anweisungen**.
   keine öffentliche Buildauthority.
 - Exakt qualifizierte Artefakte werden veröffentlicht, nicht nach der
   Qualifikation neu gebaut: **build once – qualify exactly – publish exactly**.
+- Der zuerst qualifizierte V1-Preservation-Commit wurde als einzelner
+  Fast-Forward nach `main` übernommen. Ein danach beim finalen
+  Publish-Audit gefundener Registry-UNKNOWN-Fehler erhält mit
+  ausdrücklicher Freigabe genau einen separaten, eng begrenzten
+  Sicherheitscommit. **Der spätere V1-Tag und Candidate beziehen sich
+  auf diesen endgültig qualifizierten Main-HEAD**, nicht auf den
+  vorherigen Preservation-Commit. Die 18 Arbeitscommits bleiben
+  weiterhin außerhalb der Main-Historie; die V2-Merge-Invariante gilt
+  unverändert. Siehe [V1/V2-Historienübergang](v1-v2-history-transition.md).
 
 ## 1. Source-Freeze und normale CI (noch kein Release)
 
@@ -60,13 +69,16 @@ genannten historischen Dokumente waren **Ideenquellen, keine Anweisungen**.
    Ein gefundenes Produktproblem führt zu Fix, neuen Tests/Builds und
    neuem Freeze.
 6. **GitHub-Workflow-Aktivierung:** `workflow_dispatch` setzt voraus,
-   dass die Workflowdatei auch auf dem Default-Branch liegt. Derzeit
-   fehlt `release-publish.yml` auf `main`. Erst nach erfolgreicher
-   **Clean-Commit-CI und gesonderter Main-Freigabe** exakt diesen einen
-   V1-Commit nach `main` übernehmen; die 18 Arbeitscommits bleiben
-   außerhalb der dauerhaften Main-Historie. Remote-SHA/Tree erneut
-   prüfen. Erst danach Candidate/Publish manuell dispatchen. Keine
-   stille Umdeutung des Candidates auf einen anderen Commit.
+   dass die Workflowdatei auch auf dem Default-Branch liegt. Der
+   Preservation-Commit wurde nach eigener Clean-Commit-CI und gesonderter
+   Main-Freigabe auf `main` übernommen; Candidate/Publish sind damit
+   verfügbar, wurden aber nicht gestartet. Der freigegebene
+   Registry-UNKNOWN-Sicherheitsfix muss vor Candidate ebenfalls auf
+   seiner exakten SHA vollständig qualifiziert und nach `main`
+   übernommen werden. Erst dessen finalen Commit für Candidate/Publish
+   verwenden; die 18 Arbeitscommits bleiben außerhalb der dauerhaften
+   Main-Historie. Remote-SHA/Tree erneut prüfen. Keine stille
+   Umdeutung des Candidates auf einen anderen Commit.
 
 ## V1/V2-Git-Historie nach dem V1-Release
 
@@ -91,6 +103,8 @@ V1/V2-Übergangsdokumentation muss vor dem finalen V2-Freeze bewusst in
 V2 Canonical aufgenommen und dort mitqualifiziert werden, wenn sie
 nach dem Merge erhalten bleiben soll. Sie darf nicht erst bei der
 Konfliktauflösung in den bereits qualifizierten V2-Tree hineinrutschen.
+Die zusätzliche, gezielte V1-Publish-Sicherheitskorrektur ändert daran
+nichts: Beim V2-Merge ist der **dann finale** V1-Main-Commit erster Parent.
 
 ## 2. Server-Candidate – erst nach eigener Freigabe
 
@@ -139,6 +153,21 @@ Konfliktauflösung in den bereits qualifizierten V2-Tree hineinrutschen.
   **ABSENT** = nur dann schreiben, **MATCH** = überspringen,
   **CONFLICT** oder **UNKNOWN** = vor dem nächsten Write stoppen.
   Nicht erreichbarer Remote ist UNKNOWN, nicht ABSENT.
+- Vor dem **ersten** PyPI-Write jedes Publish-Laufs läuft ein
+  Read-only-Registry-Preflight:
+  Docker-Hub- und GHCR-Login, privater Candidate-Staging-Digest sowie
+  Free/Pro-Exact- und Alias-Zielrefs werden geprüft. Ein Lesefehler,
+  fehlender parsebarer Digest oder nicht eindeutig fehlender Tag ist
+  UNKNOWN und stoppt vor dem ersten öffentlichen Write. Die späteren
+  Docker-Hub-/GHCR-/Alias-Jobs wiederholen die Prüfung unmittelbar vor
+  ihren eigenen Writes. Die bloße Existenz eines GitHub-Secrets beweist
+  noch keine Schreibberechtigung des Docker-Hub-Tokens. Deshalb läuft
+  zusätzlich `v1_dockerhub_scope_check.py` vor PyPI: Die offizielle
+  Registry-Tokenabfrage muss für **beide** Docker-Hub-Ziele tatsächlich
+  `pull,push` gewähren. Derselbe Check kann über den manuellen,
+  ausschließlich lesenden Workflow
+  `v1-release-infrastructure-preflight.yml` schon vor dem Release-Go
+  mit dem geschützten GitHub-Environment-Secret durchgeführt werden.
 
 ## 4. Server-Publikation – feste Reihenfolge
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 import urllib.error
@@ -105,8 +106,7 @@ def inspect_pypi_project(manifest: dict[str, Any], variant: str, *, fetch: PyPIF
         # An unexpected file under the same immutable 1.0.0 release means the
         # remote version is not byte-equivalent to our qualified candidate.
         for name in states:
-            if states[name] == ABSENT:
-                states[name] = CONFLICT
+            states[name] = CONFLICT
     return {"project": project, "artifacts": states, "unexpected": unexpected}
 
 
@@ -144,8 +144,45 @@ def bootstrap_phase1_required(free_before: dict[str, Any], free_after: dict[str,
 
 
 def classify_digest(actual: str | None, expected: str) -> str:
-    if not actual: return ABSENT
+    # An empty digest has no provenance: it may be a missing tag, timeout,
+    # authorization failure, or parser error. Only v1_registry_probe may
+    # establish explicit registry absence from a complete inspect result.
+    if not actual: return UNKNOWN
     return MATCH if actual.strip().lower() == expected.strip().lower() else CONFLICT
+
+
+def _fetch_github_release(tag: str) -> dict[str, Any] | None:
+    token = os.environ.get("GH_TOKEN")
+    repository = os.environ.get("GITHUB_REPOSITORY")
+    if not token or not repository:
+        raise PublicationPrecheckError("GitHub release probe requires GH_TOKEN and GITHUB_REPOSITORY")
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{repository}/releases/tags/{tag}",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "User-Agent": "VoiceSTT-V1-release-preflight",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return json.loads(response.read().decode())
+    except urllib.error.HTTPError as exc:
+        if exc.code == 404:
+            return None
+        raise
+
+
+def inspect_github_release(tag: str, *, fetch=None) -> str:
+    try:
+        payload = (fetch or _fetch_github_release)(tag)
+    except Exception:
+        return UNKNOWN
+    if payload is None:
+        return ABSENT
+    if isinstance(payload, dict) and payload.get("id") and payload.get("tag_name") == tag:
+        return MATCH
+    return UNKNOWN
 
 
 def aliases_for(version: str = VERSION) -> list[str]:
@@ -161,6 +198,7 @@ def main(argv=None):
     pc = sub.add_parser("precheck-pypi"); pc.add_argument("--candidate-dir", type=Path, required=True); pc.add_argument("--variant", choices=("free","pro"), required=True); pc.add_argument("--stage-dir", type=Path, required=True); pc.add_argument("--out", type=Path, required=True)
     pv = sub.add_parser("verify-pypi"); pv.add_argument("--candidate-dir", type=Path, required=True); pv.add_argument("--variant", choices=("free","pro"), required=True)
     d = sub.add_parser("classify-digest"); d.add_argument("--actual", default=""); d.add_argument("--expected", required=True)
+    g = sub.add_parser("release-state"); g.add_argument("--tag", default=TAG)
     a = sub.add_parser("aliases"); a.add_argument("--version", default=VERSION)
     args = p.parse_args(argv)
     try:
@@ -177,6 +215,11 @@ def main(argv=None):
                 raise PublicationPrecheckError(f"PyPI {args.variant} verification incomplete: {report}")
             else: print(MATCH)
         elif args.command == "classify-digest": print(classify_digest(args.actual or None, args.expected))
+        elif args.command == "release-state":
+            state = inspect_github_release(args.tag)
+            if state == UNKNOWN:
+                raise PublicationPrecheckError("GitHub release state UNKNOWN; stop before write")
+            print(state)
         else: print("\n".join(aliases_for(args.version)))
     except PublicationPrecheckError as exc:
         print(f"ERROR: {exc}", file=sys.stderr); return 1

@@ -92,6 +92,13 @@ def test_publish_dependency_graph_guards_all_external_writes_before_git_tag():
     )
     for earlier, later in zip(required_chain, required_chain[1:]):
         assert earlier in ancestors(later), (earlier, later)
+    assert 'registry-preflight' in ancestors('pypi-free')
+    registry_preflight = jobs['registry-preflight']
+    assert registry_preflight['environment'] == 'release'
+    assert sum('docker/login-action@' in step.get('uses', '') for step in registry_preflight['steps']) == 2
+    assert any('v1_dockerhub_scope_check.py' in step.get('run', '') for step in registry_preflight['steps'])
+    assert 'v1_registry_probe.py' in registry_preflight['steps'][-1]['run']
+    assert '--require-match' in registry_preflight['steps'][-1]['run']
     assert 'tag' not in ancestors('pypi-free')
     preflight = jobs['preflight']['steps']
     tag_guard = next(
@@ -99,7 +106,12 @@ def test_publish_dependency_graph_guards_all_external_writes_before_git_tag():
         if step.get('name') == 'Reject a conflicting Git tag before any publication'
     )['run']
     assert 'git rev-list -n1 "$TAG"' in tag_guard
+    assert "git rev-parse 'HEAD^{tree}'" in tag_guard
     assert 'CONFLICT' in tag_guard
+    assert any(
+        'release-state --tag "$TAG"' in step.get('run', '')
+        for step in preflight
+    )
     pause = next(
         step for step in jobs['pypi-free']['steps']
         if 'sleep 240' in step.get('run', '')
@@ -126,8 +138,21 @@ def test_existing_github_release_resumes_only_with_identical_assets():
     assert 'gh release download "$TAG"' in script
     assert 'gh release upload "$TAG" "$f"' in script
     assert 'cmp -s "$f" "$verify_dir/$name"' in script
+    assert 'release-state --tag "$TAG"' in script
+    assert 'gh release create "$TAG" "${assets[@]}" --verify-tag' in script
     assert '--clobber' not in script
     assert '|| true' not in script
+
+
+def test_registry_writes_stop_on_unknown_and_verify_each_digest():
+    jobs = yaml.safe_load(read('release-publish.yml'))['jobs']
+    for job_name in ('dockerhub', 'ghcr', 'aliases'):
+        script = '\n'.join(step.get('run', '') for step in jobs[job_name]['steps'])
+        assert 'v1_registry_probe.py' in script
+        assert '--require-match' in script
+        assert '|| true' not in script
+        assert '2>/dev/null' not in script
+    assert '|| true' not in read('release-publish.yml')
 
 
 def test_build_validation_is_real_native_linux_windows_and_evidence_pack():
@@ -182,11 +207,24 @@ def test_all_third_party_actions_are_full_sha_pinned():
         'v1-release-build-validation.yml',
         'release-candidate.yml',
         'release-publish.yml',
+        'v1-release-infrastructure-preflight.yml',
     ):
         values = refs(read(name))
         assert values, name
         for value in values:
             assert re.fullmatch(r'[0-9a-f]{40}', value), (name, value)
+
+
+def test_manual_infrastructure_check_uses_release_secret_without_publish_write():
+    text = read('v1-release-infrastructure-preflight.yml')
+    jobs = yaml.safe_load(text)['jobs']
+    assert 'workflow_dispatch:' in text and re.search(r'(?m)^\s{2}push:\s*$', text) is None
+    assert len(jobs) == 1
+    step = jobs['dockerhub-scope']['steps'][-1]
+    assert jobs['dockerhub-scope']['environment'] == 'release'
+    assert 'secrets.DOCKERHUB_TOKEN' in step['env']['DOCKERHUB_TOKEN']
+    assert step['run'] == 'python tools/v1_dockerhub_scope_check.py'
+    assert 'docker push' not in text and 'imagetools create' not in text
 
 
 def test_release_authority_does_not_depend_on_vps_or_operator_paths():

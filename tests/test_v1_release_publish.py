@@ -60,5 +60,22 @@ def test_all_four_match_means_pypi_complete():
 
 def test_registry_digest_and_aliases():
     d="sha256:"+"a"*64
-    assert pub.classify_digest(None,d)==pub.ABSENT and pub.classify_digest(d,d)==pub.MATCH
+    assert pub.classify_digest(None,d)==pub.UNKNOWN and pub.classify_digest(d,d)==pub.MATCH
     assert pub.aliases_for("1.0.0")==["1.0","1","latest"]
+
+
+def test_unexpected_pypi_file_conflicts_even_when_both_expected_match():
+    m = _manifest()
+    payload = _payload(m, "free")
+    payload["urls"].append({"filename": "unqualified-extra.whl", "digests": {"sha256": "c" * 64}})
+    report = pub.inspect_pypi_project(m, "free", fetch=lambda _u: payload)
+    assert set(report["artifacts"].values()) == {pub.CONFLICT}
+    with pytest.raises(pub.PublicationPrecheckError):
+        pub.validate_publishable(report)
+
+
+def test_github_release_read_error_is_unknown_not_absent():
+    assert pub.inspect_github_release("v1.0.0", fetch=lambda _tag: None) == pub.ABSENT
+    assert pub.inspect_github_release("v1.0.0", fetch=lambda tag: {"id": 123, "tag_name": tag}) == pub.MATCH
+    assert pub.inspect_github_release("v1.0.0", fetch=lambda _tag: {}) == pub.UNKNOWN
+    assert pub.inspect_github_release("v1.0.0", fetch=lambda _tag: (_ for _ in ()).throw(TimeoutError())) == pub.UNKNOWN

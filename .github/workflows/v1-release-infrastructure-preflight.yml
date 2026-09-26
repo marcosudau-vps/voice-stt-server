@@ -1,0 +1,19 @@
+name: V1 release infrastructure preflight (read only)
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  dockerhub-scope:
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions: {contents: read}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Check the protected release secret without publishing
+        env:
+          DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: python tools/v1_dockerhub_scope_check.py

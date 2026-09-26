@@ -79,3 +79,4 @@ Begründung im Archiv erhalten.
 | V1 Preservation Packaging Correction 1 | 12.09.2026 | Prüfung offen | [v1_preservation_packaging_correction_1](v1_preservation_packaging_correction_1/) |
 | V1 gebündelte Standard-Wakewords | 23.09.2026 | Umgesetzt, Test-/Buildabnahme läuft | [v1_bundled_wakewords](v1_bundled_wakewords/) |
 | V1 Clean-History Release-Prep | 26.09.2026 | Prüfung offen | [v1_preservation_clean_history](v1_preservation_clean_history/) |
+| V1 Registry-UNKNOWN-Publish-Guard | 26.09.2026 | In Umsetzung | [v1_registry_unknown_guard](v1_registry_unknown_guard/) |
