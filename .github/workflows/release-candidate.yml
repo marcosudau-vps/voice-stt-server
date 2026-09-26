@@ -80,6 +80,7 @@ jobs:
           out="candidate/python/${{ matrix.variant }}/${{ matrix.platform }}"
           python tools/v1_product_wheel.py build --variant '${{ matrix.variant }}' --platform '${{ matrix.platform }}' --kroko-wheel "$(find kroko -name '*.whl')" --out-dir "$out" --report "$out/product.json"
           python -m twine check "$out"/*.whl
+          python tools/v1_wakeword_bundle.py "$out"/*.whl
           test -z "$(find "$out" -name '*py3-none-any.whl' -o -name '*.tar.gz')"
       - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
         with:

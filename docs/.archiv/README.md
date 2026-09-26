@@ -77,3 +77,4 @@ Begründung im Archiv erhalten.
 | SQLite-first Eventstream und Admin-Logvertrag | 02.08.2026 | Abgeschlossen | [sqlite_first_admin_eventstream](sqlite_first_admin_eventstream/) |
 | Zentrale Build- und VPS-Deploymentdokumentation | 12.08.2026 | Abgeschlossen | [build_vps_dokumentation](build_vps_dokumentation/) |
 | V1 Preservation Packaging Correction 1 | 12.09.2026 | Prüfung offen | [v1_preservation_packaging_correction_1](v1_preservation_packaging_correction_1/) |
+| V1 gebündelte Standard-Wakewords | 23.09.2026 | Umgesetzt, Test-/Buildabnahme läuft | [v1_bundled_wakewords](v1_bundled_wakewords/) |

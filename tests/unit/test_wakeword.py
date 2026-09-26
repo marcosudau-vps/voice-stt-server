@@ -1,4 +1,5 @@
 import unittest
+import hashlib
 import json
 import os
 import tempfile
@@ -54,11 +55,25 @@ class WakeWordTests(unittest.TestCase):
             with self.assertRaisesRegex(ModuleNotFoundError, r"VoiceSTT\[openwakeword\]"):
                 wakeword._load_openwakeword_modules()
 
-    def test_openwakeword_offline_resolver_requires_local_assets(self):
+    def test_openwakeword_unknown_model_still_fails_offline(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
             with patch.dict(os.environ, {wakeword.OPENWAKEWORD_MODEL_ROOT_ENV: temp_dir}):
                 with self.assertRaisesRegex(FileNotFoundError, "offline mode"):
-                    wakeword._resolve_openwakeword_paths(None, "hey_jarvis")
+                    wakeword._resolve_openwakeword_paths(None, "not_bundled")
+
+    def test_bundled_catalog_contains_five_verified_classifiers(self):
+        catalog = wakeword.OpenWakeWordCatalog()
+        entries = catalog.entries()
+        by_id = {entry["id"]: entry for entry in entries}
+        self.assertTrue({
+            "hey_jarvis", "alexa", "hey_mycroft", "hey_rhasspy", "computer"
+        }.issubset(by_id))
+
+        manifest = json.loads(catalog.manifest_path.read_text(encoding="utf-8"))
+        expected = manifest["openwakeword_models"]["sha256"]
+        for filename, digest in expected.items():
+            path = catalog.manifest_path.parent / filename
+            self.assertEqual(hashlib.sha256(path.read_bytes()).hexdigest(), digest)
 
     def test_openwakeword_resolver_returns_classifier_and_feature_paths(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:
@@ -70,6 +85,8 @@ class WakeWordTests(unittest.TestCase):
         self.assertEqual([Path(value).name for value in models], ["hey_jarvis_v0.1.onnx"])
         self.assertEqual(Path(features["melspec_model_path"]).name, "melspectrogram.onnx")
         self.assertEqual(Path(features["embedding_model_path"]).name, "embedding_model.onnx")
+        self.assertEqual(Path(features["melspec_model_path"]).parent, root.resolve())
+        self.assertEqual(Path(features["embedding_model_path"]).parent, root.resolve())
 
     def test_openwakeword_resolver_uses_models_json_pipeline_mapping(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as temp_dir:

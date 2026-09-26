@@ -1,5 +1,12 @@
 # Release Notes
 
+## V1 release-polish additions
+
+- Bundled fourteen OpenWakeWord ONNX classifiers and their feature pipeline
+  for non-commercial use, with checked manifest hashes and attribution.
+- External Wake Word catalogs now supplement the bundled catalog and override
+  matching logical IDs without runtime downloads.
+
 ## V1.0.0 preservation release packaging note
 
 The preservation release publishes two alternative CPython 3.12 product

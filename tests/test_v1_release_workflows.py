@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml
+
 from tools.v1_evidence_pack import scope_reason
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,30 +41,100 @@ def test_publish_manual_protected_rebuild_free_two_projects_and_bootstrap():
     assert re.search(r'(?m)^\s*docker build(?:\s|\\)', text) is None
     assert text.count('pypa/gh-action-pypi-publish@') == 2
     assert '--variant free' in text and '--variant pro' in text
-    assert 'PYPI_PRO_PUBLISHER_SETUP_REQUIRED' in text
-    assert 'EXPECTED BOOTSTRAP STOP' in text
+    assert 'PYPI_PRO_PUBLISHER_SETUP_WINDOW: 240 seconds' in text
+    assert "if: steps.state.outputs.bootstrap_probe == 'true'" in text
+    assert 'sleep 240' in text
+    assert '::notice title=PyPI Pro setup window::' in text
+    assert 'EXPECTED BOOTSTRAP STOP' not in text
+    assert 'SAME candidate_run_id' in text
     assert 'voice-stt-server-pro' in text
     assert 'id-token: write' in text
 
 
-def test_publish_order_tag_free_pro_dockerhub_ghcr_aliases_release():
+def test_publish_order_free_pro_dockerhub_ghcr_aliases_verify_tag_release():
     text = read('release-publish.yml')
     positions = [
-        text.index('  tag:'),
         text.index('  pypi-free:'),
         text.index('  pypi-pro:'),
         text.index('  dockerhub:'),
         text.index('  ghcr:'),
         text.index('  aliases:'),
+        text.index('  pre-tag-verify:'),
+        text.index('  tag:'),
         text.index('  github-release:'),
     ]
     assert positions == sorted(positions)
+    assert text.index('Verify both Free wheels MATCH') < text.index('sleep 240') < text.index('  pypi-pro:')
+    assert "needs: [preflight, pypi-pro]" in text
+    assert "needs: [preflight, dockerhub]" in text
+    assert "needs: [preflight, ghcr]" in text
+    assert "needs: [preflight, aliases]" in text
+    assert "needs: [preflight, pre-tag-verify]" in text
+    assert "needs: [preflight, tag]" in text
+    assert text.index('Confirm candidate, four PyPI wheels, and all image digests') < text.index('git tag -a')
+    for tag in ('1.0.0', '1.0', '1', 'latest'):
+        assert tag in text
     assert 'GitHub Release last + final verification' in text
+
+
+def test_publish_dependency_graph_guards_all_external_writes_before_git_tag():
+    jobs = yaml.safe_load(read('release-publish.yml'))['jobs']
+
+    def ancestors(job):
+        needs = jobs[job].get('needs', [])
+        if isinstance(needs, str):
+            needs = [needs]
+        return set(needs).union(*(ancestors(parent) for parent in needs))
+
+    required_chain = (
+        'pypi-free', 'pypi-pro', 'dockerhub', 'ghcr', 'aliases',
+        'pre-tag-verify', 'tag', 'github-release',
+    )
+    for earlier, later in zip(required_chain, required_chain[1:]):
+        assert earlier in ancestors(later), (earlier, later)
+    assert 'tag' not in ancestors('pypi-free')
+    preflight = jobs['preflight']['steps']
+    tag_guard = next(
+        step for step in preflight
+        if step.get('name') == 'Reject a conflicting Git tag before any publication'
+    )['run']
+    assert 'git rev-list -n1 "$TAG"' in tag_guard
+    assert 'CONFLICT' in tag_guard
+    pause = next(
+        step for step in jobs['pypi-free']['steps']
+        if 'sleep 240' in step.get('run', '')
+    )
+    assert pause['if'] == "steps.state.outputs.bootstrap_probe == 'true'"
+    verify = next(
+        step for step in jobs['pre-tag-verify']['steps']
+        if 'Confirm candidate, four PyPI wheels' in step.get('name', '')
+    )['run']
+    assert '--variant free' in verify and '--variant pro' in verify
+    assert 'docker.io/' in verify and 'ghcr.io/' in verify
+    assert 'for tag in 1.0.0 1.0 1 latest' in verify
+
+
+def test_existing_github_release_resumes_only_with_identical_assets():
+    jobs = yaml.safe_load(read('release-publish.yml'))['jobs']
+    step = next(
+        step for step in jobs['github-release']['steps']
+        if step.get('name') == 'Create/resume release from exact hashed assets'
+    )
+    script = step['run']
+    assert 'git fetch origin --tags' in script
+    assert 'git rev-list -n1 "$TAG"' in script
+    assert 'gh release download "$TAG"' in script
+    assert 'gh release upload "$TAG" "$f"' in script
+    assert 'cmp -s "$f" "$verify_dir/$name"' in script
+    assert '--clobber' not in script
+    assert '|| true' not in script
 
 
 def test_build_validation_is_real_native_linux_windows_and_evidence_pack():
     text = read('v1-release-build-validation.yml')
     assert 'review/v1-release-prep-correction-1' in text
+    assert 'release/v1.0.0-prep' in text
+    assert 'branch=release%2Fv1.0.0-prep' in text
     assert 'linux_x86_64' in text and 'win_amd64' in text
     assert 'windows-latest' in text
     assert 'python tools/v1_kroko_release.py build' in text
@@ -78,6 +150,12 @@ def test_build_validation_is_real_native_linux_windows_and_evidence_pack():
     assert 'unset VOICESTT_KROKO_VARIANT KROKO_API_KEY' in text
     assert 'build/v1-release.Dockerfile' in text
     assert 'v1-correction-1-evidence' in text
+
+
+def test_preparation_ci_runs_on_current_release_preparation_branch():
+    text = read('v1-release-prep-ci.yml')
+    assert "- 'release/v1.0.0-prep'" in text
+    assert 'review/v1-release-prep-*|release/v1.0.0-prep' in text
 
 
 def test_all_third_party_actions_are_full_sha_pinned():
@@ -110,6 +188,21 @@ def test_evidence_scope_maps_native_kroko_installer():
     reason = scope_reason('VoiceSTT/install_kroko.py')
     assert 'Kroko' in reason
     assert 'native' in reason
+
+
+def test_final_release_plan_is_mandatory_checksums_and_scope_mapped():
+    from tools.v1_evidence_pack import EVIDENCE_SOURCES, MANDATORY
+
+    assert '27_release_plan.md' in MANDATORY
+    assert '27_release_plan.md' in EVIDENCE_SOURCES
+    plan = ROOT / 'docs/v1-release-final-plan.md'
+    content = plan.read_text(encoding='utf-8')
+    assert '240-Sekunden-Fenster' in content
+    assert content.index('**PyPI Free:**') < content.index('**Docker Hub exact:**')
+    assert content.index('**Docker Hub exact:**') < content.index('**GHCR exact:**')
+    assert content.index('**Pre-Tag-Gate:**') < content.index('**GitHub Release zuletzt:**')
+    assert 'release-facing' in scope_reason('docs/v1-release-final-plan.md')
+    assert 'Wake Word' in scope_reason('VoiceSTT/assets/wakeword_models/Jarvis.onnx')
 
 
 def test_dockerfile_consumes_only_final_product_wheel():

@@ -150,7 +150,12 @@ setuptools.setup(
     python_requires=">=3.11", license="MIT", install_requires=base_requirements,
     extras_require=extras_require,
     keywords="real-time, audio, transcription, speech-to-text, voice-activity-detection, VAD, real-time-transcription, ambient-noise-detection, microphone-input, faster_whisper, speech-recognition, voice-assistants, audio-processing, buffered-transcription, pyaudio, ambient-noise-level, voice-deactivity",
-    package_data={"VoiceSTT":["assets/warmup_audio.wav"],"api_fastapi_server":["static/index.html"]},
+    package_data={"VoiceSTT":[
+        "assets/warmup_audio.wav",
+        "assets/wakeword_models/models.json",
+        "assets/wakeword_models/ATTRIBUTION.md",
+        "assets/wakeword_models/*.onnx",
+    ],"api_fastapi_server":["static/index.html"]},
     include_package_data=True, cmdclass={"build_py": build_py},
     entry_points={"console_scripts":[
         "stt-server=VoiceSTT_server.server:main",

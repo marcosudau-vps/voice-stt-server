@@ -102,7 +102,7 @@ unter [`build/vps`](vps/README.md) festgelegt.
 ### Vor einem Release pruefen
 
 ```bash
-python -m pytest -q
+python -m pytest -q tests
 python -m pytest -q tests/test_v1_*.py
 python -m pip check
 python tools/compose.py config --quiet
@@ -125,7 +125,7 @@ Ein reproduzierbarer VoiceSTT-Build besteht aus mehreren getrennten Ebenen:
 | Projektquelle | Python-Code, Dockerfile, Setup-Metadaten, Dokumentation | Ja |
 | Python-Abhaengigkeiten | Kernpaket und gewaehlte Extras | Im Image ja; lokale venv nein |
 | Native Kroko-Runtime | Aus `kroko-onnx` gebautes Wheel, Variante `free` oder `pro` | Im Image ja, Lizenzbedingungen beachten |
-| Modelle | Whisper-, Kroko- und Wake-Word-Modelle | Lokal/read-only mounten; nicht in diesem Repo |
+| Modelle | Whisper-/Kroko-Modelle; vierzehn ausgewählte OpenWakeWord-Modelle | Whisper/Kroko lokal read-only mounten; das nichtkommerzielle Wakeword-Set liegt im Paket/Image |
 | Secrets | API-, Admin-, GitHub- und Kroko-Lizenz-Keys | Nein; nur Secret Store oder lokale env-Datei |
 | Laufzeitdaten | Logs, SQLite, Audiodateien, `config/runtime.json` | Nein; persistentes `/data`-Volume |
 | Serversteuerung | VPS-Pfade, Ports, Netzwerk, Release-Log | Nur unter `build/vps` als Vorlage; erzeugte Daten extern |

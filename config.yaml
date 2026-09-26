@@ -44,7 +44,7 @@ settings:
   # Wake Word
   wakeword_backend: openwakeword
   wake_words: hey_jarvis
-  openwakeword_model_paths: hey_jarvis_v0.1.onnx
+  openwakeword_model_paths: null
   openwakeword_inference_framework: onnx
   wake_words_sensitivity: 0.5
   wake_word_activation_delay: 0.0

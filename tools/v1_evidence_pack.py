@@ -37,7 +37,7 @@ MANDATORY = [
     "19_pypi_resume_simulation.json", "20_trusted_publisher_identity.txt",
     "21_artifact_negative_checks.txt", "22_license_inventory.md",
     "23_secret_scan.txt", "24_ci_runs.md", "25_no_publication_guard.md",
-    "26_remaining_risks.md", "SHA256SUMS.txt",
+    "26_remaining_risks.md", "27_release_plan.md", "SHA256SUMS.txt",
 ]
 
 EVIDENCE_SOURCES = {
@@ -69,6 +69,7 @@ EVIDENCE_SOURCES = {
     "24_ci_runs.md": ("Exact run, job and artifact identifiers", "evidence job / GitHub Actions API"),
     "25_no_publication_guard.md": ("Branch/tag/release/manual-workflow/publication guard", "evidence job / git and GitHub API"),
     "26_remaining_risks.md": ("Only known residual release risks", "evidence job / correction gate review"),
+    "27_release_plan.md": ("Final V1 release order, gates, and selected historical safeguards", "source-controlled docs/v1-release-final-plan.md"),
     "SHA256SUMS.txt": ("SHA-256 for every other evidence file", "evidence job / v1_evidence_pack.py"),
 }
 
@@ -78,12 +79,22 @@ def scope_reason(path: str) -> str:
         return "V1 native build, Candidate, publish/resume, or validation contract."
     if path == ".dockerignore":
         return "V1 Docker build-context filtering required for deterministic release image inputs."
-    if path in {"README.md", "RELEASE_NOTES.md", "setup.py", "build/BUILD.md", "docs/v1-preservation-release.md"}:
+    if path in {"README.md", "RELEASE_NOTES.md", "setup.py", "build/BUILD.md", "docs/v1-preservation-release.md", "docs/v1-release-final-plan.md"}:
         return "Directly release-facing install, packaging, or build documentation/metadata."
+    if path == "MANIFEST.in":
+        return "Packages the verified bundled Wake Word resource files."
+    if path == "config.yaml":
+        return "Source-controlled default configuration for the bundled Wake Word catalog."
+    if path in {"docs/configuration.md", "docs/licenses.md", "docs/wake-words.md"}:
+        return "Documents bundled Wake Words, configuration, and actual redistribution notices."
+    if path == "docs/engines/kroko-onnx.md":
+        return "Release-facing Kroko Native Runtime and model installation guidance."
     if path.startswith("docs/.archiv/"):
         return "Mandatory repository change-action audit trail required by AGENTS.md."
     if path == "VoiceSTT/_release_variant.py":
         return "Source-controlled baked Free/Pro distribution identity."
+    if path == "VoiceSTT/core/openwakeword_catalog.py" or path.startswith("VoiceSTT/assets/wakeword_models/"):
+        return "Bundled default Wake Word catalog, verified ONNX payload, or attribution."
     if path == "VoiceSTT/install_kroko.py":
         return "Pinned cross-platform Kroko native build and bundled runtime installer."
     if path == "VoiceSTT/transcription_engines/model_resolver.py":
@@ -92,6 +103,13 @@ def scope_reason(path: str) -> str:
         return "Production image consumes exactly one final Linux product wheel."
     if path.startswith("tests/test_v1_"):
         return "Executable acceptance/negative contract for this V1 correction."
+    if path in {
+        "tests/unit/test_install_kroko_cpu.py",
+        "tests/unit/test_fastapi_server_multi_user.py",
+        "tests/unit/test_server_operations.py",
+        "tests/unit/test_wakeword.py",
+    }:
+        return "Regression coverage for CPU-only runtime or bundled Wake Word behavior."
     if path.startswith("tools/v1_"):
         return "Source-controlled native runtime, product wheel, manifest, publish, local acceptance, or evidence tooling."
     raise SystemExit(f"unmapped scope path in correction diff: {path}")
@@ -347,6 +365,10 @@ def build_pack(root: Path, out: Path):
     if not all(context_checks.values()):
         raise SystemExit(f"Docker context secret/model check failed: {context_checks}")
     write(out / "26_remaining_risks.md", "# Remaining risks\n\n- At CI artifact creation time, operator-local Windows-PC and Linux-VPS acceptance is external evidence and must still be reconciled before Candidate.\n- The real PyPI pending-publisher transition cannot be exercised without the authorized first public release; seven safe local states are simulated in files 19.\n- GitHub recorded parse-only push run 34703916749 for an earlier invalid `release-candidate.yml`; it had no jobs and no publication, but the historical run record remains. The Candidate was never manually dispatched.\n")
+    plan = ROOT / "docs/v1-release-final-plan.md"
+    if not plan.is_file():
+        raise SystemExit(f"final release plan missing: {plan}")
+    (out / "27_release_plan.md").write_bytes(plan.read_bytes())
 
     # Predeclare every mandatory evidence file so the index also indexes itself
     # and the checksum file that is written last.

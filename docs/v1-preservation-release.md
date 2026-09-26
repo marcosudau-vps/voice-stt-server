@@ -3,6 +3,8 @@
 This document is the release-facing authority for the one-time V1 preservation
 release before V2 integration. `build/vps/**` is explicitly not a public
 release authority.
+The final cross-repository order, explicit approval gates, and selected
+historical safeguards are in [v1-release-final-plan.md](v1-release-final-plan.md).
 
 ## Public Python product contract
 
@@ -71,6 +73,13 @@ model directory, `VOICESTT_KROKO_MODEL_ROOT`, the runtime credential
 root is platform-appropriate (Windows LocalAppData or Linux/XDG user data);
 containers override it to `/models/kroko`.
 
+The product packages and Docker images include fourteen OpenWakeWord ONNX
+classifiers (listed in `wake-words.md`), including `hey_jarvis`, `alexa`,
+`hey_mycroft`, `hey_rhasspy`, and `computer`, plus their feature pipeline.
+Their CC BY-NC-SA 4.0 terms make this bundled set a
+non-commercial distribution. External OpenWakeWord catalogs remain supported
+as additive overrides. No Wake Word asset is downloaded at runtime.
+
 ## Native build authority
 
 `tools/v1_kroko_release.py` pins upstream Kroko to
@@ -102,7 +111,7 @@ health checks, and secret checks remain in force.
 
 ## Normal correction/build validation
 
-Pushes to `review/v1-release-prep-correction-1` run real build validation:
+Pushes to `release/v1.0.0-prep` run real build validation:
 
 1. build four pinned Kroko native intermediate wheels;
 2. assemble four final product wheels;
@@ -152,13 +161,16 @@ persists private GHCR staging images, and emits one immutable
 `release` environment, consumes exact candidate bytes, and contains no build
 step. Publication order is:
 
-1. create/resume exact tag `v1.0.0`;
-2. publish/resume `voice-stt-server` Linux + Windows wheels;
+1. publish/resume `voice-stt-server` Linux + Windows wheels;
+2. on the first run, wait four minutes after both Free wheels match so the Pro
+   Pending Publisher can be configured;
 3. publish/resume `voice-stt-server-pro` Linux + Windows wheels;
 4. Docker Hub immutable tags;
 5. final GHCR immutable tags;
 6. aliases `1.0`, `1`, `latest`;
-7. GitHub Release last.
+7. verify all four PyPI wheels and all Free/Pro immutable + alias image digests;
+8. create/resume the exact Git tag `v1.0.0` only after those checks pass;
+9. create/verify the GitHub Release last.
 
 Remote Python state is classified **per file** using only `ABSENT`, `MATCH`,
 `CONFLICT`, or `UNKNOWN`. Only `ABSENT` files are staged; `CONFLICT` or
@@ -167,13 +179,19 @@ ABSENT file without inventing a fifth `PARTIAL` artifact state.
 
 For the first public V1.0.0 release, the Pending Trusted Publisher is initially
 configured only for `voice-stt-server`. After both Free wheels are uploaded and
-verified MATCH, the workflow deliberately stops with
-`PYPI_PRO_PUBLISHER_SETUP_REQUIRED`. The operator then configures the Pending
-Trusted Publisher for `voice-stt-server-pro` using the same repository,
-`release-publish.yml`, and `release` environment, and reruns the **same
+verified MATCH, the workflow announces a **240-second setup window** and waits.
+During that pause, the operator can configure the Pending Trusted Publisher for
+`voice-stt-server-pro` using the same repository, `release-publish.yml`, and
+`release` environment. After the pause the Pro job attempts publication. If the
+publisher is ready, the **same workflow run** continues. If the Pro upload fails,
+inspect the error, configure/correct the publisher, and rerun the **same
 candidate/version**. Already MATCH Free artifacts are not uploaded again; only
-ABSENT Pro files are staged. Only after all four Python wheels MATCH may OCI
-publication continue.
+ABSENT Pro files are staged. Only after all four Python wheels MATCH may Docker
+Hub, final GHCR, and aliases run. The workflow then verifies both registries
+against the candidate digests before creating the Git tag; the GitHub Release
+page is last. PyPI and registry publication are themselves public writes and
+cannot be made reversible by delaying the Git tag. A failed later step is
+resumed against the same candidate/version, never rebuilt or overwritten.
 
 ## Preparation safety lock
 

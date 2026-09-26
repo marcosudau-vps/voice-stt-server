@@ -8,8 +8,10 @@ speech into text with only a few lines of code.
 
 This checkout is configured as a CPU-only deployment. The supported production
 path uses Faster Whisper, Kroko ONNX, Silero ONNX, OpenWakeWord and Porcupine.
-Model downloads are disabled in deployment; existing model directories are
-resolved from environment variables or read-only Docker volumes.
+Model downloads are disabled in deployment. Whisper and Kroko directories are
+resolved from environment variables or read-only Docker volumes; five
+non-commercial OpenWakeWord models are bundled for an immediately usable Wake
+Word mode.
 
 The central build and deployment reference is
 [`build/BUILD.md`](build/BUILD.md). Server-specific files for Marcos VPS are
@@ -162,7 +164,7 @@ audio, logging, and executor injection.
 
 - Voice activity detection with WebRTC VAD and Silero VAD.
 - Final and realtime transcription with selectable engines.
-- Optional wake word activation through Porcupine or OpenWakeWord.
+- Optional wake word activation through Porcupine or OpenWakeWord, with fourteen bundled ONNX Wake Words for non-commercial use.
 - Session-local OpenWakeWord selection for FastAPI WebSocket clients without changing the server baseline or other sessions.
 - Direct microphone input or application-fed audio chunks.
 - Event callbacks for recording, VAD, realtime text, transcription, and wake word state.

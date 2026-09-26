@@ -53,7 +53,7 @@ documented centrally in [`build/BUILD.md`](../build/BUILD.md#community-und-pro).
 | --- | --- | --- |
 | WebRTC VAD via `webrtcvad-wheels` | PyPI lists MIT. | Permissive wrapper; preserve notices if redistributing. |
 | Silero VAD | [`silero-vad`](https://github.com/snakers4/silero-vad/blob/master/LICENSE) is MIT. | Permissive for the packaged VAD assets, subject to MIT notices. |
-| OpenWakeWord | OpenWakeWord is documented as Apache-2.0. | Permissive wake-word path. Verify any third-party wake-word model you add. |
+| OpenWakeWord | Runtime/source code is Apache-2.0. The pretrained models bundled by V1 are CC BY-NC-SA 4.0. | Bundled models are non-commercial and share-alike. See `VoiceSTT/assets/wakeword_models/ATTRIBUTION.md`; verify separately supplied models individually. |
 | Porcupine / Picovoice | Picovoice publishes separate service and SDK terms. | Treat Porcupine as a provider-licensed dependency. Free trials or free plans may not cover all commercial deployment scenarios. |
 
 ## Source Links Checked
@@ -79,5 +79,5 @@ documented centrally in [`build/BUILD.md`](../build/BUILD.md#community-und-pro).
 - Cohere Transcribe model card: `https://huggingface.co/CohereLabs/cohere-transcribe-03-2026`
 - webrtcvad-wheels PyPI metadata: `https://pypi.org/project/webrtcvad-wheels`
 - Silero VAD license: `https://github.com/snakers4/silero-vad/blob/master/LICENSE`
-- OpenWakeWord project page: `https://openwakeword.com`
+- OpenWakeWord repository and model license: `https://github.com/dscripka/openWakeWord`
 - Picovoice terms: `https://picovoice.ai/docs/terms-of-use`

@@ -1,0 +1,45 @@
+{
+  "openwakeword_models": {
+    "path": ".",
+    "default_model": "hey_jarvis",
+    "pipeline_models": {
+      "melspectrogram_onnx": "melspectrogram.onnx",
+      "embedding_model_onnx": "embedding_model.onnx"
+    },
+    "onnx_models": {
+      "hey_jarvis": "jarvis_v2.onnx",
+      "alexa": "alexa.onnx",
+      "hey_mycroft": "hey_mycroft.onnx",
+      "hey_rhasspy": "hey_rhasspy.onnx",
+      "computer": "Computer.onnx",
+      "hey_nabu": "hey_nabu.onnx",
+      "hey_rocky": "Hey_Rocky.onnx",
+      "jarvis": "Jarvis.onnx",
+      "stop": "Stop.onnx",
+      "hey_alfred": "Hey_Alfred.onnx",
+      "hey_billy": "Hey_Billy.onnx",
+      "hey_bro": "Hey_Bro.onnx",
+      "hey_glados": "hey_glados.onnx",
+      "hey_mira": "Hey_Mira.onnx"
+    },
+    "tflite_models": {},
+    "sha256": {
+      "jarvis_v2.onnx": "dae408c0fa69ec888bf8e3a8b41a41f97677522be3b8163821e4105fa754b988",
+      "alexa.onnx": "6ff566a01d12670e8d9e3c59da32651db1575d17272a601b7f8a39283dfbae3e",
+      "hey_mycroft.onnx": "c2a311e8fa1338de89c31b3b46dc4dffd4af2f9a8d6ddead48893c2d301b1f18",
+      "hey_rhasspy.onnx": "5a9b3ed3be2910e35780e097905aa9f35a9c10038df47914cf2b3ec4d670f6ea",
+      "Computer.onnx": "ad7a4c7f1a7168a46daac25a43cc8a743cd77449038d2db0c941ee2230760527",
+      "hey_nabu.onnx": "eaf5ac5cdd3f5311ca2d96af5297aad421e51d21f8187d0312b0cbbddc7c7311",
+      "Hey_Rocky.onnx": "bbbf9dd8a06d5baf88fd3363de77c44896759dab392fd3ab0ac19341298bb46c",
+      "Jarvis.onnx": "c2734f180d81832d8f217184706b64ce469a243f11bb5f49df94fa82ab9db3d4",
+      "Stop.onnx": "bcaa8deea30bf5a6d9dbd25a32b7b53ee1b6041031d5def0ab6965f57d5ece4b",
+      "Hey_Alfred.onnx": "6dfb5ad5e2e6d0700af7d489dfa4f0f5b7cf17f0f4cbd15ae2c4b417d92d0f7f",
+      "Hey_Billy.onnx": "a9f0f1d84a99a394581aa6d0664655bcf62daa3b6080d7515290ad5bec91eb75",
+      "Hey_Bro.onnx": "278d9c1a8c94ee90b40d2d432551d0f7915cafae14fe6e4165d45e6447f76dbf",
+      "hey_glados.onnx": "0885f72fd5f0630a28dc063df6f838ec6892b6af788442141a219e9d16d36262",
+      "Hey_Mira.onnx": "761ea62cd77644e018550b172a3e7fa641647c32a0d91983f89f411cfd33053b",
+      "melspectrogram.onnx": "ba2b0e0f8b7b875369a2c89cb13360ff53bac436f2895cced9f479fa65eb176f",
+      "embedding_model.onnx": "70d164290c1d095d1d4ee149bc5e00543250a7316b59f31d056cff7bd3075c1f"
+    }
+  }
+}

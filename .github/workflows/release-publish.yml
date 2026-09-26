@@ -29,6 +29,8 @@ jobs:
       source_commit: ${{ steps.identity.outputs.source_commit }}
       source_tree: ${{ steps.identity.outputs.source_tree }}
     steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {fetch-depth: 0}
       - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
         with: {name: v1-release-candidate, path: candidate, run-id: '${{ inputs.candidate_run_id }}', github-token: '${{ secrets.GITHUB_TOKEN }}'}
       - id: identity
@@ -46,38 +48,18 @@ jobs:
           assert commit==os.environ['GITHUB_SHA'], f"publish ref {os.environ['GITHUB_SHA']} != candidate {commit}"
           print('source_commit='+commit); print('source_tree='+tree)
           PY
-
-  tag:
-    needs: preflight
-    runs-on: ubuntu-24.04
-    environment: release
-    permissions: {actions: read, contents: write}
-    steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
-        with: {ref: '${{ needs.preflight.outputs.source_commit }}', fetch-depth: 0}
-      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
-        with: {name: v1-release-candidate, path: candidate, run-id: '${{ inputs.candidate_run_id }}', github-token: '${{ secrets.GITHUB_TOKEN }}'}
-      - name: Verify exact candidate and create/resume immutable tag
+      - name: Reject a conflicting Git tag before any publication
         shell: bash
         run: |
           set -euo pipefail
-          python tools/v1_release_publish.py verify-candidate --candidate-dir candidate
-          test "$(git rev-parse HEAD)" = '${{ needs.preflight.outputs.source_commit }}'
-          test "$(git rev-parse 'HEAD^{tree}')" = '${{ needs.preflight.outputs.source_tree }}'
           git fetch origin --tags --force
-          expected='${{ needs.preflight.outputs.source_commit }}'
           if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
-            test "$(git rev-list -n1 "$TAG")" = "$expected" || { echo CONFLICT; exit 1; }
-            echo "MATCH: $TAG"
-          else
-            git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-            git tag -a "$TAG" "$expected" -m 'VoiceSTT V1 preservation release 1.0.0'
-            git push origin "refs/tags/$TAG"
+            test "$(git rev-list -n1 "$TAG")" = '${{ steps.identity.outputs.source_commit }}' || { echo "CONFLICT: $TAG points to another commit" >&2; exit 1; }
           fi
 
   pypi-free:
-    name: PyPI Free / bootstrap gate
-    needs: [preflight, tag]
+    name: PyPI Free / first-release setup window
+    needs: preflight
     runs-on: ubuntu-24.04
     environment: release
     permissions: {actions: read, contents: read, id-token: write}
@@ -110,22 +92,24 @@ jobs:
           set -euo pipefail
           for i in $(seq 1 12); do python tools/v1_release_publish.py verify-pypi --candidate-dir candidate --variant free && exit 0; sleep 10; done
           exit 1
-      - name: Expected first-release bootstrap stop
+      - name: Four-minute Pro publisher setup window after Free verification
         if: steps.state.outputs.bootstrap_probe == 'true'
         shell: bash
         run: |
+          echo '::notice title=PyPI Pro setup window::Free wheels MATCH. Configure the Pending Publisher for voice-stt-server-pro now; Pro publication is attempted after 240 seconds.'
           cat <<'EOF'
-          EXPECTED BOOTSTRAP STOP: PYPI_PRO_PUBLISHER_SETUP_REQUIRED
+          PYPI_PRO_PUBLISHER_SETUP_WINDOW: 240 seconds, starting now.
           voice-stt-server 1.0.0 Free Linux+Windows wheels are now remotely verified MATCH.
-          voice-stt-server-pro was intentionally NOT uploaded. Docker Hub, final GHCR,
-          aliases, and GitHub Release have not run.
-          Configure the Pending Trusted Publisher for project voice-stt-server-pro with:
+          Configure the Pending Trusted Publisher for voice-stt-server-pro now:
             repository: marcosudau-vps/voice-stt-server
             workflow: release-publish.yml
             environment: release
-          Then re-run THIS SAME version 1.0.0 with THIS SAME candidate_run_id.
+          The Pro job will attempt the upload after this pause. If it fails, inspect
+          its error, configure/correct the publisher, and re-run with the SAME
+          version 1.0.0 and the SAME candidate_run_id; Free MATCH is not re-uploaded.
           EOF
-          exit 78
+          sleep 240
+          echo 'Setup window elapsed; continuing with the Pro publication job.'
 
   pypi-pro:
     name: PyPI Pro / resumable
@@ -243,16 +227,102 @@ jobs:
           m=json.load(open('candidate/rc-manifest.json'))
           for v in ('free','pro'): r=m['images'][v]; print(r['image'],r['digest'],sep='\t')
           PY
+          inspect(){ docker buildx imagetools inspect "$1" 2>/dev/null | awk '$1=="Digest:"{print $2;exit}'; }
+          # Detect every conflicting alias before creating the first new one.
           while IFS=$'\t' read -r image digest; do
             for alias in "${aliases[@]}"; do
-              docker buildx imagetools create --tag "docker.io/${DOCKERHUB_USERNAME}/${image}:${alias}" "docker.io/${DOCKERHUB_USERNAME}/${image}@${digest}"
-              docker buildx imagetools create --tag "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}:${alias}" "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}@${digest}"
+              for registry in "docker.io/${DOCKERHUB_USERNAME}" "ghcr.io/${GITHUB_REPOSITORY_OWNER}"; do
+                ref="${registry}/${image}:${alias}"
+                actual="$(inspect "$ref" || true)"
+                test -z "$actual" || test "$actual" = "$digest" || { echo "CONFLICT $ref $actual != $digest" >&2; exit 1; }
+              done
+            done
+          done < images.tsv
+          while IFS=$'\t' read -r image digest; do
+            for alias in "${aliases[@]}"; do
+              for registry in "docker.io/${DOCKERHUB_USERNAME}" "ghcr.io/${GITHUB_REPOSITORY_OWNER}"; do
+                ref="${registry}/${image}:${alias}"
+                actual="$(inspect "$ref" || true)"
+                if [ -z "$actual" ]; then
+                  docker buildx imagetools create --tag "$ref" "${registry}/${image}@${digest}"
+                elif [ "$actual" != "$digest" ]; then
+                  echo "CONFLICT $ref $actual != $digest" >&2; exit 1
+                fi
+                test "$(inspect "$ref")" = "$digest"
+              done
             done
           done < images.tsv
 
+  pre-tag-verify:
+    name: Verify PyPI and both registries before Git tag
+    needs: [preflight, aliases]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions: {actions: read, contents: read, packages: read}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {ref: '${{ needs.preflight.outputs.source_commit }}'}
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: v1-release-candidate, path: candidate, run-id: '${{ inputs.candidate_run_id }}', github-token: '${{ secrets.GITHUB_TOKEN }}'}
+      - uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with: {username: '${{ env.DOCKERHUB_USERNAME }}', password: '${{ secrets.DOCKERHUB_TOKEN }}'}
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with: {registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
+      - name: Confirm candidate, four PyPI wheels, and all image digests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/v1_release_publish.py verify-candidate --candidate-dir candidate
+          python tools/v1_release_publish.py verify-pypi --candidate-dir candidate --variant free
+          python tools/v1_release_publish.py verify-pypi --candidate-dir candidate --variant pro
+          python - <<'PY' > images.tsv
+          import json
+          m=json.load(open('candidate/rc-manifest.json'))
+          for v in ('free','pro'): r=m['images'][v]; print(r['image'],r['digest'],sep='\t')
+          PY
+          inspect(){ docker buildx imagetools inspect "$1" 2>/dev/null | awk '$1=="Digest:"{print $2;exit}'; }
+          while IFS=$'\t' read -r image expected; do
+            for tag in 1.0.0 1.0 1 latest; do
+              for ref in "docker.io/${DOCKERHUB_USERNAME}/${image}:${tag}" "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}:${tag}"; do
+                actual="$(inspect "$ref")"
+                test "$actual" = "$expected" || { echo "CONFLICT $ref $actual != $expected" >&2; exit 1; }
+              done
+            done
+          done < images.tsv
+
+  tag:
+    name: Create or verify Git tag after external artifacts match
+    needs: [preflight, pre-tag-verify]
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions: {actions: read, contents: write}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {ref: '${{ needs.preflight.outputs.source_commit }}', fetch-depth: 0}
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: v1-release-candidate, path: candidate, run-id: '${{ inputs.candidate_run_id }}', github-token: '${{ secrets.GITHUB_TOKEN }}'}
+      - name: Verify exact candidate and create/resume immutable tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/v1_release_publish.py verify-candidate --candidate-dir candidate
+          test "$(git rev-parse HEAD)" = '${{ needs.preflight.outputs.source_commit }}'
+          test "$(git rev-parse 'HEAD^{tree}')" = '${{ needs.preflight.outputs.source_tree }}'
+          git fetch origin --tags --force
+          expected='${{ needs.preflight.outputs.source_commit }}'
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            test "$(git rev-list -n1 "$TAG")" = "$expected" || { echo CONFLICT; exit 1; }
+            echo "MATCH: $TAG"
+          else
+            git config user.name 'github-actions[bot]'; git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git tag -a "$TAG" "$expected" -m 'VoiceSTT V1 preservation release 1.0.0'
+            git push origin "refs/tags/$TAG"
+          fi
+
   github-release:
     name: GitHub Release last + final verification
-    needs: [preflight, aliases]
+    needs: [preflight, tag]
     runs-on: ubuntu-24.04
     environment: release
     permissions: {actions: read, contents: write, packages: read}
@@ -270,13 +340,36 @@ jobs:
           mapfile -t wheels < <(find candidate/python -name '*.whl' -type f | sort)
           test "${#wheels[@]}" -eq 4
           assets=("${wheels[@]}" candidate/rc-manifest.json candidate/sha256-inventory.json)
+          expected='${{ needs.preflight.outputs.source_commit }}'
+          git fetch origin --tags
+          test "$(git rev-list -n1 "$TAG")" = "$expected" || { echo 'CONFLICT: Git tag points to another commit'; exit 1; }
+          verify_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$verify_dir"' EXIT
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "MATCH/RESUME: release exists; verifying tag before any asset action"
-            test "$(gh release view "$TAG" --json targetCommitish --jq .targetCommitish)" = '${{ needs.preflight.outputs.source_commit }}' || true
+            echo "MATCH/RESUME: release exists; checking each existing asset before upload"
+            existing_assets="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+            for f in "${assets[@]}"; do
+              name="$(basename "$f")"
+              if grep -Fxq "$name" <<< "$existing_assets"; then
+                gh release download "$TAG" --pattern "$name" --dir "$verify_dir"
+                cmp -s "$f" "$verify_dir/$name" || { echo "CONFLICT: release asset differs: $name"; exit 1; }
+              fi
+            done
+            for f in "${assets[@]}"; do
+              name="$(basename "$f")"
+              if ! grep -Fxq "$name" <<< "$existing_assets"; then
+                gh release upload "$TAG" "$f"
+              fi
+            done
           else
             gh release create "$TAG" "${assets[@]}" --title 'VoiceSTT V1.0.0 preservation release' --notes 'Preserved V1 release: Free and Pro CPython 3.12 native wheels for Linux x86_64 and Windows AMD64; exact qualified OCI images.'
           fi
-          gh release view "$TAG" --json assets --jq '.assets[].name' | sort
-          for f in "${assets[@]}"; do gh release view "$TAG" --json assets --jq '.assets[].name' | grep -Fx "$(basename "$f")"; done
+          for f in "${assets[@]}"; do
+            name="$(basename "$f")"
+            if [ ! -f "$verify_dir/$name" ]; then
+              gh release download "$TAG" --pattern "$name" --dir "$verify_dir"
+            fi
+            cmp -s "$f" "$verify_dir/$name" || { echo "CONFLICT: release asset differs: $name"; exit 1; }
+          done
           python tools/v1_release_publish.py verify-pypi --candidate-dir candidate --variant free
           python tools/v1_release_publish.py verify-pypi --candidate-dir candidate --variant pro
