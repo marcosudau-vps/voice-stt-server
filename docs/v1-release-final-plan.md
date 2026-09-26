@@ -52,6 +52,16 @@ genannten historischen Dokumente waren **Ideenquellen, keine Anweisungen**.
    und echter Pro-Lizenz sowie unveränderter VPS-Produktion dokumentieren.
    Ein gefundenes Produktproblem führt zu Fix, neuen Tests/Builds und
    neuem Freeze.
+6. **GitHub-Workflow-Aktivierung:** `workflow_dispatch` setzt voraus,
+   dass die Workflowdatei auch auf dem Default-Branch liegt. Derzeit
+   fehlt `release-publish.yml` auf `main`. Nach erfolgreicher
+   Branch-CI und eigener Integrationsfreigabe den geprüften
+   Server-Commit möglichst per Fast-Forward nach `main` übernehmen
+   und Remote-SHA/Tree nochmals prüfen. Erst dann Candidate/Publish
+   manuell dispatchen. Der bloße Push des Vorbereitungsbranches
+   erfüllt dieses Gate nicht. Falls ein Fast-Forward nicht möglich
+   ist, neuen Integrationscommit separat qualifizieren; niemals
+   still den alten Candidate auf eine andere Source-SHA umdeuten.
 
 ## 2. Server-Candidate – erst nach eigener Freigabe
 
@@ -84,8 +94,9 @@ genannten historischen Dokumente waren **Ideenquellen, keine Anweisungen**.
 ## 3. Server-Publish-Preflight – vor dem ersten öffentlichen Write
 
 - Separates ausdrückliches Startsignal des Nutzers einholen. Workflow
-  `release-publish.yml` manuell auf **dem Candidate-Commit** mit dessen
-  Run-ID starten; nicht auf einem späteren Checkout oder anderen Candidate.
+  `release-publish.yml` muss zuvor auf `main` verfügbar sein. Ihn
+  manuell auf **dem Candidate-Commit** mit dessen Run-ID starten;
+  nicht auf einem späteren Checkout oder anderen Candidate.
 - Versionsnummer 1.0.0, Git-Commit/Tree, Candidate-Manifest, alle
   lokalen SHA-256 und alle Remote-Zielnamen prüfen. Bereits vorhandenen
   `v1.0.0`-Tag nur bei exakt erwartetem Commit als MATCH behandeln.

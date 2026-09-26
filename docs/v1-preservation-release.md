@@ -5,6 +5,9 @@ release before V2 integration. `build/vps/**` is explicitly not a public
 release authority.
 The final cross-repository order, explicit approval gates, and selected
 historical safeguards are in [v1-release-final-plan.md](v1-release-final-plan.md).
+The manual publish workflow must also be present on the repository default
+branch before GitHub can dispatch it; pushing only the preparation branch
+does not activate publication.
 
 ## Public Python product contract
 

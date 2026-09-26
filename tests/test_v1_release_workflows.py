@@ -198,6 +198,7 @@ def test_final_release_plan_is_mandatory_checksums_and_scope_mapped():
     plan = ROOT / 'docs/v1-release-final-plan.md'
     content = plan.read_text(encoding='utf-8')
     assert '240-Sekunden-Fenster' in content
+    assert 'workflow_dispatch' in content and 'Default-Branch' in content
     assert content.index('**PyPI Free:**') < content.index('**Docker Hub exact:**')
     assert content.index('**Docker Hub exact:**') < content.index('**GHCR exact:**')
     assert content.index('**Pre-Tag-Gate:**') < content.index('**GitHub Release zuletzt:**')
