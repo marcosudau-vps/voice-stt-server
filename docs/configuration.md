@@ -112,7 +112,7 @@ recorder = AudioToTextRecorder(
 | `wake_word_activation_delay` | `0.0` | Delay before switching from normal voice activation to wake word activation. |
 | `wake_word_timeout` | `5.0` | Seconds after wake word detection to wait for speech before returning to wake word mode. |
 | `wake_word_buffer_duration` | `0.1` | Audio removed/buffered around wake word detection so the wake word is not included in the transcription. |
-| `openwakeword_model_paths` | `None` | Comma-separated OpenWakeWord classifier paths, a model directory, or a `models.json` manifest path. |
+| `openwakeword_model_paths` | `None` | Optional comma-separated classifier paths, external model directory, or external `models.json`. External models extend the fourteen bundled ONNX Wake Words and override matching logical IDs. |
 | `openwakeword_inference_framework` | `"onnx"` | OpenWakeWord inference framework: `"onnx"` or `"tflite"`. |
 
 ## Callback Parameters

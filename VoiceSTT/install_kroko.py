@@ -20,6 +20,12 @@ DEFAULT_REPO = "https://github.com/kroko-ai/kroko-onnx.git"
 DEFAULT_BRANCH = "cross-platform-builds"
 SUPPORTED_VARIANTS = ("free", "pro")
 KROKO_LICENSE_QUIET_ENV = "KROKO_ONNX_SUPPRESS_LICENSE_OUTPUT"
+WINDOWS_OPENSSL_PACKAGE = "openssl-native"
+WINDOWS_OPENSSL_VERSION = "3.5.5"
+WINDOWS_OPENSSL_URL = (
+    "https://api.nuget.org/v3-flatcontainer/openssl-native/3.5.5/"
+    "openssl-native.3.5.5.nupkg"
+)
 
 
 class KrokoInstallError(RuntimeError):
@@ -379,53 +385,52 @@ def patch_windows_dockerfile(repo_dir):
         newline = "\r\n" if "\r\n" in text else "\n"
         openssl_block = newline.join(
             [
-                "# Windows-native OpenSSL - required by sherpa-onnx's CMakeLists when",
-                "# SHERPA_ONNX_ENABLE_WEBSOCKET=ON (websocketpp uses it for wss:// support",
-                "# and the link is unconditional). Slproweb no longer keeps the previously",
-                "# pinned MSI files online reliably, so download the current Inno Setup EXE",
-                "# installers and extract the DLLs, import libraries, and headers directly.",
+                "# Windows-native OpenSSL -- pinned binary package.",
+                "# Rotating Slproweb installer filenames can disappear without a source",
+                "# change. This versioned NuGet package contains the x64 headers, import",
+                "# libraries, and runtime DLLs required by the Kroko Windows build.",
                 "RUN apt-get update && apt-get install -y --no-install-recommends \\",
-                "        curl innoextract \\",
+                "        curl unzip \\",
                 " && rm -rf /var/lib/apt/lists/* \\",
-                " && mkdir -p /tmp/openssl-final /opt/openssl-win64/app/bin \\",
+                " && mkdir -p /tmp/openssl-native /opt/openssl-win64/app/bin \\",
                 "        /opt/openssl-win64/app/lib /opt/openssl-win64/app/include \\",
-                " && cd /tmp \\",
-                " && for v in 3_6_3 3_5_7 3_4_6 3_0_21; do \\",
-                "        for flavor in \"\" \"_Light\"; do \\",
-                "            if curl -sLf \"https://slproweb.com/download/Win64OpenSSL${flavor}-${v}.exe\" \\",
-                "                    -o openssl.exe; then \\",
-                "                echo \"Downloaded Win64OpenSSL${flavor}-${v}.exe\"; \\",
-                "                break 2; \\",
-                "            fi; \\",
-                "            rm -f openssl.exe; \\",
-                "        done; \\",
-                "    done \\",
-                " && test -s openssl.exe \\",
-                " && innoextract -d /tmp/openssl-final openssl.exe \\",
-                " && (cp -r /tmp/openssl-final/app/* /opt/openssl-win64/app/ 2>/dev/null \\",
-                "     || (find /tmp/openssl-final -name \"libcrypto*.dll\" \\",
-                "            -exec cp -v {} /opt/openssl-win64/app/bin/ \\; ; \\",
-                "         find /tmp/openssl-final -name \"libssl*.dll\" \\",
-                "            -exec cp -v {} /opt/openssl-win64/app/bin/ \\; ; \\",
-                "         find /tmp/openssl-final -name \"libcrypto.lib\" \\",
-                "            -exec cp -v {} /opt/openssl-win64/app/lib/ \\; ; \\",
-                "         find /tmp/openssl-final -name \"libssl.lib\" \\",
-                "            -exec cp -v {} /opt/openssl-win64/app/lib/ \\; ; \\",
-                "         find /tmp/openssl-final -type d -name \"include\" \\",
-                "            -exec cp -r {} /opt/openssl-win64/app/ \\;)) \\",
-                " && (test -d /opt/openssl-win64/app/lib/VC/x64/MT \\",
-                "     && mv /opt/openssl-win64/app/lib/VC/x64/MT/* /opt/openssl-win64/app/lib/ \\",
-                "     || true) \\",
-                " && test -f /opt/openssl-win64/app/lib/libcrypto.lib \\",
-                "        -o -f /opt/openssl-win64/app/lib/libcrypto_static.lib \\",
-                " && rm -rf /tmp/openssl-final /tmp/openssl.exe",
+                "        /opt/openssl-win64/licenses \\",
+                " && curl -fL --retry 4 --retry-all-errors \\",
+                '        "{0}" \\'.format(WINDOWS_OPENSSL_URL),
+                "        -o /tmp/openssl-native.nupkg \\",
+                " && unzip -q /tmp/openssl-native.nupkg -d /tmp/openssl-native \\",
+                " && test -f /tmp/openssl-native/include/openssl/ssl.h \\",
+                " && test -f /tmp/openssl-native/lib/win-x64/native/libcrypto.lib \\",
+                " && test -f /tmp/openssl-native/lib/win-x64/native/libssl.lib \\",
+                " && test -f /tmp/openssl-native/runtimes/win-x64/native/libcrypto-3-x64.dll \\",
+                " && test -f /tmp/openssl-native/runtimes/win-x64/native/libssl-3-x64.dll \\",
+                " && cp -a /tmp/openssl-native/include/. /opt/openssl-win64/app/include/ \\",
+                " && cp -a /tmp/openssl-native/lib/win-x64/native/libcrypto.lib \\",
+                "        /opt/openssl-win64/app/lib/libcrypto.lib \\",
+                " && cp -a /tmp/openssl-native/lib/win-x64/native/libssl.lib \\",
+                "        /opt/openssl-win64/app/lib/libssl.lib \\",
+                " && cp -a /tmp/openssl-native/runtimes/win-x64/native/libcrypto-3-x64.dll \\",
+                "        /opt/openssl-win64/app/bin/libcrypto-3-x64.dll \\",
+                " && cp -a /tmp/openssl-native/runtimes/win-x64/native/libssl-3-x64.dll \\",
+                "        /opt/openssl-win64/app/bin/libssl-3-x64.dll \\",
+                " && cp -a /tmp/openssl-native/docs/license.txt \\",
+                "        /opt/openssl-win64/licenses/openssl-native-3.5.5-license.txt \\",
+                " && test -s /opt/openssl-win64/app/lib/libcrypto.lib \\",
+                " && test -s /opt/openssl-win64/app/lib/libssl.lib \\",
+                " && test -s /opt/openssl-win64/app/bin/libcrypto-3-x64.dll \\",
+                " && test -s /opt/openssl-win64/app/bin/libssl-3-x64.dll \\",
+                " && rm -rf /tmp/openssl-native /tmp/openssl-native.nupkg",
                 "",
             ]
         )
         if text[openssl_start:openssl_end] != openssl_block:
             text = text[:openssl_start] + openssl_block + text[openssl_end:]
             changed = True
-            print("Patched Dockerfile.windows to use current Slproweb OpenSSL EXE installers.")
+            print(
+                "Patched Dockerfile.windows to use pinned {0} {1}.".format(
+                    WINDOWS_OPENSSL_PACKAGE, WINDOWS_OPENSSL_VERSION
+                )
+            )
 
     if "sed -i 's/\\r$//'" in text:
         if changed:

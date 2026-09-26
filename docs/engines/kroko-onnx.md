@@ -55,6 +55,11 @@ CPython 3.12 `win_amd64` wheel with Docker Desktop, then installs that wheel.
 On Linux it patches the checkout and installs from source. Add `--skip-install`
 to build without installing into the active Python environment.
 
+The Windows helper deliberately sources OpenSSL from the versioned
+`openssl-native 3.5.5` NuGet package. Do not replace it with rotating Slproweb
+installer URLs: historical filenames can disappear and make an unchanged
+checkout fail at `test -s openssl.exe`.
+
 Windows requirements:
 
 - Python 3.12 x64
