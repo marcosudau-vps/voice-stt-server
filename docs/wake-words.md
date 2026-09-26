@@ -30,10 +30,35 @@ If `wake_words` is set without an explicit backend, the recorder selects
 Porcupine for backward compatibility. This Porcupine path is a library feature;
 it is not selectable through the current FastAPI session or admin contract.
 
-## Local model catalog
+## Bundled and local model catalog
 
-VoiceSTT never downloads Wake Word assets at runtime. It first looks for a
-`models.json` beside the configured model directory. Set the search root with:
+VoiceSTT never downloads Wake Word assets at runtime. V1 ships fourteen ONNX
+classifiers plus the required feature pipeline:
+
+| Logical ID | Spoken phrase |
+| --- | --- |
+| `hey_jarvis` | Hey Jarvis |
+| `alexa` | Alexa |
+| `hey_mycroft` | Hey Mycroft |
+| `hey_rhasspy` | Hey Rhasspy |
+| `computer` | Computer |
+| `hey_nabu` | Hey Nabu |
+| `hey_rocky` | Hey Rocky |
+| `jarvis` | Jarvis |
+| `stop` | Stop |
+| `hey_alfred` | Hey Alfred |
+| `hey_billy` | Hey Billy |
+| `hey_bro` | Hey Bro |
+| `hey_glados` | Hey Glados |
+| `hey_mira` | Hey Mira |
+
+`hey_jarvis` is the default. These files make Wake Word mode usable without a
+model mount. Their non-commercial/share-alike terms and hashes are recorded in
+`VoiceSTT/assets/wakeword_models/ATTRIBUTION.md` and `models.json`.
+
+An external `models.json` or directory extends the bundled catalog. A model
+with the same logical ID overrides its bundled counterpart. Set the external
+search root with:
 
 ```bash
 VOICESTT_OPENWAKEWORD_MODEL_ROOT=/models/openwakeword
@@ -78,9 +103,10 @@ to remain usable after a model directory is mounted at a different path.
 - a directory containing models and optionally `models.json`;
 - the path to `models.json` itself.
 
-Without a usable manifest, VoiceSTT falls back to scanning local `.onnx` and
-`.tflite` files. A manifest is recommended because it provides exact logical
-IDs, the default model and pipeline-file mappings.
+Without a usable external manifest, VoiceSTT scans external `.onnx` and
+`.tflite` files and merges them with the bundled catalog. A manifest is
+recommended because it provides exact logical IDs, the default model and
+pipeline-file mappings.
 
 ## Python recorder
 

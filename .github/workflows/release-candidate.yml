@@ -1,0 +1,195 @@
+name: V1 preservation release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      staging_private_confirmed:
+        description: Confirm both GHCR *-v1-staging packages are private
+        required: true
+        type: boolean
+        default: false
+      qualification_context:
+        description: Qualification note
+        required: false
+        default: V1.0.0 preservation candidate qualification
+
+permissions:
+  contents: read
+
+env:
+  CANDIDATE_ID: v1-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  guard:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: test '${{ inputs.staging_private_confirmed }}' = 'true'
+
+  kroko:
+    needs: guard
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [free, pro]
+        platform: [linux_x86_64, win_amd64]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with: {python-version: '3.12'}
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake libssl-dev pybind11-dev zlib1g-dev
+          python -m pip install --upgrade 'pip<26' setuptools==75.8.2 wheel==0.45.1
+      - name: Build exact pinned runtime
+        run: |
+          set -euo pipefail
+          test -z "${KROKO_API_KEY:-}"
+          out="candidate/kroko/${{ matrix.variant }}/${{ matrix.platform }}"
+          python tools/v1_kroko_release.py build --variant '${{ matrix.variant }}' --platform '${{ matrix.platform }}' --out-dir "$out"
+          python tools/v1_kroko_release.py verify --variant '${{ matrix.variant }}' --platform '${{ matrix.platform }}' --artifact-dir "$out"
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with:
+          name: candidate-kroko-${{ matrix.variant }}-${{ matrix.platform }}
+          path: candidate/kroko/${{ matrix.variant }}/${{ matrix.platform }}/
+          if-no-files-found: error
+          retention-days: 7
+
+  product:
+    needs: kroko
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [free, pro]
+        platform: [linux_x86_64, win_amd64]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with: {python-version: '3.12'}
+      - run: python -m pip install --upgrade 'pip<26' setuptools wheel build twine
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with:
+          name: candidate-kroko-${{ matrix.variant }}-${{ matrix.platform }}
+          path: kroko
+      - name: Assemble exact public product wheel
+        run: |
+          set -euo pipefail
+          out="candidate/python/${{ matrix.variant }}/${{ matrix.platform }}"
+          python tools/v1_product_wheel.py build --variant '${{ matrix.variant }}' --platform '${{ matrix.platform }}' --kroko-wheel "$(find kroko -name '*.whl')" --out-dir "$out" --report "$out/product.json"
+          python -m twine check "$out"/*.whl
+          python tools/v1_wakeword_bundle.py "$out"/*.whl
+          test -z "$(find "$out" -name '*py3-none-any.whl' -o -name '*.tar.gz')"
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with:
+          name: candidate-product-${{ matrix.variant }}-${{ matrix.platform }}
+          path: candidate/python/${{ matrix.variant }}/${{ matrix.platform }}/
+          if-no-files-found: error
+          retention-days: 7
+
+  linux-install:
+    needs: product
+    runs-on: ubuntu-24.04
+    strategy: {fail-fast: false, matrix: {variant: [free, pro]}}
+    steps:
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with: {python-version: '3.12'}
+      - run: sudo apt-get update && sudo apt-get install -y portaudio19-dev libsndfile1
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: 'candidate-product-${{ matrix.variant }}-linux_x86_64', path: product}
+      - run: |
+          set -euo pipefail
+          python -m venv clean
+          clean/bin/python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+          clean/bin/python -m pip install product/*.whl
+          clean/bin/python -c "import VoiceSTT, VoiceSTT_server.server, kroko_onnx; from VoiceSTT._release_variant import KROKO_VARIANT; assert KROKO_VARIANT == '${{ matrix.variant }}'"
+          clean/bin/python -c "import torch, importlib.metadata as m; assert torch.version.cuda is None, torch.version.cuda; bad=[d.metadata['Name'] for d in m.distributions() if d.metadata.get('Name') and (d.metadata['Name'].lower().startswith('nvidia-') or d.metadata['Name'].lower() == 'triton')]; assert not bad, bad; print('CPU_ONLY_OK=true')"
+          clean/bin/stt-server --help >/dev/null
+          clean/bin/python -m pip check
+
+  windows-install:
+    needs: product
+    runs-on: windows-latest
+    strategy: {fail-fast: false, matrix: {variant: [free, pro]}}
+    steps:
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with: {python-version: '3.12', architecture: x64}
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: 'candidate-product-${{ matrix.variant }}-win_amd64', path: product}
+      - shell: pwsh
+        run: |
+          python -m venv clean
+          $wheel=(Get-ChildItem product/*.whl).FullName
+          & .\clean\Scripts\python.exe -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+          & .\clean\Scripts\python.exe -m pip install $wheel
+          & .\clean\Scripts\python.exe -c "import VoiceSTT, VoiceSTT_server.server, kroko_onnx; from VoiceSTT._release_variant import KROKO_VARIANT; assert KROKO_VARIANT == '${{ matrix.variant }}'"
+          & .\clean\Scripts\python.exe -c "import torch, importlib.metadata as m; assert torch.version.cuda is None, torch.version.cuda; bad=[d.metadata['Name'] for d in m.distributions() if d.metadata.get('Name') and (d.metadata['Name'].lower().startswith('nvidia-') or d.metadata['Name'].lower() == 'triton')]; assert not bad, bad; print('CPU_ONLY_OK=true')"
+          & .\clean\Scripts\stt-server.exe --help | Out-Null
+          & .\clean\Scripts\python.exe -m pip check
+
+  image:
+    needs: [product, linux-install, windows-install]
+    runs-on: ubuntu-24.04
+    permissions: {contents: read, packages: write}
+    strategy: {fail-fast: false, matrix: {variant: [free, pro]}}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {fetch-depth: 0}
+      - uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: 'candidate-product-${{ matrix.variant }}-linux_x86_64', path: release-inputs/python}
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with: {registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
+      - id: build
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ '${{ matrix.variant }}' = free ]; then image=voice-stt-server; else image=voice-stt-server-pro; fi
+          local="$image:candidate"
+          docker build -f build/v1-release.Dockerfile --platform linux/amd64 --build-arg VOICESTT_VERSION=1.0.0 --build-arg VOICESTT_GIT_COMMIT="$GITHUB_SHA" --build-arg KROKO_VARIANT='${{ matrix.variant }}' --build-arg IMAGE_TITLE="$image" --build-arg BUILD_DATE="$(git show -s --format=%cI HEAD)" -t "$local" .
+          docker run --rm --entrypoint python "$local" -c "import kroko_onnx; from VoiceSTT._release_variant import KROKO_VARIANT; assert KROKO_VARIANT == '${{ matrix.variant }}'"
+          staging="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}-v1-staging:${CANDIDATE_ID}"
+          docker tag "$local" "$staging"; docker push "$staging"
+          digest="$(docker buildx imagetools inspect "$staging" | awk '$1=="Digest:"{print $2;exit}')"
+          mkdir -p candidate/images
+          VARIANT='${{ matrix.variant }}' IMAGE="$image" STAGING="$staging" DIGEST="$digest" python - <<'PY'
+          import json,os,pathlib
+          tag=os.environ['STAGING']; digest=os.environ['DIGEST']
+          pathlib.Path('candidate/images/'+os.environ['VARIANT']+'.json').write_text(json.dumps({'variant':os.environ['VARIANT'],'image':os.environ['IMAGE'],'stagingTag':tag,'digest':digest,'stagingReference':tag.rsplit(':',1)[0]+'@'+digest},indent=2,sort_keys=True)+'\n')
+          PY
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with: {name: 'candidate-image-${{ matrix.variant }}', path: 'candidate/images/${{ matrix.variant }}.json', if-no-files-found: error, retention-days: 7}
+
+  qualify:
+    needs: [kroko, product, image]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {fetch-depth: 0}
+      - uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b
+        with: {python-version: '3.12'}
+      - name: Download product matrix
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {pattern: 'candidate-product-*', path: flat-product}
+      - name: Download Kroko provenance
+        uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {pattern: 'candidate-kroko-*', path: flat-kroko}
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {pattern: 'candidate-image-*', path: candidate/images, merge-multiple: true}
+      - name: Normalize and assemble immutable manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          for v in free pro; do for p in linux_x86_64 win_amd64; do
+            mkdir -p "candidate/python/$v/$p" "candidate/kroko/$v/$p"
+            cp -a "flat-product/candidate-product-$v-$p/." "candidate/python/$v/$p/"
+            cp -a "flat-kroko/candidate-kroko-$v-$p/." "candidate/kroko/$v/$p/"
+          done; done
+          tree="$(git rev-parse 'HEAD^{tree}')"; url="https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          python tools/v1_release_manifest.py assemble --candidate-dir candidate --candidate-id "$CANDIDATE_ID" --source-commit "$GITHUB_SHA" --source-tree "$tree" --run-url "$url" --evidence-ref "$url :: ${{ inputs.qualification_context }}" --out candidate/rc-manifest.json
+          python tools/v1_release_manifest.py inventory --candidate-dir candidate --out candidate/sha256-inventory.json
+          python tools/v1_release_manifest.py validate candidate/rc-manifest.json
+      - uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882
+        with: {name: v1-release-candidate, path: candidate/, if-no-files-found: error, retention-days: 30}

@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -1519,10 +1520,12 @@ class FastAPIMultiUserWebSocketTests(unittest.TestCase):
                     })
                     self.assertEqual(logs.receive_json()["type"], "log.hello")
                     self.assertEqual(logs.receive_json()["type"], "log.subscribed")
-                    self.assertEqual(
-                        logs.receive_json()["type"],
-                        "log.replay_completed",
-                    )
+                    while True:
+                        replay_message = logs.receive_json()
+                        if replay_message["type"] == "log.replay_completed":
+                            break
+                        self.assertEqual(replay_message["type"], "log.event")
+                        self.assertTrue(replay_message["replay"])
 
                     events._store.append = lambda event: (_ for _ in ()).throw(
                         OSError("simulated outage")
@@ -1530,7 +1533,11 @@ class FastAPIMultiUserWebSocketTests(unittest.TestCase):
                     self.assertIsNone(
                         events.emit("system", "outage.not_committed")
                     )
-                    error = logs.receive_json()
+                    while True:
+                        error = logs.receive_json()
+                        if error["type"] == "log.error":
+                            break
+                        self.assertEqual(error["type"], "log.event")
                     self.assertEqual(error["type"], "log.error")
                     self.assertEqual(error["code"], "event_store_unavailable")
                     with self.assertRaises(WebSocketDisconnect) as closed:
@@ -1676,7 +1683,9 @@ class FastAPIMultiUserWebSocketTests(unittest.TestCase):
                 session_b_cursor = events._store.append({
                     **common,
                     "eventId": "retention-transcription-session-b",
-                    "timestamp": "2026-08-02T00:00:00.000Z",
+                    "timestamp": datetime.now(timezone.utc).isoformat(
+                        timespec="milliseconds"
+                    ).replace("+00:00", "Z"),
                     "channel": "transcription",
                     "event": "retention.session_b",
                     "sessionId": "session-b",

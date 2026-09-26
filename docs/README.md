@@ -5,6 +5,23 @@ Serverdokumentation. Historische Planungen und Abschlussvergleiche liegen
 getrennt unter [`.archiv`](.archiv/README.md) und ersetzen die aktuelle
 Referenz nicht.
 
+## V1-Release und spätere V2-Integration – zuerst lesen
+
+- [Finaler V1-Release- und Publikationsplan](v1-release-final-plan.md):
+  Freigabegates, Candidate, PyPI Free/Pro, Docker Hub, GHCR, Git-Tag,
+  GitHub Release und anschließender separater Client-Release.
+- [V1/V2-Historienübergang](v1-v2-history-transition.md): warum V1 als
+  einzelner Commit auf `main` liegt und wie der spätere V2-Merge beide
+  Historien bewahrt, ohne den qualifizierten V2-Dateibaum zu vermischen.
+- [V1-Produktvertrag](v1-preservation-release.md): Free/Pro-Wheels,
+  Modelle, Wakewords, Docker und Qualifikation.
+
+Diese Dokumente sind auch für die V2-Releaseplanung maßgeblich. Der
+V2-Canonical-Zweig muss sie vor seinem endgültigen Source-Freeze bewusst
+übernehmen, wenn sie nach dem V2-Merge im Ergebnisbaum erhalten bleiben
+sollen; der V2-Merge selbst darf den qualifizierten V2-Tree nicht nachträglich
+verändern.
+
 ## Aktueller Funktionsstand
 
 Die zuletzt abgeschlossenen größeren Erweiterungen sind vollständig in

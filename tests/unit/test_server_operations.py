@@ -21,6 +21,7 @@ from VoiceSTT_server.event_logging import (
     apply_process_log_level,
 )
 from VoiceSTT.core.initialization import _configure_logger
+from VoiceSTT.core.openwakeword_catalog import BUNDLED_OPENWAKEWORD_MODEL_ROOT
 
 
 def make_ctranslate_model(root, folder):
@@ -64,11 +65,13 @@ def test_wakeword_registry_discovers_models_and_ignores_support_files(tmp_path):
 
     models = registry.openwakeword_models(framework="onnx")
 
-    assert len(models) == 1
-    assert models[0]["id"] == "hey_jarvis"
-    assert models[0]["label"] == "Hey Jarvis"
-    assert models[0]["path"].endswith("hey_jarvis_v0.1.onnx")
-    assert models[0]["availableFormats"] == ["onnx", "tflite"]
+    by_id = {model["id"]: model for model in models}
+    assert {"hey_jarvis", "alexa", "computer", "hey_mycroft", "hey_rhasspy"} <= by_id.keys()
+    assert "embedding_model" not in by_id
+    assert "melspectrogram" not in by_id
+    assert by_id["hey_jarvis"]["label"] == "Hey Jarvis"
+    assert by_id["hey_jarvis"]["path"].endswith("hey_jarvis_v0.1.onnx")
+    assert by_id["hey_jarvis"]["availableFormats"] == ["onnx", "tflite"]
 
 
 def test_wakeword_registry_prefers_models_json_and_resolves_default(tmp_path):
@@ -108,9 +111,20 @@ def test_wakeword_registry_prefers_models_json_and_resolves_default(tmp_path):
         framework="onnx",
     )
 
-    assert [model["id"] for model in models] == ["alexa", "hey_jarvis"]
+    bundled_manifest = json.loads(
+        (BUNDLED_OPENWAKEWORD_MODEL_ROOT / "models.json").read_text(encoding="utf-8")
+    )["openwakeword_models"]["onnx_models"]
+    bundled_ids = {
+        model_id
+        for model_id, filename in bundled_manifest.items()
+        if (BUNDLED_OPENWAKEWORD_MODEL_ROOT / filename).is_file()
+    }
+    assert {model["id"] for model in models} == bundled_ids
+    assert [model["id"] for model in models] == sorted(bundled_ids)
     assert models[0]["default"] is True
-    assert all(model["source"] == "models.json" for model in models)
+    assert {
+        model["id"] for model in models if model["source"] == "models.json"
+    } == {"alexa", "hey_jarvis"}
     assert default["id"] == "alexa"
     assert missing == []
     assert selected[0]["id"] == "hey_jarvis"
