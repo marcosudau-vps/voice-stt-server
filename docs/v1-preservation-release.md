@@ -9,10 +9,12 @@ The manual publish workflow must also be present on the repository default
 branch before GitHub can dispatch it; pushing only the preparation branch
 does not activate publication.
 After the single V1 preservation commit reached `main`, the final publication
-audit found a registry UNKNOWN/ABSENT conflation. One separately approved,
-narrow publish-safety commit is required before Candidate. Candidate and tag
-must use the **final** qualified Main HEAD; neither the first preservation
-commit nor normal-CI wheels are public release bytes.
+audit found a registry UNKNOWN/ABSENT conflation; a separately approved,
+narrow safety commit fixed it. The first publish attempt then failed before
+upload because its pinned PyPI action did not support Core Metadata 2.4.
+Correcting that pin requires a fresh, qualified Candidate on the **final**
+Main HEAD. Neither earlier Candidate nor normal-CI wheels are public release
+bytes. See [V1/V2 history transition](v1-v2-history-transition.md).
 
 ## Public Python product contract
 
@@ -163,7 +165,7 @@ authority.
 must **not** be started during correction review. When later authorized it
 rebuilds/qualifies the four exact public wheels, performs real Linux and Windows
 clean-install checks, builds the two OCI images from the final Linux wheels,
-persists private GHCR staging images, and emits one immutable
+persists GHCR staging images, and emits one immutable
 `v1-release-candidate` artifact. No sdist is part of that candidate.
 
 ## Publication and first-release PyPI bootstrap
@@ -173,7 +175,7 @@ persists private GHCR staging images, and emits one immutable
 step.
 
 Before step 1, a read-only registry preflight authenticates to Docker Hub and
-GHCR, verifies both immutable private candidate staging references, and
+GHCR, verifies both immutable candidate staging references, and
 classifies every Free/Pro exact and alias destination. Ambiguous registry
 errors are UNKNOWN, never ABSENT. Registry write jobs repeat these probes
 immediately before each write. A release-page read failure is also UNKNOWN;

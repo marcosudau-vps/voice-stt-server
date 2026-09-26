@@ -1,6 +1,6 @@
 # V1-Erstrelease und späterer V2-Historienübergang
 
-Stand: 26.09.2026. Einstieg für die spätere V2-Releasearbeit. Der
+Stand: 27.09.2026. Einstieg für die spätere V2-Releasearbeit. Der
 [finale V1-Releaseplan](v1-release-final-plan.md) regelt die
 Publikationsreihenfolge; dieses Dokument regelt ausschließlich den
 Git-Historienübergang. V1 und V2 sind bewusst unterschiedliche
@@ -16,12 +16,16 @@ Produktstände. V2-Code wird nicht in V1 zurückportiert.
   ist genau ein Nachfahre dieses Ankers. Er wurde nach grüner CI und
   ausdrücklicher Main-Freigabe per Fast-Forward `main`.
 - Beim abschließenden Publish-Audit wurde ein Registry-UNKNOWN-Guard-Fehler
-  entdeckt. Der Nutzer hat **genau einen** zweiten, eng begrenzten
-  Sicherheitscommit auf `main` nach vollständiger erneuter Qualifikation
-  freigegeben. Der `v1.0.0`-Tag muss auf diesen finalen V1-Main-Commit
-  zeigen; der erste Preservation-Commit bleibt sein Parent und wird
-  nicht umgeschrieben. Es gibt keinen Grund, die 18 Arbeitscommits
-  nachträglich einzufügen.
+  entdeckt. Der Nutzer gab dafür einen zweiten, eng begrenzten
+  Sicherheitscommit `e00490ef7abaeacbcd55b1cf7a40b68728b61bdb` auf
+  `main` nach erneuter Qualifikation frei. Dessen erster Publish-Versuch
+  scheiterte vor jedem PyPI-Upload an einer zu alten PyPI-Action, die
+  Core Metadata 2.4 nicht unterstützt. Die Korrektur braucht einen
+  weiteren gezielten Commit und einen **neuen Candidate**, weil der
+  Publish-Workflow Candidate- und Publish-Source-SHA gleichsetzt. Der
+  `v1.0.0`-Tag muss auf den tatsächlich letzten qualifizierten V1-Main-
+  Commit zeigen; alle bisherigen Commits bleiben unverändert in seiner
+  Historie. Die 18 Arbeitscommits werden nicht nachträglich eingefügt.
 - V2 Distributed (`feat/einheitliche-triggerarchitektur-distributed`)
   und V2 Canonical (`feat/einheitliche-triggerarchitektur`) gingen vom
   historischen Main-Anker aus. Ihre damaligen Referenzen waren
@@ -75,6 +79,9 @@ Integrationsmerge neu vorbereiten.
 
 Der V1-Commit bleibt über den ersten Merge-Elternpfad in `main`
 auffindbar; V2 Canonical bleibt über den zweiten Elternpfad erhalten.
+Die Anzahl der linearen V1-Korrekturcommits vor diesem Merge ändert die
+Zwei-Eltern- und Tree-Gleichheits-Invariante nicht. Beim V2-Merge ist
+stets der **dann aktuelle** V1-Main-Commit der erste Parent.
 Das veröffentlichte V2-Dateisystem ist trotzdem exakt der eigens
 qualifizierte V2-Stand. Ein `git diff` ohne Änderungen zwischen beiden
 Trees ist der entscheidende Inhaltsbeweis; eine bloße grüne CI des

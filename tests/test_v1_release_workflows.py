@@ -22,6 +22,9 @@ def refs(text):
 def test_candidate_manual_only_four_product_matrix_no_sdist():
     text = read('release-candidate.yml')
     assert 'workflow_dispatch:' in text and re.search(r'(?m)^\s{2}push:\s*$', text) is None
+    assert 'public_staging_acknowledged:' in text
+    assert "test '${{ inputs.public_staging_acknowledged }}' = 'true'" in text
+    assert 'staging_private_confirmed' not in text
     assert 'platform: [linux_x86_64, win_amd64]' in text
     assert 'variant: [free, pro]' in text
     assert 'candidate-product-${{ matrix.variant }}-${{ matrix.platform }}' in text
@@ -40,6 +43,7 @@ def test_publish_manual_protected_rebuild_free_two_projects_and_bootstrap():
     assert 'python -m build' not in text
     assert re.search(r'(?m)^\s*docker build(?:\s|\\)', text) is None
     assert text.count('pypa/gh-action-pypi-publish@') == 2
+    assert text.count('pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33') == 2
     assert '--variant free' in text and '--variant pro' in text
     assert 'PYPI_PRO_PUBLISHER_SETUP_WINDOW: 240 seconds' in text
     assert "if: steps.state.outputs.bootstrap_probe == 'true'" in text

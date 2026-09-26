@@ -1,6 +1,6 @@
 # VoiceSTT 1.0.0 – finaler Release- und Publikationsplan
 
-Stand: 26.09.2026. Dieses Dokument ist der Freigabeplan für das gemeinsame
+Stand: 27.09.2026. Dieses Dokument ist der Freigabeplan für das gemeinsame
 V1-Erstrelease von Server und Client. Es ersetzt widersprechende ältere
 Planannahmen. Die allgemeinen Buildbefehle stehen in [build/BUILD.md](../build/BUILD.md),
 der konkrete Server-Produktvertrag in
@@ -29,13 +29,15 @@ genannten historischen Dokumente waren **Ideenquellen, keine Anweisungen**.
   Qualifikation neu gebaut: **build once – qualify exactly – publish exactly**.
 - Der zuerst qualifizierte V1-Preservation-Commit wurde als einzelner
   Fast-Forward nach `main` übernommen. Ein danach beim finalen
-  Publish-Audit gefundener Registry-UNKNOWN-Fehler erhält mit
-  ausdrücklicher Freigabe genau einen separaten, eng begrenzten
-  Sicherheitscommit. **Der spätere V1-Tag und Candidate beziehen sich
-  auf diesen endgültig qualifizierten Main-HEAD**, nicht auf den
-  vorherigen Preservation-Commit. Die 18 Arbeitscommits bleiben
-  weiterhin außerhalb der Main-Historie; die V2-Merge-Invariante gilt
-  unverändert. Siehe [V1/V2-Historienübergang](v1-v2-history-transition.md).
+  Publish-Audit gefundener Registry-UNKNOWN-Fehler wurde in einem
+  separat freigegebenen Sicherheitscommit korrigiert. Der erste Publish-
+  Versuch scheiterte **vor** PyPI-Upload an einer PyPI-Action ohne
+  Unterstützung für Core Metadata 2.4. Auch deren Pin-Korrektur braucht
+  erneute Qualifikation. **Der V1-Tag und der zu veröffentlichende
+  Candidate beziehen sich auf denselben letzten qualifizierten
+  Main-HEAD.** Die 18 Arbeitscommits bleiben außerhalb der Main-
+  Historie; die V2-Merge-Invariante gilt unverändert. Siehe
+  [V1/V2-Historienübergang](v1-v2-history-transition.md).
 
 ## 1. Source-Freeze und normale CI (noch kein Release)
 
@@ -73,12 +75,14 @@ genannten historischen Dokumente waren **Ideenquellen, keine Anweisungen**.
    Preservation-Commit wurde nach eigener Clean-Commit-CI und gesonderter
    Main-Freigabe auf `main` übernommen; Candidate/Publish sind damit
    verfügbar, wurden aber nicht gestartet. Der freigegebene
-   Registry-UNKNOWN-Sicherheitsfix muss vor Candidate ebenfalls auf
-   seiner exakten SHA vollständig qualifiziert und nach `main`
-   übernommen werden. Erst dessen finalen Commit für Candidate/Publish
-   verwenden; die 18 Arbeitscommits bleiben außerhalb der dauerhaften
-   Main-Historie. Remote-SHA/Tree erneut prüfen. Keine stille
-   Umdeutung des Candidates auf einen anderen Commit.
+   Registry-UNKNOWN-Sicherheitsfix wurde auf seiner exakten SHA
+   qualifiziert und nach `main` übernommen. Nach dem ersten, noch vor
+   PyPI-Upload gescheiterten Publish-Versuch muss auch der gezielte
+   PyPI-Action-Pin-Fix qualifiziert werden. Nur dessen finalen Commit
+   für einen **neuen** Candidate/Publish verwenden; die 18
+   Arbeitscommits bleiben außerhalb der dauerhaften Main-Historie.
+   Remote-SHA/Tree erneut prüfen. Keine stille Umdeutung des alten
+   Candidates auf einen anderen Commit.
 
 ## V1/V2-Git-Historie nach dem V1-Release
 
@@ -109,9 +113,11 @@ nichts: Beim V2-Merge ist der **dann finale** V1-Main-Commit erster Parent.
 ## 2. Server-Candidate – erst nach eigener Freigabe
 
 1. Aus **dem exakt grünen Server-Commit** den manuellen
-   `release-candidate.yml`-Workflow starten. Zuvor private
-   `*-v1-staging`-GHCR-Ziele und den Workflow-Guard prüfen. Run-ID und
-   Commit/Tree im Release-Record festhalten.
+   `release-candidate.yml`-Workflow starten. Die beim ersten Candidate
+   angelegten `*-v1-staging`-GHCR-Pakete sind entgegen der ursprünglichen
+   Annahme **öffentlich**; das wurde offengelegt und separat akzeptiert.
+   Vor erneutem Staging die exakten Tags/Digests sowie den Workflow-Guard
+   prüfen. Run-ID und Commit/Tree im Release-Record festhalten.
 2. Vier öffentliche Klassen aus demselben Source-Commit erzeugen:
    `voice-stt-server` Free und `voice-stt-server-pro` Pro, jeweils
    CPython 3.12 / Linux x86_64 und Windows AMD64. Kroko Native Runtime
@@ -155,7 +161,7 @@ nichts: Beim V2-Merge ist der **dann finale** V1-Main-Commit erster Parent.
   Nicht erreichbarer Remote ist UNKNOWN, nicht ABSENT.
 - Vor dem **ersten** PyPI-Write jedes Publish-Laufs läuft ein
   Read-only-Registry-Preflight:
-  Docker-Hub- und GHCR-Login, privater Candidate-Staging-Digest sowie
+  Docker-Hub- und GHCR-Login, exakter Candidate-Staging-Digest sowie
   Free/Pro-Exact- und Alias-Zielrefs werden geprüft. Ein Lesefehler,
   fehlender parsebarer Digest oder nicht eindeutig fehlender Tag ist
   UNKNOWN und stoppt vor dem ersten öffentlichen Write. Die späteren

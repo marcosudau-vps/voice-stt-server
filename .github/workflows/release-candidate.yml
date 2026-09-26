@@ -3,8 +3,8 @@ name: V1 preservation release candidate
 on:
   workflow_dispatch:
     inputs:
-      staging_private_confirmed:
-        description: Confirm both GHCR *-v1-staging packages are private
+      public_staging_acknowledged:
+        description: Acknowledge both GHCR *-v1-staging packages are public; no secrets may be embedded
         required: true
         type: boolean
         default: false
@@ -23,7 +23,7 @@ jobs:
   guard:
     runs-on: ubuntu-24.04
     steps:
-      - run: test '${{ inputs.staging_private_confirmed }}' = 'true'
+      - run: test '${{ inputs.public_staging_acknowledged }}' = 'true'
 
   kroko:
     needs: guard

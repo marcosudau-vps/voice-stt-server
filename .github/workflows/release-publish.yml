@@ -128,7 +128,7 @@ jobs:
           PY
       - name: Publish only ABSENT Free wheels
         if: steps.state.outputs.upload == 'true'
-        uses: pypa/gh-action-pypi-publish@15c56dba361d8335944d31a2ecd17d700fc7bcbc
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2; supports Core Metadata 2.4
         with: {packages-dir: upload-free}
       - name: Verify both Free wheels MATCH
         shell: bash
@@ -175,7 +175,7 @@ jobs:
           if find upload-pro -maxdepth 1 -type f | grep -q .; then echo upload=true >> "$GITHUB_OUTPUT"; else echo upload=false >> "$GITHUB_OUTPUT"; fi
       - name: Publish only ABSENT Pro wheels
         if: steps.state.outputs.upload == 'true'
-        uses: pypa/gh-action-pypi-publish@15c56dba361d8335944d31a2ecd17d700fc7bcbc
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2; supports Core Metadata 2.4
         with: {packages-dir: upload-pro}
       - name: Verify all four public Python wheels MATCH
         shell: bash
