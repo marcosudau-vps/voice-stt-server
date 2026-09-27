@@ -10,6 +10,7 @@ import v1_product_wheel as product  # noqa:E402
 VERSION='1.0.0'; SCHEMA_VERSION=2
 DISTRIBUTIONS={'free':'voice-stt-server','pro':'voice-stt-server-pro'}
 PLATFORMS=('linux_x86_64','win_amd64'); IMAGE_NAMES={'free':'voice-stt-server','pro':'voice-stt-server-pro'}
+PUBLIC_WHEEL_TAGS={'linux_x86_64':'manylinux_2_35_x86_64','win_amd64':'win_amd64'}
 _SHA40=re.compile(r'^[0-9a-f]{40}$'); _DIGEST=re.compile(r'^sha256:[0-9a-f]{64}$')
 class CandidateManifestError(RuntimeError): pass
 
@@ -36,7 +37,8 @@ def build_python_identity(python_dir:Path)->dict[str,Any]:
    if report['distribution']!=DISTRIBUTIONS[variant] or report['version']!=VERSION: raise CandidateManifestError(f'wrong product identity: {report}')
    if report['variant']!=variant: raise CandidateManifestError(f'wrong baked variant: {report}')
    if report['rootIsPurelib']: raise CandidateManifestError(f'native product wheel incorrectly marked pure: {report}')
-   if not any(t.startswith('cp312-') and t.endswith('-'+platform) for t in report['tags']): raise CandidateManifestError(f'wrong product native tag: {report}')
+   expected_tag='cp312-cp312-'+PUBLIC_WHEEL_TAGS[platform]
+   if report['tags']!=[expected_tag] or not report['filename'].endswith('-'+expected_tag+'.whl'): raise CandidateManifestError(f'wrong public product native tag: {report}')
    if report['nestedWheels'] or report['krokoDistInfoEntries'] or not report['krokoNativePayload'] or not report['variantMarkerPresent'] or not report['recordValid'] or report['modelPayloadEntries'] or report['obviousCredentialPatternMatches']: raise CandidateManifestError(f'invalid product-wheel structure: {report}')
    wheels[platform]=report
   result[variant]={'distribution':DISTRIBUTIONS[variant],'version':VERSION,'variant':variant,'wheels':wheels}
@@ -77,6 +79,8 @@ def validate_candidate(manifest:dict[str,Any])->None:
   for platform,wheel in entry['wheels'].items():
    if not re.fullmatch(r'[0-9a-f]{64}',str(wheel.get('sha256') or '')): raise CandidateManifestError(f'missing wheel hash for {variant}/{platform}')
    if wheel.get('variant')!=variant or wheel.get('distribution')!=DISTRIBUTIONS[variant] or wheel.get('rootIsPurelib') is not False: raise CandidateManifestError(f'crossed/pure wheel identity for {variant}/{platform}')
+   expected_tag='cp312-cp312-'+PUBLIC_WHEEL_TAGS[platform]
+   if wheel.get('tags')!=[expected_tag] or not str(wheel.get('filename','')).endswith('-'+expected_tag+'.whl'): raise CandidateManifestError(f'unsupported public wheel platform tag for {variant}/{platform}')
    if wheel.get('variantMarkerPresent') is not True or wheel.get('recordValid') is not True or wheel.get('modelPayloadEntries') or wheel.get('obviousCredentialPatternMatches'): raise CandidateManifestError(f'unsafe/incomplete wheel inventory for {variant}/{platform}')
    if wheel.get('filename','').endswith('py3-none-any.whl'): raise CandidateManifestError('pure public wheel is forbidden')
  for variant in ('free','pro'):

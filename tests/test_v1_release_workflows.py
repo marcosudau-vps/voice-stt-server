@@ -28,6 +28,7 @@ def test_candidate_manual_only_four_product_matrix_no_sdist():
     assert 'platform: [linux_x86_64, win_amd64]' in text
     assert 'variant: [free, pro]' in text
     assert 'candidate-product-${{ matrix.variant }}-${{ matrix.platform }}' in text
+    assert 'bash build/v1-repair-linux-wheel.sh "$out"' in text
     assert '--sdist' not in text and '*.tar.gz' in text  # negative guard only
     assert 'py3-none-any' in text  # negative guard only
     assert 'windows-latest' in text and 'kroko_onnx' in text
@@ -171,6 +172,7 @@ def test_build_validation_is_real_native_linux_windows_and_evidence_pack():
     assert 'python tools/v1_kroko_release.py build' in text
     assert 'docker version' in text
     assert 'python tools/v1_product_wheel.py build' in text
+    assert 'bash build/v1-repair-linux-wheel.sh "$out"' in text
     assert 'pip install "$wheel"' in text
     assert '& $stt --help' in text
     assert text.count('selector_env_absent=true') == 2

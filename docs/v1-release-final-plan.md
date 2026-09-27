@@ -123,6 +123,11 @@ nichts: Beim V2-Merge ist der **dann finale** V1-Main-Commit erster Parent.
    CPython 3.12 / Linux x86_64 und Windows AMD64. Kroko Native Runtime
    ist direkt im Produktwheel; kein zweites Nutzer-Wheel, kein
    `py3-none-any`, kein öffentlicher Server-sdist.
+   Das Linux-Produktwheel muss vor der Kandidatenqualifikation im
+   gepinnten Bookworm-Container mit `auditwheel` zu
+   `manylinux_2_35_x86_64` repariert und geprüft werden. Der generische
+   Tag `linux_x86_64` wird vom Candidate-Manifest hart abgelehnt, weil
+   PyPI ihn nicht akzeptiert.
 3. Free/Pro sowie Plattform nicht aus dem API-Key erraten. Modelle,
    insbesondere Pro-Modelle, und Schlüssel nicht in Wheels/Images
    einbetten. Die 14 dokumentierten Wakeword-Klassifikatoren und ihre

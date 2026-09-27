@@ -12,9 +12,14 @@ After the single V1 preservation commit reached `main`, the final publication
 audit found a registry UNKNOWN/ABSENT conflation; a separately approved,
 narrow safety commit fixed it. The first publish attempt then failed before
 upload because its pinned PyPI action did not support Core Metadata 2.4.
-Correcting that pin requires a fresh, qualified Candidate on the **final**
-Main HEAD. Neither earlier Candidate nor normal-CI wheels are public release
-bytes. See [V1/V2 history transition](v1-v2-history-transition.md).
+A second qualified Candidate passed that stage but PyPI rejected the generic
+`linux_x86_64` platform tag before accepting any wheel. The Linux product
+wheel is now repaired and audited in a digest-pinned Debian Bookworm container
+to produce `manylinux_2_35_x86_64`. The manifest rejects generic Linux tags
+before publication. Each correction requires a fresh, fully qualified
+Candidate on the **final** Main HEAD. Neither earlier Candidate nor normal-CI
+wheels are public release bytes. See
+[V1/V2 history transition](v1-v2-history-transition.md).
 
 ## Public Python product contract
 
@@ -26,14 +31,18 @@ VoiceSTT source commit:
 
 Each project publishes exactly two CPython 3.12 wheels:
 
-- Linux x86_64, with a native tag at least as restrictive as the embedded Kroko runtime.
+- Linux x86_64, with the audited `cp312-cp312-manylinux_2_35_x86_64` tag
+  (glibc 2.35 or newer; for example, Ubuntu 22.04 or Debian Bookworm).
 - Windows AMD64, with a native tag at least as restrictive as the embedded Kroko runtime.
 
 The Linux Kroko intermediate is compiled inside the source-controlled,
 digest-pinned Python 3.12 Debian Bookworm builder. The runtime Dockerfile uses
 that same base-image digest. This is part of the artifact identity and prevents
 a newer hosted-runner GLIBC from making the Linux wheel unusable in the V1
-container.
+container. The public Linux wheel is then repaired with pinned `auditwheel`
+and `patchelf` versions inside a separate container using that same base
+image digest. This bundles external native dependencies and validates the
+platform tag without inheriting the hosted runner's newer GLIBC.
 
 No V1.0.0 public sdist is produced. No public final wheel may be
 `py3-none-any`. The final product wheel contains the actual `kroko_onnx`

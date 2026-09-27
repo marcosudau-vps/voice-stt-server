@@ -67,6 +67,9 @@ jobs:
           test "$(find kroko-input -maxdepth 1 -name '*.whl' | wc -l)" -eq 1
           out="evidence-input/product/${{ matrix.variant }}/${{ matrix.platform }}"
           python tools/v1_product_wheel.py build --variant '${{ matrix.variant }}' --platform '${{ matrix.platform }}' --kroko-wheel "$(find kroko-input -maxdepth 1 -name '*.whl')" --out-dir "$out" --report "$out/product.json"
+          if [ '${{ matrix.platform }}' = linux_x86_64 ]; then
+            bash build/v1-repair-linux-wheel.sh "$out"
+          fi
           python -m twine check "$out"/*.whl
           python tools/v1_wakeword_bundle.py "$out"/*.whl
           test -z "$(find "$out" -name '*py3-none-any.whl' -print -quit)"

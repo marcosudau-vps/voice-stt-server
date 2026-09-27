@@ -79,6 +79,9 @@ jobs:
           set -euo pipefail
           out="candidate/python/${{ matrix.variant }}/${{ matrix.platform }}"
           python tools/v1_product_wheel.py build --variant '${{ matrix.variant }}' --platform '${{ matrix.platform }}' --kroko-wheel "$(find kroko -name '*.whl')" --out-dir "$out" --report "$out/product.json"
+          if [ '${{ matrix.platform }}' = linux_x86_64 ]; then
+            bash build/v1-repair-linux-wheel.sh "$out"
+          fi
           python -m twine check "$out"/*.whl
           python tools/v1_wakeword_bundle.py "$out"/*.whl
           test -z "$(find "$out" -name '*py3-none-any.whl' -o -name '*.tar.gz')"

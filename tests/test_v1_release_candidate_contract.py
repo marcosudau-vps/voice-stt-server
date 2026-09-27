@@ -3,8 +3,8 @@ import pytest
 from tools import v1_release_manifest as rm
 
 def _wheel(variant,platform):
-    dist=rm.DISTRIBUTIONS[variant]; name=dist.replace('-','_')+f"-1.0.0-cp312-cp312-{platform}.whl"
-    return {"filename":name,"distribution":dist,"version":"1.0.0","variant":variant,"tags":[f"cp312-cp312-{platform}"],"rootIsPurelib":False,"bytes":123,"sha256":"a"*64,"krokoNativePayload":["kroko_onnx/native"],"licensePayload":["license"],"nestedWheels":[],"krokoDistInfoEntries":[],"variantMarkerPresent":True,"recordValid":True,"modelPayloadEntries":[],"obviousCredentialPatternMatches":[],"topLevel":[]}
+    dist=rm.DISTRIBUTIONS[variant]; tag=f"cp312-cp312-{rm.PUBLIC_WHEEL_TAGS[platform]}"; name=dist.replace('-','_')+f"-1.0.0-{tag}.whl"
+    return {"filename":name,"distribution":dist,"version":"1.0.0","variant":variant,"tags":[tag],"rootIsPurelib":False,"bytes":123,"sha256":"a"*64,"krokoNativePayload":["kroko_onnx/native"],"licensePayload":["license"],"nestedWheels":[],"krokoDistInfoEntries":[],"variantMarkerPresent":True,"recordValid":True,"modelPayloadEntries":[],"obviousCredentialPatternMatches":[],"topLevel":[]}
 
 def _manifest():
     python={}; kroko={}; images={}
@@ -25,3 +25,11 @@ def test_missing_pro_or_pure_wheel_is_rejected():
     with pytest.raises(rm.CandidateManifestError): rm.validate_candidate(m)
     m=_manifest(); m["python"]["free"]["wheels"]["linux_x86_64"]["filename"]="x-py3-none-any.whl"
     with pytest.raises(rm.CandidateManifestError): rm.validate_candidate(m)
+
+
+def test_pypi_unsupported_linux_platform_tag_is_rejected():
+    m=_manifest(); wheel=m['python']['free']['wheels']['linux_x86_64']
+    wheel['filename']='voice_stt_server-1.0.0-cp312-cp312-linux_x86_64.whl'
+    wheel['tags']=['cp312-cp312-linux_x86_64']
+    with pytest.raises(rm.CandidateManifestError,match='unsupported public wheel platform tag'):
+        rm.validate_candidate(m)

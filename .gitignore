@@ -65,6 +65,8 @@ build/
 !build/
 build/*
 !build/BUILD.md
+!build/v1-wheel-repair.Dockerfile
+!build/v1-repair-linux-wheel.sh
 !build/vps/
 !build/vps/**
 .build-python/
