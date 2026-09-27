@@ -82,6 +82,26 @@ def test_publish_order_free_pro_dockerhub_ghcr_aliases_verify_tag_release():
     assert 'GitHub Release last + final verification' in text
 
 
+def test_resume_after_pypi_keeps_original_candidate_and_tags_it_last():
+    text = read('release-resume-after-pypi.yml')
+    jobs = yaml.safe_load(text)['jobs']
+    assert list(jobs) == ['preflight', 'registries', 'pre-tag-verify', 'tag', 'github-release']
+    assert jobs['registries']['needs'] == 'preflight'
+    assert jobs['pre-tag-verify']['needs'] == 'registries'
+    assert jobs['tag']['needs'] == 'pre-tag-verify'
+    assert jobs['github-release']['needs'] == 'tag'
+    assert all(jobs[job]['environment'] == 'release' for job in list(jobs)[1:])
+    assert 'SOURCE_COMMIT: 3df318635aef00a05417f74bce3f5d21b746eb59' in text
+    assert "CANDIDATE_RUN: '36294216937'" in text
+    assert text.count('run-id: \'36294216937\'') == len(jobs)
+    assert 'verify-pypi --candidate-dir candidate --variant free' in text
+    assert 'verify-pypi --candidate-dir candidate --variant pro' in text
+    assert '--repair-single-child-wrapper' in text
+    assert 'python -m tools.v1_registry_promote' in text
+    assert 'DOCKER_CONFIG="$anonymous_config" python tools/v1_registry_probe.py' in text
+    assert text.index('  pre-tag-verify:') < text.index('git tag -a') < text.index('gh release create')
+
+
 def test_publish_dependency_graph_guards_all_external_writes_before_git_tag():
     jobs = yaml.safe_load(read('release-publish.yml'))['jobs']
 

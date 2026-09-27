@@ -282,6 +282,34 @@ Backports, eine zusätzliche SIGTERM-Testinfrastruktur nur für den
 Releaseablauf und ein modellgefülltes Docker-Image bringen für diesen
 V1-Release keinen gerechtfertigten Vorteil.
 
+## Kontrollierte Fortsetzung nach dem Docker-Hub-Stopp am 27.09.2026
+
+Im Publish-Run `36320560524` wurden alle vier PyPI-Wheels des Candidates
+`36294216937` hashgleich veröffentlicht. `docker buildx imagetools create`
+erzeugte danach für den Free-Docker-Hub-Tag eine zusätzliche Manifest-Liste:
+Ihr einziges `linux/amd64`-Kind ist exakt der Candidate-Digest, der Tag-Digest
+weicht aber ab. Die unveränderte Sicherheitsprüfung stoppte vor Pro-Docker-
+Hub, GHCR, Aliasen und Git-Tag. Der erste Tag ist also kein qualifizierter
+Exact-Tag und muss gezielt repariert werden.
+
+Die einmalige, gesonderte `release-resume-after-pypi.yml` wird **von `main`**
+gestartet, bindet sich aber fest an Candidate-Run `36294216937`, Source-Commit
+`3df318635aef00a05417f74bce3f5d21b746eb59` und dessen Tree. Sie prüft
+vor jedem Registry-Write beide PyPI-Projekte erneut. Nur der nachgewiesene
+Docker-Hub-Free-Wrapper mit genau einem Kind des erwarteten Digests darf mit
+`--prefer-index=false` in den unveränderten Image-Manifest-Digest umgetaggt
+werden. Jeder andere `CONFLICT`/`UNKNOWN` bleibt Stop. Danach folgen Pro auf
+Docker Hub, beide finalen GHCR-Packages, Aliase und unabhängige Checks. Erst
+nach vollständiger Digestprüfung und bestätigter öffentlicher GHCR-Sichtbarkeit
+werden Git-Tag und GitHub Release zugelassen. Der Tag zeigt **auf den alten,
+qualifizierten Source-Commit**, nicht auf den neueren reinen Recovery-Workflow-
+Commit auf `main`; es gibt keinen Neubau und keine andere PyPI-Version.
+
+Für V2 ist dieser zusätzliche `main`-Commit ein dokumentierter reiner
+Release-Orchestrierungs-Nachtrag. Der zuvor festgelegte Zwei-Eltern-Merge
+bleibt der Integrationsweg; V2-Quellcode und dessen Branch werden nicht
+zurückgesetzt oder umgebogen.
+
 ## Historische Ideenquellen (nicht normativ)
 
 - `AP-SRV-070 #U2013 Fixierter Release- und Publikationsplan.md`

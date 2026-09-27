@@ -1,0 +1,231 @@
+name: V1 preservation release resume after verified PyPI
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: 'Enter resume-v1-36294216937 after verifying both PyPI projects'
+        required: true
+        type: string
+
+concurrency:
+  group: v1-preservation-publish-1.0.0
+  cancel-in-progress: false
+
+env:
+  VERSION: '1.0.0'
+  TAG: v1.0.0
+  SOURCE_COMMIT: 3df318635aef00a05417f74bce3f5d21b746eb59
+  SOURCE_TREE: e8805b04da59eba7d3dfdf840b41fbd838a8145e
+  CANDIDATE_RUN: '36294216937'
+  DOCKERHUB_USERNAME: ${{ vars.DOCKERHUB_USERNAME }}
+
+jobs:
+  preflight:
+    runs-on: ubuntu-24.04
+    permissions: {actions: read, contents: read}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {fetch-depth: 0}
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: v1-release-candidate, path: candidate, run-id: '36294216937', github-token: '${{ secrets.GITHUB_TOKEN }}'}
+      - name: Prove exact old candidate, published PyPI wheels, and no conflicting Git tag
+        env: {GH_TOKEN: '${{ github.token }}'}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test '${{ inputs.confirmation }}' = resume-v1-36294216937
+          test "$GITHUB_REF" = refs/heads/main
+          python tools/v1_release_publish.py verify-candidate --candidate-dir candidate
+          python tools/v1_release_publish.py verify-pypi --candidate-dir candidate --variant free
+          python tools/v1_release_publish.py verify-pypi --candidate-dir candidate --variant pro
+          python - <<'PY'
+          import json, os
+          m=json.load(open('candidate/rc-manifest.json'))
+          assert m['productVersion']=='1.0.0'
+          assert m['sourceCommit']==os.environ['SOURCE_COMMIT']
+          assert m['sourceTree']==os.environ['SOURCE_TREE']
+          assert m['candidate']['runUrl'].endswith('/actions/runs/'+os.environ['CANDIDATE_RUN'])
+          PY
+          test "$(git rev-parse "${SOURCE_COMMIT}^{tree}")" = "$SOURCE_TREE"
+          git fetch origin --tags
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            test "$(git rev-list -n1 "$TAG")" = "$SOURCE_COMMIT" || { echo 'CONFLICT: tag points elsewhere'; exit 1; }
+          fi
+          python tools/v1_release_publish.py release-state --tag "$TAG"
+
+  registries:
+    name: Resume exact Docker Hub and GHCR image publication
+    needs: preflight
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions: {actions: read, contents: read, packages: write}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: v1-release-candidate, path: candidate, run-id: '36294216937', github-token: '${{ secrets.GITHUB_TOKEN }}'}
+      - uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with: {registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with: {username: '${{ env.DOCKERHUB_USERNAME }}', password: '${{ secrets.DOCKERHUB_TOKEN }}'}
+      - name: Repair only verified Free wrapper; promote remaining exact manifests and aliases
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/v1_release_publish.py verify-candidate --candidate-dir candidate
+          python tools/v1_release_publish.py verify-pypi --candidate-dir candidate --variant free
+          python tools/v1_release_publish.py verify-pypi --candidate-dir candidate --variant pro
+          python - <<'PY' > images.tsv
+          import json
+          m=json.load(open('candidate/rc-manifest.json'))
+          for v in ('free','pro'):
+            r=m['images'][v]; print(r['image'],r['stagingReference'],r['digest'],sep='\t')
+          PY
+          while IFS=$'\t' read -r image staging digest; do
+            python tools/v1_registry_probe.py "$staging" "$digest" --require-match
+            hub="docker.io/${DOCKERHUB_USERNAME}/${image}:1.0.0"
+            if [ "$image" = voice-stt-server ]; then
+              python -m tools.v1_registry_promote "$hub" "$staging" "$digest" --repair-single-child-wrapper
+            else
+              python -m tools.v1_registry_promote "$hub" "$staging" "$digest"
+            fi
+            ghcr="ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}:1.0.0"
+            python -m tools.v1_registry_promote "$ghcr" "docker.io/${DOCKERHUB_USERNAME}/${image}@${digest}" "$digest"
+          done < images.tsv
+          mapfile -t aliases < <(python tools/v1_release_publish.py aliases --version 1.0.0)
+          # Classify all aliases before creating any of them.
+          while IFS=$'\t' read -r image staging digest; do
+            for registry in "docker.io/${DOCKERHUB_USERNAME}" "ghcr.io/${GITHUB_REPOSITORY_OWNER}"; do
+              python tools/v1_registry_probe.py "${registry}/${image}:1.0.0" "$digest" --require-match
+              for alias in "${aliases[@]}"; do
+                python tools/v1_registry_probe.py "${registry}/${image}:${alias}" "$digest"
+              done
+            done
+          done < images.tsv
+          while IFS=$'\t' read -r image staging digest; do
+            for registry in "docker.io/${DOCKERHUB_USERNAME}" "ghcr.io/${GITHUB_REPOSITORY_OWNER}"; do
+              for alias in "${aliases[@]}"; do
+                python -m tools.v1_registry_promote "${registry}/${image}:${alias}" "${registry}/${image}@${digest}" "$digest"
+              done
+            done
+          done < images.tsv
+
+  pre-tag-verify:
+    name: Verify all public artifacts before irreversible Git tag
+    needs: registries
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions: {actions: read, contents: read, packages: read}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: v1-release-candidate, path: candidate, run-id: '36294216937', github-token: '${{ secrets.GITHUB_TOKEN }}'}
+      - uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with: {username: '${{ env.DOCKERHUB_USERNAME }}', password: '${{ secrets.DOCKERHUB_TOKEN }}'}
+      - uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567
+        with: {registry: ghcr.io, username: '${{ github.actor }}', password: '${{ secrets.GITHUB_TOKEN }}'}
+      - name: Verify original candidate, both PyPI projects, and 16 image tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/v1_release_publish.py verify-candidate --candidate-dir candidate
+          python tools/v1_release_publish.py verify-pypi --candidate-dir candidate --variant free
+          python tools/v1_release_publish.py verify-pypi --candidate-dir candidate --variant pro
+          python - <<'PY' > images.tsv
+          import json
+          m=json.load(open('candidate/rc-manifest.json'))
+          for v in ('free','pro'):
+            r=m['images'][v]; print(r['image'],r['digest'],sep='\t')
+          PY
+          while IFS=$'\t' read -r image digest; do
+            for tag in 1.0.0 1.0 1 latest; do
+              for ref in "docker.io/${DOCKERHUB_USERNAME}/${image}:${tag}" "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}:${tag}"; do
+                python tools/v1_registry_probe.py "$ref" "$digest" --require-match
+              done
+            done
+          done < images.tsv
+          # GHCR packages must be truly public, not merely readable with GITHUB_TOKEN.
+          anonymous_config="$(mktemp -d)"
+          trap 'rm -rf -- "$anonymous_config"' EXIT
+          while IFS=$'\t' read -r image digest; do
+            for tag in 1.0.0 1.0 1 latest; do
+              DOCKER_CONFIG="$anonymous_config" python tools/v1_registry_probe.py "ghcr.io/${GITHUB_REPOSITORY_OWNER}/${image}:${tag}" "$digest" --require-match
+            done
+          done < images.tsv
+
+  tag:
+    name: Create exact V1 Git tag only after artifact verification
+    needs: pre-tag-verify
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions: {actions: read, contents: write}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {ref: '3df318635aef00a05417f74bce3f5d21b746eb59', fetch-depth: 0}
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: v1-release-candidate, path: candidate, run-id: '36294216937', github-token: '${{ secrets.GITHUB_TOKEN }}'}
+      - name: Create or verify immutable tag at candidate source commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/v1_release_publish.py verify-candidate --candidate-dir candidate
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$SOURCE_TREE"
+          git fetch origin --tags --force
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            test "$(git rev-list -n1 "$TAG")" = "$SOURCE_COMMIT" || { echo 'CONFLICT: tag points elsewhere'; exit 1; }
+          else
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git tag -a "$TAG" "$SOURCE_COMMIT" -m 'VoiceSTT V1 preservation release 1.0.0'
+            git push origin "refs/tags/$TAG"
+          fi
+
+  github-release:
+    name: GitHub Release last with exact candidate assets
+    needs: tag
+    runs-on: ubuntu-24.04
+    environment: release
+    permissions: {actions: read, contents: write, packages: read}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {ref: '3df318635aef00a05417f74bce3f5d21b746eb59', fetch-depth: 0}
+      - uses: actions/download-artifact@fa0a91b85d4f404e444e00e005971372dc801d16
+        with: {name: v1-release-candidate, path: candidate, run-id: '36294216937', github-token: '${{ secrets.GITHUB_TOKEN }}'}
+      - name: Create or resume release and compare downloaded assets
+        env: {GH_TOKEN: '${{ github.token }}'}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python tools/v1_release_publish.py verify-candidate --candidate-dir candidate
+          mapfile -t wheels < <(find candidate/python -name '*.whl' -type f | sort)
+          test "${#wheels[@]}" -eq 4
+          assets=("${wheels[@]}" candidate/rc-manifest.json candidate/sha256-inventory.json)
+          git fetch origin --tags
+          test "$(git rev-list -n1 "$TAG")" = "$SOURCE_COMMIT"
+          verify_dir="$(mktemp -d)"
+          trap 'rm -rf -- "$verify_dir"' EXIT
+          state="$(python tools/v1_release_publish.py release-state --tag "$TAG")"
+          if [ "$state" = MATCH ]; then
+            existing="$(gh release view "$TAG" --json assets --jq '.assets[].name')"
+            for f in "${assets[@]}"; do
+              name="$(basename "$f")"
+              if grep -Fxq "$name" <<< "$existing"; then
+                gh release download "$TAG" --pattern "$name" --dir "$verify_dir"
+                cmp -s "$f" "$verify_dir/$name" || { echo "CONFLICT: $name"; exit 1; }
+              else
+                gh release upload "$TAG" "$f"
+              fi
+            done
+          else
+            gh release create "$TAG" "${assets[@]}" --verify-tag --title 'VoiceSTT V1.0.0 preservation release' --notes 'Preserved V1 release: Free and Pro CPython 3.12 native wheels for Linux x86_64 and Windows AMD64; exact qualified OCI images.'
+          fi
+          for f in "${assets[@]}"; do
+            name="$(basename "$f")"
+            if [ ! -f "$verify_dir/$name" ]; then gh release download "$TAG" --pattern "$name" --dir "$verify_dir"; fi
+            cmp -s "$f" "$verify_dir/$name" || { echo "CONFLICT: $name"; exit 1; }
+          done
+          python tools/v1_release_publish.py verify-pypi --candidate-dir candidate --variant free
+          python tools/v1_release_publish.py verify-pypi --candidate-dir candidate --variant pro

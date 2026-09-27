@@ -225,6 +225,20 @@ page is last. PyPI and registry publication are themselves public writes and
 cannot be made reversible by delaying the Git tag. A failed later step is
 resumed against the same candidate/version, never rebuilt or overwritten.
 
+## Recovery-Nachtrag nach öffentlichem PyPI-Upload
+
+Der Docker-Hub-Lauf `36320560524` stoppte beim ersten Free-Tag: Buildx
+erzeugte eine einteilige Manifest-Liste um den richtigen Candidate-Digest,
+weshalb der strikte Tag-Digest-Vergleich fehlschlug. Beide PyPI-Projekte sind
+hingegen bereits `MATCH`. Die einmalige Workflow-Fortsetzung
+`release-resume-after-pypi.yml` verifiziert Candidate, alle vier PyPI-Wheels
+und Source-Tree erneut und repariert **nur diesen nachgewiesenen Wrapper** mit
+einer Manifest-Kopie ohne zusätzliche Liste. Jeder andere Konflikt stoppt.
+Der spätere Tag `v1.0.0` muss weiterhin auf den ursprünglichen Candidate-
+Commit `3df318635aef00a05417f74bce3f5d21b746eb59` zeigen, auch wenn der
+Recovery-Workflow als nachträglicher Commit auf `main` liegt. Vor dem Tag
+werden Docker Hub, GHCR und deren öffentliche Erreichbarkeit geprüft.
+
 ## Preparation safety lock
 
 During correction review: no force push, rebase, branch deletion, tag, GitHub
