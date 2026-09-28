@@ -1,6 +1,14 @@
-# Empfohlenes Client-Zustandsmodell
+# Legacy V1 – Empfohlenes Client-Zustandsmodell
 
-[← Event-Katalog](04-server-events-katalog-und-chronologie.md) · [HTTP-API →](06-http-api-und-authentifizierung.md)
+> **Legacy V1 – nur für den Kompatibilitätsendpunkt `/ws/transcribe`.**
+> Diese Seite beschreibt das alte V1-Protokoll, das der Server weiterhin für
+> bestehende Clients (u. a. den integrierten Browserclient) bereitstellt. Sie
+> darf **nicht** zur Implementierung eines neuen Clients verwendet werden.
+> Das aktuelle Protokoll ist V2 auf `/ws/v2`:
+> [**V2-Client-Dokumentation**](../README.md). Übersicht der Legacy-Seiten:
+> [legacy-v1/README.md](README.md).
+
+[← Event-Katalog (V1)](v1-server-events-katalog-und-chronologie.md) · [Triggerquellen & Queryparameter (V1) →](v1-triggerquellen-und-queryparameter.md)
 
 Diese Seite übersetzt das Protokoll in ein belastbares Clientdesign. Sie ist
 nicht serverseitig vorgeschrieben, passt aber zu den tatsächlich möglichen

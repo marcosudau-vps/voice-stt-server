@@ -1,6 +1,14 @@
-# Server-Events – Kurzreferenz
+# Legacy V1 – Server-Events – Kurzreferenz
 
-[← WebSocket-Protokoll](02-websocket-protokoll.md) · [Ausführlicher Katalog & Chronologie →](04-server-events-katalog-und-chronologie.md)
+> **Legacy V1 – nur für den Kompatibilitätsendpunkt `/ws/transcribe`.**
+> Diese Seite beschreibt das alte V1-Protokoll, das der Server weiterhin für
+> bestehende Clients (u. a. den integrierten Browserclient) bereitstellt. Sie
+> darf **nicht** zur Implementierung eines neuen Clients verwendet werden.
+> Das aktuelle Protokoll ist V2 auf `/ws/v2`:
+> [**V2-Client-Dokumentation**](../README.md). Übersicht der Legacy-Seiten:
+> [legacy-v1/README.md](README.md).
+
+[← WebSocket-Protokoll](v1-websocket-protokoll.md) · [Ausführlicher Katalog & Chronologie →](v1-server-events-katalog-und-chronologie.md)
 
 Alle Servernachrichten sind JSON-Objekte in WebSocket-Textframes. `type` ist der
 primäre Diskriminator. Der produktive Server kann die folgenden **zwölf** Typen
@@ -11,7 +19,7 @@ an einen Client senden.
 > (`hello.accepted`, `command.ack`, `session.snapshot` und punktgetrennte
 > Domain-Events mit `eventId`/`eventSeq`/`stateVersion`). Keiner der hier
 > beschriebenen Typen erreicht eine v2-Verbindung. Siehe
-> [`docs/einheitliche-triggerarchitektur.md`](../einheitliche-triggerarchitektur.md),
+> [`docs/einheitliche-triggerarchitektur.md`](../../einheitliche-triggerarchitektur.md),
 > Abschnitt 12.
 
 ## Eventübersicht
@@ -156,7 +164,7 @@ Werte anzeigen/loggen und nur bekannte Fälle speziell behandeln.
 ## Minimale TypeScript-Union
 
 Diese Union bildet die Routing-Ebene ab; die vollständigen Feldtabellen stehen
-im [ausführlichen Event-Katalog](04-server-events-katalog-und-chronologie.md).
+im [ausführlichen Event-Katalog](v1-server-events-katalog-und-chronologie.md).
 
 ```ts
 type ServerEvent =

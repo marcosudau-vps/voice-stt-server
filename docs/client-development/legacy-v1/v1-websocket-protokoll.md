@@ -1,6 +1,14 @@
-# WebSocket-Protokoll
+# Legacy V1 – WebSocket-Protokoll
 
-[← Session- und Server-Scope](01-session-und-server-scope.md) · [Event-Kurzreferenz →](03-server-events-kurzreferenz.md)
+> **Legacy V1 – nur für den Kompatibilitätsendpunkt `/ws/transcribe`.**
+> Diese Seite beschreibt das alte V1-Protokoll, das der Server weiterhin für
+> bestehende Clients (u. a. den integrierten Browserclient) bereitstellt. Sie
+> darf **nicht** zur Implementierung eines neuen Clients verwendet werden.
+> Das aktuelle Protokoll ist V2 auf `/ws/v2`:
+> [**V2-Client-Dokumentation**](../README.md). Übersicht der Legacy-Seiten:
+> [legacy-v1/README.md](README.md).
+
+[← Legacy-Übersicht](README.md) · [Event-Kurzreferenz (V1) →](v1-server-events-kurzreferenz.md)
 
 ## Endpunkt und Transport
 
@@ -375,7 +383,7 @@ Unterstützte Queryparameter sind `wakeWordEnabled`, `wakeWordBackend`,
 `wakeWordTimeout`, `wakeWordBufferDuration` und
 `wakeWordFollowupWindow`. Die vollständigen Regeln, Fallbacks und
 Clientabläufe stehen unter
-[Triggerquellen und sessionlokale Wake-Word-Konfiguration](09-betriebsmodi-und-serverkonfiguration.md).
+[Triggerquellen und sessionlokale Wake-Word-Konfiguration](v1-triggerquellen-und-queryparameter.md).
 
 Der Server bestätigt nicht nur die Anfrage, sondern die tatsächlich wirksame
 Konfiguration in `hello.sessionConfig` und `ready.sessionConfig`. Interne
@@ -598,4 +606,4 @@ function stopMicrophone() {
 ```
 
 Eine vollständige Reducer-Strategie steht unter
-[Client-Zustandsmodell](05-client-zustandsmodell.md).
+[Client-Zustandsmodell](v1-client-zustandsmodell.md).

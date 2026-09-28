@@ -1,6 +1,14 @@
-# Triggerquellen und sessionlokale Wake-Word-Konfiguration
+# Legacy V1 – Triggerquellen und sessionlokale Wake-Word-Konfiguration
 
-[← Protokollabgrenzung](08-protokollabgrenzung.md) · [Zur Übersicht](README.md)
+> **Legacy V1 – nur für den Kompatibilitätsendpunkt `/ws/transcribe`.**
+> Diese Seite beschreibt das alte V1-Protokoll, das der Server weiterhin für
+> bestehende Clients (u. a. den integrierten Browserclient) bereitstellt. Sie
+> darf **nicht** zur Implementierung eines neuen Clients verwendet werden.
+> Das aktuelle Protokoll ist V2 auf `/ws/v2`:
+> [**V2-Client-Dokumentation**](../README.md). Übersicht der Legacy-Seiten:
+> [legacy-v1/README.md](README.md).
+
+[← Client-Zustandsmodell (V1)](v1-client-zustandsmodell.md) · [Legacy-Übersicht](README.md)
 
 > **Diese Datei hieß früher „Betriebsmodi und sessionlokale
 > Wake-Word-Konfiguration".** Der Begriff *Betriebsmodus* hat keine aktive
@@ -11,7 +19,7 @@
 > weiterhin gilt.
 >
 > Die vollständige Architektur steht in
-> [`docs/einheitliche-triggerarchitektur.md`](../einheitliche-triggerarchitektur.md).
+> [`docs/einheitliche-triggerarchitektur.md`](../../einheitliche-triggerarchitektur.md).
 
 ## Zweck und aktueller Stand
 
@@ -77,7 +85,7 @@ wss://SERVER/ws/transcribe?manualTriggerEnabled=true&wakeWordTriggerEnabled=fals
 Der Hotkeydruck ist zunächst nur eine lokale Absicht. Der Client sendet ein
 `trigger`-Kommando und darf erst nach einem `trigger_ack` mit
 `accepted: true` fachliches Feedback auslösen. Details in
-[WebSocket-Protokoll](02-websocket-protokoll.md#triggerkommandos).
+[WebSocket-Protokoll](v1-websocket-protokoll.md#triggerkommandos).
 
 ### Wake-Word-Trigger
 

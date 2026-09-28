@@ -1,6 +1,14 @@
-# Server-Events – Katalog und Chronologie
+# Legacy V1 – Server-Events – Katalog und Chronologie
 
-[← Kurzreferenz](03-server-events-kurzreferenz.md) · [Client-Zustandsmodell →](05-client-zustandsmodell.md)
+> **Legacy V1 – nur für den Kompatibilitätsendpunkt `/ws/transcribe`.**
+> Diese Seite beschreibt das alte V1-Protokoll, das der Server weiterhin für
+> bestehende Clients (u. a. den integrierten Browserclient) bereitstellt. Sie
+> darf **nicht** zur Implementierung eines neuen Clients verwendet werden.
+> Das aktuelle Protokoll ist V2 auf `/ws/v2`:
+> [**V2-Client-Dokumentation**](../README.md). Übersicht der Legacy-Seiten:
+> [legacy-v1/README.md](README.md).
+
+[← Kurzreferenz](v1-server-events-kurzreferenz.md) · [Client-Zustandsmodell →](v1-client-zustandsmodell.md)
 
 Diese Seite beschreibt jedes Event nach Bedeutung, Trigger, Feldern und
 Clientreaktion. Sie bezieht sich auf den produktiven Single-WebSocket-Endpunkt
@@ -172,7 +180,7 @@ aktualisieren, aber auf `ready` warten.
 Der Log-Token ist nur für Ereignisse dieser Session und die Kanäle `audit`,
 `transcription` und `performance` gültig. Details zu Replay, Cursor und
 Historienabruf stehen unter
-[Structured logging and client log access](../structured-logging.md).
+[Structured logging and client log access](../../structured-logging.md).
 Bei deaktiviertem Livezugriff oder nicht verfügbarem Eventstore ist
 `available: false` gesetzt, `accessToken` fehlt und `code`/`reason` erklären
 die Ursache.
