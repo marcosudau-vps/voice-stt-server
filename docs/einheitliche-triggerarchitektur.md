@@ -39,12 +39,12 @@ Folgepaketen zugeordnet:
   v1-Pfad auf `/ws/transcribe`. AP-SRV-070 hat gezielt toten v1-Code entfernt
   (siehe Abschnitt 14.11), den v1-Transport selbst aber als erforderlichen
   Kompatibilitätspfad bestätigt und nicht abgebaut.
-- Die Timerwerte sind Sessionparameter der bestehenden Query-Admission. Die
-  vollständige Settings-Control-Plane mit Scope, Auth, Constraints und
-  Apply-Policy folgt in AP-SRV-050. Protokoll v2 veröffentlicht sie bereits als
-  `effectiveSettings` und führt `settingsRevision` mit, lehnt einen
-  `session_settings.patch` aber ausdrücklich ab
-  (`REQUIRES_AP_SRV_050_BINDING`).
+- Die Timerwerte waren in dieser Baseline Sessionparameter der V1-Query-
+  Admission. Seit AP-SRV-050 laufen sie über die Settings-Control-Plane
+  (Abschnitt 13); Protokoll v2 veröffentlicht sie als `requestedSettings`/
+  `effectiveSettings` mit `settingsRevision` und nimmt
+  `session_settings.patch` an. (Die frühere Aussage, v2 lehne den Patch mit
+  `REQUIRES_AP_SRV_050_BINDING` ab, ist durch Abschnitt 12.9 überholt.)
 - Wake-Word-Erkennung arbeitet seit AP-SRV-060 C3 auf zusammenhängenden
   Trefferbereichen echter Prediction-Frames gegen die
   konfigurierte Sensitivität. Es existiert kein belastbarer Score-/Audio-
@@ -71,7 +71,11 @@ Eine Clientverbindung besitzt:
 - und **zwei unabhängig aktivierbare Triggerquellen**: `manual` und
   `wake_word`.
 
-| `manualTriggerEnabled` | `wakeWordTriggerEnabled` | zulässig |
+V1 setzt die Quellen per Queryparameter (`manualTriggerEnabled`,
+`wakeWordTriggerEnabled`), V2 im `hello` (`requestedSession.trigger.manual`,
+`requestedSession.trigger.wakeWord`); die Regel ist dieselbe:
+
+| manual | wake word | zulässig |
 | --- | --- | --- |
 | true | false | ja |
 | false | true | ja |
@@ -520,7 +524,11 @@ Aufnahme kann deshalb strukturell keine zweite Aufnahme starten.
 
 ---
 
-## 6. WebSocket-Vertrag
+## 6. WebSocket-Vertrag (Legacy V1, `/ws/transcribe`)
+
+> Die Abschnitte 6 bis 9 beschreiben den geerbten V1-Transport. Neue Clients
+> verwenden Protokoll V2 (Abschnitt 12); dessen Clientvertrag steht in
+> [`client-development/`](client-development/README.md).
 
 ### Verbindung
 
@@ -713,7 +721,9 @@ Der Replaycache gilt für die **gesamte Sitzung**; siehe Abschnitt 3a.
 
 ---
 
-## 7. IDs und Korrelation
+## 7. IDs und Korrelation (Legacy V1)
+
+V2-Identitäten (kanonische UUIDs) stehen in Abschnitt 12.3.
 
 | ID | Producer | Scope | Lebensdauer | Reconnect |
 | --- | --- | --- | --- | --- |
@@ -737,7 +747,13 @@ Segmentkontext und tragen additiv `activationId`, `activationSequence`,
 
 ---
 
-## 8. Events
+## 8. Timeline- und Observability-Events
+
+Die folgenden Namen sind V1-Timeline-Nachrichten und Namen im strukturierten
+Eventstream (`/ws/logs`). Sie sind **nicht** die V2-Wire-Events; deren Namen
+und Abbildung stehen in Abschnitt 12.5 (z. B. `activation.closed` →
+`activation.input_closed`, `activation.drained` →
+`activation.completed`/`.cancelled`/`.failed`).
 
 Neu hinzugekommen:
 
@@ -782,7 +798,7 @@ Wakeword-Event bleibt erhalten.
 
 ---
 
-## 9. Legacykompatibilität und Rollout
+## 9. Legacykompatibilität und Rollout (V1)
 
 - Eine Sitzung ohne die neuen Queryparameter verhält sich **exakt wie bisher**.
   Es wird kein `ActivationController` angelegt, das Recorder-Gate bleibt in der
@@ -825,7 +841,9 @@ greifen kann, hat aber Folgen, die bewusst zu tragen sind:
 
 ---
 
-## 11. Troubleshooting
+## 11. Troubleshooting (Legacy V1)
+
+Für V2 siehe [`client-development/07-robustheit-grenzen-und-sicherheit.md`](client-development/07-robustheit-grenzen-und-sicherheit.md).
 
 | Symptom | Wahrscheinliche Ursache |
 | --- | --- |
@@ -862,7 +880,10 @@ Timer-, Ledger-, Settings- oder Wake-State-Machine.
   -> Eventprojektion und Snapshot
 ```
 
-Implementierung: `api_fastapi_server/protocol_v2/`.
+Implementierung: `api_fastapi_server/protocol_v2/`. Dieser Abschnitt beschreibt
+die Serverarchitektur hinter dem Protokoll. Der kanonische, vollständige
+Clientvertrag (Felder, Result-Codes, Audioformat, Reihenfolgen, Beispiele)
+steht in [`client-development/`](client-development/README.md).
 
 ### 12.1 Eigener Endpunkt
 
@@ -887,9 +908,9 @@ Audio, manuelle Activation, Wake-Word-Erkennung und Domaincommands gesperrt.
 {
   "type": "hello",
   "supportedProtocolVersions": [2],
-  "clientVersion": "…",
-  "clientCommit": "…",
-  "clientRunId": "…",
+  "clientVersion": "2.0.0-desktop",
+  "clientCommit": "unknown",
+  "clientRunId": "10000000-0000-4000-8000-000000000001",
   "requestedSession": {
     "trigger": {"manual": true, "wakeWord": false},
     "wakeWordIds": []
@@ -908,7 +929,7 @@ Ablehnungen und Close-Codes:
 | --- | --- | ---: |
 | ungültige erste Nachricht, nicht parsebares `hello` | – | `4400` |
 | keine gemeinsame Protokollversion | `protocol.incompatible` | `4406` |
-| Handshake-Timeout | – | `4408` |
+| Handshake-Timeout (10 s ohne erstes Frame) | – | `4408` |
 | Sessionadmission abgelehnt | `session.rejected` mit `errors[]` | `4409` |
 | unerwarteter interner Fehler | – | `1011` |
 
@@ -1010,16 +1031,21 @@ ein v2-Event.
 | `final_transcript_failed` | `transcription.failed` |
 | `watchdog_warning` | `watchdog.warning` |
 | `wakeword_detected` | `wakeword.detected` |
+| `wakeword_availability_changed` | `wakeword.availability_changed` |
+| – (Settings-Transaktion) | `settings.changed` |
+| – (abgewiesenes `activate`) | `activation.trigger_suppressed` |
 
-Legacyereignisse ohne v2-Entsprechung werden verworfen, nicht durchgereicht.
+Legacyereignisse ohne v2-Entsprechung werden verworfen, nicht durchgereicht –
+insbesondere gibt es auf v2 keine Realtime-/Zwischentranskripte.
 
 Ein Transportretry desselben logischen Ereignisses liefert dieselbe `eventId`,
 dieselbe `eventSeq` und dieselbe `stateVersion`.
 
-`eventSeq` ist die verbindliche Reihenfolge. Sie wird unter dem Protokolllock
-vergeben; die Zustellreihenfolge kann davon abweichen, wenn zwei
-Domainthreads gleichzeitig publizieren. Ein Client ordnet und dedupliziert
-deshalb nach `eventSeq`/`eventId` und leitet aus einer Lücke einen
+`eventSeq` ist die verbindliche Reihenfolge. Vergabe und Übergabe an den
+Writer sind unter `_event_dispatch_lock` linearisiert, sodass Events in
+`eventSeq`-Reihenfolge gesendet werden
+(`tests/unit/test_protocol_v2_races.py`). Ein Client ordnet und dedupliziert
+trotzdem nach `eventSeq`/`eventId` und leitet aus einer Lücke einen
 `session.snapshot.request` ab.
 
 ### 12.5.1 `stateVersion`
@@ -1097,8 +1123,8 @@ ursprüngliche Identität für Diagnose und Ledgerkorrelation.
 `session.snapshot` ist die serverautoritative Resync-Sicht und enthält
 `protocolVersion`, `serverVersion`, `serverCommit`, `sessionId`,
 `stateVersion`, `lastEventSeq`, `settingsRevision`, `input`,
-`pendingActivations`, `trigger`, `audioAvailable`, `effectiveSettings` und
-`wakeWordCapabilities`.
+`pendingActivations`, `trigger`, `audioAvailable`, `requestedSettings`
+(Abschnitt 13.7), `effectiveSettings` und `wakeWordCapabilities`.
 
 `input` trägt `phase`, `activationId`, `primarySource`, `deadlineAtUnixMs`,
 `remainingMs` und `closeRequested`. In `idle` sind alle optionalen Werte

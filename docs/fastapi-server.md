@@ -1,10 +1,11 @@
 # FastAPI Browser Server
 
-> Für die Implementierung eines neuen Clients gibt es eine aus dem aktuellen
-> Code abgeleitete, mehrseitige Dokumentation unter
-> [client-development/README.md](client-development/README.md). Sie enthält
-> Session-/Server-Scope, Binärprotokoll, alle WebSocket-Events, Chronologien,
-> Zustandsmodell, HTTP-API sowie Robustheits- und Sicherheitshinweise.
+> Neue Clients implementieren **Protokoll V2 (`/ws/v2`)**. Der kanonische,
+> aus dem Code abgeleitete Clientvertrag steht unter
+> [client-development/README.md](client-development/README.md) (Handshake,
+> Commands/Acks, Events, Snapshot, Audioformat, Wake Words, Settings, HTTP-API,
+> Robustheit). Diese Seite beschreibt den Serverbetrieb; der Abschnitt zu
+> `/ws/transcribe` betrifft nur das Legacy-V1-Protokoll.
 
 `api_fastapi_server` is the browser streaming reference app for
 VoiceSTT. It serves a local browser UI and exposes a WebSocket endpoint that
@@ -275,7 +276,8 @@ fields are `performanceEnabled` and `performanceMirrorEnabled`. The response
 reports applied and rejected fields. SQLite store activation and its path
 remain startup-only.
 
-A normal session receives `hello.logAccess` and can use its token only for its
+A legacy v1 (`/ws/transcribe`) session receives `hello.logAccess` and can use
+its token only for its
 own `audit`, `transcription`, and `performance` history. Administrators can
 query or subscribe across all retained sessions and include `system`; omitting
 the session and channel filters explicitly means all sessions/channels. Tokens
@@ -291,7 +293,9 @@ specific `retentionCursor`. Replay and live both read SQLite. A deleted event
 relevant to the requested scope produces `log.gap(reason=retention)`;
 a cursor above the high-watermark produces `log.error(code=cursor_ahead)`.
 Store failure closes existing log sockets with `1011`, blocks new log access,
-and leaves `/ws/transcribe` operational. An empty final recorder result emits
+and leaves the audio WebSockets operational. v2 sessions receive no
+`logAccess` token; they can read `/ws/logs` and `/api/logs/*` only with the
+admin key. An empty final recorder result emits
 `transcription.discarded(reason=empty_final)` but no empty `final` frame. Each
 result is correlated with the generation and segment captured by its actual
 transcription-start callback; duplicate recorder results without another start
@@ -446,11 +450,14 @@ required compatibility path for the browser client and existing integrations;
 it is not scheduled for removal. New clients should integrate against
 [Protocol v2](#protocol-v2) instead.
 
-The browser sends binary audio packets to `/ws/transcribe`:
+The browser sends binary audio packets to `/ws/transcribe` (the same frame
+format is used on `/ws/v2`):
 
-- 4 bytes little-endian unsigned metadata length
-- UTF-8 JSON metadata
-- 16-bit little-endian mono PCM audio bytes
+- 4 bytes little-endian unsigned metadata length (at most 65 536)
+- UTF-8 JSON metadata object (`sampleRate` required; `channels` 1–8, default 1;
+  `format` only `pcm_s16le`; optional `frames` must match the payload)
+- 16-bit little-endian PCM audio bytes (interleaved if `channels` > 1), at most
+  `max_audio_packet_bytes`
 
 Metadata example:
 
@@ -529,13 +536,13 @@ the same effective `sessionConfig` and a path-free logical model catalog under
 WS /ws/v2
 ```
 
-`/ws/v2` is the frozen protocol v2 audio/command channel. It is strictly
-isolated from `/ws/transcribe` at the transport level: a v2 client never
-receives a v1 message, an admitted v2 connection has no v1 fallback, and a
-32-character v1 session id is always rejected on v2. `serverVersion`,
-`serverCommit`, and `supportedProtocolVersions` (`(2,)`) are published
-consistently across every v2 wire surface (`hello.accepted`,
-`session.snapshot`, `protocol.incompatible`, `session.rejected`).
+`/ws/v2` is the frozen protocol v2 audio/command channel and the protocol for
+all new clients. It is strictly isolated from `/ws/transcribe` at the transport
+level: a v2 client never receives a v1 message, an admitted v2 connection has
+no v1 fallback, and a 32-character v1 session id is always rejected on v2.
+`serverVersion` and `serverCommit` are published on `hello.accepted`,
+`session.snapshot`, `protocol.incompatible` and `session.rejected`; the two
+refusal messages additionally carry `supportedProtocolVersions` (`[2]`).
 
 A v2 session opens with a strict client-first handshake:
 
@@ -554,14 +561,17 @@ A v2 session opens with a strict client-first handshake:
 }
 ```
 
-The server admits nothing until the `hello` is fully validated, then responds
-with `hello.accepted` carrying `sessionId` (canonical UUIDv4), `serverVersion`,
-`serverCommit`, `supportedProtocolVersions`, and the effective session
-configuration. Admission is atomic: an unsupported protocol version, a
-malformed or missing handshake field, an invalid trigger combination (both
-trigger sources disabled), or an unresolvable wake-word selection refuses the
-whole session with `protocol.incompatible` or `session.rejected` and a
-machine-readable reason; there is no partial session.
+The server admits nothing until the `hello` is fully validated (it must arrive
+within 10 s, otherwise close `4408`), then responds with `hello.accepted`
+carrying `protocolVersion`, `sessionId` (canonical UUID), `serverVersion`,
+`serverCommit`, and the full `snapshot`. Admission is atomic: a malformed or
+missing handshake field closes with `4400`; an unsupported protocol version
+answers `protocol.incompatible` and closes with `4406`; an invalid trigger
+combination (both trigger sources disabled), an unresolvable wake-word
+selection or the session limit answers `session.rejected` with
+machine-readable `errors[]` and closes with `4409`; there is no partial
+session. Binary audio uses the same length-prefixed frame as v1 (see above)
+and is only accepted after `hello.accepted`.
 
 ### Server-authoritative activation lifecycle
 
@@ -577,10 +587,12 @@ eventSeq      monotonic per-session sequence
 stateVersion  advances exactly once per visible state change
 ```
 
-`session.snapshot` is the resynchronization surface: a client that reconnects
-or suspects drift requests it and receives the complete current state,
-including pending activations, requested/effective settings, and wake-word
-capabilities, rather than replaying history. The complete event catalog,
+`session.snapshot` is the resynchronization surface: a client that detects an
+`eventSeq` gap requests it and receives the complete current state, including
+pending activations, requested/effective settings, and wake-word capabilities,
+rather than replaying history. A reconnect always creates a new session whose
+initial snapshot arrives inside `hello.accepted`; v2 has no session
+resumption and no interim (realtime) transcripts. The complete event catalog,
 phase matrix, and close-code reference are in
 [docs/client-development](client-development/README.md) and
 [docs/einheitliche-triggerarchitektur.md](einheitliche-triggerarchitektur.md).
@@ -664,8 +676,9 @@ timeline lists wake wait/detect/timeout events, recording start/end, realtime
 updates, and final transcript delivery. Clear/reset affects only the issuing
 session.
 
-Admission limits are explicit. When `--max-sessions` is reached, new websocket
-clients receive an admission error and close code `1013`. When active speaker
+Admission limits are explicit. When `--max-sessions` is reached, new legacy
+v1 websocket clients receive an admission error and close code `1013` (v2:
+`session.rejected` with `session_limit_reached` and close `4409`). When active speaker
 capacity is reached, accepted sessions receive warnings while existing final
 work is preserved where possible.
 

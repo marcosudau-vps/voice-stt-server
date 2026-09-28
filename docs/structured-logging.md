@@ -178,7 +178,7 @@ source policy for high-volume realtime performance detail.
 ### Store availability, failure and recovery
 
 The canonical store reports one overall availability state. It is what
-`hello.logAccess.available` and `replayAvailable` expose, what `/health` folds
+the legacy v1 `hello.logAccess.available` and `replayAvailable` expose, what `/health` folds
 into `ok`, what `/api/logs/*` requires before answering, and what makes
 `/ws/logs` send `log.error(code=event_store_unavailable)` and close `1011`.
 
@@ -199,7 +199,7 @@ While canonical writes are unavailable, live logging stays unavailable. This is
 deliberate: newly generated events cannot be persisted, and a live stream that
 kept reporting itself healthy would silently drop them without any signal —
 `log.gap(reason=retention)` describes deleted history, not events that were
-never committed. `/ws/transcribe` audio and text operation is unaffected by a
+never committed. Audio and text operation on `/ws/v2` and `/ws/transcribe` is unaffected by a
 canonical store outage.
 
 History is available at:
@@ -231,7 +231,10 @@ documented fields. Responses include `authorizationScope`, `allSessions`,
 
 ## Live log WebSocket
 
-The transcription WebSocket `hello` response contains:
+The legacy v1 transcription WebSocket (`/ws/transcribe`) `hello` response
+contains the token below. Protocol v2 (`/ws/v2`) sessions receive **no**
+`logAccess`; a v2 client can use the log WebSocket and history endpoints only
+with the admin key.
 
 ```json
 {
@@ -315,7 +318,7 @@ only in the current page's password field; it is not persisted in browser
 storage.
 
 The browser persists a random stable client identifier locally and supplies it
-as `clientId` when opening `/ws/transcribe`. API clients can supply the same
+as `clientId` when opening the legacy v1 `/ws/transcribe` endpoint. API clients can supply the same
 correlation concept in `X-VoiceSTT-Client-ID`. `clientId`, `sessionId`,
 `requestId`, and `transcriptionId` remain separate identifiers. Client IP
 addresses and access tokens are not part of session events.

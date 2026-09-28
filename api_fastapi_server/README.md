@@ -152,7 +152,9 @@ speakers above `--max-active-speakers` receive a warning while already accepted
 sessions continue to preserve final transcription work where possible.
 Session slots are reserved before per-session recorder/VAD construction so a
 burst of concurrent connects cannot instantiate more recorders than the session
-limit. Audio packets are accepted only after a `start` command. Recorder input
+limit. On the legacy v1 endpoint `/ws/transcribe`, audio packets are accepted
+only after a `start` command; on `/ws/v2` the audio path opens with
+`hello.accepted`. Recorder input
 queues use `--audio-queue-size`, long continuous recordings are force-finalized
 at `--max-audio-queue-seconds-per-session`, and completed recording backlog is
 trimmed to `--max-final-queue-depth-per-session`.
@@ -297,11 +299,18 @@ python api_fastapi_server/server.py \
 
 ## Protocol
 
-The browser sends binary WebSocket audio packets to `/ws/transcribe`:
+New clients use **protocol v2 on `/ws/v2`**; its canonical contract is
+[`docs/client-development/`](../docs/client-development/README.md). The rest of
+this section describes the **legacy v1** endpoint `/ws/transcribe` used by the
+bundled browser client
+([legacy v1 docs](../docs/client-development/legacy-v1/README.md)).
 
-- 4 bytes little-endian unsigned metadata length
-- UTF-8 JSON metadata
-- 16-bit little-endian mono PCM audio bytes
+The browser sends binary WebSocket audio packets to `/ws/transcribe` (the same
+frame format is used on `/ws/v2`):
+
+- 4 bytes little-endian unsigned metadata length (at most 65 536)
+- UTF-8 JSON metadata object (`sampleRate` required)
+- 16-bit little-endian PCM audio bytes
 
 Metadata fields:
 
@@ -314,7 +323,7 @@ Metadata fields:
 }
 ```
 
-Server events:
+Legacy v1 server events:
 
 - `hello`: assigns `clientId` and `sessionId`
 - `ready`: model lanes are initialized; includes public settings and limits
@@ -328,7 +337,7 @@ Transcript-bearing events include `sessionId` and are routed only to that
 session. `clear` resets only the issuing session and discards pending stale
 results from earlier session generations.
 
-`hello.logAccess` provides a short-lived session-scoped token for the separate
+On v1, `hello.logAccess` provides a short-lived session-scoped token for the separate
 `/ws/logs` connection and the `/api/logs/events`,
 `/api/logs/sessions/{sessionId}`, and
 `/api/logs/transcriptions/{transcriptionId}` history endpoints. Structured
@@ -346,7 +355,8 @@ The `system` channel and cross-session access require the admin key. Send the
 token in `X-VoiceSTT-Log-Token` for HTTP or in the first `/ws/logs` subscribe
 message, never in a URL.
 
-Wake Word behavior can be selected per connection:
+On v1, Wake Word behavior can be selected per connection (v2 selects wake
+words by canonical id in the `hello` handshake):
 
 ```text
 /ws/transcribe?wakeWordEnabled=false
