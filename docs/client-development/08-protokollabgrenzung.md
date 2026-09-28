@@ -31,13 +31,13 @@ Alle drei Endpunkte liegen auf demselben HTTP-/HTTPS-Port.
 | Audiostart | implizit mit `hello.accepted` | `{"type":"start"}` |
 | Activation-Steuerung | `activation.command` (`activate`/`refresh`/`finish`/`cancel`) | `trigger` (gleiche Aktionen) |
 | Antworten | `command.ack` mit 15 Result-Codes | `trigger_ack`, `audio_availability_ack` |
-| Events | 17 Typen, `eventSeq`, `stateVersion` | `status`, `realtime`, `final`, `timeline`, … |
-| Zwischentext | keiner | `realtime` |
+| Events | 18 Typen, `eventSeq`, `stateVersion` | `status`, `realtime`, `final`, `timeline`, … |
+| Zwischentext | `transcription.interim` | `realtime` |
 | Resync | `session.snapshot` | – |
 | IDs | kanonische UUIDs | kompakte Hex-IDs, Integer-`segmentId` |
 | Audioframe | Längenpräfix + JSON + PCM | identisch |
 | Session-Settings | `session_settings.patch` | – |
-| Log-Token | – | `hello.logAccess` |
+| Log-Token | `hello.accepted.logAccess` | `hello.logAccess` |
 
 Die beiden Protokolle teilen alle Serverautoritäten (Activation-Controller,
 Segmentledger, Recorder, Scheduler), sind aber strikt getrennt: Ein V2-Client

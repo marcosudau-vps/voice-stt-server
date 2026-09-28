@@ -328,6 +328,7 @@ class ProtocolV2Connection:
         session.start_streaming()
 
         payload = self._snapshot_payload()
+        log_access = self.service.create_log_access(self.state.session_id)
         self.send({
             "type": schema.HELLO_ACCEPTED,
             "protocolVersion": self.state.protocol_version,
@@ -335,6 +336,10 @@ class ProtocolV2Connection:
             "serverVersion": self.server_version,
             "serverCommit": self.server_commit,
             "snapshot": snapshot_layer.embedded_snapshot(payload),
+            # Entitlement material is connection bootstrap data, not
+            # snapshot-authoritative domain state. Reuse the established v1
+            # token authority and keep it out of later resync snapshots.
+            "logAccess": log_access,
         })
 
     # -- commands ------------------------------------------------------------

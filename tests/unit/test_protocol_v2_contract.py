@@ -94,6 +94,7 @@ class ContractVectorFileTests(unittest.TestCase):
             "manual_activate_replay",
             "refresh_active_activation",
             "activation_started_event",
+            "transcription_interim_event",
             "idle_snapshot",
             "wake_enabled_without_selection",
             "client_claims_wake_word",
@@ -207,6 +208,37 @@ class ContractVectorBehaviourTests(unittest.TestCase):
                 missing = expected_fields - set(started)
                 self.assertEqual(missing, set(), started)
                 self.assertEqual(started["type"], "activation.started")
+
+    def test_transcription_interim_event_uses_the_frozen_field_names(self):
+        expected = vector("transcription_interim_event")["message"]
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                session.activate()
+                session.event(schema.EVENT_ACTIVATION_STARTED)
+                from tests.unit.test_server_controlled_e2e import speech_packet
+
+                session.send_bytes(speech_packet())
+                session.event(schema.EVENT_SEGMENT_RECORDING_STARTED)
+                from types import SimpleNamespace
+
+                session.server_session(
+                    self.app
+                )._on_realtime_stabilization_event(SimpleNamespace(
+                    raw_observation_text=expected["text"],
+                    stable_text=expected["committedStableText"],
+                    stable_delta=expected["committedStableText"],
+                    unstable_text=expected["visualUnstableText"],
+                    display_text=expected["displayText"],
+                    sequence=expected["sequence"],
+                    segment_id=None,
+                    timing=None,
+                ))
+                produced = session.event(schema.EVENT_TRANSCRIPTION_INTERIM)
+                self.assertEqual(set(expected) - set(produced), set(), produced)
+                self.assertEqual(
+                    produced["type"], schema.EVENT_TRANSCRIPTION_INTERIM
+                )
+                self.assertEqual(produced["text"], expected["text"])
 
     def test_idle_snapshot_uses_the_frozen_field_names(self):
         message = vector("idle_snapshot")["message"]
@@ -604,7 +636,7 @@ class EventProjectionTests(unittest.TestCase):
 
     def test_unknown_legacy_events_are_dropped(self):
         for legacy in (
-            "realtime_transcript", "idle", "wakeword_wait_started",
+            "idle", "wakeword_wait_started",
             "wakeword_followup_timeout", "transcription_started_unknown",
         ):
             with self.subTest(legacy=legacy):
@@ -612,6 +644,43 @@ class EventProjectionTests(unittest.TestCase):
                     self.projector.project(legacy, {}, self.context()), []
                 )
         self.assertEqual(self.state.last_event_seq, 0)
+
+    def test_realtime_transcript_is_a_canonical_revisable_interim_event(self):
+        self.projector.project(
+            "recording_started",
+            {
+                "segmentId": "s1",
+                "segmentSequence": 3,
+                "activationId": self.activation,
+            },
+            self.context(phase=schema.SEGMENT_ACTIVE),
+        )
+        state_version = self.state.state_version
+        produced = self.projector.project(
+            "realtime_transcript",
+            {
+                "segmentId": "s1",
+                "segmentSequence": 3,
+                "text": "Hallo Welt",
+                "sequence": 7,
+                "displayText": "Hallo Welt",
+                "committedStableText": "Hallo ",
+                "visualUnstableText": "Welt",
+            },
+            self.context(phase=schema.SEGMENT_ACTIVE),
+        )
+        self.assertEqual(len(produced), 1)
+        event = produced[0]
+        self.assertEqual(event["type"], schema.EVENT_TRANSCRIPTION_INTERIM)
+        self.assertEqual(event["activationId"], self.activation)
+        self.assertEqual(event["segmentId"], "s1")
+        self.assertEqual(event["segmentSequence"], 3)
+        self.assertEqual(event["sequence"], 7)
+        self.assertEqual(event["text"], "Hallo Welt")
+        self.assertEqual(event["committedStableText"], "Hallo ")
+        self.assertEqual(event["visualUnstableText"], "Welt")
+        self.assertEqual(event["stateVersion"], state_version)
+        self.assertEqual(event["eventSeq"], 3)
 
     def test_input_closed_keeps_a_null_correlation_for_timer_closes(self):
         produced = self.projector.project(

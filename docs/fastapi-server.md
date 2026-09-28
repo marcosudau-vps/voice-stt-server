@@ -276,8 +276,9 @@ fields are `performanceEnabled` and `performanceMirrorEnabled`. The response
 reports applied and rejected fields. SQLite store activation and its path
 remain startup-only.
 
-A legacy v1 (`/ws/transcribe`) session receives `hello.logAccess` and can use
-its token only for its
+A protocol v2 (`/ws/v2`) session receives `hello.accepted.logAccess`; legacy
+v1 (`/ws/transcribe`) receives the same contract as `hello.logAccess`. A
+session can use its token only for its
 own `audit`, `transcription`, and `performance` history. Administrators can
 query or subscribe across all retained sessions and include `system`; omitting
 the session and channel filters explicitly means all sessions/channels. Tokens
@@ -293,9 +294,9 @@ specific `retentionCursor`. Replay and live both read SQLite. A deleted event
 relevant to the requested scope produces `log.gap(reason=retention)`;
 a cursor above the high-watermark produces `log.error(code=cursor_ahead)`.
 Store failure closes existing log sockets with `1011`, blocks new log access,
-and leaves the audio WebSockets operational. v2 sessions receive no
-`logAccess` token; they can read `/ws/logs` and `/api/logs/*` only with the
-admin key. An empty final recorder result emits
+and leaves the audio WebSockets operational. If the store or live access is
+unavailable, `logAccess.available` is false and no session token is issued. An
+empty final recorder result emits
 `transcription.discarded(reason=empty_final)` but no empty `final` frame. Each
 result is correlated with the generation and segment captured by its actual
 transcription-start callback; duplicate recorder results without another start
@@ -592,7 +593,8 @@ stateVersion  advances exactly once per visible state change
 pending activations, requested/effective settings, and wake-word capabilities,
 rather than replaying history. A reconnect always creates a new session whose
 initial snapshot arrives inside `hello.accepted`; v2 has no session
-resumption and no interim (realtime) transcripts. The complete event catalog,
+resumption. Realtime text is delivered as revisable `transcription.interim`
+events, while only `transcription.completed` is final. The complete event catalog,
 phase matrix, and close-code reference are in
 [docs/client-development](client-development/README.md) and
 [docs/einheitliche-triggerarchitektur.md](einheitliche-triggerarchitektur.md).

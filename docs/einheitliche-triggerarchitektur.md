@@ -920,8 +920,13 @@ Audio, manuelle Activation, Wake-Word-Erkennung und Domaincommands gesperrt.
 ```
 
 `hello.accepted` enthält `protocolVersion`, `sessionId`, `serverVersion`,
-`serverCommit` und den vollständigen Snapshot unter `snapshot` (ohne dessen
-inneres `type`). Erst danach ist Domaintraffic erlaubt.
+`serverCommit`, den vollständigen Snapshot unter `snapshot` (ohne dessen
+inneres `type`) und `logAccess`. Der Logblock bootstrapt mit dem bestehenden
+sessiongebundenen Token `/ws/logs` und die HTTP-History; bei deaktiviertem oder
+nicht verfügbarem Logpfad meldet er `available=false` ohne Token. Da das
+Berechtigungsmaterial kein fachlicher Zustand ist, wird es in späteren
+Snapshots nicht wiederholt. Erst nach `hello.accepted` ist Domaintraffic
+erlaubt.
 
 Ablehnungen und Close-Codes:
 
@@ -1026,6 +1031,7 @@ ein v2-Event.
 | `activation_drained` | `activation.completed` / `.cancelled` / `.failed` |
 | `recording_started` / `recording_ended` | `segment.recording_started` / `.recording_ended` |
 | `transcription_started` | `transcription.accepted` |
+| `realtime_transcript` | `transcription.interim` |
 | `final_transcript` | `transcription.completed` |
 | `final_transcript_discarded` / `_cancelled` | `transcription.discarded` |
 | `final_transcript_failed` | `transcription.failed` |
@@ -1035,8 +1041,17 @@ ein v2-Event.
 | – (Settings-Transaktion) | `settings.changed` |
 | – (abgewiesenes `activate`) | `activation.trigger_suppressed` |
 
-Legacyereignisse ohne v2-Entsprechung werden verworfen, nicht durchgereicht –
-insbesondere gibt es auf v2 keine Realtime-/Zwischentranskripte.
+Legacyereignisse ohne v2-Entsprechung werden verworfen, nicht durchgereicht.
+`realtime_transcript` ist die ausdrücklich typisierte Ausnahme und wird als
+`transcription.interim` projiziert.
+
+`transcription.interim` ist das revidierbare Live-Ergebnis eines Segments. Es
+trägt mindestens `activationId`, `segmentId`, `segmentSequence` und `text` und
+kann die vorhandenen Stabilisierungs-, Consensus-, Revision- und Timingfelder
+enthalten. Ein neueres Interim ersetzt die vorläufige Darstellung desselben
+Segments. Das Event ist durch `eventSeq` geordnet, erhöht als Dataplane-Update
+aber nicht `stateVersion`; ein Transkriptionsterminal beendet die vorläufige
+Darstellung.
 
 Ein Transportretry desselben logischen Ereignisses liefert dieselbe `eventId`,
 dieselbe `eventSeq` und dieselbe `stateVersion`.

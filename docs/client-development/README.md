@@ -3,7 +3,9 @@
 > **Status:** kanonische Client-Dokumentation für **Protokoll V2 auf `/ws/v2`**.
 > Aus dem Code abgeleitet und am 2026-09-28 gegen
 > `f7d2b3ccd07757172a45b371829b04bcedffab4b` geprüft
-> ([Prüfbericht](../audits/v2-client-contract-review/INDEPENDENT_REVIEW.md)).
+> ([Prüfbericht](../audits/v2-client-contract-review/INDEPENDENT_REVIEW.md));
+> anschließend um `transcription.interim` und den V2-Session-Logzugriff ergänzt
+> ([Follow-up](../audits/v2-client-contract-review/2026-09-28_V2_REALTIME_LOGACCESS_FOLLOWUP.md)).
 > **Serverversion:** `2.0.0`
 
 Diese Seiten sind die maßgebliche Grundlage für neue Clients, insbesondere den
@@ -22,7 +24,7 @@ implementiert ist – ohne dass dafür Servercode gelesen werden muss.
 | --- | --- |
 | [01 – Session- und Server-Scope](01-session-und-server-scope.md) | Was pro Verbindung isoliert und was serverweit geteilt ist; Admin-Runtime-Settings |
 | [02 – WebSocket-Protokoll V2](02-websocket-protokoll.md) | **Normativ:** Endpunkt, Handshake, Identitäten, Commands, `command.ack`, Replay, Audioframe, Close-Codes |
-| [03 – Server-Nachrichten](03-server-events-kurzreferenz.md) | **Normativ:** Event-Hülle und alle 17 Events mit Feldern |
+| [03 – Server-Nachrichten](03-server-events-kurzreferenz.md) | **Normativ:** Event-Hülle und alle 18 Events mit Feldern |
 | [04 – Lebenszyklen & Chronologie](04-server-events-katalog-und-chronologie.md) | Phasen, Fristen, Segment-/Transkriptlebenszyklus, Reihenfolge-Garantien, Beispielabläufe, Trigger |
 | [05 – Zustandsmodell, Snapshot, Reconnect](05-client-zustandsmodell.md) | **Normativ:** `session.snapshot`; Reducer, Lückenbehandlung, Reconnect |
 | [06 – HTTP-API & Authentifizierung](06-http-api-und-authentifizierung.md) | `/health`, `/api/v2/*`, Admin-/OpenAI-API, Log-Zugriff |
@@ -63,13 +65,14 @@ flowchart LR
 1. GET /api/v2/wake-words                          (falls Wake Word genutzt wird)
 2. WS  /ws/v2 öffnen
 3. →  hello {supportedProtocolVersions:[2], clientRunId, requestedSession, runtimeSuppression}
-4. ←  hello.accepted {sessionId, snapshot}         → Spiegel aus snapshot bauen
+4. ←  hello.accepted {sessionId, snapshot, logAccess} → Spiegel bauen, Logzugriff merken
 5. →  (optional) session_settings.patch            → Timings/Sensitivität
 6. →  Binärframes kontinuierlich (uint32-LE-Länge + JSON{sampleRate} + PCM s16le)
 7. →  activation.command activate (PTT) … finish   ← Events, command.ack
-8. ←  transcription.completed {segmentId, text}    → Text anzeigen
-9. Lücke in eventSeq → session.snapshot.request → session.snapshot
-10. Verbindungsverlust → neue Session ab Schritt 2
+8. ←  transcription.interim {segmentId, text}      → ersetzbare Vorschau anzeigen
+9. ←  transcription.completed {segmentId, text}    → Vorschau durch Finaltext ersetzen
+10. Lücke in eventSeq → session.snapshot.request → session.snapshot
+11. Verbindungsverlust → neue Session ab Schritt 2
 ```
 
 ## Die wichtigsten Regeln
@@ -80,7 +83,7 @@ flowchart LR
 4. **Jedes Command mit kanonischer `commandId` bekommt genau ein `command.ack`;** `accepted` ist nur für `applied`/`no_change` wahr. Die ausgelösten Events kommen vor dem Ack.
 5. **Events strikt nach `eventSeq`;** Lücke → Snapshot anfordern. Der Snapshot ist autoritativ.
 6. **Audio ist ein Längenpräfix-Format**, kein Header mit Magic: `uint32` LE Metadatenlänge, UTF-8-JSON mit `sampleRate`, PCM `pcm_s16le`. Kontinuierlich senden.
-7. **Es gibt keine Zwischentranskripte.** Text kommt nur mit `transcription.completed` je `segmentId`.
+7. **`transcription.interim` ist eine ersetzbare Vorschau je `segmentId`.** Nur `transcription.completed` ist ein dauerhaftes Ergebnis; ein Terminal beendet die Vorschau.
 8. **`activation.input_closed` ≠ fertig.** Die Hintergrundtranskription endet mit `activation.completed`/`.cancelled`/`.failed` – das auch vor `input_closed` eintreffen kann.
 9. **Wake-Word-IDs sind kanonische Katalog-IDs** (`hey_jarvis`), nie Anzeigenamen oder Aliase.
 10. **Eine neue Verbindung ist eine neue Session** ohne Wiederaufnahme; Settings danach neu setzen.

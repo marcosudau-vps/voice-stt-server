@@ -49,7 +49,7 @@ sequenceDiagram
         S-->>C: session.rejected (errors[])
         S-->>C: Close 4409
     else angenommen
-        S-->>C: hello.accepted (sessionId, snapshot)
+        S-->>C: hello.accepted (sessionId, snapshot, logAccess)
         Note over C,S: Commands und Audio sind jetzt erlaubt
     end
 ```
@@ -94,13 +94,28 @@ Zusätzliche Felder werden ignoriert.
   "sessionId": "20000000-0000-4000-8000-000000000001",
   "serverVersion": "2.0.0",
   "serverCommit": "unknown",
-  "snapshot": { "…": "vollständiger session.snapshot ohne type, siehe 05" }
+  "snapshot": { "…": "vollständiger session.snapshot ohne type, siehe 05" },
+  "logAccess": {
+    "available": true,
+    "websocketPath": "/ws/logs",
+    "historyPath": "/api/logs/events",
+    "accessToken": "<session-token>",
+    "sessionId": "20000000-0000-4000-8000-000000000001",
+    "logProtocolVersion": 2,
+    "deliveryMode": "sqlite_first",
+    "replayAvailable": true
+  }
 }
 ```
 
 Mit dem Senden von `hello.accepted` ist der Audiopfad geöffnet (es gibt kein
 `start`) und die `runtimeSuppression` gesetzt. `serverCommit` ist
-`VOICESTT_SERVER_COMMIT` oder `"unknown"`.
+`VOICESTT_SERVER_COMMIT` oder `"unknown"`. `logAccess` beschreibt den
+separaten strukturierten Logpfad. Bei `available: true` ist sein Token auf
+`sessionId` sowie `audit`, `transcription` und `performance` begrenzt. Bei
+deaktiviertem oder nicht verfügbarem Logstore fehlt `accessToken`; `code` und
+`reason` erklären die Ursache. Die Berechtigung ist Bootstrap-Material und
+wird deshalb nicht in späteren `session.snapshot`-Antworten wiederholt.
 
 ### 2.3 `protocol.incompatible` / `session.rejected`
 

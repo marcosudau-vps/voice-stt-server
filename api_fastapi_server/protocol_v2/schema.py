@@ -155,6 +155,7 @@ EVENT_ACTIVATION_TRIGGER_SUPPRESSED = "activation.trigger_suppressed"
 EVENT_SEGMENT_RECORDING_STARTED = "segment.recording_started"
 EVENT_SEGMENT_RECORDING_ENDED = "segment.recording_ended"
 EVENT_TRANSCRIPTION_ACCEPTED = "transcription.accepted"
+EVENT_TRANSCRIPTION_INTERIM = "transcription.interim"
 EVENT_TRANSCRIPTION_COMPLETED = "transcription.completed"
 EVENT_TRANSCRIPTION_DISCARDED = "transcription.discarded"
 EVENT_TRANSCRIPTION_FAILED = "transcription.failed"
@@ -175,6 +176,7 @@ EVENT_TYPES = (
     EVENT_SEGMENT_RECORDING_STARTED,
     EVENT_SEGMENT_RECORDING_ENDED,
     EVENT_TRANSCRIPTION_ACCEPTED,
+    EVENT_TRANSCRIPTION_INTERIM,
     EVENT_TRANSCRIPTION_COMPLETED,
     EVENT_TRANSCRIPTION_DISCARDED,
     EVENT_TRANSCRIPTION_FAILED,
@@ -189,6 +191,9 @@ EVENT_TYPES = (
 NON_STATE_EVENTS = frozenset({
     EVENT_WATCHDOG_WARNING,
     EVENT_ACTIVATION_TRIGGER_SUPPRESSED,
+    # Interim text is a revisable data-plane update. It is ordered by
+    # ``eventSeq`` but does not change the snapshot-authoritative lifecycle.
+    EVENT_TRANSCRIPTION_INTERIM,
 })
 
 

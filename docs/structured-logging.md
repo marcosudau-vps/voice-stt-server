@@ -231,10 +231,9 @@ documented fields. Responses include `authorizationScope`, `allSessions`,
 
 ## Live log WebSocket
 
-The legacy v1 transcription WebSocket (`/ws/transcribe`) `hello` response
-contains the token below. Protocol v2 (`/ws/v2`) sessions receive **no**
-`logAccess`; a v2 client can use the log WebSocket and history endpoints only
-with the admin key.
+Both transcription protocols return the scoped token below during bootstrap:
+legacy v1 in `/ws/transcribe` `hello`, protocol v2 in `/ws/v2`
+`hello.accepted`. V2 does not repeat the entitlement in `session.snapshot`.
 
 ```json
 {

@@ -6,12 +6,12 @@
 
 | `type` | Art | `eventSeq` | Beschreibung |
 | --- | --- | --- | --- |
-| `hello.accepted` | Handshake | – | Session angenommen, enthält Snapshot |
+| `hello.accepted` | Handshake | – | Session angenommen, enthält Snapshot und `logAccess` |
 | `protocol.incompatible` | Handshake | – | vor Close `4406` |
 | `session.rejected` | Handshake | – | vor Close `4409` |
 | `command.ack` | Antwort | – | genau eine je empfangenem Command mit kanonischer `commandId` |
 | `session.snapshot` | Antwort | – | nach `session.snapshot.request` |
-| 17 Domain-Events (unten) | Event | ja | geordneter Zustandsstrom |
+| 18 Domain-Events (unten) | Event | ja | geordneter Zustands- und Datenstrom |
 
 Unbekannte `type`-Werte und unbekannte Felder muss ein Client ignorieren.
 
@@ -68,12 +68,28 @@ Alle tragen `activationId`, `segmentId`, `segmentSequence`.
 | `segment.recording_started` | – | +1 |
 | `segment.recording_ended` | `reason` (z. B. `recording_stop`) | +1 |
 | `transcription.accepted` | – | +1 |
+| `transcription.interim` | `text`; optional die Stabilisierungs-, Consensus-, Revision- und Timingfelder aus §3.1 | ±0 |
 | `transcription.completed` | `text` (finaler Text, kann leer sein) | +1 |
 | `transcription.discarded` | `reason` (z. B. `cancelled`, `empty_final`) | +1 |
 | `transcription.failed` | `reason` | +1 |
 
 Je `segmentId` gibt es genau ein Terminal (`completed` | `discarded` |
-`failed`). **Es gibt keine Zwischen-/Realtime-Transkripte auf V2.**
+`failed`). `transcription.interim` ist eine revidierbare Vorschau: Das neueste
+Interim desselben Segments ersetzt die vorherige Vorschau. Es ist über
+`eventSeq` geordnet, erhöht `stateVersion` aber nicht. Ein Terminal beendet und
+entfernt die Vorschau.
+
+#### 3.1 Optionale Felder von `transcription.interim`
+
+Die einfache Realtime-Quelle liefert nur `text`. Der Stabilisierer kann
+zusätzlich folgende Felder liefern; Clients müssen alle als optional behandeln:
+
+`recordingId`, `sequence`, `rawText`, `displayText`, `stableText`,
+`stableDelta`, `unstableText`, `committedStableText`,
+`committedStableDelta`, `visualStableText`, `visualUnstableText`,
+`consensusText`, `consensusUnstableText`, `consensusDisplayText`,
+`publicConsensusAligned`, `internalRevision`, `isOutlier`,
+`stablePrefixConflict`, `commitReason`, `stableNormalizedOffset`, `timing`.
 
 ### Watchdog, Wake Word, Settings
 
@@ -114,6 +130,9 @@ type V2Event =
   | Envelope & { type: "activation.trigger_suppressed"; source: Source; reason: "trigger_suppressed" }
   | Envelope & SegmentRef & { type: "segment.recording_started" | "transcription.accepted" }
   | Envelope & SegmentRef & { type: "segment.recording_ended" | "transcription.discarded" | "transcription.failed"; reason: string }
+  | Envelope & SegmentRef & { type: "transcription.interim"; text: string;
+                 displayText?: string; stableText?: string; unstableText?: string;
+                 internalRevision?: boolean; timing?: Record<string, unknown> }
   | Envelope & SegmentRef & { type: "transcription.completed"; text: string }
   | Envelope & { type: "watchdog.warning"; activationId: string | null; segmentId: string | null;
                  segmentSequence: number | null; deadlineAtUnixMs: number | null; remainingMs: number | null }

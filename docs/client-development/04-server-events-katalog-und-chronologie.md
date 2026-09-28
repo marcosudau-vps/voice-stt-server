@@ -48,15 +48,19 @@ Hinweise zur Sichtbarkeit:
 ## 3. Segment- und Transkriptlebenszyklus
 
 ```text
-segment.recording_started ─► segment.recording_ended ─► transcription.accepted ─► Terminal
-                                                        Terminal ∈ { transcription.completed (text)
-                                                                     transcription.discarded (reason)
-                                                                     transcription.failed (reason) }
+segment.recording_started ─┬─► transcription.interim (0..n, ersetzbare Vorschau)
+                           │
+                           └─► segment.recording_ended ─► transcription.accepted ─► Terminal
+                                                                                   Terminal ∈ {
+                                                                                     transcription.completed (text)
+                                                                                     transcription.discarded (reason)
+                                                                                     transcription.failed (reason) }
 ```
 
 * Schlüssel ist `segmentId`; Reihenfolge der Segmente ist `segmentSequence`.
+* Realtime-Jobs laufen asynchron. Interims entstehen typischerweise während der Aufnahme, können aber nahe am Aufnahmeende verzögert eintreffen. Nach einem Terminal darf ein späteres Interim die endgültige Darstellung nicht mehr verändern.
 * Genau ein Terminal je Segment. Beim Abbruch kann `transcription.discarded` (`reason = cancelled`) **vor** `recording_ended`/`accepted` desselben Segments eintreffen. Regel: das erste Terminal ist endgültig; spätere nicht-terminale Events dieses Segments nur noch protokollieren.
-* `transcription.completed` ist das einzige Textereignis. Ein leerer Recordertext wird `transcription.discarded` mit `reason = empty_final`.
+* `transcription.interim` ist revidierbarer Live-Text und verändert `stateVersion` nicht. Der Client ersetzt die Vorschau desselben `segmentId`; nur `completed` ist endgültig. Ein leerer Recordertext wird `transcription.discarded` mit `reason = empty_final`.
 * Das Activation-Terminal (`activation.completed`/`.cancelled`/`.failed`) folgt, wenn alle angenommenen Segmente terminal sind.
 
 ## 4. Reihenfolge-Garantien und Nicht-Garantien
@@ -84,14 +88,16 @@ S→C command.ack C1 applied               sv 1   inputPhase=waiting_first_speec
     … Client streamt Audio …
 S→C activation.phase_changed      seq 2  sv 2   waiting_first_speech → segment_active
 S→C segment.recording_started     seq 3  sv 3   S1 segmentSequence=1
-S→C activation.phase_changed      seq 4  sv 4   segment_active → followup_wait
-S→C segment.recording_ended       seq 5  sv 5   S1 reason=recording_stop
-S→C transcription.accepted        seq 6  sv 6   S1
-S→C transcription.completed       seq 7  sv 7   S1 text="…"
+S→C transcription.interim         seq 4  sv 3   S1 text="vorläufig …"
+S→C transcription.interim         seq 5  sv 3   S1 text="korrigiert …"
+S→C activation.phase_changed      seq 6  sv 4   segment_active → followup_wait
+S→C segment.recording_ended       seq 7  sv 5   S1 reason=recording_stop
+S→C transcription.accepted        seq 8  sv 6   S1
+S→C transcription.completed       seq 9  sv 7   S1 text="…"
 C→S activation.command finish activationId=A1               (commandId C2)
                                           sv 8   (Eintritt closing_input, ohne Event)
-S→C activation.completed          seq 8  sv 9   A1 accepted=1 terminal=1
-S→C activation.input_closed       seq 9  sv 10  A1 reason=finished causedByCommandId=C2
+S→C activation.completed          seq 10 sv 9   A1 accepted=1 terminal=1
+S→C activation.input_closed       seq 11 sv 10  A1 reason=finished causedByCommandId=C2
 S→C command.ack C2 applied               sv 8   inputPhase=closing_input
 ```
 

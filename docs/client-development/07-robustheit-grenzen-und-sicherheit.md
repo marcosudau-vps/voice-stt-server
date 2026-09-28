@@ -125,8 +125,9 @@ tatsächliche serverseitige Datenverarbeitung informieren und nicht allein aus
 `save_audio_files: false` ableiten, dass keine textuellen Inhalte protokolliert
 werden.
 
-Ein Legacy-V1-Sessionclient erhält den Log-Zugriffstoken ausschließlich in
-`hello` (V2 erhält keinen, siehe [06](06-http-api-und-authentifizierung.md#strukturierter-logzugriff)).
+Ein Sessionclient erhält den Log-Zugriffstoken ausschließlich beim Bootstrap:
+V2 in `hello.accepted.logAccess`, Legacy V1 in `hello.logAccess`
+(siehe [06](06-http-api-und-authentifizierung.md#strukturierter-logzugriff)).
 Dieser Token darf nur die eigene Session und die Kanäle `audit`,
 `transcription` und `performance` lesen. Der Systemkanal und
 sessionübergreifende Abfragen bleiben dem Adminzugriff vorbehalten. Tokens
@@ -178,6 +179,8 @@ globalen `oldestCursor` unverändert lässt.
       Reconnect-Schleife.
 - [ ] Close-Codes `4400`, `4406`, `4408`, `4409`, `1011` werden unterschieden.
 - [ ] Zustand wird aus `hello.accepted.snapshot` initialisiert.
+- [ ] `hello.accepted.logAccess` wird nur bei `available: true` verwendet und
+      weder in URLs noch als Adminberechtigung behandelt.
 
 ### Commands
 
@@ -191,6 +194,8 @@ globalen `oldestCursor` unverändert lässt.
       Snapshot aus, gepufferte Events werden nachgezogen.
 - [ ] Terminal vor `input_closed` wird korrekt dargestellt.
 - [ ] Erstes Segmentterminal ist endgültig.
+- [ ] `transcription.interim` ersetzt nur die Vorschau desselben Segments;
+      ein Terminal entfernt sie und kann nicht von einem späten Interim überschrieben werden.
 - [ ] Unbekannte Eventtypen/Felder brechen den Parser nicht.
 
 ### Audio

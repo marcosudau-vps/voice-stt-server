@@ -58,6 +58,7 @@ LEGACY_EVENT_TYPES = {
     "recording_started": schema.EVENT_SEGMENT_RECORDING_STARTED,
     "recording_ended": schema.EVENT_SEGMENT_RECORDING_ENDED,
     "transcription_started": schema.EVENT_TRANSCRIPTION_ACCEPTED,
+    "realtime_transcript": schema.EVENT_TRANSCRIPTION_INTERIM,
     "final_transcript": schema.EVENT_TRANSCRIPTION_COMPLETED,
     "final_transcript_discarded": schema.EVENT_TRANSCRIPTION_DISCARDED,
     # The frozen event list has no ``transcription.cancelled``; a deliberate
@@ -291,6 +292,42 @@ class EventProjector:
     def _build_transcription_accepted(self, payload, context):
         return self._segment_fields(payload, context)
 
+    def _build_transcription_interim(self, payload, context):
+        fields = self._segment_fields(payload, context)
+        if fields is None:
+            return None
+        fields["text"] = str(payload.get("text") or "")
+        # Preserve the existing stabilizer contract without leaking legacy
+        # transport envelope fields onto the canonical v2 connection. The
+        # simple realtime callback only supplies ``text``; every richer field
+        # is therefore optional by design.
+        for name in (
+            "recordingId",
+            "sequence",
+            "rawText",
+            "displayText",
+            "stableText",
+            "stableDelta",
+            "unstableText",
+            "committedStableText",
+            "committedStableDelta",
+            "visualStableText",
+            "visualUnstableText",
+            "consensusText",
+            "consensusUnstableText",
+            "consensusDisplayText",
+            "publicConsensusAligned",
+            "internalRevision",
+            "isOutlier",
+            "stablePrefixConflict",
+            "commitReason",
+            "stableNormalizedOffset",
+            "timing",
+        ):
+            if name in payload and payload[name] is not None:
+                fields[name] = payload[name]
+        return fields
+
     def _build_transcription_completed(self, payload, context):
         fields = self._segment_fields(payload, context)
         if fields is None:
@@ -388,6 +425,9 @@ _BUILDERS = {
     ),
     schema.EVENT_TRANSCRIPTION_ACCEPTED: (
         EventProjector._build_transcription_accepted
+    ),
+    schema.EVENT_TRANSCRIPTION_INTERIM: (
+        EventProjector._build_transcription_interim
     ),
     schema.EVENT_TRANSCRIPTION_COMPLETED: (
         EventProjector._build_transcription_completed

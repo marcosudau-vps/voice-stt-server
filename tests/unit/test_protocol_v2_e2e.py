@@ -20,6 +20,7 @@ break in the domain path shows up here as well instead of being mocked away.
 
 import json
 import queue
+import tempfile
 import threading
 import time
 import unittest
@@ -27,6 +28,7 @@ import uuid
 from unittest import mock
 
 from api_fastapi_server.protocol_v2 import schema
+from api_fastapi_server.server import ServerSettings, create_app
 
 try:
     from starlette.websockets import WebSocketDisconnect
@@ -35,6 +37,7 @@ except Exception:  # pragma: no cover - optional dependency
         code = None
 
 from tests.unit.test_server_controlled_e2e import (
+    AutoScheduler,
     GateAwareRecorder,
     TestClient,
     build_app,
@@ -282,6 +285,80 @@ class ProtocolV2HandshakeTests(unittest.TestCase):
                     "wakeWordCapabilities",
                 ):
                     self.assertIn(field, snapshot)
+
+                access = accepted["logAccess"]
+                self.assertFalse(access["available"])
+                self.assertEqual(access["sessionId"], session.session_id)
+                self.assertEqual(access["websocketPath"], "/ws/logs")
+                self.assertEqual(access["historyPath"], "/api/logs/events")
+                self.assertEqual(access["code"], "log_live_disabled")
+                self.assertNotIn("accessToken", access)
+
+    def test_v2_log_access_token_authorizes_session_history_and_live_logs(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            app = create_app(
+                ServerSettings(
+                    model_warmup=False,
+                    data_root_path=temp_dir,
+                    admin_api_key="test-admin-secret",
+                    request_logging_enabled=False,
+                    performance_logging_enabled=False,
+                    performance_log_mirror_enabled=False,
+                    transcription_logging_enabled=False,
+                    system_event_logging_enabled=False,
+                    event_store_enabled=True,
+                    log_live_enabled=True,
+                    realtime_processing_pause=0.0,
+                    realtime_min_audio_seconds=0.01,
+                    min_length_of_recording=0.0,
+                    post_speech_silence_duration=60.0,
+                ),
+                scheduler_factory=AutoScheduler,
+                recorder_factory=GateAwareRecorder,
+            )
+            with TestClient(app) as client:
+                with V2Session(client) as session:
+                    access = session.accepted["logAccess"]
+                    self.assertTrue(access["available"])
+                    self.assertEqual(access["sessionId"], session.session_id)
+                    self.assertTrue(access["accessToken"])
+
+                    history = client.get(
+                        access["historyPath"],
+                        params={"sessionId": session.session_id},
+                        headers={
+                            "X-VoiceSTT-Log-Token": access["accessToken"]
+                        },
+                    )
+                    self.assertEqual(history.status_code, 200)
+                    self.assertEqual(
+                        history.json()["authorizationScope"], "session"
+                    )
+
+                    with client.websocket_connect(
+                        access["websocketPath"]
+                    ) as logs:
+                        logs.send_json({
+                            "type": "subscribe",
+                            "accessToken": access["accessToken"],
+                            "sessionId": session.session_id,
+                            "channels": [
+                                "audit", "performance", "transcription"
+                            ],
+                            "afterCursor": 0,
+                        })
+                        self.assertEqual(
+                            logs.receive_json()["type"], "log.hello"
+                        )
+                        subscribed = logs.receive_json()
+                        self.assertEqual(subscribed["type"], "log.subscribed")
+                        self.assertEqual(
+                            subscribed["authorizationScope"], "session"
+                        )
+                        while True:
+                            message = logs.receive_json()
+                            if message["type"] == "log.replay_completed":
+                                break
 
     def test_first_message_must_be_hello(self):
         messages = self._refused({
@@ -1158,6 +1235,28 @@ class ProtocolV2EventTests(unittest.TestCase):
                 self.assertEqual(
                     ended["segmentSequence"], started["segmentSequence"]
                 )
+
+    def test_realtime_text_reaches_v2_as_canonical_interim_event(self):
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                session.activate()
+                session.event(schema.EVENT_ACTIVATION_STARTED)
+                session.send_bytes(speech_packet())
+                started = session.event(schema.EVENT_SEGMENT_RECORDING_STARTED)
+                state_before = started["stateVersion"]
+
+                session.server_session(self.app)._on_realtime_text(
+                    "Zwischenstand"
+                )
+                interim = session.event(schema.EVENT_TRANSCRIPTION_INTERIM)
+                self.assertEqual(interim["text"], "Zwischenstand")
+                self.assertEqual(interim["segmentId"], started["segmentId"])
+                self.assertEqual(
+                    interim["segmentSequence"], started["segmentSequence"]
+                )
+                self.assertEqual(interim["activationId"], started["activationId"])
+                self.assertEqual(interim["stateVersion"], state_before)
+                self.assertGreater(interim["eventSeq"], started["eventSeq"])
 
     def test_a_phase_change_is_announced_before_the_segment_event(self):
         with TestClient(self.app) as client:

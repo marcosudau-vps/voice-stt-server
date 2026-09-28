@@ -9,7 +9,8 @@
     "segmentId": "40000000-0000-4000-8000-000000000001",
     "activateCommandId": "50000000-0000-4000-8000-000000000001",
     "refreshCommandId": "50000000-0000-4000-8000-000000000002",
-    "eventId": "60000000-0000-4000-8000-000000000001"
+    "eventId": "60000000-0000-4000-8000-000000000001",
+    "interimEventId": "60000000-0000-4000-8000-000000000002"
   },
   "validMessages": [
     {
@@ -17,7 +18,9 @@
       "direction": "client_to_server",
       "message": {
         "type": "hello",
-        "supportedProtocolVersions": [2],
+        "supportedProtocolVersions": [
+          2
+        ],
         "clientVersion": "2.0.0-test",
         "clientCommit": "client-test-commit",
         "clientRunId": "10000000-0000-4000-8000-000000000001",
@@ -26,7 +29,9 @@
             "manual": true,
             "wakeWord": true
           },
-          "wakeWordIds": ["hey_jarvis"]
+          "wakeWordIds": [
+            "hey_jarvis"
+          ]
         },
         "runtimeSuppression": {
           "manual": false,
@@ -103,6 +108,28 @@
       "expected": "mirror_waiting_first_speech"
     },
     {
+      "name": "transcription_interim_event",
+      "direction": "server_to_client",
+      "message": {
+        "type": "transcription.interim",
+        "protocolVersion": 2,
+        "sessionId": "20000000-0000-4000-8000-000000000001",
+        "eventId": "60000000-0000-4000-8000-000000000002",
+        "eventSeq": 2,
+        "stateVersion": 1,
+        "occurredAtUnixMs": 1787616000100,
+        "activationId": "30000000-0000-4000-8000-000000000001",
+        "segmentId": "40000000-0000-4000-8000-000000000001",
+        "segmentSequence": 1,
+        "text": "Hallo Welt",
+        "sequence": 7,
+        "displayText": "Hallo Welt",
+        "committedStableText": "Hallo ",
+        "visualUnstableText": "Welt"
+      },
+      "expected": "replace_interim_for_segment_without_state_transition"
+    },
+    {
       "name": "idle_snapshot",
       "direction": "server_to_client",
       "message": {
@@ -124,15 +151,26 @@
         },
         "pendingActivations": [],
         "trigger": {
-          "configured": {"manual": true, "wakeWord": true},
-          "suppressed": {"manual": false, "wakeWord": false},
-          "effective": {"manual": true, "wakeWord": true}
+          "configured": {
+            "manual": true,
+            "wakeWord": true
+          },
+          "suppressed": {
+            "manual": false,
+            "wakeWord": false
+          },
+          "effective": {
+            "manual": true,
+            "wakeWord": true
+          }
         },
         "audioAvailable": true,
         "effectiveSettings": {},
         "wakeWordCapabilities": {
           "catalogRevision": 1,
-          "availableWakeWordIds": ["hey_jarvis"]
+          "availableWakeWordIds": [
+            "hey_jarvis"
+          ]
         }
       },
       "expected": "mirror_idle"
@@ -144,7 +182,9 @@
       "direction": "client_to_server",
       "message": {
         "type": "hello",
-        "supportedProtocolVersions": [2],
+        "supportedProtocolVersions": [
+          2
+        ],
         "clientVersion": "2.0.0-test",
         "clientCommit": "client-test-commit",
         "clientRunId": "10000000-0000-4000-8000-000000000002",

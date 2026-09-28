@@ -102,8 +102,8 @@ interface V2Mirror {
   }>;
   segments: Map<string, {              // segmentId → Zustand
     activationId: string; sequence: number;
-    stage: "recording" | "recorded" | "accepted" | "completed" | "discarded" | "failed";
-    text?: string; reason?: string;
+    stage: "recording" | "recorded" | "accepted" | "interim" | "completed" | "discarded" | "failed";
+    interimText?: string; text?: string; reason?: string;
   }>;
   trigger: { configured: Flags; suppressed: Flags; effective: Flags };
   audioAvailable: boolean;
@@ -170,7 +170,8 @@ Regeln für `apply`:
 | `activation.input_closed` | Activation `inputClosed = true`; `input` nur dann auf `idle` setzen, wenn `input.activationId === e.activationId` – eine neue Activation kann ihr `activation.started` **vor** dem `input_closed` der vorigen senden |
 | `activation.completed`/`.cancelled`/`.failed` | Activation `terminal` setzen; darf **vor** `input_closed` kommen – dann `input` erst bei `input_closed` zurücksetzen |
 | `segment.*`, `transcription.accepted` | Segment anlegen/Stufe erhöhen, falls noch nicht terminal |
-| `transcription.completed`/`.discarded`/`.failed` | Segment terminal setzen (erstes Terminal gewinnt) |
+| `transcription.interim` | falls noch nicht terminal: `interimText` desselben Segments ersetzen; optionale Stabilisierungsfelder nur als Vorschau behandeln |
+| `transcription.completed`/`.discarded`/`.failed` | `interimText` entfernen und Segment terminal setzen (erstes Terminal gewinnt) |
 | `settings.changed` | `settingsRevision` übernehmen; Werte per Snapshot nachladen, falls benötigt |
 | `wakeword.availability_changed` | `wakeWords.available`/`catalogRevision` ersetzen; bei geänderter Revision den Katalog (`GET /api/v2/wake-words`) neu laden – das Event trägt keine Metadaten (Anzeigenamen, Aliase, Backends) und kommt auch bei reinen Metadatenänderungen |
 | `wakeword.detected` | UI-Hinweis (Activation kam bereits mit `activation.started`) |
@@ -189,6 +190,13 @@ Es gibt keine Wiederaufnahme einer Session.
 3. Aus `hello.accepted.snapshot` einen frischen Spiegel bauen: neue `sessionId`, `lastEventSeq = 0`, `stateVersion = 0`, `settingsRevision = 0`.
 4. Session-Settings stehen wieder auf Serverdefaults → gewünschte Werte erneut per `session_settings.patch` (Basis `0`) setzen; Suppression und Audioverfügbarkeit erneut melden, falls sie vom `hello` abweichen.
 5. Keine `commandId` der alten Session wiederverwenden.
+
+Ein beim Disconnect verlorenes Interim ist nur eine verlorene Vorschau. Ein
+verlorenes Terminal bleibt wegen des fehlenden Domain-Event-Replays dagegen
+eine unvollständige fachliche Ausgabe. `hello.accepted.logAccess` der neuen
+Session ersetzt den Bootstrap-Logzugriff für die neue Session; ein noch
+gültiges Token der alten Session bleibt ausschließlich auf deren Historie
+begrenzt.
 
 | Ereignis | Automatischer Reconnect? |
 | --- | --- |

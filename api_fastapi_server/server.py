@@ -4994,8 +4994,18 @@ class RecorderBackedRealtimeSession:
             timestamp=timestamp,
             segment_id=segment_id,
             segment=segment,
-            text=text,
-            sequence=payload.get("sequence"),
+            **{
+                key: value
+                for key, value in payload.items()
+                if key not in {
+                    "type",
+                    "sessionId",
+                    "segmentId",
+                    "segment",
+                    "timestamp",
+                    "timestampIso",
+                }
+            },
         )
 
     def _record_first_text_performance(self, segment_id, timestamp, segment, text):

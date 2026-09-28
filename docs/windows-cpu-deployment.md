@@ -151,10 +151,10 @@ Performance remains numeric and transcript-free. Each channel can be mirrored
 to stdout independently.
 
 The same events are indexed in SQLite when `--event-store` is enabled. A
-legacy v1 WebSocket session (`/ws/transcribe`) receives a scoped token in
-`hello.logAccess` for its own history and `/ws/logs` (protocol v2 sessions
-receive none and need the admin key); admins may read across sessions and include the
-system channel. Uploaded audio archiving stays opt-in through
+protocol v2 session (`/ws/v2`) receives a scoped token in
+`hello.accepted.logAccess`; legacy v1 receives the same contract in
+`hello.logAccess`. The token reads only its own history and `/ws/logs`;
+admins may read across sessions and include the system channel. Uploaded audio archiving stays opt-in through
 `--save-audio-files`. Configure runtime-safe channel behavior through
 `PUT /api/logging`; all generated paths remain derived from the single
 `--data-root`. See [structured logging](structured-logging.md) for the full

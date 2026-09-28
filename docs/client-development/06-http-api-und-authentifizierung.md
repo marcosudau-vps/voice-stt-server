@@ -88,14 +88,9 @@ können ohnehin keine beliebigen Authorization-Header setzen.
 
 ### Strukturierter Logzugriff
 
-> **V2:** `hello.accepted` enthält **keinen** `logAccess`-Token. Ein
-> V2-Client kann `/ws/logs` und `/api/logs/*` daher nur mit dem Admin-Key
-> nutzen (siehe Befund `IMPL-03` in
-> [`INDEPENDENT_REVIEW.md`](../audits/v2-client-contract-review/INDEPENDENT_REVIEW.md#implementierungsbefunde)).
-> Der folgende Sessiontoken-Mechanismus betrifft Legacy-V1-Sessions.
-
-`hello.logAccess` des Legacy-V1-WebSockets `/ws/transcribe` liefert einen zufälligen,
-24 Stunden innerhalb des aktuellen Serverprozesses gültigen Sessiontoken. Er
+`hello.accepted.logAccess` von V2 und `hello.logAccess` des Legacy-V1-WebSockets
+liefern denselben zufälligen, 24 Stunden innerhalb des aktuellen
+Serverprozesses gültigen Sessiontoken-Vertrag. Er
 erlaubt ausschließlich die eigene Session und die Channels `audit`,
 `transcription` und `performance`; `system` und fremde Sessions bleiben dem
 Adminzugriff vorbehalten. `available`, `logProtocolVersion: 2`,
@@ -103,6 +98,12 @@ Adminzugriff vorbehalten. `available`, `logProtocolVersion: 2`,
 `oldestCursor` und `latestCursor` beschreiben den zuverlässigen Logpfad. Bei
 nicht verfügbarem Store oder deaktiviertem Livezugriff ist `available: false`
 und es wird kein Sessiontoken ausgegeben.
+
+V2 gibt `logAccess` nur beim Verbindungsbootstrap aus. Es ist kein
+Domainzustand und wird deshalb in `session.snapshot` nicht wiederholt. Der
+frühere Auditbefund `IMPL-03` ist mit AP-SRV-080 behoben; der historische
+[Prüfbericht](../audits/v2-client-contract-review/INDEPENDENT_REVIEW.md#implementierungsbefunde)
+bleibt auf seinen ausgewiesenen Baseline-SHA bezogen.
 
 Nach dem Subscribe enthält `log.hello` zusätzlich `retentionCursor`. Dieser
 Watermark ist auf die effektiven Channels und die effektive Session des
