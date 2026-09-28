@@ -1,26 +1,38 @@
-# V1 zu V2 Client Migrationsmatrix
+# V1 zu V2 Client-Migrationsmatrix
 
-Dieses Dokument bietet Entwicklern eines bestehenden Desktop-Clients, der bisher das V1-Protokoll (`/ws/transcribe`) verwendet hat, eine exakte technische Gegenüberstellung für die Migration auf das V2-Protokoll (`/ws/v2`).
+**Stand:** korrigiert am 2026-09-28 (Baseline `f7d2b3ccd07757172a45b371829b04bcedffab4b`).
+Belege: [`../v2-client-contract-review/FACT_REVIEW_MATRIX.md`](../v2-client-contract-review/FACT_REVIEW_MATRIX.md) (`MIG-*`).
+
+Gegenüberstellung für Entwickler eines Clients, der bisher das Legacy-V1-
+Protokoll (`/ws/transcribe`) nutzt. Der vollständige V2-Vertrag steht in
+[`docs/client-development/`](../../client-development/README.md), der V1-Vertrag
+(nur zur Wartung) in
+[`docs/client-development/legacy-v1/`](../../client-development/legacy-v1/README.md).
 
 ---
 
 ## Migrationsmatrix
 
-| V1-Konzept | V1-Vertrag (`/ws/transcribe`) | V2-Entsprechung (`/ws/v2`) | Art der Änderung | Konkrete Client-Änderung | Kompatibilitätshinweis |
-| --- | --- | --- | --- | --- | --- |
-| **Endpoint URL** | `/ws/transcribe` | `/ws/v2` | Geändert | WebSocket-Verbindungs-URL auf `/ws/v2` umstellen | V1 bleibt als Abwärtskompatibilitätspfad auf `/ws/transcribe` bestehen, V2 ist der neue Zielvertrag. |
-| **Handshake** | Nach WS-Connect unaufgefordert `hello` oder `ready` vom Server. | Client **muss** zuerst Textnachricht `hello` senden. | **Breaking Change** | Client muss aktiv `hello` senden und auf `hello.accepted` warten. | Sendet der Client nicht innerhalb von 10s `hello`, schließt der Server mit Close `4408`. |
-| **Session ID** | `sessionId` (String) | `sessionId` (Kanonische UUIDv4) | Format verschärft | Formatprüfungen anpassen (36 Chars, Hyphens). | V2 akzeptiert keine kompakten 32-Char Hex-Strings. |
-| **Command Envelope** | Freie JSON-Befehle (`start`, `stop`, `clear`) | Strict Envelope mit `protocolVersion: 2`, `sessionId`, `commandId` | **Breaking Change** | Jeden Command in das V2-Envelope verpacken + frische `commandId` generieren. | Commands ohne valide `commandId` erhalten kein Ack. |
-| **Manual Start/PTT** | `{"type": "start"}` oder `{"type": "trigger", "action": "start"}` | `{"type": "activation.command", "action": "activate", "source": "manual"}` | Geändert | Nachrichtenformat anpassen. | `source="wake_word"` darf vom Client NIEMALS gesendet werden. |
-| **Manual Stop/PTT Release** | `{"type": "stop"}` oder `{"type": "trigger", "action": "stop"}` | `{"type": "activation.command", "action": "finish", "activationId": "..."}` | Geändert | Nachrichtenformat anpassen, `activationId` mitsenden. | `action="finish"` erfordert die `activationId` der laufenden Activation. |
-| **Verlängerung/Extend** | `{"type": "trigger", "action": "extend"}` | `{"type": "activation.command", "action": "refresh", "activationId": "..."}` | Umbenannt | Alias `extend` durch `refresh` ersetzen. | `extend` wird auf V2 als `invalid_payload` abgelehnt! |
-| **Abbruch/Cancel** | `{"type": "clear"}` | `{"type": "activation.command", "action": "cancel", "activationId": "..."}` | Geändert | `action="cancel"` mit `activationId` senden. | `clear` existiert auf V2 nicht mehr. |
-| **Command Ack** | `trigger_ack` / `status` | `command.ack` mit schlossenem Result-Code Set | Geändert | Auf `command.ack` hören und `accepted: true/false` sowie `result` auswerten. | Exactly-once Replay-Semantik per `commandId`. |
-| **Server Events** | Heterogene Events (`realtime_transcript`, `final_transcript`, `status`) | Strukturierte, punktgetrennte Events (`activation.started`, `transcription.completed` etc.) | **Breaking Change** | Event-Handler auf V2-Eventnamen umstellen. | Jedes Event enthält `eventSeq` und `stateVersion`. |
-| **Event Sequence & Ordering** | Keine globale Sequenznummer | `eventSeq` (1, 2, 3...) und `stateVersion` | **Neu in V2** | In-Order Event-Queue und Gap-Detection implementieren. | Bei Lücke `session.snapshot.request` senden. |
-| **Resynchronisierung** | Nicht vorhanden | `session.snapshot.request` -> `session.snapshot` | **Neu in V2** | Snapshot-Resync-Logik implementieren. | Autoritatives Serverbild ersetzt lokalen Mirror. |
-| **Audio Framing** | Binary Frames mit 8-Byte VSTT Header + PCM 16kHz | Identisch (8-Byte VSTT Header + PCM 16kHz) | Unverändert | Der binäre Audio-Transport ist auf V1 und V2 identisch. | Audio erst nach `hello.accepted` senden! |
-| **Settings Patch** | `config` / `/api/config` | `session_settings.patch` mit `baseSettingsRevision` | Geändert | Optimistisches Patching mit Revisionszählung implementieren. | Bei Konflikt `settings_revision_conflict` verarbeiten. |
-| **Wake Words** | Teils Freitext / Aliase | Kanonische IDs über `requestedSession.wakeWordIds` | Verschärft | Nur kanonische IDs senden, Katalog via `GET /api/v2/wake-words` beziehen. | Ungültige IDs führen zu `session.rejected`. |
-| **Audio Availability** | Nicht explizit im Protokoll | `audio_availability.set` Command | **Neu in V2** | Mikrofon-Status explizit an Server melden. | |
+| Konzept | Legacy V1 (`/ws/transcribe`) | V2 (`/ws/v2`) | Art | Client-Änderung |
+| --- | --- | --- | --- | --- |
+| **Endpoint** | `/ws/transcribe` | `/ws/v2` | geändert | URL umstellen. V1 bleibt als Kompatibilitätspfad bestehen. |
+| **Sessionkonfiguration** | Queryparameter (`manualTriggerEnabled`, `wakeWordTriggerEnabled`, `wakeWordEnabled`, `wakeWords`, Timings …) | `hello.requestedSession` + `hello.runtimeSuppression`; Timings per `session_settings.patch` | **Breaking** | Queryparameter entfallen (nur `clientId` wird noch gelesen). |
+| **Handshake** | Server sendet unaufgefordert `hello`, danach `ready`. | Client sendet `hello`; Server antwortet `hello.accepted` (mit Snapshot), `protocol.incompatible` (4406) oder `session.rejected` (4409). Kein `ready`. | **Breaking** | `hello` binnen 10 s senden (sonst 4408). |
+| **Admission-Fehler** | `error` (`where=session_config`/`admission`) + Close 1008/1013 | `session.rejected` + Close 4409 | geändert | Neue Fehlerbehandlung. |
+| **IDs** | kompakte 32-Hex-`sessionId`/`activationId`, Integer-`segmentId`, freie `commandId` | kanonische UUIDs für alle IDs; `segmentSequence`/`activationSequence` als Zahlen | **Breaking** | Formate anpassen; V1-IDs sind auf V2 `invalid_payload`. |
+| **Audiostart** | `{"type":"start"}` Pflicht vor Audio; `stop` beendet den Stream | Audiopfad öffnet mit `hello.accepted`; kein `start`/`stop` | **Breaking** | `start`/`stop` entfallen. |
+| **Activation starten** | `{"type":"trigger","action":"activate","source":"manual","commandId":"…"}` | `{"type":"activation.command","protocolVersion":2,"sessionId":"…","commandId":"<uuid>","action":"activate","source":"manual"}` | geändert | V2-Envelope. |
+| **Activation beenden (PTT loslassen)** | `trigger` mit `action:"finish"` | `activation.command` `action:"finish"` + `activationId`, **ohne** `source` | geändert | V2 verbietet `source` bei Controls. |
+| **Frist verlängern** | `trigger` mit `action:"refresh"` (`extend` ist auch auf V1 entfernt) | `activation.command` `action:"refresh"` + `activationId` | geändert | – |
+| **Abbrechen** | `trigger` mit `action:"cancel"`; zusätzlich `clear` (setzt Turn, Segmente und Timeline zurück) | `activation.command` `action:"cancel"` + `activationId`; kein `clear` | geändert | `clear`-Nutzung ersetzen. |
+| **Ping / Metrics** | `ping` → `pong`, `metrics` → `metrics` | nicht vorhanden (unbekannte Typen werden ignoriert) | entfallen | Transport-Keepalive der WS-Bibliothek nutzen; Metriken per HTTP. |
+| **Audioverfügbarkeit** | `{"type":"audio_availability","audioAvailable":…,"commandId":…}` → `audio_availability_ack` | `audio_availability.set` → `command.ack` | geändert | – |
+| **Trigger-Suppression** | nicht vorhanden | `trigger_suppression.set` | neu | – |
+| **Acks** | `trigger_ack`, `audio_availability_ack` (`accepted`, `reason`) | `command.ack` mit 15 Result-Codes, `stateVersion`, `settingsRevision` | **Breaking** | Result-Codes auswerten. |
+| **Server-Events** | `status`, `realtime`, `final`, `timeline` (Untertypen), `warning`, `error` | 17 punktgetrennte Events mit `eventId`/`eventSeq`/`stateVersion` | **Breaking** | Neuer Reducer. |
+| **Zwischentext** | `realtime` (revidierbar) | **nicht vorhanden** | entfallen | Nur `transcription.completed` anzeigen. |
+| **Ordnung / Resync** | keine Sequenz | `eventSeq`, `session.snapshot.request` → `session.snapshot` | neu | Gap-Detection + Resync. |
+| **Audio-Framing** | `uint32` LE Metadatenlänge + UTF-8-JSON + PCM `pcm_s16le` | identisch | unverändert | Fehlerhafte Frames: V1 `error(where=audio_packet)`, V2 still verworfen. |
+| **Session-Settings** | keine Session-Patches; `PATCH /api/config` ist Admin-Serverkonfiguration | `session_settings.patch` mit `baseSettingsRevision` | neu | Optimistische Revision. |
+| **Wake Words** | `wakeWords`-Queryparameter, tolerant (Aliase/Anzeigenamen) | nur kanonische IDs in `requestedSession.wakeWordIds`; Katalog `GET /api/v2/wake-words` | verschärft | IDs clientseitig auflösen. |
+| **Log-Zugriff** | `hello.logAccess`-Sessiontoken für `/ws/logs`, `/api/logs/*` | kein `logAccess`; nur Admin-Key | eingeschränkt | – |
