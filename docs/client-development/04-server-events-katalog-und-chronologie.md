@@ -67,6 +67,7 @@ segment.recording_started ─► segment.recording_ended ─► transcription.ac
 | Events eines Commands kommen vor dessen `command.ack` | Segment-interne Reihenfolge bei `cancel` (siehe oben) |
 | `activation.started` vor `wakeword.detected` derselben Activation | ein `activation.phase_changed` für `closing_input` |
 | genau ein `activation.input_closed` je Activation | lückenlose `stateVersion` im Eventstrom |
+| | `activation.input_closed` von A vor `activation.started` von B – der Vordergrund wird intern vor der Publikation von `input_closed` frei, eine neue Activation kann dazwischen starten |
 
 ## 5. Beispielabläufe
 

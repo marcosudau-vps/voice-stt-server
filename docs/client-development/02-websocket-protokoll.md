@@ -378,7 +378,8 @@ const meta = new TextEncoder().encode(JSON.stringify({
 }));
 const len = new DataView(new ArrayBuffer(4));
 len.setUint32(0, meta.byteLength, true);           // little-endian
-socket.send(new Blob([len.buffer, meta, pcm.buffer])); // pcm: Int16Array
+socket.send(new Blob([len.buffer, meta, pcm]));  // pcm: Int16Array – die View,
+                                                  // nicht pcm.buffer (Subarray-Offset!)
 ```
 
 Empfehlungen:

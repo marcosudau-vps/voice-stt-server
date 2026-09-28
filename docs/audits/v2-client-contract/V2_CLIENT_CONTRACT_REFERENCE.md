@@ -413,7 +413,8 @@ ohne Abbildung werden nicht weitergegeben.
 
 1. `lastSeq` merken; Events mit `eventSeq ≤ lastSeq` verwerfen.
 2. `eventSeq > lastSeq + 1` → Lücke: `session.snapshot.request` senden, weitere Events puffern.
-3. Nach dem Snapshot: Zustand ersetzen, `lastSeq = snapshot.lastEventSeq`, gepufferte Events mit `eventSeq > lastSeq` in Reihenfolge anwenden.
+3. Nach dem Snapshot: Zustand ersetzen, `lastSeq = snapshot.lastEventSeq`, gepufferte Events mit `eventSeq > lastSeq` in Reihenfolge anwenden. Gepufferte Segment-/Transkriptionsevents mit `eventSeq ≤ lastSeq` trotzdem in die Transkriptliste übernehmen – der Snapshot enthält keine Segmente und keine Texte.
+4. Es gibt keinen Replay: in der Lücke verlorene Transkripte sind nicht wiederherstellbar.
 
 ---
 
@@ -439,6 +440,7 @@ closing_input ──sicherer Eingabeschluss (activation.input_closed)──► i
 * Der Eintritt in `closing_input` ist im Ack (`inputPhase`) und im Snapshot sichtbar; ein `activation.phase_changed` dorthin wird nur gesendet, wenn in dieser Phase ein weiteres Domainereignis projiziert wird.
 * `activation.input_closed` = Eingabeseite geschlossen; Vordergrund wieder frei. Die Hintergrundarbeit endet mit `activation.completed`/`.cancelled`/`.failed`. Dieses Terminal **kann vor** `activation.input_closed` derselben Activation eintreffen.
 * Eine neue Activation kann starten, während ältere noch in `pendingActivations` drainen.
+* Der Vordergrund wird intern vor der Publikation von `activation.input_closed` frei. `activation.started` einer neuen Activation kann daher **vor** dem `input_closed` der vorigen eintreffen; `input_closed` setzt den Vordergrund nur zurück, wenn seine `activationId` die aktuelle ist.
 
 ---
 

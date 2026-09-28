@@ -46,7 +46,7 @@ Der Server trennt **Stream-Zustand** von **teuren Inferenzressourcen**:
 | Finales ASR-Modell / Worker | Server | bis Unload, Switch oder Shutdown | Nicht pro Client geladen |
 | Realtime-ASR-Modell / Worker | Server oder mit finaler Lane geteilt | bis Unload, Switch oder Shutdown | Eine oder zwei Lanes je Konfiguration |
 | Modell-Lifecycle und Aktivitätszeit | Server | Prozess | Leerlauf-Entladen und Lazy-Reload betreffen alle Clients |
-| Startfehlerliste | Server | Prozess | Kann per `error` an alle Sessions gesendet und neuen Sessions wiederholt werden |
+| Startfehlerliste | Server | Prozess | V2: nur über `GET /health` (`startupErrors`); Legacy V1 sendet sie zusätzlich per `error` an alle `/ws/transcribe`-Sessions |
 | Public Settings / Runtime-Vertrag | Server | Prozess, teilweise änderbar | In `/api/config` sichtbar (V1 zusätzlich in `hello`/`ready`) |
 | Limits | Server | Prozess, teilweise änderbar | Alle Sessions konkurrieren unter denselben Obergrenzen |
 | Modell- und Wake-Word-Registry | Server | Prozess | Gemeinsamer Katalog lokaler Modelle |
@@ -311,8 +311,10 @@ flowchart LR
 ## Datenschutz- und Isolationsaussage
 
 Transcript-Events werden gezielt an die zugehörige Verbindung gesendet; eine
-V2-Verbindung erhält ausschließlich ihre eigenen V2-Nachrichten. Bestimmte serverweite Startfehler können
-weiterhin für alle Verbindungen relevant sein. Audio wird nicht broadcastet.
+V2-Verbindung erhält ausschließlich ihre eigenen V2-Nachrichten. Serverweite
+Startfehler broadcastet der Server nur an Legacy-V1-Verbindungen; ein
+V2-Client liest sie aus `GET /health` (`startupErrors`). Audio wird nicht
+broadcastet.
 
 Der Transkriptionskanal kann – abhängig von `transcript_log_mode` –
 Transkripttext enthalten; Audit- und Performancekanal enthalten keinen

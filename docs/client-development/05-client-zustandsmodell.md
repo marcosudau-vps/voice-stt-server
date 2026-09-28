@@ -11,9 +11,20 @@ zwei Quellen:
 2. **Events** in `eventSeq`-Reihenfolge – aktualisieren ihn inkrementell.
 
 `command.ack` bestätigt nur ein Command (Erfolg/Fehler). Optimistische
-UI-Zustände (z. B. „PTT gedrückt“) werden bei `accepted: false` zurückgerollt
-und bei `accepted: true` durch die zugehörigen Events bestätigt, die **vor**
-dem Ack eintreffen.
+UI-Zustände (z. B. „PTT gedrückt“) werden bei `accepted: false` zurückgerollt.
+Bei `accepted: true` gilt je Command:
+
+| Command | Bestätigung des neuen Zustands |
+| --- | --- |
+| `activate`, wirksamer `refresh`/`finish`/`cancel` | zugehörige Events (`activation.started`, `activation.phase_changed`, …) kommen **vor** dem Ack; der Eintritt in `closing_input` ist nur im Ack (`inputPhase`) sichtbar |
+| `refresh` ohne Fristverschiebung | kein Event – das Ack (`applied`) ist die Bestätigung |
+| `trigger_suppression.set`, `audio_availability.set` | kein Event – Spiegel nach dem Ack lokal setzen (oder Snapshot anfordern) |
+| `session_settings.patch` | `settings.changed` vor dem Ack |
+| `session.snapshot.request` | `session.snapshot` **nach** dem Ack |
+| `no_change` | nichts zu tun |
+
+Nie nach einem `applied`-Ack auf ein Event warten, das es für dieses Command
+nicht gibt.
 
 ## 2. `session.snapshot`
 
@@ -106,6 +117,10 @@ interface V2Mirror {
 ## 4. Event-Reducer
 
 ```ts
+// Events mit Nutzlast, die ein Snapshot NICHT enthält (Segmente, Texte).
+const PAYLOAD = (e: V2Event) =>
+  e.type.startsWith("segment.") || e.type.startsWith("transcription.");
+
 function onEvent(m: V2Mirror, e: V2Event) {
   if (m.resync.pending) { m.resync.buffer.push(e); return; }
   if (e.eventSeq <= m.lastEventSeq) return;                // Duplikat
@@ -119,14 +134,32 @@ function onEvent(m: V2Mirror, e: V2Event) {
 }
 
 function onSnapshot(m: V2Mirror, s: Snapshot) {
-  replaceMirrorFrom(m, s);                                  // vollständig ersetzen
+  replaceMirrorFrom(m, s);          // Zustand ersetzen; segments/Texte BEHALTEN
   m.lastEventSeq = s.lastEventSeq;
-  const buffered = m.resync.buffer.filter(e => e.eventSeq > s.lastEventSeq)
-                                  .sort((a, b) => a.eventSeq - b.eventSeq);
+  const buffer = m.resync.buffer.sort((a, b) => a.eventSeq - b.eventSeq);
   m.resync = { pending: false, buffer: [] };
-  for (const e of buffered) onEvent(m, e);                  // kann erneut Lücke erkennen
+  for (const e of buffer) {
+    if (e.eventSeq <= s.lastEventSeq) {
+      if (PAYLOAD(e)) applySegment(m, e);  // Snapshot kennt keine Texte
+      continue;                            // Zustand steckt bereits im Snapshot
+    }
+    onEvent(m, e);                         // kann erneut Lücke erkennen
+  }
 }
 ```
+
+`replaceMirrorFrom` ersetzt `input`, `trigger`, `audioAvailable`, Settings,
+`wakeWords` und den Activation-Status aus `pendingActivations`, lässt aber
+die Segment-/Transkriptliste stehen: Der Snapshot enthält nur Zähler
+(`acceptedSegmentCount`/`terminalSegmentCount`), keine `segmentId` und keinen
+Text. `applySegment` ist idempotent (erstes Terminal gewinnt).
+
+> **Grenze des Protokolls:** Es gibt keinen Replay. Ein Segment- oder
+> Transkriptionsevent, das in der Lücke selbst verloren ging, ist nicht
+> wiederherstellbar; der Snapshot zeigt nur, dass eine Activation terminal ist.
+> Ein Client sollte solche Activations als „Ergebnis unvollständig“ markieren.
+> Da der Server Events linearisiert über eine TCP-Verbindung sendet, entstehen
+> Lücken praktisch nur durch Clientfehler (verworfene Nachrichten).
 
 Regeln für `apply`:
 
@@ -134,12 +167,12 @@ Regeln für `apply`:
 | --- | --- |
 | `activation.started` | `input` = neue Activation, Phase `waiting_first_speech`; Activation anlegen |
 | `activation.phase_changed` | `input.phase`/Frist aktualisieren |
-| `activation.input_closed` | `input` = `idle`; Activation `inputClosed = true` |
+| `activation.input_closed` | Activation `inputClosed = true`; `input` nur dann auf `idle` setzen, wenn `input.activationId === e.activationId` – eine neue Activation kann ihr `activation.started` **vor** dem `input_closed` der vorigen senden |
 | `activation.completed`/`.cancelled`/`.failed` | Activation `terminal` setzen; darf **vor** `input_closed` kommen – dann `input` erst bei `input_closed` zurücksetzen |
 | `segment.*`, `transcription.accepted` | Segment anlegen/Stufe erhöhen, falls noch nicht terminal |
 | `transcription.completed`/`.discarded`/`.failed` | Segment terminal setzen (erstes Terminal gewinnt) |
 | `settings.changed` | `settingsRevision` übernehmen; Werte per Snapshot nachladen, falls benötigt |
-| `wakeword.availability_changed` | `wakeWords` ersetzen |
+| `wakeword.availability_changed` | `wakeWords.available`/`catalogRevision` ersetzen; bei geänderter Revision den Katalog (`GET /api/v2/wake-words`) neu laden – das Event trägt keine Metadaten (Anzeigenamen, Aliase, Backends) und kommt auch bei reinen Metadatenänderungen |
 | `wakeword.detected` | UI-Hinweis (Activation kam bereits mit `activation.started`) |
 | `watchdog.warning`, `activation.trigger_suppressed` | nur Anzeige/Diagnose |
 
