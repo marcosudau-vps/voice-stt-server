@@ -4,7 +4,8 @@
 `api_fastapi_server/server.py`. Server and clients are independent
 processes and may run on different hosts. One server instance provides:
 
-- isolated WebSocket sessions at `/ws/transcribe`;
+- isolated WebSocket sessions at `/ws/v2` (protocol v2, for new clients) and
+  the legacy v1 endpoint `/ws/transcribe` (browser client, existing clients);
 - concurrent realtime and final jobs through a fair shared scheduler;
 - Faster Whisper and Kroko ONNX model routing;
 - OpenAI-compatible `POST /v1/audio/transcriptions`, including SSE streaming;
@@ -43,13 +44,14 @@ uses the typed `/api/language`, `/api/wake-word`, `/api/logging`, and
 `/api/models/active` endpoints. Remote administration requires the configured
 admin key; persisted runtime JSON never contains secrets.
 
-Each `/ws/transcribe` connection can inherit, disable, or explicitly enable
-OpenWakeWord for only that session. The effective profile and logical model
-catalog are returned in `hello.sessionConfig` and `sessionCapabilities`.
-`hello.logAccess` supplies the session-scoped token used for the separate log
-WebSocket and history endpoints. See the
-[FastAPI server guide](../docs/fastapi-server.md),
-[session-local Wake Word reference](../docs/client-development/09-betriebsmodi-und-serverkonfiguration.md),
-and [structured logging contract](../docs/structured-logging.md).
+A `/ws/v2` session selects its trigger sources and wake words (canonical ids
+from `GET /api/v2/wake-words`) in the client `hello`; see the
+[v2 client documentation](../docs/client-development/README.md). On the legacy
+v1 endpoint `/ws/transcribe`, each connection can inherit, disable, or
+explicitly enable OpenWakeWord through query parameters, and `hello.logAccess`
+supplies a session-scoped log token
+([legacy v1 docs](../docs/client-development/legacy-v1/README.md)). See also the
+[FastAPI server guide](../docs/fastapi-server.md) and the
+[structured logging contract](../docs/structured-logging.md).
 
 See [the complete Windows CPU deployment guide](../docs/windows-cpu-deployment.md).

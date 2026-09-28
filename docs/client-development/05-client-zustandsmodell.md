@@ -1,344 +1,204 @@
-# Empfohlenes Client-Zustandsmodell
+# Client-Zustandsmodell, Snapshot und Reconnect (V2)
 
-[← Event-Katalog](04-server-events-katalog-und-chronologie.md) · [HTTP-API →](06-http-api-und-authentifizierung.md)
+[← Lebenszyklen & Chronologie](04-server-events-katalog-und-chronologie.md) · [HTTP-API →](06-http-api-und-authentifizierung.md) · [Übersicht](README.md)
 
-Diese Seite übersetzt das Protokoll in ein belastbares Clientdesign. Sie ist
-nicht serverseitig vorgeschrieben, passt aber zu den tatsächlich möglichen
-Eventfolgen.
+## 1. Grundsatz
 
-## Drei getrennte Automaten
+Der Server ist autoritativ. Der Client spiegelt den Serverzustand aus genau
+zwei Quellen:
 
-Ein Client sollte Audio-/Sessiontransport, Recorder-/Sprachzustand und den
-zuverlässigen Log-/Eventstream getrennt halten. Ein einzelnes
-`isRecording`-Boolean oder ein gemeinsamer Socketstatus kann die Serverzustände
-nicht korrekt abbilden.
+1. **Snapshots** (`hello.accepted.snapshot`, `session.snapshot`) – ersetzen den Spiegel vollständig;
+2. **Events** in `eventSeq`-Reihenfolge – aktualisieren ihn inkrementell.
 
-```mermaid
-flowchart LR
-    subgraph Transport["Transportautomat"]
-        T0["disconnected"] --> T1["connecting"]
-        T1 --> T2["admitted / hello"]
-        T2 --> T3["ready"]
-        T3 --> T0
-    end
+`command.ack` bestätigt nur ein Command (Erfolg/Fehler). Optimistische
+UI-Zustände (z. B. „PTT gedrückt“) werden bei `accepted: false` zurückgerollt.
+Bei `accepted: true` gilt je Command:
 
-    subgraph Stream["Session-/Recorderautomat"]
-        S0["idle"] --> S1["listening oder wakeword_wait"]
-        S1 --> S2["voice / wakeword_detected"]
-        S2 --> S3["recording"]
-        S3 --> S4["transcribing"]
-        S4 --> S1
-        S1 --> S0
-    end
+| Command | Bestätigung des neuen Zustands |
+| --- | --- |
+| `activate`, wirksamer `refresh`/`finish`/`cancel` | zugehörige Events (`activation.started`, `activation.phase_changed`, …) kommen **vor** dem Ack; der Eintritt in `closing_input` ist nur im Ack (`inputPhase`) sichtbar |
+| `refresh` ohne Fristverschiebung | kein Event – das Ack (`applied`) ist die Bestätigung |
+| `trigger_suppression.set`, `audio_availability.set` | kein Event – Spiegel nach dem Ack lokal setzen (oder Snapshot anfordern) |
+| `session_settings.patch` | `settings.changed` vor dem Ack |
+| `session.snapshot.request` | `session.snapshot` **nach** dem Ack |
+| `no_change` | nichts zu tun |
 
-    subgraph Events["Log-/Eventstreamautomat"]
-        L0["disabled / unavailable"] --> L1["connecting"]
-        L1 --> L2["replaying"]
-        L2 --> L3["live"]
-        L3 --> L1
-        L1 --> L0
-    end
-```
+Nie nach einem `applied`-Ack auf ein Event warten, das es für dieses Command
+nicht gibt.
 
-Der Streamautomat ist nur gültig, solange der Transportautomat dieselbe
-`sessionId` besitzt. Der Logautomat kann unabhängig reconnecten. Im
-Session-Scope hängt sein Token an derselben Session; im Admin-Scope kann er
-auch ohne aktive Audioverbindung serverweit laufen.
+## 2. `session.snapshot`
 
-## Empfohlenes State-Schema
-
-```ts
-interface ClientState {
-  transport: "disconnected" | "connecting" | "admitted" | "ready" | "error";
-  sessionId?: string;
-  readyOk: boolean;
-  serverStatus: string;
-  streamingRequested: boolean;
-  settings?: PublicSettings;
-  limits?: Limits;
-  models?: ModelLifecycle;
-  segments: Map<number, TranscriptSegment>;
-  segmentOrder: number[];
-  timeline: TimelineEvent[];
-  lastWarning?: ServerWarning;
-  lastError?: ServerError;
-  sessionMetrics?: SessionMetrics;
-  pingStartedAt?: number;
-  roundTripMs?: number;
-  logConnection: "unavailable" | "connecting" | "replaying" | "live" | "error";
-  logScope?: "session" | "admin";
-  logServerInstanceId?: string;
-  lastCommittedLogCursor: number;
-  oldestLogCursor?: number;
-  latestLogCursor?: number;
-  retentionGap?: { from: number; to: number };
-}
-
-interface TranscriptSegment {
-  segmentId: number;
-  text: string;
-  final: boolean;
-  lastSequence?: number;
-  rawText?: string;
-  stableText?: string;
-  unstableText?: string;
-  timing?: unknown;
-  timeline?: SegmentTimeline;
-  updatedAt?: number;
+```json
+{
+  "type": "session.snapshot",
+  "protocolVersion": 2,
+  "serverVersion": "2.0.0",
+  "serverCommit": "unknown",
+  "sessionId": "20000000-0000-4000-8000-000000000001",
+  "stateVersion": 8,
+  "lastEventSeq": 12,
+  "settingsRevision": 3,
+  "input": {
+    "phase": "segment_active",
+    "activationId": "30000000-0000-4000-8000-000000000002",
+    "primarySource": "manual",
+    "deadlineAtUnixMs": 1787616600000,
+    "remainingMs": 598000,
+    "closeRequested": false
+  },
+  "pendingActivations": [
+    {
+      "activationId": "30000000-0000-4000-8000-000000000001",
+      "activationSequence": 1,
+      "inputClosedReason": "finished",
+      "processingState": "draining",
+      "acceptedSegmentCount": 2,
+      "terminalSegmentCount": 1
+    }
+  ],
+  "trigger": {
+    "configured": {"manual": true, "wakeWord": true},
+    "suppressed": {"manual": false, "wakeWord": true},
+    "effective": {"manual": true, "wakeWord": false}
+  },
+  "audioAvailable": true,
+  "requestedSettings": {"activation.followupTimeoutMs": 4000, "…": "alle 16 Session-Schlüssel"},
+  "effectiveSettings": {"activation.followupTimeoutMs": 3000, "…": "alle 16 Session-Schlüssel"},
+  "wakeWordCapabilities": {"catalogRevision": 1, "availableWakeWordIds": ["alexa", "hey_jarvis"]}
 }
 ```
 
-## Event-Reducer
+| Feld | Bedeutung |
+| --- | --- |
+| `stateVersion` | Version des abgebildeten Zustands |
+| `lastEventSeq` | letztes bereits enthaltene Event (0 = noch keins) |
+| `settingsRevision` | aktuelle Session-Settingsrevision (Basis für den nächsten Patch) |
+| `input` | Vordergrund. In `idle` sind `activationId`, `primarySource`, `deadlineAtUnixMs`, `remainingMs` `null`, `closeRequested` `false`; `closeRequested` ist genau in `closing_input` `true` |
+| `pendingActivations` | Activations mit geschlossener Eingabe, deren Segmente noch nicht alle terminal sind; aufsteigend nach `activationSequence`; enthält nie die offene Vordergrund-Activation |
+| `trigger` | `configured`/`suppressed`/`effective` je Quelle |
+| `audioAvailable` | zuletzt gemeldete Geräteverfügbarkeit |
+| `requestedSettings` / `effectiveSettings` | angeforderte bzw. wirksame Werte aller 16 Session-Schlüssel; während einer offenen Activation zeigt `effectiveSettings` deren gelatchte Werte ([09](09-betriebsmodi-und-serverkonfiguration.md#session-settings)) |
+| `wakeWordCapabilities` | aktuelle Katalogrevision und verfügbare IDs |
+
+`deadlineAtUnixMs` ist aus der monotonen Serverfrist abgeleitet; für
+Countdown-Anzeigen `remainingMs` relativ zum Empfangszeitpunkt verwenden,
+nicht die Uhren vergleichen.
+
+Ein Snapshot ist ein reiner Lesevorgang und trägt kein `eventSeq`.
+
+## 3. Empfohlenes Zustandsschema
 
 ```ts
-function reduce(state: ClientState, event: ServerEvent): ClientState {
-  switch (event.type) {
-    case "hello":
-      return {
-        ...freshSessionState(state),
-        transport: "admitted",
-        sessionId: event.sessionId,
-        settings: event.settings,
-        limits: event.limits,
-      };
+interface V2Mirror {
+  sessionId: string;
+  lastEventSeq: number;
+  stateVersion: number;
+  settingsRevision: number;
+  input: { phase: Phase; activationId: string | null; primarySource: Source | null;
+           deadlineAtUnixMs: number | null; remainingMs: number | null; closeRequested: boolean };
+  activations: Map<string, {           // activationId → Zustand
+    sequence: number; source: Source; inputClosed: boolean;
+    terminal: null | "completed" | "cancelled" | "failed";
+  }>;
+  segments: Map<string, {              // segmentId → Zustand
+    activationId: string; sequence: number;
+    stage: "recording" | "recorded" | "accepted" | "completed" | "discarded" | "failed";
+    text?: string; reason?: string;
+  }>;
+  trigger: { configured: Flags; suppressed: Flags; effective: Flags };
+  audioAvailable: boolean;
+  requestedSettings: Record<string, unknown>;
+  effectiveSettings: Record<string, unknown>;
+  wakeWords: { catalogRevision: number; available: string[] };
+  resync: { pending: boolean; buffer: V2Event[] };
+}
+```
 
-    case "ready":
-      return {
-        ...state,
-        transport: event.ok ? "ready" : "error",
-        readyOk: event.ok,
-        settings: event.settings ?? state.settings,
-        limits: event.limits ?? state.limits,
-        models: event.models ?? state.models,
-      };
+## 4. Event-Reducer
 
-    case "status":
-      return { ...state, serverStatus: event.state };
+```ts
+// Events mit Nutzlast, die ein Snapshot NICHT enthält (Segmente, Texte).
+const PAYLOAD = (e: V2Event) =>
+  e.type.startsWith("segment.") || e.type.startsWith("transcription.");
 
-    case "realtime":
-      return upsertRealtime(state, event);
+function onEvent(m: V2Mirror, e: V2Event) {
+  if (m.resync.pending) { m.resync.buffer.push(e); return; }
+  if (e.eventSeq <= m.lastEventSeq) return;                // Duplikat
+  if (e.eventSeq > m.lastEventSeq + 1) {                    // Lücke
+    m.resync.pending = true; m.resync.buffer.push(e);
+    send(snapshotRequest()); return;
+  }
+  apply(m, e);
+  m.lastEventSeq = e.eventSeq;
+  m.stateVersion = Math.max(m.stateVersion, e.stateVersion);
+}
 
-    case "final":
-      return upsertFinal(state, event);
-
-    case "timeline":
-      return event.event === "final_transcript_discarded"
-        ? markSegmentDiscarded(appendTimeline(state, event), event.segmentId)
-        : appendTimeline(state, event);
-
-    case "clear":
-      return { ...state, segments: new Map(), segmentOrder: [], timeline: [] };
-
-    case "metrics":
-      return { ...state, sessionMetrics: event.metrics };
-
-    case "pong":
-      return finishPing(state);
-
-    case "warning":
-      return { ...state, lastWarning: event };
-
-    case "error":
-      return classifyError(state, event);
-
-    default:
-      return state;
+function onSnapshot(m: V2Mirror, s: Snapshot) {
+  replaceMirrorFrom(m, s);          // Zustand ersetzen; segments/Texte BEHALTEN
+  m.lastEventSeq = s.lastEventSeq;
+  const buffer = m.resync.buffer.sort((a, b) => a.eventSeq - b.eventSeq);
+  m.resync = { pending: false, buffer: [] };
+  for (const e of buffer) {
+    if (e.eventSeq <= s.lastEventSeq) {
+      if (PAYLOAD(e)) applySegment(m, e);  // Snapshot kennt keine Texte
+      continue;                            // Zustand steckt bereits im Snapshot
+    }
+    onEvent(m, e);                         // kann erneut Lücke erkennen
   }
 }
 ```
 
-`markSegmentDiscarded` darf einen vorherigen Realtime-Text nicht in einen
-finalen Transkripttext umwandeln. Für Textinjektion ist nur ein echtes
-`final`-Frame maßgeblich; das Discard-Event beendet lediglich den offenen
-Segmentzustand ohne Einfügung.
+`replaceMirrorFrom` ersetzt `input`, `trigger`, `audioAvailable`, Settings,
+`wakeWords` und den Activation-Status aus `pendingActivations`, lässt aber
+die Segment-/Transkriptliste stehen: Der Snapshot enthält nur Zähler
+(`acceptedSegmentCount`/`terminalSegmentCount`), keine `segmentId` und keinen
+Text. `applySegment` ist idempotent (erstes Terminal gewinnt).
 
-## Realtime-Upsert
+> **Grenze des Protokolls:** Es gibt keinen Replay. Ein Segment- oder
+> Transkriptionsevent, das in der Lücke selbst verloren ging, ist nicht
+> wiederherstellbar; der Snapshot zeigt nur, dass eine Activation terminal ist.
+> Ein Client sollte solche Activations als „Ergebnis unvollständig“ markieren.
+> Da der Server Events linearisiert über eine TCP-Verbindung sendet, entstehen
+> Lücken praktisch nur durch Clientfehler (verworfene Nachrichten).
 
-```ts
-function upsertRealtime(state: ClientState, event: RealtimeEvent): ClientState {
-  const previous = state.segments.get(event.segmentId);
-  if (previous?.final) return state;
+Regeln für `apply`:
 
-  if (
-    event.sequence != null &&
-    previous?.lastSequence != null &&
-    event.sequence < previous.lastSequence
-  ) return state;
-
-  const next = new Map(state.segments);
-  next.set(event.segmentId, {
-    ...previous,
-    segmentId: event.segmentId,
-    text: event.displayText ?? event.text,
-    final: false,
-    lastSequence: event.sequence ?? previous?.lastSequence,
-    rawText: event.rawText,
-    stableText: event.committedStableText ?? event.stableText,
-    unstableText: event.visualUnstableText ?? event.unstableText,
-    timing: event.timing,
-    timeline: event.segment ?? previous?.timeline,
-    updatedAt: event.timestamp,
-  });
-  return withOrderedSegment(state, next, event.segmentId);
-}
-```
-
-Warum vollständiges Ersetzen statt Anhängen?
-
-- `text`/`displayText` beschreibt die gesamte aktuelle Segmentansicht.
-- Modelle korrigieren Wörter rückwirkend.
-- `stableDelta` betrifft nur den bestätigten Präfix und reicht allein nicht aus,
-  um den unstabilen Suffix korrekt zu rekonstruieren.
-
-## Final-Upsert
-
-```ts
-function upsertFinal(state: ClientState, event: FinalEvent): ClientState {
-  const previous = state.segments.get(event.segmentId);
-  const next = new Map(state.segments);
-  next.set(event.segmentId, {
-    ...previous,
-    segmentId: event.segmentId,
-    text: event.text,
-    final: true,
-    timeline: event.segment ?? previous?.timeline,
-    updatedAt: event.timestamp,
-  });
-  return withOrderedSegment(state, next, event.segmentId);
-}
-```
-
-Ein Final ohne Realtime muss ein neues Segment anlegen. Ein Realtime nach Final
-für dieselbe ID sollte ignoriert werden.
-
-## Timeline und Transkript nicht vermischen
-
-`timeline(realtime_transcript)` und `timeline(final_transcript)` spiegeln
-Textmeilensteine. Würde ein Client sie ebenfalls in `segments` einfügen, entstünden
-Duplikate. Empfohlene Trennung:
-
-- `realtime` / `final` → Transkriptmodell;
-- `timeline` → Ablauf-/Diagnosehistorie;
-- `status` → momentane UI-Zustandsanzeige.
-
-## Start, Stop und Clear
-
-### Start
-
-1. WebSocket offen.
-2. `hello` erhalten und aktuelle `sessionId` gespeichert.
-3. `ready.ok === true`.
-4. Mikrofonzugriff herstellen.
-5. `{ "type": "start" }` senden.
-6. Erst dann Audiopakete senden.
-
-Der Client kann `streamingRequested = true` sofort setzen, sollte den
-bestätigten Serverzustand aber separat aus `status` ableiten.
-
-### Stop
-
-1. Keine neuen Audiopakete mehr erzeugen.
-2. Bereits vollständig gebildetes letztes Paket senden.
-3. `{ "type": "stop" }` senden.
-4. `status(idle)` anzeigen.
-5. Nachlaufende `final`-Events weiterhin annehmen.
-
-Den Socket direkt nach `stop` zu schließen kann das letzte finale Ergebnis
-verlieren.
-
-### Clear
-
-Der lokale Clear-Button darf die UI sofort optimistisch leeren. Für eine
-serverseitig bestätigte Zustandsgrenze sollte der Client zusätzlich auf `clear`
-warten. Ein Timeout bedeutet nicht zwingend, dass der Server nicht gelöscht hat;
-das Protokoll besitzt keine Request-ID für genau-einmalige Befehlsbestätigung.
-
-## Reconnect-Automat
-
-```mermaid
-stateDiagram-v2
-    [*] --> Connect
-    Connect --> Handshake: Socket open
-    Connect --> Backoff: Netzwerkfehler
-    Handshake --> Active: hello + ready(ok)
-    Handshake --> Backoff: Close / ready(false)
-    Active --> Backoff: unerwarteter Close
-    Active --> Closed: Benutzer stoppt dauerhaft
-    Backoff --> Connect: Timer abgelaufen
-    Closed --> [*]
-```
-
-Empfehlung:
-
-- Exponentielles Backoff mit Jitter, z. B. 0,5 s → 1 s → 2 s → 4 s, gedeckelt.
-- Close `1013` mindestens so behandeln wie Überlast, nicht sofort schleifen.
-- Nach stabiler Verbindung Backoffzähler zurücksetzen.
-- Bei jeder neuen `hello.sessionId` Sessionstate, Segmente und Timeline neu
-  initialisieren.
-- Mikrofon kann lokal offen bleiben, aber Audio erst nach neuem `start` senden.
-- Keine alten Binärpakete replayen, sofern kein bewusstes Offline-Uploadkonzept
-  implementiert wurde.
-
-Der Log-/Eventstream besitzt einen eigenen Reconnectpfad:
-
-- erst subscriben, dann Replay bis `log.replay_completed`, erst danach Zustand
-  `live` setzen;
-- ausschließlich den Cursor eines vollständig verarbeiteten `log.event`
-  persistieren;
-- globale Cursorsprünge bei Filtern nicht als Verlust interpretieren;
-- bei Retentiongap die gemeldete Spanne sichtbar speichern, den serverseitig
-  fortgesetzten Replaystrom aber ohne eigenen Sprung zu `oldestCursor` oder
-  `retentionCursor` weiterverarbeiten;
-- bei `cursor_ahead` `serverInstanceId`/`latestCursor` neu übernehmen;
-- bei Storefehler `1011` mit Backoff reconnecten, ohne Audio oder Transkription
-  neu zu starten;
-- Admin- und Sessioncursor getrennt speichern, weil Scope und Filter
-  unterschiedlich sind.
-
-## Statusdarstellung
-
-Eine angenehme UI gruppiert die feinen Serverzustände:
-
-| UI-Gruppe | Serverzustände |
+| Event | Wirkung im Spiegel |
 | --- | --- |
-| Nicht aktiv | `idle`, `closed` |
-| Wartet | `listening`, `wakeword_wait`, `wakeword_detected` |
-| Eingang aktiv | `voice`, `silence` |
-| Aufnahme | `recording` |
-| Verarbeitung | `transcribing` |
-| Hinweis/Timeout | `wakeword_timeout` |
+| `activation.started` | `input` = neue Activation, Phase `waiting_first_speech`; Activation anlegen |
+| `activation.phase_changed` | `input.phase`/Frist aktualisieren |
+| `activation.input_closed` | Activation `inputClosed = true`; `input` nur dann auf `idle` setzen, wenn `input.activationId === e.activationId` – eine neue Activation kann ihr `activation.started` **vor** dem `input_closed` der vorigen senden |
+| `activation.completed`/`.cancelled`/`.failed` | Activation `terminal` setzen; darf **vor** `input_closed` kommen – dann `input` erst bei `input_closed` zurücksetzen |
+| `segment.*`, `transcription.accepted` | Segment anlegen/Stufe erhöhen, falls noch nicht terminal |
+| `transcription.completed`/`.discarded`/`.failed` | Segment terminal setzen (erstes Terminal gewinnt) |
+| `settings.changed` | `settingsRevision` übernehmen; Werte per Snapshot nachladen, falls benötigt |
+| `wakeword.availability_changed` | `wakeWords.available`/`catalogRevision` ersetzen; bei geänderter Revision den Katalog (`GET /api/v2/wake-words`) neu laden – das Event trägt keine Metadaten (Anzeigenamen, Aliase, Backends) und kommt auch bei reinen Metadatenänderungen |
+| `wakeword.detected` | UI-Hinweis (Activation kam bereits mit `activation.started`) |
+| `watchdog.warning`, `activation.trigger_suppressed` | nur Anzeige/Diagnose |
 
-`silence` bedeutet nicht automatisch Segmentende. Die konfigurierte
-Post-Speech-Pause und weitere Recorderlogik entscheiden über Finalisierung.
+Zustände **ohne Event** (Suppression, `audioAvailable`) ändern sich durch
+eigene Commands; nach deren `applied`-Ack den Spiegel lokal setzen oder einen
+Snapshot anfordern.
 
-## Wake-Word-Verhalten
+## 5. Reconnect
 
-Auch während `wakeword_wait` muss der Client kontinuierlich Audio senden, sonst
-kann der Server das Weckwort nicht erkennen. Der Client sollte nicht versuchen,
-die Wake-Word-Erkennung lokal anhand von Statusereignissen nachzubauen.
+Es gibt keine Wiederaufnahme einer Session.
 
-Nach `wakeword_followup_started` signalisiert `status(wakeword_detected)`, dass
-eine Folgeäußerung ohne erneutes Weckwort beginnen kann. Das Fenster endet durch
-eine neue Aufnahme oder `wakeword_followup_timeout`.
+1. Verbindung weg → alle nicht bestätigten Commands als verloren betrachten; offene Activations und nicht terminale Segmente der alten Session als abgebrochen darstellen (ihre Ergebnisse kommen nie an).
+2. Neu verbinden mit Backoff und Jitter, neues `hello` (gleiche `clientRunId`, gleiche gewünschte Trigger/Wake Words).
+3. Aus `hello.accepted.snapshot` einen frischen Spiegel bauen: neue `sessionId`, `lastEventSeq = 0`, `stateVersion = 0`, `settingsRevision = 0`.
+4. Session-Settings stehen wieder auf Serverdefaults → gewünschte Werte erneut per `session_settings.patch` (Basis `0`) setzen; Suppression und Audioverfügbarkeit erneut melden, falls sie vom `hello` abweichen.
+5. Keine `commandId` der alten Session wiederverwenden.
 
-## Synchronisation und Zeit
+| Ereignis | Automatischer Reconnect? |
+| --- | --- |
+| Netzwerkabbruch, `1011`, Serverneustart | ja, Backoff + Jitter |
+| `4409` mit `session_limit_reached` | ja, langer Backoff |
+| `4409` sonst, `4406`, `4400` | nein – Konfiguration/Clientbug beheben |
+| `4408` | einmal sofort; wiederholt → Clientbug |
 
-- WebSocket-Textframes werden in Sendereihenfolge transportiert.
-- Recorder-, Scheduler- und Textworker laufen nebenläufig; fachliche Ereignisse
-  können eng verschachtelt sein.
-- `timestamp` stammt von der Server-Wallclock.
-- Für UI-Sortierung pro Socket ist Empfangsreihenfolge meist zuverlässiger;
-  Timestamp ist für Anzeige/Korrelation nützlich.
-- `segmentId` ist die primäre Korrelation für Text; nicht der Timestamp.
+## 6. Zeit
 
-## Persistenz im Client
-
-Wenn Transkripte über Reconnects hinweg erhalten bleiben sollen, sollte der
-Client einen zusammengesetzten Schlüssel verwenden:
-
-```text
-serverIdentity + sessionId + segmentId
-```
-
-Nur `segmentId` ist nicht global eindeutig. Die serverseitige `sessionId` ist
-zudem keine stabile Benutzer- oder Geräteidentität.
+* Ordnung ausschließlich über `eventSeq`, nie über `occurredAtUnixMs`.
+* `occurredAtUnixMs`/`deadlineAtUnixMs` sind Server-Wall-Clock-Werte in ms.
+* Countdown aus `remainingMs` + lokalem monotonem Zeitpunkt des Empfangs.

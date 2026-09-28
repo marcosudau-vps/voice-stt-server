@@ -1,145 +1,111 @@
-# VoiceSTT – Leitfaden für die Client-Entwicklung
+# VoiceSTT – Client-Entwicklung (Protokoll V2)
 
-> **Status:** aus dem implementierten Code abgeleitet · **Stand:** 2. August 2026
-> **Primäre Audio-Schnittstelle:** `WS /ws/transcribe` · **Zuverlässiger Eventstream:** `WS /ws/logs` (SQLite-first, Version 2) · **Serverversion:** `2.0.0`
+> **Status:** kanonische Client-Dokumentation für **Protokoll V2 auf `/ws/v2`**.
+> Aus dem Code abgeleitet und am 2026-09-28 gegen
+> `f7d2b3ccd07757172a45b371829b04bcedffab4b` geprüft
+> ([Prüfbericht](../audits/v2-client-contract-review/INDEPENDENT_REVIEW.md)).
+> **Serverversion:** `2.0.0`
 
-Diese Dokumentation beschreibt den Server so, wie er im Repository tatsächlich
-implementiert ist. Maßgeblich ist der produktive Einstiegspunkt
-`VoiceSTT_server.server`; er verwendet dieselbe Implementierung wie
-`api_fastapi_server.server`.
+Diese Seiten sind die maßgebliche Grundlage für neue Clients, insbesondere den
+VoiceSTT-Desktop-Client V2. Sie beschreiben das Verhalten so, wie es in
+`api_fastapi_server/protocol_v2/` und `api_fastapi_server/server.py`
+implementiert ist – ohne dass dafür Servercode gelesen werden muss.
 
-Die Seiten sind für die Neuentwicklung eines Web-, Desktop- oder Mobile-Clients
-gedacht. Sie erklären nicht nur das Nachrichtenformat, sondern auch Besitz,
-Lebensdauer, Zustandswechsel, Backpressure und die Stellen, an denen ein robuster
-Client bewusst tolerant sein sollte.
+> **Legacy V1 (`/ws/transcribe`)** wird vom Server weiter betrieben, ist aber
+> nicht für neue Clients gedacht. Seine Beschreibung liegt getrennt unter
+> [`legacy-v1/`](legacy-v1/README.md). Umstieg:
+> [V1 → V2 Migrationsmatrix](../audits/v2-client-contract/V1_TO_V2_CLIENT_MIGRATION_MATRIX.md).
 
 ## Dokumentationspaket
 
-| Seite | Inhalt | Besonders nützlich für |
-| --- | --- | --- |
-| [Session- und Server-Scope](01-session-und-server-scope.md) | Was pro Verbindung isoliert ist, was alle Clients teilen, vollständiger Einstellungs-Scope und Modell-/Scheduler-Architektur | Architektur, Datenschutz, Kapazitätsplanung |
-| [WebSocket-Protokoll](02-websocket-protokoll.md) | Verbindung, Handshake, Clientbefehle, binäres Audioformat und Segmentregeln | Implementierung des Transport-Layers |
-| [Server-Events – Kurzreferenz](03-server-events-kurzreferenz.md) | Alle vom Server sendbaren Eventtypen und ihre Felder in kompakter Form | Nachschlagen beim Implementieren |
-| [Server-Events – Katalog & Chronologie](04-server-events-katalog-und-chronologie.md) | Auslöser, Semantik und Felder jedes Events sowie normale Abläufe mit und ohne Weckwort | Event-Reducer, UI und Fehlersuche |
-| [Client-Zustandsmodell](05-client-zustandsmodell.md) | Empfohlener Reducer, Segment-Merging, Statusautomat und Reconnect-Verhalten | Anwendungsarchitektur |
-| [HTTP-API & Authentifizierung](06-http-api-und-authentifizierung.md) | Health, Konfiguration, Metriken, Log-Historie, Admin-API und OpenAI-kompatible Datei-Transkription | Administration, Logs und Datei-Uploads |
-| [Robustheit, Grenzen & Sicherheit](07-robustheit-grenzen-und-sicherheit.md) | Fehlerklassen, Überlast, Timeouts, Datenschutz und Abnahmetests | Produktionsreife Clients |
-| [Abgrenzung der Serverprotokolle](08-protokollabgrenzung.md) | Klare Unterscheidung des produktiven Single-WebSocket-Protokolls von der separaten Zwei-Port-Implementierung | Auswahl des richtigen Einstiegspunkts |
-| [Triggerquellen & sessionlokale Wake-Word-Konfiguration](09-betriebsmodi-und-serverkonfiguration.md) | Manual- und Wake-Word-Trigger, gültige Kombinationen, Legacy-Verhalten, Session-Create-Contract, `models.json`, Fallbacks, Admin-Baseline und UI-Konzept | Desktop-Client, Aufnahmeautomation und Administration |
+| Seite | Inhalt |
+| --- | --- |
+| [01 – Session- und Server-Scope](01-session-und-server-scope.md) | Was pro Verbindung isoliert und was serverweit geteilt ist; Admin-Runtime-Settings |
+| [02 – WebSocket-Protokoll V2](02-websocket-protokoll.md) | **Normativ:** Endpunkt, Handshake, Identitäten, Commands, `command.ack`, Replay, Audioframe, Close-Codes |
+| [03 – Server-Nachrichten](03-server-events-kurzreferenz.md) | **Normativ:** Event-Hülle und alle 17 Events mit Feldern |
+| [04 – Lebenszyklen & Chronologie](04-server-events-katalog-und-chronologie.md) | Phasen, Fristen, Segment-/Transkriptlebenszyklus, Reihenfolge-Garantien, Beispielabläufe, Trigger |
+| [05 – Zustandsmodell, Snapshot, Reconnect](05-client-zustandsmodell.md) | **Normativ:** `session.snapshot`; Reducer, Lückenbehandlung, Reconnect |
+| [06 – HTTP-API & Authentifizierung](06-http-api-und-authentifizierung.md) | `/health`, `/api/v2/*`, Admin-/OpenAI-API, Log-Zugriff |
+| [07 – Robustheit, Grenzen & Sicherheit](07-robustheit-grenzen-und-sicherheit.md) | Limits, Fehlerstrategie, Timeouts, Datenschutz, Abnahme-Checkliste |
+| [08 – Protokollabgrenzung](08-protokollabgrenzung.md) | V2 vs. Legacy V1 vs. Zwei-Port-Server vs. `/ws/logs` |
+| [09 – Triggerquellen, Wake Words & Settings](09-betriebsmodi-und-serverkonfiguration.md) | Triggerkombinationen, Wake-Word-Katalog und -Admission, `session_settings.patch` |
+
+Maschinenlesbare Vertragsvektoren:
+[`tests/contracts/protocol-v2-vectors.json`](../../tests/contracts/protocol-v2-vectors.json).
+Server-Architektur hinter dem Protokoll:
+[`docs/einheitliche-triggerarchitektur.md`](../einheitliche-triggerarchitektur.md) §12–14.
 
 ## Architektur in einem Bild
 
 ```mermaid
 flowchart LR
-    subgraph Clients["Unabhängige Client-Sitzungen"]
-        C1["Client A\nWebSocket + Audio"]
-        C2["Client B\nWebSocket + Audio"]
+    subgraph Client["Desktop-Client"]
+        MIC["Mikrofon → PCM"]
+        UI["UI / Hotkey"]
+        RED["Reducer\n(eventSeq, Snapshot)"]
     end
-
-    subgraph Sessions["Pro Session isoliert"]
-        S1["Recorder A\nVAD · Wake Word · Buffer · Segmente"]
-        S2["Recorder B\nVAD · Wake Word · Buffer · Segmente"]
+    subgraph Server["VoiceSTT-Server"]
+        WS["/ws/v2\nHandshake · Envelope · Acks"]
+        AC["ActivationController\nPhasen · Fristen · Lock"]
+        REC["Recorder\nVAD · Wake Word"]
+        LED["SegmentLedger\nDrain"]
+        ASR["geteilte ASR-Worker"]
     end
-
-    subgraph Shared["Serverweit geteilt"]
-        Q["Faire Inferenz-Queues\nFinal priorisiert · Realtime koalesziert"]
-        M["ASR-Modell-Lane(s)\nfinal + optional realtime"]
-        G["Limits · Modell-Lifecycle\nMetriken · Logging"]
-    end
-
-    C1 <--> S1
-    C2 <--> S2
-    S1 --> Q
-    S2 --> Q
-    Q --> M
-    M --> Q
-    G --- Q
+    MIC -- "Binärframes" --> WS
+    UI -- "activation.command u. a." --> WS
+    WS -- "command.ack · Events · Snapshot" --> RED
+    WS --> AC --> REC --> LED --> ASR
 ```
 
-## Die wichtigsten Integrationsregeln
+## Minimaler Ablauf
 
-1. **`hello` bedeutet zugelassen, `ready` bedeutet betriebsbereit.** Ein Client
-   sollte den Audiostart erst nach einem erfolgreichen `ready` freigeben.
-2. **Vor dem ersten Audiopaket muss `{ "type": "start" }` gesendet werden.**
-   Andernfalls lehnt die Session Audio mit einem `warning`-Event ab.
-3. **Audio ist binär, Befehle und Server-Events sind JSON-Textframes.** Das
-   Binärpaket beginnt mit einer Little-Endian-Metadatenlänge, gefolgt von UTF-8
-   JSON und PCM-Samples.
-4. **Realtime ist revidierbar.** Alle `realtime`-Events eines `segmentId` ersetzen
-   die bisherige Zwischenanzeige. Erst `final` ist das abgeschlossene Ergebnis.
-5. **Eine neue WebSocket-Verbindung ist eine neue Session.** Nach Reconnect gibt
-   es eine neue `sessionId`; alte Segmente und Befehle werden nicht fortgesetzt.
-6. **Die Triggerquellen werden beim Verbindungsaufbau festgelegt.** Es gibt
-   keinen Hotkey- und keinen Wake-Word-Modus mehr, sondern zwei unabhängig
-   aktivierbare Quellen (`manualTriggerEnabled`, `wakeWordTriggerEnabled`).
-   `hello.activationConfig` und `hello.sessionConfig` sind die verbindliche
-   Bestätigung der effektiven sessionlokalen Konfiguration. Eine Session ohne
-   diese Parameter bleibt im **Legacy-Modus** und verhält sich wie bisher.
-7. **Logs verwenden einen getrennten Zugriffskanal.** `hello.logAccess` liefert
-   den Sessiontoken; er gehört in `X-VoiceSTT-Log-Token` beziehungsweise die
-   erste `/ws/logs`-Subscribe-Nachricht, nie in eine URL. Beim Reconnect wird
-   mit dem letzten verarbeiteten committed Cursor fortgesetzt. Replay und Live
-   lesen beide den kanonischen SQLite-Store; die Audioverbindung wird dadurch
-   weder belastet noch administrativ privilegiert. Ein Admin-Key erlaubt auf
-   dem Logkanal ausdrücklich serverweite Historie und Liveevents.
+```text
+1. GET /api/v2/wake-words                          (falls Wake Word genutzt wird)
+2. WS  /ws/v2 öffnen
+3. →  hello {supportedProtocolVersions:[2], clientRunId, requestedSession, runtimeSuppression}
+4. ←  hello.accepted {sessionId, snapshot}         → Spiegel aus snapshot bauen
+5. →  (optional) session_settings.patch            → Timings/Sensitivität
+6. →  Binärframes kontinuierlich (uint32-LE-Länge + JSON{sampleRate} + PCM s16le)
+7. →  activation.command activate (PTT) … finish   ← Events, command.ack
+8. ←  transcription.completed {segmentId, text}    → Text anzeigen
+9. Lücke in eventSeq → session.snapshot.request → session.snapshot
+10. Verbindungsverlust → neue Session ab Schritt 2
+```
 
-## Aktuelle versionierte Repository-Baseline
+## Die wichtigsten Regeln
 
-Der aktuelle Vertrag der sessionlokalen Wake-Word-Konfiguration steht unter
-[`09-betriebsmodi-und-serverkonfiguration.md`](09-betriebsmodi-und-serverkonfiguration.md)
-und [`docs/wake-words.md`](../wake-words.md). Die ursprüngliche
-Einführungsdokumentation der Erweiterung ist historisch archiviert unter
-[`docs/.archiv/session-wakeword`](../.archiv/session-wakeword/).
-
-Das zentrale Entwicklungs- und Deploymentprofil `config.yaml` konfiguriert:
-
-| Bereich | Wert |
-| --- | --- |
-| Sprache / Ausführung | Deutsch (`de`), CPU, `int8` |
-| Final | `faster_whisper`, `faster-whisper-large-v3-turbo` |
-| Realtime | `kroko_onnx`, `Kroko-DE-Community-64-L-Streaming-001.data` |
-| Modellfreigabe | getrennte Modell-Lanes (`use_main_model_for_realtime: false`) |
-| Wake Word | OpenWakeWord, `hey_jarvis`, Timeout 7 s, Follow-up 7 s |
-| Kapazität | 8 Sessions, 4 gleichzeitig aktive Sprecher |
-| Aufnahmegrenze | 30 s pro fortlaufendem Segment |
-| Modell-Lifecycle | automatisches Entladen nach 3600 s Inaktivität |
-
-Diese Werte sind eine versionierte Ausgangskonfiguration, **kein fest
-verdrahteter Protokollvertrag und kein garantierter Live-VPS-Zustand**. Ein
-Deployment kann eine eigene YAML-Datei verwenden; zusätzlich kann eine
-persistierte Runtime-Konfiguration die Startwerte überschreiben. Für einen
-Client sind deshalb `hello.settings`, `ready.settings` oder `GET /api/config`
-die maßgebliche Laufzeitauskunft.
+1. **Der Client spricht zuerst.** Erstes Frame ist `hello`, spätestens nach 10 s; vorher kein Audio, keine Commands.
+2. **Alle IDs sind kanonische UUID-Strings** (klein, mit Bindestrichen); jede neue `commandId` ist eine neue UUID, Retries sind byte-gleich.
+3. **`activate` nur mit `source: "manual"` und ohne `activationId`; `refresh`/`finish`/`cancel` nur mit `activationId` und ohne `source`.** Wake-Word-Activations entstehen ausschließlich serverseitig.
+4. **Jedes Command mit kanonischer `commandId` bekommt genau ein `command.ack`;** `accepted` ist nur für `applied`/`no_change` wahr. Die ausgelösten Events kommen vor dem Ack.
+5. **Events strikt nach `eventSeq`;** Lücke → Snapshot anfordern. Der Snapshot ist autoritativ.
+6. **Audio ist ein Längenpräfix-Format**, kein Header mit Magic: `uint32` LE Metadatenlänge, UTF-8-JSON mit `sampleRate`, PCM `pcm_s16le`. Kontinuierlich senden.
+7. **Es gibt keine Zwischentranskripte.** Text kommt nur mit `transcription.completed` je `segmentId`.
+8. **`activation.input_closed` ≠ fertig.** Die Hintergrundtranskription endet mit `activation.completed`/`.cancelled`/`.failed` – das auch vor `input_closed` eintreffen kann.
+9. **Wake-Word-IDs sind kanonische Katalog-IDs** (`hey_jarvis`), nie Anzeigenamen oder Aliase.
+10. **Eine neue Verbindung ist eine neue Session** ohne Wiederaufnahme; Settings danach neu setzen.
 
 ## Dokumentationskonventionen
 
-- Feldnamen werden exakt in der vom Server gesendeten Schreibweise gezeigt.
-- „Pro Session“ meint die Lebensdauer genau einer angenommenen WebSocket-Verbindung.
-- „Serverweit“ meint einen gemeinsam laufenden Serverprozess.
-- Zeitstempel ohne Suffix sind Unix-Sekunden als Zahl; `...Iso` ist derselbe
-  Zeitpunkt als UTC-ISO-8601-Zeichenfolge.
-- Felder mit `null` oder als „optional“ markierte Felder dürfen fehlen. Ein Client
-  sollte zusätzliche unbekannte Felder ignorieren.
+- Feldnamen exakt wie auf dem Wire.
+- „Session“ = eine angenommene `/ws/v2`-Verbindung.
+- Zeitwerte auf dem Wire sind Millisekunden (`…Ms`, `…UnixMs`).
+- Unbekannte Nachrichtentypen und Felder muss ein Client ignorieren.
+- Beispiele verwenden die IDs der Vertragsvektoren (`10000000-…` = `clientRunId`, `20000000-…` = `sessionId`, `30000000-…` = `activationId`, `40000000-…` = `segmentId`, `50000000-…` = `commandId`, `60000000-…` = `eventId`).
 
 ## Geprüfte Codequellen
 
-Die Aussagen wurden gegen folgende Implementierungsstellen und Referenztests
-geprüft:
-
 | Quelle | Verwendet für |
 | --- | --- |
-| `VoiceSTT_server/server.py` | produktiver Einstiegspunkt und Re-Export |
-| `api_fastapi_server/server.py` | Settings, Sessions, Scheduler, Events, Endpunkte und Lifecycle |
-| `api_fastapi_server/protocol.py` | binäres Audiopaket und Validierung |
-| `VoiceSTT_server/openai_compat.py` | Multipartparameter, Antwort- und Fehlerformate |
-| `VoiceSTT_server/operations.py` | Modellregistrys, Runtime-Persistenz und Logging-Fassaden |
-| `VoiceSTT_server/event_logging.py` | Event-Envelope, Redaction, kanonischer SQLite-Commit, optionale Kalender-/stdout-Spiegel und Commit-Wakeups |
-| `api_fastapi_server/static/index.html` | tatsächlich genutzter Browser-Clientablauf |
-| `config.yaml` | zentrale versionierte Laufzeitkonfiguration |
-| `tests/unit/test_fastapi_server_*.py` | Protokoll-, Isolation-, Event- und Integrationsverhalten |
-| `tests/unit/test_openai_compatible_endpoint.py` | OpenAI-/Admin-HTTP-Vertrag |
-| `tests/unit/test_server_operations.py` | Registry-, Logging- und Persistenzverhalten |
+| `api_fastapi_server/protocol_v2/schema.py` | Nachrichtentypen, Result-Codes, Close-Codes, UUID-Regel |
+| `api_fastapi_server/protocol_v2/handshake.py` | `hello`-Validierung, Admission |
+| `api_fastapi_server/protocol_v2/commands.py` | Command-Envelope, Result-Projektion |
+| `api_fastapi_server/protocol_v2/connection.py` | Ack, Replay, Event-Dispatch, Snapshot-Anfrage |
+| `api_fastapi_server/protocol_v2/events.py`, `session.py`, `snapshot.py` | Event-Projektion, `eventSeq`/`stateVersion`, Snapshot |
+| `api_fastapi_server/protocol.py` | Audioframe |
+| `api_fastapi_server/activation.py` | Phasen, Fristen, Command-Ergebnisse |
+| `api_fastapi_server/settings_control.py` | Settings-Registry und Patch |
+| `VoiceSTT/core/wakeword_catalog.py` | Katalog und Admission |
+| `api_fastapi_server/server.py` | `/ws/v2`-Handler, HTTP-Routen, Session |
 
-Bei Änderungen an `ServerSettings`, `_publish_timeline_event`, dem
-WebSocket-Handler oder `openai_compat.py` sollte dieses Paket zusammen mit den
-Contract-Tests aktualisiert werden.
+Bei Änderungen an diesen Dateien ist diese Dokumentation mitzuziehen.

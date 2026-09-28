@@ -2,9 +2,11 @@
 
 [← Client-Zustandsmodell](05-client-zustandsmodell.md) · [Robustheit & Sicherheit →](07-robustheit-grenzen-und-sicherheit.md)
 
-Der Live-Client benötigt primär `WS /ws/transcribe`. Die HTTP-Endpunkte sind
-für Readiness, Diagnose, Administration und abgeschlossene Audiodateien
-relevant.
+Der Live-Client benötigt primär `WS /ws/v2` ([02](02-websocket-protokoll.md)).
+Für einen V2-Desktop-Client relevant sind vor allem `GET /health`,
+`GET /api/v2/wake-words`, `GET /api/v2/settings/schema` und
+`GET /api/v2/settings/server`. Die übrigen HTTP-Endpunkte dienen Diagnose,
+Administration und abgeschlossenen Audiodateien.
 
 ## Endpunktmatrix
 
@@ -35,8 +37,9 @@ relevant.
 | `POST` | `/api/v2/wake-words/refresh` | Admin | Katalog atomar neu laden; Fehler = 422 und last-known-good bleibt |
 | `GET` | `/v1/models` | OpenAI-Key* | geladene Modelle/Aliasse |
 | `POST` | `/v1/audio/transcriptions` | OpenAI-Key* | abgeschlossene Audiodatei transkribieren |
-| `WS` | `/ws/transcribe` | keine im Handler | kontinuierliches Live-Audio |
-| `WS` | `/ws/logs` | Admin- oder Sessiontoken in erster Nachricht | Cursor-Replay und strukturierte Live-Events |
+| `WS` | `/ws/v2` | keine im Handler | Live-Audio und Steuerung, Protokoll V2 (aktuell) |
+| `WS` | `/ws/transcribe` | keine im Handler | Legacy V1 – nur für bestehende Clients ([legacy-v1](legacy-v1/README.md)) |
+| `WS` | `/ws/logs` | Admin-Key oder V1-Sessiontoken in erster Nachricht | Cursor-Replay und strukturierte Live-Events |
 
 \* Wenn kein OpenAI-Key konfiguriert ist, lässt der implementierte Handler die
 Anfrage ohne Authentifizierung zu. Im versionierten Deployment werden Keys über
@@ -77,14 +80,21 @@ keinen Modellwechsel und keine Konfigurationsänderung.
 
 ### WebSocket
 
-Der Handler für `/ws/transcribe` prüft keine Header, Cookies, Queryparameter oder
-erste Auth-Nachricht. Eine Clientimplementierung darf nicht annehmen, dass
+Die Handler für `/ws/v2` und `/ws/transcribe` prüfen keine Header, Cookies,
+Queryparameter oder Auth-Nachricht; `clientId` (Query oder
+`X-VoiceSTT-Client-Id`) ist nur eine Korrelations-ID. Eine Clientimplementierung darf nicht annehmen, dass
 `Authorization: Bearer ...` vom Server ausgewertet wird. Browser-WebSockets
 können ohnehin keine beliebigen Authorization-Header setzen.
 
 ### Strukturierter Logzugriff
 
-`hello.logAccess` des Transkriptions-WebSockets liefert einen zufälligen,
+> **V2:** `hello.accepted` enthält **keinen** `logAccess`-Token. Ein
+> V2-Client kann `/ws/logs` und `/api/logs/*` daher nur mit dem Admin-Key
+> nutzen (siehe Befund `IMPL-03` in
+> [`INDEPENDENT_REVIEW.md`](../audits/v2-client-contract-review/INDEPENDENT_REVIEW.md#implementierungsbefunde)).
+> Der folgende Sessiontoken-Mechanismus betrifft Legacy-V1-Sessions.
+
+`hello.logAccess` des Legacy-V1-WebSockets `/ws/transcribe` liefert einen zufälligen,
 24 Stunden innerhalb des aktuellen Serverprozesses gültigen Sessiontoken. Er
 erlaubt ausschließlich die eigene Session und die Channels `audit`,
 `transcription` und `performance`; `system` und fremde Sessions bleiben dem
@@ -126,9 +136,11 @@ durch `authorizationScope: "admin"`, `allSessions: true` und
 Audio-WebSocket erhält dadurch keine Adminrechte.
 
 Replay und Live lesen beide ausschließlich committed SQLite-Events. Der
-Protokollablauf und die Fehlercodes sind in
-[WebSocket-Protokoll](02-websocket-protokoll.md#zweite-verbindung-zuverlässiger-eventstream)
-und [Strukturiertes Logging](../structured-logging.md) beschrieben.
+Protokollablauf (`subscribe`, `log.hello`, `log.subscribed`, Replay, `log.gap`,
+Fehlercodes) ist in [Strukturiertes Logging](../structured-logging.md) und – mit
+V1-Bezug – in
+[Legacy V1 WebSocket-Protokoll](legacy-v1/v1-websocket-protokoll.md#zweite-verbindung-zuverlässiger-eventstream)
+beschrieben.
 
 ## `GET /health`
 
@@ -167,8 +179,13 @@ Kompakte Form von `service.metrics()`:
 | `startupErrors` | serverweite Engine-/Startfehler |
 | `eventStore` | Zustand und committed Cursorgrenzen des kanonischen SQLite-Stores |
 
+V2 kennt keine `ready`-Nachricht. Ein V2-Client, der Betriebsbereitschaft
+anzeigen will, liest `ready`/`sttReady` aus `GET /health`; eine angenommene
+Session funktioniert aber auch bei entladenen Modellen (die erste Inferenz lädt
+sie nach).
+
 Ein Livenessmonitor sollte `ok` prüfen. Ist Live-Logging konfiguriert, wird
-`ok` bei degradiertem Eventstore false, während `/ws/transcribe` bewusst
+`ok` bei degradiertem Eventstore false, während die Audio-WebSockets bewusst
 weiterarbeiten kann. Ein UI kann zusätzlich `models.loaded` anzeigen, sollte
 „unloaded“ aber nicht automatisch als Ausfall bewerten.
 
@@ -444,7 +461,8 @@ Bei **jeder** sichtbaren Katalogänderung – auch einer reinen Metadatenänderu
 erhalten laufende v2-Sessions `wakeword.availability_changed` mit der neuen
 Revision.
 
-`GET /api/wake-word` unten bleibt der Adminvertrag des v1-Pfades.
+`GET /api/wake-word` unten ist der ältere Admin-Endpunkt für die
+Wake-Word-Baseline; ein V2-Client benötigt ihn nicht.
 
 `GET /api/wake-word` liefert:
 
@@ -456,8 +474,8 @@ followupWindow, openwakewordModelPaths, availableModels, appliesTo
 `availableModels.openwakeword` enthält die lokal validierten logischen
 Modell-IDs aus `models.json` beziehungsweise dem Dateiscan. Der aktuelle
 FastAPI-Adminvertrag veröffentlicht kein Porcupine. Änderungen via `PUT`
-ändern nur die Baseline für neue Sessions; ein Desktop-Client kann Wake Word
-unabhängig davon beim WebSocket-Aufbau sessionlokal konfigurieren.
+ändern nur die Baseline für neue Sessions; ein V2-Client wählt Wake Words
+unabhängig davon im `hello` ([09](09-betriebsmodi-und-serverkonfiguration.md)).
 
 ## OpenAI-kompatible Datei-Transkription
 

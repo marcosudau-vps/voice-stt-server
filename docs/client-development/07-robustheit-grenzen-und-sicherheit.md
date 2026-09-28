@@ -1,6 +1,6 @@
-# Robustheit, Grenzen und Sicherheit
+# Robustheit, Grenzen und Sicherheit (V2)
 
-[← HTTP-API](06-http-api-und-authentifizierung.md) · [Protokollabgrenzung →](08-protokollabgrenzung.md)
+[← HTTP-API](06-http-api-und-authentifizierung.md) · [Protokollabgrenzung →](08-protokollabgrenzung.md) · [Übersicht](README.md)
 
 ## Belastungsmodell
 
@@ -9,111 +9,79 @@ normale Betriebszustände behandeln, nicht nur als Ausnahmefälle.
 
 ```mermaid
 flowchart LR
-    A["WebSocket Connect"] -->|maxSessions| B["Session-Slot"]
-    B --> C["start + Audio"]
+    A["/ws/v2 + hello"] -->|maxSessions| B["Session-Slot"]
+    B --> C["Audio"]
     C -->|maxActiveSpeakers| D["aktive Aufnahme"]
     D -->|maxAudioQueueSeconds| E["Zwangsfinalisierung"]
     E -->|per-session final depth| F["faire Queue"]
-    D -->|Realtime koalesziert / age| F
     F -->|global depth| G["Shared Model Worker"]
 ```
 
 ## Implementierte Limits
 
-| Limit | Standard im Code | Produktionsprofil | Wirkung |
-| --- | --- | --- | --- |
-| `max_sessions` | 4 | 8 | weitere Verbindung: `error(admission)` + Close 1013 |
-| `max_active_speakers` | 4 | 4 | weitere gleichzeitige Aufnahme wird ignoriert, `warning` |
-| `audio_queue_size` | 128 | 128 | Recorder-Latenz-/Queuegrenze pro Session |
-| `max_audio_packet_bytes` | 524.288 | 524.288 | größeres Binärpaket: `error(audio_packet)` |
-| Metadatenlänge | 65.536 | 65.536 | im Protokollmodul fest |
-| `max_audio_queue_seconds_per_session` | 30 s | 30 s | lange Aufnahme wird finalisiert, `warning` |
-| `max_realtime_queue_age_ms` | 1.500 ms | 1.500 ms | alte Realtime-Jobs werden verworfen |
-| `max_final_queue_depth_per_session` | 8 | 8 | weitere Finals abgelehnt/Recorderbacklog getrimmt |
-| `max_global_inference_queue_depth` | 64 | 64 | neue Jobs werden abgelehnt |
-| `realtime_min_audio_seconds` | 0,25 s | 0,25 s | vor dieser Dauer kein Realtime-Job |
-| `realtime_max_audio_seconds` | 20 s | 20 s | Realtime betrachtet begrenztes Audiofenster |
-| OpenAI-Dateigröße | 25 MiB | 25 MiB | HTTP 413 |
+| Limit | Standard im Code | Wirkung auf einen V2-Client |
+| --- | --- | --- |
+| `max_sessions` | 4 (Produktionsprofil 8) | weitere Verbindung: `session.rejected` (`session_limit_reached`) + Close `4409` |
+| `max_active_speakers` | 4 | weitere gleichzeitige Aufnahmen anderer Sessions starten nicht; die Session bleibt verbunden |
+| `max_audio_packet_bytes` | 524 288 | größeres Audioframe wird still verworfen |
+| Metadatenlänge | 65 536 (fest) | größeres Audioframe wird still verworfen |
+| `max_audio_queue_seconds_per_session` | 30 s | lange Aufnahme wird finalisiert |
+| `max_final_queue_depth_per_session` | 8 | weitere Final-Jobs abgelehnt / Recorderbacklog getrimmt |
+| `max_global_inference_queue_depth` | 64 | neue Jobs werden abgelehnt |
+| OpenAI-Dateigröße | 25 MiB | HTTP 413 |
 
-Die Runtime-Werte können abweichen. `hello.limits` enthält die kompakte
-Live-Sicht; `hello.settings` bzw. `/api/config` liefern weitere Werte.
+Aktuelle Werte: `GET /api/config` (`settings`, `limits`). V2 sendet keine
+`warning`-Nachrichten; Überlast zeigt sich an ausbleibenden oder
+fehlgeschlagenen Segmentterminals (`transcription.failed`,
+`activation.failed`) und in `GET /api/metrics`.
 
 ## Überlast und Backpressure
 
-### Realtime
-
-Realtime ist bewusst „latest wins“:
-
-- ein wartendes Update je Session;
-- neuere Beobachtung ersetzt ältere;
-- überalterte Jobs werden gedroppt;
-- Drops erscheinen in `coalescedRealtime` und `staleRealtimeDiscarded`;
-- die Verbindung bleibt bestehen.
-
-Ein Client darf daher keine feste Anzahl Realtime-Events pro Sekunde erwarten.
-Fehlende Zwischenupdates sind keine Lücke im finalen Transkriptvertrag.
-
-### Final
-
-Finale Jobs werden gegenüber Realtime innerhalb einer Session priorisiert, aber
-nicht unbegrenzt gepuffert. Bei dauerhaft schnellerer Audioerzeugung als
-Inferenz können Recorded-Segmente verworfen werden. Das ist ein Datenverlust und
-wird als `warning` gemeldet.
-
-### Aktive Sprecher
-
-Eine angenommene Session garantiert noch keinen aktiven Sprecher-Slot. Er wird
-erst beim Aufnahmebeginn reserviert. Wird das globale Limit erreicht, bleibt die
-Session verbunden und kann später erneut Sprache liefern.
+* **Final:** Finale Jobs sind priorisiert, aber begrenzt. Bei dauerhaft
+  schnellerer Audioerzeugung als Inferenz können aufgezeichnete Segmente
+  verloren gehen.
+* **Aktive Sprecher:** Eine angenommene Session garantiert noch keinen
+  Sprecher-Slot; er wird beim Aufnahmebeginn reserviert.
+* **Modelle:** Nach Idle-Unload lädt die erste Inferenz die Modelle
+  synchron nach; das erste `transcription.completed` kann deutlich länger
+  dauern.
 
 ## Fehlerstrategie
 
 | Situation | Automatisch reconnecten? | Empfohlene Aktion |
 | --- | --- | --- |
-| Close 1013 / Admission | ja, mit langem Backoff | Kapazitätshinweis zeigen |
-| Netzwerkclose | ja, mit Backoff/Jitter | neue Session vollständig handshaken |
-| `error(command)` | nein | Clientbug/Payload korrigieren |
-| `error(audio_packet)` | nein | Encoder/Paket verwerfen; bei Serie Aufnahme stoppen |
-| `warning` | nein | melden und Ursache klassifizieren |
-| `ready(ok=false)` / Enginefehler | später erneut prüfen | Health pollen oder Verbindung mit Backoff neu aufbauen |
-| einzelne leere Realtimephase | nein | auf Final warten |
-| Pingtimeout | nicht sofort | Socketzustand prüfen; nach mehreren Timeouts reconnecten |
+| Close `4409` `session_limit_reached` | ja, langer Backoff | Kapazitätshinweis |
+| Close `4409` sonst, `4406`, `4400` | nein | Konfiguration/Clientbug beheben |
+| Close `4408` | einmal | wiederholt → Clientbug (kein `hello` gesendet) |
+| Close `1011` / Netzwerkabbruch | ja, Backoff + Jitter | neue Session, Settings neu patchen |
+| Ack `invalid_payload`, `stale_session`, `command_id_conflict` | nein | Clientbug |
+| Ack `activation_locked`, `not_active`, `stale_activation`, `invalid_phase` | nein | Spiegel per Snapshot abgleichen |
+| Ack `internal_error` | nein | loggen; bei Häufung neu verbinden |
+| Ack bleibt aus | – | Verbindung prüfen; nach Timeout neu verbinden |
+| `eventSeq`-Lücke | nein | `session.snapshot.request` |
 
 ## Timeouts für einen Client
-
-Der Server schreibt keine verbindlichen Clienttimeouts vor. Sinnvolle
-Startwerte:
 
 | Phase | Vorschlag | Begründung |
 | --- | --- | --- |
 | Socket-Verbindung | 10–15 s | Netzwerk/Proxy |
-| `hello` nach Open | 5 s | Sessionanlage sollte kurz sein |
-| initiales `ready` | deutlich länger, z. B. 180 s | CPU-Modellstart/Healthcheck erlaubt ebenfalls 180 s Startphase |
-| Ping | alle 2,5–15 s | Browserreferenz nutzt 2,5 s; Produkt kann sparsamer sein |
-| Pong | 2–3 Intervalle | keine Ping-ID, kurzzeitige Last tolerieren |
-| finales Ergebnis nach Stop | produktabhängig, mindestens mehrere Sekunden | Queue + Lazy-Modellstart möglich |
-
-Bei entladenen Modellen kann die erste Inferenz deutlich länger als spätere
-Anfragen dauern. Ein pauschaler kurzer Finaltimeout wäre daher fehleranfällig.
+| `hello` senden | sofort nach Open | Server schließt nach 10 s mit `4408` |
+| `hello.accepted` | 10–30 s | Sessionaufbau erzeugt einen Recorder |
+| `command.ack` | einige Sekunden | Acks sind synchron; Ausbleiben = Transportproblem |
+| `transcription.completed` nach `finish` | produktabhängig, mindestens mehrere Sekunden | Queue + Lazy-Modellstart |
+| Keepalive | WebSocket-Ping der Clientbibliothek | V2 hat kein `ping`-Command |
 
 ## Sicherheitslage des implementierten Protokolls
 
 ### WebSocket-Autorisierung
 
-`/ws/transcribe` hat im Handler keine Authentifizierung. Konsequenzen:
+`/ws/v2` (wie `/ws/transcribe`) hat im Handler keine Authentifizierung:
 
-- Jeder Netzwerkakteur, der den Endpunkt erreicht, kann einen Session-Slot
-  belegen und Audio zur Verarbeitung senden.
+- Jeder, der den Endpunkt erreicht, kann einen Session-Slot belegen und Audio
+  senden.
 - Kapazitätsgrenzen reduzieren Ressourcenverbrauch, ersetzen aber keine Auth.
-- Ein permanenter Key im Querystring wäre ungünstig, da URLs oft geloggt werden.
-- Vor breiter Verteilung empfiehlt sich ein vorgeschalteter Auth-Mechanismus
-  oder eine Protokollerweiterung mit kurzlebigem Sessiontoken.
-
-Das gilt auch für sessionlokale Wake-Word-Queryparameter. Sie verändern keine
-globale Konfiguration und akzeptieren keine freien Pfade, können aber die
-Initialisierung lokaler OpenWakeWord-Modelle und damit Ressourcenverbrauch
-auslösen. Reverse Proxy, Sessionlimit, Connection-/Rate-Limits und Monitoring
-sind deshalb weiterhin Teil der Produktionshärtung.
+- Ein vorgeschalteter Auth-Mechanismus (Reverse Proxy, Netzwerkgrenze) ist
+  eine Deploymententscheidung außerhalb dieses Repositories.
 
 Diese Dokumentation erfindet bewusst keinen Tokenparameter: Ein Client darf nur
 Felder senden, die der Server tatsächlich auswertet.
@@ -157,7 +125,8 @@ tatsächliche serverseitige Datenverarbeitung informieren und nicht allein aus
 `save_audio_files: false` ableiten, dass keine textuellen Inhalte protokolliert
 werden.
 
-Ein Sessionclient erhält den Log-Zugriffstoken ausschließlich in `hello`.
+Ein Legacy-V1-Sessionclient erhält den Log-Zugriffstoken ausschließlich in
+`hello` (V2 erhält keinen, siehe [06](06-http-api-und-authentifizierung.md#strukturierter-logzugriff)).
 Dieser Token darf nur die eigene Session und die Kanäle `audit`,
 `transcription` und `performance` lesen. Der Systemkanal und
 sessionübergreifende Abfragen bleiben dem Adminzugriff vorbehalten. Tokens
@@ -178,107 +147,73 @@ globalen `oldestCursor` unverändert lässt.
 - PCM vor Quantisierung auf `[-1, 1]` clampen, anschließend auf signed Int16
   skalieren.
 - Keine Float32-Samples als `pcm_s16le` deklarieren.
-- Kanalzahl und `frames` müssen zur Nutzlast passen.
-- Pakete vorzugsweise in gleichmäßiger Kadenz senden; sehr große Bursts erhöhen
-  Queue-Latenz.
-- 40 ms Mono-Pakete wie im Browserclient sind ein guter Startwert.
-- Bei Sample-Rate-Wechsel (z. B. Audiogerät neu geöffnet) `sampleRate` in jedem
-  Paket korrekt setzen; der Server validiert pro Paket.
-- Audio muss auch in `wakeword_wait` kontinuierlich fließen.
+- `channels` und `frames` müssen zur Nutzlast passen; sonst wird das Frame
+  still verworfen.
+- Pakete in gleichmäßiger Kadenz senden (20–100 ms); große Bursts erhöhen die
+  Latenz.
+- Bei Wechsel des Audiogeräts `sampleRate` in jedem Paket korrekt setzen.
+- Audio auch ohne offene Activation kontinuierlich senden (Wake Word,
+  Sprachbeginn).
 
 ## Race Conditions, die der Client tolerieren muss
 
-1. `status(idle)` kann vor einem nachlaufenden `final` eintreffen.
-2. `error` eines Startworkers kann serverweit ohne `sessionId` eintreffen.
-3. `clear` und bereits unterwegs befindliche Events können sehr eng
-   aufeinanderfolgen; nach verarbeitetem `clear` sollte der Client ältere lokale
-   Arbeit verwerfen.
-4. `status` darf denselben State mehrfach melden.
-5. Final kann ohne vorheriges Realtime eintreffen.
-6. Bei Disconnect gibt es kein letztes garantiertes Status-/Finalevent.
-7. Audio- und Log-WebSocket können unabhängig ausfallen oder reconnecten.
-8. Ein leerer finaler Recordertext erzeugt kein `final`, aber
-   `final_transcript_discarded` und ein committed
-   `transcription.discarded(reason=empty_final)`.
-9. Mehrfach gelieferte Recorder-Ergebnisse ohne einen weiteren tatsächlichen
-   Transkriptionsstart beanspruchen kein neues Segment und erzeugen kein
-   zweites Terminalereignis.
+1. Das Activation-Terminal kann vor `activation.input_closed` eintreffen.
+2. Beim Abbruch kann `transcription.discarded` vor `segment.recording_ended`
+   desselben Segments kommen.
+3. Events eines Commands kommen vor seinem Ack; das Ack trägt ggf. eine
+   ältere `stateVersion`.
+4. Ein Wake-Treffer kann eine Activation öffnen, während der Client gerade
+   `activate` sendet → `activation_locked`.
+5. `transcription.completed` älterer Activations kann nach
+   `activation.started` einer neuen Activation eintreffen.
+6. Bei Disconnect gibt es kein garantiertes letztes Event.
+7. Audio- und Log-WebSocket fallen unabhängig aus.
 
-## Abnahmetest-Checkliste für einen neuen Client
+## Abnahmetest-Checkliste für einen neuen V2-Client
 
 ### Handshake und Transport
 
-- [ ] `hello` und das sessionspezifische `ready` mit `sessionId`,
-      `sessionConfig`, `sessionCapabilities` und `models` werden akzeptiert.
-- [ ] Admission-Fehler vor `hello` wird korrekt angezeigt.
-- [ ] Close 1013 führt nicht zu einer aggressiven Reconnect-Schleife.
-- [ ] Text- und Binärframes werden strikt getrennt.
-- [ ] Little-Endian-Metadatenlänge und UTF-8 JSON sind korrekt.
+- [ ] `hello` als erstes Frame; nichts vor `hello.accepted`.
+- [ ] `protocol.incompatible`/`session.rejected` werden angezeigt, ohne
+      Reconnect-Schleife.
+- [ ] Close-Codes `4400`, `4406`, `4408`, `4409`, `1011` werden unterschieden.
+- [ ] Zustand wird aus `hello.accepted.snapshot` initialisiert.
+
+### Commands
+
+- [ ] Jede `commandId` ist eine neue kanonische UUID; Retries byte-gleich.
+- [ ] Alle 15 Result-Codes werden behandelt.
+- [ ] `activate` ohne `activationId`, Controls ohne `source`.
+
+### Events und Zustand
+
+- [ ] Duplikate (`eventSeq ≤ last`) werden verworfen, Lücken lösen einen
+      Snapshot aus, gepufferte Events werden nachgezogen.
+- [ ] Terminal vor `input_closed` wird korrekt dargestellt.
+- [ ] Erstes Segmentterminal ist endgültig.
+- [ ] Unbekannte Eventtypen/Felder brechen den Parser nicht.
 
 ### Audio
 
+- [ ] Längenpräfix Little-Endian, UTF-8-JSON mit `sampleRate`, `pcm_s16le`.
 - [ ] 16 kHz und 48 kHz Mono funktionieren.
-- [ ] Optionales Mehrkanalformat wird korrekt interleaved gesendet.
-- [ ] `frames` stimmt exakt; Randfälle erzeugen verständliche Clientlogs.
-- [ ] Audio wird erst nach `start` gesendet.
-- [ ] `stop` beendet neue Pakete, lässt aber Finalevents nachlaufen.
+- [ ] Audio fließt kontinuierlich; Geräteverlust → `audio_availability.set`.
 
-### Textmodell
+### Wake Words und Settings
 
-- [ ] Realtime ersetzt statt anzuhängen.
-- [ ] Mehrere Segmente bleiben anhand `segmentId` getrennt.
-- [ ] Final ohne Realtime wird angelegt.
-- [ ] Realtime nach bereits finalem Segment wird ignoriert.
-- [ ] `clear` leert Transkript und Timeline.
-- [ ] Neue `sessionId` nach Reconnect startet einen frischen Namespace.
-
-### Zustände und Wake Word
-
-- [ ] Statuswiederholungen sind idempotent.
-- [ ] Wake-Wartephase sendet weiterhin Audio.
-- [ ] Wake-Timeout und Follow-up-Timeout werden unterschieden.
-- [ ] Aufnahme-/Timelinefelder werden bei Fehlen tolerant behandelt.
-- [ ] `wakeWordEnabled=false`, `true` und Vererbung werden gegen
-      `hello.sessionConfig` geprüft.
-- [ ] Fallbacks/Warnungen werden sichtbar behandelt; ein
-      `session_config`-Fehler mit Close 1008 erzeugt keine Reconnectschleife.
-
-### Fehler und Last
-
-- [ ] `warning` schließt den Socket nicht automatisch.
-- [ ] Audio-Paketfehler verwirft nur das Paket.
-- [ ] Realtime-Coalescing wird nicht als Finalverlust interpretiert.
-- [ ] Modell-Lazy-Reload toleriert hohe erste Latenz.
-- [ ] Unbekannte Eventtypen/Felder brechen den Parser nicht.
-
-### Zuverlässiger Log-/Eventstream
-
-- [ ] `hello.logAccess.available=false` wird ohne Tokenzugriffsversuch
-      behandelt.
-- [ ] Replay wird vollständig bis `log.replay_completed` verarbeitet, bevor
-      Livezustand angezeigt wird.
-- [ ] Der committed Cursor wird erst nach erfolgreicher lokaler Verarbeitung
-      gespeichert.
-- [ ] Retentiongap, Cursor-ahead und Storefehler 1011 werden getrennt
-      behandelt.
-- [ ] Audio läuft bei einem isolierten Store-/Logsocketausfall weiter.
-- [ ] Sessiontoken kann weder `system` noch fremde Sessions lesen.
-- [ ] Adminmodus bestätigt `authorizationScope: admin`, `allSessions` und den
-      erwarteten Channelfilter; Admin-Key erscheint nie in URL, Persistenz oder
-      Telemetrie.
+- [ ] Katalog wird geladen, nur kanonische IDs gesendet.
+- [ ] `settings_revision_conflict` führt zu Snapshot + erneutem Patch.
+- [ ] Nach Reconnect werden Settings erneut gesetzt.
 
 ## Serverseitige Referenztests
 
-Die relevanten automatisierten Tests liegen insbesondere in:
-
 ```text
-tests/unit/test_fastapi_server_protocol.py
-tests/unit/test_fastapi_server_multi_user.py
-tests/unit/test_fastapi_server_multi_user_asr_integration.py
-tests/unit/test_openai_compatible_endpoint.py
-tests/unit/test_server_operations.py
+tests/unit/test_protocol_v2_contract.py      Vektoren, Envelope, Ack-Projektion
+tests/unit/test_protocol_v2_e2e.py           echte /ws/v2-Route Ende-zu-Ende
+tests/unit/test_protocol_v2_state_version.py stateVersion-Regeln
+tests/unit/test_protocol_v2_races.py         Nebenläufigkeit, Linearisierung
+tests/unit/test_protocol_v2_settings.py      session_settings.patch, REST-v2-Settings
+tests/unit/test_protocol_v1_v2_boundary.py   Trennung V1/V2
+tests/unit/test_wakeword_session_e2e.py      Wake-Admission und -Events über /ws/v2
+tests/contracts/protocol-v2-vectors.json     maschinenlesbare Vertragsvektoren
 ```
-
-Für einen externen Client lohnt sich zusätzlich ein eigener Contract-Test, der
-den realen WebSocket startet, `start`/Audio/`stop` sendet und Events bis zum
-passenden `final.segmentId` sammelt.

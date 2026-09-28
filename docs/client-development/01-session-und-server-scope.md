@@ -1,6 +1,12 @@
 # Session- und Server-Scope
 
-[← Übersicht](README.md) · [WebSocket-Protokoll →](02-websocket-protokoll.md)
+[← Übersicht](README.md) · [WebSocket-Protokoll V2 →](02-websocket-protokoll.md)
+
+Diese Seite ist protokollneutral: Sie beschreibt, was der Server pro
+Session isoliert und was er teilt. Für V2 ist eine Session genau eine
+angenommene `/ws/v2`-Verbindung. Wo V1-Befehle (`start`, `stop`, `clear`,
+`metrics`) genannt sind, betreffen sie nur den
+[Legacy-V1-Endpunkt](legacy-v1/README.md).
 
 ## Kurzfassung
 
@@ -22,15 +28,15 @@ Der Server trennt **Stream-Zustand** von **teuren Inferenzressourcen**:
 | `clientId` | Clientkorrelation | vom Client stabil lieferbar, sonst serverseitig erzeugt | Browser persistiert sie lokal; nicht mit `sessionId` gleichsetzen |
 | WebSocket-Verbindung | Session | bis Disconnect | Server sendet Session-Events nur an den Besitzer |
 | `AudioToTextRecorder` | Session | Verbindung | Eigene Stream-Zustandsmaschine je Client |
-| WebRTC-/Silero-VAD-Zustand | Session | Verbindung bzw. `clear`/Recorder-Reset | Sprache eines Clients beeinflusst keinen anderen Stream |
+| WebRTC-/Silero-VAD-Zustand | Session | Verbindung bzw. Recorder-Reset (V1: `clear`) | Sprache eines Clients beeinflusst keinen anderen Stream |
 | Wake-Word-Zustand und Follow-up-Timer | Session | Verbindung / jeweiliger Wake-Zyklus | Erkennung, Timeout und Follow-up sind isoliert |
-| Audioeingangsqueue und aufgezeichnete Audioqueue | Session | Verbindung; durch `clear`/Limits beeinflusst | Backlog und Drops werden pro Session gezählt |
+| Audioeingangsqueue und aufgezeichnete Audioqueue | Session | Verbindung; durch Limits (V1 zusätzlich `clear`) beeinflusst | Backlog und Drops werden pro Session gezählt |
 | Pre-Recording-Buffer | Session | laufender Stream | Vorlauf-Audio wird nicht zwischen Clients geteilt |
-| Aufnahme-/Streamingstatus | Session | Verbindung | `start`, `stop` und `clear` wirken nur auf den Absender |
-| Segmentzähler | Session | Verbindung; `clear` springt zum nächsten Wert | `segmentId` ist nur innerhalb einer Session eindeutig |
-| Segment-Timeline | Session | Verbindung; `clear` leert sie | Aufnahme-/Wake-Zeitpunkte bleiben sessionlokal |
-| Generation / Stale-Result-Schutz | Session | wird bei `clear`/Close erhöht | Ergebnisse einer abgebrochenen Generation werden verworfen |
-| Sessionmetriken | Session | Verbindung | Antwort auf Befehl `metrics`; zusätzlich in globalen Metriken eingebettet |
+| Aufnahme-/Streamingstatus | Session | Verbindung | V2: mit `hello.accepted` geöffnet; V1: `start`/`stop`/`clear` wirken nur auf den Absender |
+| Segmentzähler | Session | Verbindung | `segmentSequence` ist sessionlokal; V2-`segmentId` ist eine UUID |
+| Segment-Timeline | Session | Verbindung (V1: `clear` leert sie) | Aufnahme-/Wake-Zeitpunkte bleiben sessionlokal |
+| Generation / Stale-Result-Schutz | Session | wird bei Close (V1 auch `clear`) erhöht | Ergebnisse einer abgebrochenen Generation werden verworfen |
+| Sessionmetriken | Session | Verbindung | in `GET /api/metrics` eingebettet (V1 zusätzlich Befehl `metrics`) |
 | Text-Worker-Thread | Session | Verbindung | Holt finale Texte aus genau diesem Recorder |
 | Aktiver-Sprecher-Slot | global verwaltet, Session zugeordnet | während aktiver Aufnahme | Maximalzahl wird serverweit durchgesetzt |
 | Connection Manager | Server | Prozess | Kennt alle verbundenen Session-WebSockets; routet normalerweise gezielt |
@@ -40,8 +46,8 @@ Der Server trennt **Stream-Zustand** von **teuren Inferenzressourcen**:
 | Finales ASR-Modell / Worker | Server | bis Unload, Switch oder Shutdown | Nicht pro Client geladen |
 | Realtime-ASR-Modell / Worker | Server oder mit finaler Lane geteilt | bis Unload, Switch oder Shutdown | Eine oder zwei Lanes je Konfiguration |
 | Modell-Lifecycle und Aktivitätszeit | Server | Prozess | Leerlauf-Entladen und Lazy-Reload betreffen alle Clients |
-| Startfehlerliste | Server | Prozess | Kann per `error` an alle Sessions gesendet und neuen Sessions wiederholt werden |
-| Public Settings / Runtime-Vertrag | Server | Prozess, teilweise änderbar | In `hello`, `ready` und `/api/config` sichtbar |
+| Startfehlerliste | Server | Prozess | V2: nur über `GET /health` (`startupErrors`); Legacy V1 sendet sie zusätzlich per `error` an alle `/ws/transcribe`-Sessions |
+| Public Settings / Runtime-Vertrag | Server | Prozess, teilweise änderbar | In `/api/config` sichtbar (V1 zusätzlich in `hello`/`ready`) |
 | Limits | Server | Prozess, teilweise änderbar | Alle Sessions konkurrieren unter denselben Obergrenzen |
 | Modell- und Wake-Word-Registry | Server | Prozess | Gemeinsamer Katalog lokaler Modelle |
 | Strukturiertes Event-Logging | Server | Prozess | Vier Channels, kanonisches SQLite, optionale Kalenderdateien und SQLite-basierter Live-Stream; Sessionevents enthalten ggf. `sessionId` |
@@ -52,20 +58,19 @@ Der Server trennt **Stream-Zustand** von **teuren Inferenzressourcen**:
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Reserviert: WebSocket-Anfrage
-    Reserviert --> Abgewiesen: maxSessions erreicht
-    Reserviert --> Initialisiert: Recorder + VAD + Text-Worker
-    Initialisiert --> Verbunden: WebSocket akzeptiert
-    Verbunden --> Streaming: Client sendet start
-    Streaming --> Verbunden: Client sendet stop
-    Streaming --> Streaming: clear setzt Generation/Segmente zurück
-    Verbunden --> Geschlossen: Disconnect
+    [*] --> Offen: WebSocket /ws/v2 akzeptiert (noch keine Session)
+    Offen --> Abgewiesen: hello ungültig / Version / Admission / maxSessions
+    Offen --> Reserviert: gültiges hello
+    Reserviert --> Streaming: Recorder + VAD + Text-Worker, hello.accepted
     Streaming --> Geschlossen: Disconnect
     Geschlossen --> [*]: Jobs abbrechen, Recorder shutdown, Slot freigeben
 ```
 
 Die Slot-Reservierung passiert **vor** dem Erzeugen des Recorders. So kann eine
 Verbindungswelle nicht mehr Recorder erzeugen, als `max_sessions` erlaubt.
+
+Legacy V1 admittiert die Session dagegen schon beim Upgrade aus den
+Queryparametern und kennt zusätzlich `start`/`stop`/`clear`.
 
 Beim Schließen werden Scheduler-Jobs und wartende Recorder-Transkriptionen der
 Session abgebrochen, der aktive Sprecher-Slot freigegeben und der Recorder
@@ -272,16 +277,18 @@ ihnen stärkere Laufzeitgarantien ableiten, als die beobachteten Events liefern.
 ### Modelle „unloaded“ ist ein gesunder Zustand
 
 Nach dem konfigurierten Idle-Timeout dürfen die Modell-Worker entladen sein.
-`ready`/`health` können trotzdem erfolgreich sein. Die nächste Inferenz lädt die
+`GET /health` kann trotzdem erfolgreich sein. Die nächste Inferenz lädt die
 Lanes synchron wieder; der erste Text kann dann deutlich länger dauern.
 
-### Settings in `hello` sind die effektive Sessionkopie
+### Session-Settings sind eine eigene Ebene
 
-Der Client erhält die für diese Verbindung aufgelösten öffentlichen Settings.
-Wake-Word-Queryparameter können sie beim Aufbau sessionlokal beeinflussen;
-nach `hello` existiert weiterhin kein Befehl zum Ändern einzelner
-Sessionparameter. Serverweite Änderungen laufen über die Admin-HTTP-API und
-gelten entsprechend dem Runtime-Vertrag.
+Eine V2-Session startet mit den Serverdefaults der Settings-Control-Plane
+(`GET /api/v2/settings/server`) plus den Angaben aus dem `hello` (Trigger,
+Wake-Word-Auswahl, Suppression). Einzelne Session-Werte ändert der Client
+danach per `session_settings.patch`
+([09](09-betriebsmodi-und-serverkonfiguration.md#session-settings)); die
+wirksamen Werte stehen im Snapshot. Die Admin-Runtime-Settings oben
+(`/api/config`) sind davon getrennt und gelten serverweit.
 
 ## Konfigurationsquellen und Priorität
 
@@ -303,9 +310,11 @@ flowchart LR
 
 ## Datenschutz- und Isolationsaussage
 
-Transcript-Events und `ready` werden gezielt mit der jeweiligen `sessionId` an
-die zugehörige Verbindung gesendet. Bestimmte serverweite Startfehler können
-weiterhin für alle Verbindungen relevant sein. Audio wird nicht broadcastet.
+Transcript-Events werden gezielt an die zugehörige Verbindung gesendet; eine
+V2-Verbindung erhält ausschließlich ihre eigenen V2-Nachrichten. Serverweite
+Startfehler broadcastet der Server nur an Legacy-V1-Verbindungen; ein
+V2-Client liest sie aus `GET /health` (`startupErrors`). Audio wird nicht
+broadcastet.
 
 Der Transkriptionskanal kann – abhängig von `transcript_log_mode` –
 Transkripttext enthalten; Audit- und Performancekanal enthalten keinen

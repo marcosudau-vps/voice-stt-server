@@ -542,7 +542,7 @@ same one canonical manifest as the v2 path.
 
 VoiceSTT never downloads Wake Word assets at runtime. It reads the same
 bundled `models.json` the v2 catalog uses (see
-["`models.json` is the authority"](#models-json-is-the-authority) above).
+["`models.json` is the authority"](#modelsjson-is-the-authority) above).
 Override the search root with:
 
 ```bash
@@ -609,9 +609,11 @@ fallbacks and available IDs are returned in `hello.sessionConfig` and
 TensorFlow Lite variant with `wakeWordInferenceFramework=onnx` or
 `wakeWordInferenceFramework=tflite`.
 
-See
-[Betriebsmodi und sessionlokale Wake-Word-Konfiguration](client-development/09-betriebsmodi-und-serverkonfiguration.md)
-for the complete contract.
+See the legacy
+[V1 trigger sources and query parameters](client-development/legacy-v1/v1-triggerquellen-und-queryparameter.md)
+for the complete v1 contract. New clients use the v2 handshake described
+above; the v2 client view is in
+[client-development/09](client-development/09-betriebsmodi-und-serverkonfiguration.md).
 
 ## Sensitivity and timing
 

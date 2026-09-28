@@ -1,601 +1,404 @@
-# WebSocket-Protokoll
+# WebSocket-Protokoll V2 (`/ws/v2`)
 
-[← Session- und Server-Scope](01-session-und-server-scope.md) · [Event-Kurzreferenz →](03-server-events-kurzreferenz.md)
+[← Session- und Server-Scope](01-session-und-server-scope.md) · [Event-Referenz →](03-server-events-kurzreferenz.md) · [Übersicht](README.md)
 
-## Endpunkt und Transport
+Diese Seite ist der normative Teil des V2-Vertrags für Verbindung,
+Handshake, Identitäten, Commands, Acks, Audio und Close-Codes. Events stehen in
+[03](03-server-events-kurzreferenz.md), Zustand und Resync in
+[05](05-client-zustandsmodell.md).
+
+Implementierung: `api_fastapi_server/protocol_v2/` und der `/ws/v2`-Handler in
+`api_fastapi_server/server.py`. Maschinenlesbare Vektoren:
+[`tests/contracts/protocol-v2-vectors.json`](../../tests/contracts/protocol-v2-vectors.json).
+
+## 1. Endpunkt und Frames
 
 ```text
-WS  /ws/transcribe
-WSS wss://stt.voice.marcosudau.com/ws/transcribe
+ws://<host>:<port>/ws/v2
+wss://<host>/ws/v2
 ```
 
-Der WebSocket ist die primäre Schnittstelle für kontinuierliches Mikrofon-Audio.
-Eine Verbindung entspricht genau einer Session.
-
-| Richtung | WebSocket-Frame | Inhalt |
+| Richtung | Frame | Inhalt |
 | --- | --- | --- |
-| Client → Server | Text | ein JSON-Objekt als Befehl |
-| Client → Server | Binär | Metadatenheader + PCM-Audio |
-| Server → Client | Text | ein JSON-Objekt mit diskriminierendem Feld `type` |
-| Server → Client | Binär | wird nicht gesendet |
+| Client → Server | Text | genau ein JSON-Objekt (`hello` oder ein Command) |
+| Client → Server | Binär | ein Audioframe (§7) |
+| Server → Client | Text | genau ein JSON-Objekt mit Feld `type` |
+| Server → Client | Binär | wird nie gesendet |
 
-Der implementierte WebSocket-Handler prüft derzeit keinen API-Key und wertet
-keine Token-Queryparameter aus. TLS (`wss://`) schützt den Transport, ist aber
-keine Nutzungsautorisierung. Ein vorgeschalteter Reverse Proxy kann außerhalb
-dieses Codes zusätzliche Regeln anwenden.
+Eine Verbindung ist genau eine Session. Optional kann der Client eine
+Korrelations-ID mitgeben: Query `?clientId=<id>` oder Header
+`X-VoiceSTT-Client-Id` (1–128 Zeichen aus `A–Z a–z 0–9 . _ : -`; sonst
+erzeugt der Server `client-<hex>`). Sie dient nur Audit/Logs und erscheint in
+keiner V2-Nachricht. Andere Queryparameter werden auf `/ws/v2` ignoriert.
 
-## Verbindungs-Handshake
+## 2. Handshake
 
 ```mermaid
 sequenceDiagram
     participant C as Client
     participant S as Server
-    C->>S: WebSocket Upgrade /ws/transcribe?...
-    alt Sessionkonfiguration ungültig/nicht erfüllbar
-        S-->>C: error (where=session_config)
-        S-->>C: Close 1008
-    else Sessionlimit erreicht
-        S-->>C: error (where=admission, limits)
-        S-->>C: Close 1013
-    else Session angenommen
-        S-->>C: hello (sessionId, settings, sessionConfig, ...)
-        alt Modelle/Service bereits ready
-            S-->>C: ready (sessionId, sessionConfig, ok, models, ...)
-        else Initialisierung läuft
-            Note over C,S: Verbindung bleibt offen
-            S-->>C: ready (sessionspezifisch)
-        end
-        C->>S: {"type":"start"}
-        S-->>C: status
-        C->>S: Binäre Audiopakete
+    C->>S: WebSocket-Upgrade /ws/v2
+    Note over S: keine Session, kein Recorder
+    C->>S: hello (innerhalb von 10 s)
+    alt hello ungültig / kein JSON / Binärframe
+        S-->>C: Close 4400
+    else keine gemeinsame Version
+        S-->>C: protocol.incompatible
+        S-->>C: Close 4406
+    else Session unzulässig
+        S-->>C: session.rejected (errors[])
+        S-->>C: Close 4409
+    else angenommen
+        S-->>C: hello.accepted (sessionId, snapshot)
+        Note over C,S: Commands und Audio sind jetzt erlaubt
     end
 ```
 
-### Handshake-Regeln
+Der Server sendet **nichts**, bevor der Client `hello` gesendet hat. Kommt
+binnen 10,0 s kein Frame, schließt er mit `4408`.
 
-- `hello` bestätigt die Aufnahme der Session und liefert die neue `sessionId`
-  sowie die separat vom Client übermittelte oder serverseitig erzeugte
-  `clientId`. Beide IDs haben unterschiedliche Lebenszyklen.
-- `hello.logAccess` liefert einen kurzlebigen, auf diese Session begrenzten
-  Zugriff auf `/ws/logs` und `/api/logs/events`. Der Token gehört in Header
-  beziehungsweise erste Subscribe-Nachricht, nicht in eine URL. Das Objekt
-  enthält `available`, `logProtocolVersion: 2`,
-  `deliveryMode: "sqlite_first"`, `replayAvailable`, `serverInstanceId` sowie
-  `oldestCursor`/`latestCursor`. `log.hello` ergänzt für den tatsächlich
-  abonnierten Channel-/Session-Scope den `retentionCursor`. Bei
-  `available: false` fehlt der Token.
-- `ready` kann direkt nach `hello` oder später eintreffen.
-- Jede `ready`-Nachricht ist sessionspezifisch und enthält dieselbe
-  `sessionConfig` wie `hello`.
-- Startfehler können nach `ready` als `error` folgen und bei später verbundenen
-  Clients erneut ausgespielt werden.
-- Ein Client sollte erst nach `ready` mit `ok: true` den Audiostart freigeben.
-- `models.loaded: false` kann bei absichtlich entladenen Idle-Modellen normal
-  sein; die erste Inferenz löst dann einen Lazy-Reload aus.
-
-## Zweite Verbindung: zuverlässiger Eventstream
-
-`/ws/transcribe` bleibt ausschließlich für Audio, Befehle und unmittelbare
-Sessionausgaben zuständig. Der getrennte `/ws/logs`-Socket ist kein bloßer
-Dateilog-Tail, sondern ein zuverlässiger, replaybarer Eventstream aus dem
-kanonischen SQLite-Store:
-
-```text
-strukturierter Serverevent
-  → SQLite-Commit + globaler Cursor
-  → payloadfreies Commit-Wakeup
-  → /ws/logs liest committed Events aus SQLite
-```
-
-Der Client sendet als erste Nachricht:
+### 2.1 `hello`
 
 ```json
 {
-  "type": "subscribe",
-  "accessToken": "<session-token-oder-admin-key>",
-  "sessionId": "<nur bei Session-Scope>",
-  "channels": ["audit", "transcription", "performance"],
-  "afterCursor": 18427
+  "type": "hello",
+  "supportedProtocolVersions": [2],
+  "clientVersion": "2.0.0-desktop",
+  "clientCommit": "a1b2c3d4",
+  "clientRunId": "10000000-0000-4000-8000-000000000001",
+  "requestedSession": {
+    "trigger": {"manual": true, "wakeWord": true},
+    "wakeWordIds": ["hey_jarvis"]
+  },
+  "runtimeSuppression": {"manual": false, "wakeWord": false}
 }
 ```
 
-Danach folgen `log.hello`, `log.subscribed`, null bis viele
-`log.event(replay=true)`, `log.replay_completed` und anschließend
-`log.event(replay=false)`. `log.subscribed.authorizationScope` unterscheidet
-`session` und `admin`; `allSessions`/`allChannels` machen globale Adminsemantik
-explizit.
-
-Wichtige Cursorregeln:
-
-- Cursor sind global; Lücken in einem gefilterten Stream sind normal.
-- `log.gap(reason=retention)` bedeutet, dass nach dem angeforderten Cursor
-  mindestens ein zum Channel-/Session-Scope passendes Event gelöscht wurde.
-  Die verlorene Spanne sichtbar dokumentieren und den unmittelbar folgenden
-  Replaystrom normal weiterverarbeiten. Nicht selbst zu `oldestCursor` oder
-  `retentionCursor` springen: Der Server liefert weiterhin alle noch
-  vorhandenen passenden Events ab dem ursprünglich angeforderten Cursor.
-- `log.error(code=cursor_ahead)` bedeutet meist Store-/Serverwechsel. Den
-  lokalen Cursor anhand `serverInstanceId` und `latestCursor` neu bewerten.
-- `log.error(code=event_store_unavailable)` plus Close `1011` ist ein
-  vorübergehender Ausfall des zuverlässigen Logpfads. Die Audioverbindung darf
-  unabhängig weiterlaufen.
-- Ein Commit-Wakeup darf zusammenfallen oder ausbleiben; der Server liest
-  selbstständig bis zum committed High-Watermark nach. Der Client muss keine
-  flüchtigen Payloadqueues kompensieren.
-
-Ein normaler Token bleibt auf seine Session und die drei erlaubten Channels
-begrenzt. Der Admin-Key wird nur im ersten Subscribe-Frame eingesetzt, nie in
-der URL. Ohne `sessionId` und ohne Channel-Filter erhält ein authentifizierter
-Admin serverweite Events einschließlich `system`.
-
-## Sessionlokale Triggerparameter
-
-Die Triggerquellen werden beim Upgrade festgelegt:
-
-```text
-/ws/transcribe?manualTriggerEnabled=true&wakeWordTriggerEnabled=false
-/ws/transcribe?manualTriggerEnabled=false&wakeWordTriggerEnabled=true&wakeWordEnabled=true
-/ws/transcribe?manualTriggerEnabled=true&wakeWordTriggerEnabled=true&wakeWordEnabled=true
-```
-
-| Parameter | Typ | Default | Bedeutung |
-| --- | --- | --- | --- |
-| `manualTriggerEnabled` | Bool | – | Manualtrigger darf eine Activation öffnen |
-| `wakeWordTriggerEnabled` | Bool | – | Wake Word darf eine Activation öffnen |
-| `initialSpeechTimeout` | Zahl 0.01–3600 | `15` | Wartezeit auf die erste Sprache |
-| `followupTimeout` | Zahl 0.01–3600 | `3` | Nachfragefenster nach einem Segment |
-| `segmentWatchdogInitialSeconds` | Zahl 0.01–3600 | `600` | Daueraufnahme-Watchdog beim Segmentstart |
-| `segmentWatchdogRefreshSeconds` | Zahl 0.01–3600 | `180` | Mindestrestzeit, die ein `refresh` sichert |
-| `segmentWatchdogWarningSeconds` | Zahl 0.01–3600 | `30` | Vorwarnung vor dem Watchdog-Ablauf |
-| `closingRecoveryTimeoutSeconds` | Zahl 0.01–3600 | `5` | Recoveryfrist in `closing_input` |
-
-`extensionSeconds` ist mit AP-SRV-030 entfallen; die additive Extend-Semantik
-ist kein gültiges Soll mehr. Ein Client, der den Parameter noch sendet, wird
-nicht abgelehnt — der Wert wird ignoriert.
-
-Wahrheitswerte: `true/1/yes/on` und `false/0/no/off`. Ein nicht
-interpretierbarer Wert wird **abgelehnt**, nicht als `false` gedeutet.
-
-Wird **keiner** der beiden Flags gesendet, bleibt die Session im
-**Legacy-Modus** und verhält sich exakt wie bisher. Wird mindestens einer
-gesendet, ist die Session `controlled`, und der weggelassene Wert gilt als
-`false`.
-
-Ablehnungen bei der Admission (jeweils `type: error`, `where: session_config`,
-Close `1008`):
-
-| Code | Anlass |
+| Feld | Typ / Regel |
 | --- | --- |
-| `activation_trigger_required` | beide Triggerflags `false` |
-| `activation_wake_word_unavailable` | Wake Word ist einzige Quelle, aber kein Wake-Word-Profil aktiv |
-| `invalid_activation_flag` | Flag ist kein Wahrheitswert |
-| `invalid_activation_timing` | Zeitwert keine Zahl oder außerhalb des Bereichs |
+| `supportedProtocolVersions` | nicht leere Liste von Ganzzahlen; muss `2` enthalten |
+| `clientVersion`, `clientCommit` | nicht leere Strings (`clientCommit` darf `"unknown"` sein) |
+| `clientRunId` | kanonische UUID (§3); identifiziert den Clientprozesslauf, vom Server nur syntaktisch geprüft |
+| `requestedSession.trigger.manual` / `.wakeWord` | Bool; mindestens einer `true` |
+| `requestedSession.wakeWordIds` | Liste kanonischer Katalog-IDs; nicht leer genau dann, wenn `trigger.wakeWord = true` |
+| `runtimeSuppression.manual` / `.wakeWord` | Bool; Anfangszustand der Laufzeit-Unterdrückung |
 
-Die tatsächlich wirksame Auflösung steht in `hello.activationConfig` und
-`ready.activationConfig`:
+Zusätzliche Felder werden ignoriert.
+
+### 2.2 `hello.accepted`
 
 ```json
 {
-  "version": 2,
-  "mode": "controlled",
-  "manualTriggerEnabled": true,
-  "wakeWordTriggerEnabled": false,
-  "wakeWordProfileEnabled": false,
-  "initialSpeechTimeout": 15.0,
-  "followupTimeout": 3.0,
-  "segmentWatchdogInitialSeconds": 600.0,
-  "segmentWatchdogRefreshSeconds": 180.0,
-  "segmentWatchdogWarningSeconds": 30.0,
-  "closingRecoveryTimeoutSeconds": 5.0
+  "type": "hello.accepted",
+  "protocolVersion": 2,
+  "sessionId": "20000000-0000-4000-8000-000000000001",
+  "serverVersion": "2.0.0",
+  "serverCommit": "unknown",
+  "snapshot": { "…": "vollständiger session.snapshot ohne type, siehe 05" }
 }
 ```
 
-## Capability-Vertrag
+Mit dem Senden von `hello.accepted` ist der Audiopfad geöffnet (es gibt kein
+`start`) und die `runtimeSuppression` gesetzt. `serverCommit` ist
+`VOICESTT_SERVER_COMMIT` oder `"unknown"`.
 
-Ein Client **muss** vor dem Senden eines Triggerkommandos prüfen, ob der Server
-den Vertrag anbietet. Die Capability steht in `hello.sessionCapabilities` und
-`ready.sessionCapabilities`:
-
-```json
-"activationTriggers": {
-  "supported": true,
-  "version": 2,
-  "sources": ["manual", "wake_word"],
-  "actions": ["activate", "refresh", "finish", "cancel"],
-  "commandType": "trigger",
-  "ackType": "trigger_ack",
-  "commandIdRequired": true,
-  "commandIdIdempotent": true,
-  "commandHistory": "session",
-  "activationIdValidated": true,
-  "audioAvailabilityCommandType": "audio_availability",
-  "audioAvailabilityAckType": "audio_availability_ack",
-  "activationEvents": ["activation.started", "activation.refreshed",
-                       "activation.closed", "watchdog.warning"]
-}
-```
-
-Fehlt der Block oder ist `supported` nicht `true`, verhält sich der Client wie
-gegen einen Legacyserver: nur `start`/`stop`, keine Triggerkommandos.
-
-## Triggerkommandos
+### 2.3 `protocol.incompatible` / `session.rejected`
 
 ```json
-{ "type": "trigger", "action": "activate", "source": "manual",
-  "commandId": "6f1c..." }
+{"type": "protocol.incompatible", "reason": "no_common_protocol_version",
+ "serverVersion": "2.0.0", "serverCommit": "unknown",
+ "supportedProtocolVersions": [2]}
 ```
-
-`action` ist eines von `activate`, `refresh`, `finish`, `cancel`. Die
-veraltete Schreibweise `extend` ist mit AP-SRV-070 entfallen: sie wird jetzt
-wie jede andere unbekannte Aktion mit `invalid_action` beantwortet. Ein Client,
-der sie noch sendet, muss auf `refresh` umgestellt werden.
-`source` ist `manual` oder `wake_word`. `commandId` ist ein nicht leerer String
-und wird vom Client erzeugt.
-
-Bei `refresh`, `finish` und `cancel` ist die vom Client beobachtete
-`activationId` **Pflicht** (AP-SRV-030 C2, F5). Eine fehlende oder leere ID wird
-als `invalid_payload` abgelehnt; eine alte ID wird `stale_activation` und ändert
-nichts. Bei `activate` ist das Feld verboten. Die Control-Aktionen sind
-**source-neutral** (F6): für sie wird kein `source` erwartet. Ein im
-v1-Übergang noch mitgesendetes `source` wird als Legacyfeld toleriert und
-ignoriert — es ist weder eine Berechtigung noch Teil der Replay-Identität.
-
-Jeder Befehl erhält **genau eine** Antwort — auch jede Ablehnung:
 
 ```json
-{ "type": "trigger_ack", "commandId": "6f1c...", "accepted": true,
-  "reason": "activated", "activationId": "a42...",
-  "phase": "waiting_first_speech", "sessionId": "s..." }
+{"type": "session.rejected", "reason": "invalid_requested_session",
+ "serverVersion": "2.0.0", "serverCommit": "unknown",
+ "supportedProtocolVersions": [2],
+ "errors": [{"field": "requestedSession.wakeWordIds", "code": "wake_word_unavailable",
+             "message": "'Hey Jarvis' ist keine kanonische Wake-Word-ID.",
+             "reason": "not_canonical", "wakeWordId": "Hey Jarvis"}]}
 ```
 
-Läuft bereits eine Activation, trägt auch eine Ablehnung deren `activationId`.
-
-| `reason` | `accepted` | Bedeutung |
+| `reason` | `errors[].code` | Ursache |
 | --- | --- | --- |
-| `activated` | true | neue Activation eröffnet |
-| `refreshed` | true | Follow-up- beziehungsweise Watchdog-Deadline neu gesetzt |
-| `finished` | true | Turn kontrolliert beendet |
-| `cancelled` | true | Turn verworfen |
-| `no_change` | true | idempotente Zustandsantwort; der gewünschte Zustand liegt bereits an |
-| `activation_locked` | false | `activate` traf eine nicht-idle Phase; die laufende Activation bleibt unverändert |
-| `invalid_phase` | false | `refresh` in `waiting_first_speech` |
-| `closing_input` | false | `refresh` während der Eingabebarriere |
-| `not_active` | false | keine Activation offen |
-| `stale_activation` | false | mitgeschickte `activationId` ist nicht die laufende |
-| `audio_unavailable` | false | `activate` bei `audioAvailable=false` |
-| `trigger_disabled` | false | diese Quelle ist für die Session nicht aktiviert |
-| `invalid_payload` | false | Befehl ist kein Objekt, oder `activate` trug eine `activationId` |
-| `missing_command_id` | false | `commandId` fehlt oder ist leer |
-| `invalid_command_id` | false | `commandId` ist kein String |
-| `invalid_action` | false | `action` unbekannt oder falscher Typ |
-| `invalid_source` | false | `source` unbekannt oder falscher Typ |
-| `command_id_conflict` | false | bekannte `commandId` mit abweichendem Payload |
-| `controlled_activation_disabled` | false | Session läuft im Legacy-Modus |
-| `stream_not_started` | false | Trigger vor `start` oder nach `stop` |
-| `session_closed` | false | Session ist bereits geschlossen |
+| `invalid_requested_session` | `activation_trigger_required` | beide Trigger `false` |
+| `invalid_requested_session` | `wake_word_selection_required` | Wake Word aktiv, aber keine IDs |
+| `invalid_requested_session` | `wake_word_selection_not_allowed` | Wake Word inaktiv, aber IDs gesendet |
+| `invalid_requested_session` | `wake_word_unavailable` (+ `reason`, `wakeWordId`) | ID nicht kanonisch, unbekannt, deaktiviert, nicht ladbar oder kein gemeinsames Backend – siehe [09](09-betriebsmodi-und-serverkonfiguration.md#wake-word-admission) |
+| `session_limit_reached` | `session_limit_reached` | `max_sessions` erreicht |
 
-> Hinweis: Die früher hier genannten Werte `merged` und `already_active`
-> stammen aus der Zeit vor AP-SRV-010. Seit First-Trigger-wins gibt es sie
-> nicht mehr; ein zweiter `activate` wird `activation_locked`.
+Ein `session.rejected` ist eine Konfigurationsablehnung: nicht automatisch mit
+unverändertem `hello` wiederholen (Ausnahme `session_limit_reached`, mit
+langem Backoff).
 
-### Phasenmatrix
+## 3. Identitäten
 
-| Phase | `activate` | `refresh` | `finish` / `cancel` |
+**Kanonische UUID** heißt: 36 Zeichen, Kleinbuchstaben, Bindestriche,
+`str(uuid.UUID(x)) == x`. Die Version wird nicht geprüft; Clients erzeugen
+UUIDv4. Großbuchstaben, 32-Hex ohne Bindestriche, Klammern oder Leerraum sind
+ungültig.
+
+| ID | Erzeuger | Lebensdauer | Hinweise |
 | --- | --- | --- | --- |
-| `idle` | gemäß effektiver Triggerquelle | `not_active` | `not_active` |
-| `waiting_first_speech` | `activation_locked` | `invalid_phase` | zulässig |
-| `segment_active` | `activation_locked` | `refreshed` (Watchdog) | zulässig |
-| `followup_wait` | `activation_locked` | `refreshed` (Follow-up) | zulässig |
-| `closing_input` | `activation_locked` | `closing_input` | `no_change` |
+| `clientRunId` | Client | ein Clientprozesslauf | bei Reconnects desselben Prozesses beibehalten; keine Serverfunktion außer Validierung |
+| `sessionId` | Server | eine Verbindung | in jedem Command mitsenden; nach Reconnect neu |
+| `commandId` | Client | Replay-Schlüssel dieser Session | pro logischem Command neu; Retries byte-gleich |
+| `activationId` | Server | eine Activation bis zu ihrem Terminal | nur in `refresh`/`finish`/`cancel` referenzieren |
+| `activationSequence` | Server | Ganzzahl, pro Session steigend | Ordnung von Activations |
+| `segmentId` | Server | ein Sprachsegment | Schlüssel für Transkripte |
+| `segmentSequence` | Server | Ganzzahl, pro Session steigend | Ordnung von Segmenten |
+| `eventId` | Server | ein logisches Event | bleibt bei Transport-Retry gleich |
+| `eventSeq` | Server | Ganzzahl ab 1, lückenlos | Ordnung und Lückenerkennung |
 
-### Idempotenz
+## 4. Commands
 
-Der Replaycache gilt für die **gesamte Session**.
-
-- gleiche `commandId`, semantisch gleicher Payload: **exakt dasselbe Ack**,
-  keine zweite Wirkung — kein neuer Timer, kein neues Event, kein zweites
-  Segment, kein zweites Cancel/Finish. Für `activate` zählt
-  `(action, source)` als Semantik, für Control-Aktionen `(action,
-  activationId)`; ein `source`-Wechsel eines Controls ist kein Konflikt (F6);
-- gleiche `commandId`, anderer Payload: `command_id_conflict`, die laufende
-  Activation bleibt unberührt;
-- ein fachlich abgelehntes Kommando **mit verwendbarer `commandId` belegt**
-  seinen Replayeintrag (F3): ein identisches Kommando erhält dieselbe Antwort,
-  eine andere Payload-Wiederverwendung erhält `command_id_conflict`. Nur
-  Kommandos ohne verwendbare `commandId` bleiben keyless.
-
-### Audioverfügbarkeit
+Gemeinsame Pflichtfelder:
 
 ```json
-{ "type": "audio_availability", "commandId": "3f0e...",
-  "audioAvailable": false }
+{"type": "<command>", "protocolVersion": 2,
+ "sessionId": "<eigene sessionId>", "commandId": "<neue UUID>"}
 ```
 
-Antwort ist ein `audio_availability_ack` mit `accepted`, `reason`,
-`audioAvailable`, `activationId`, `phase` und `sessionId`. `false` cancelt eine
-offene Activation, beendet aber **nicht** die Session; bereits veröffentlichter
-Text bleibt bestehen. Solange kein Audio verfügbar ist, wird `activate` mit
-`audio_unavailable` abgelehnt. Welches Gerät betroffen ist, erfährt der Server
-bewusst nicht.
+| Eingang | Reaktion |
+| --- | --- |
+| kein JSON / kein Objekt / unbekannter `type` | ignoriert, **kein Ack** |
+| `commandId` fehlt oder nicht kanonisch | ignoriert, **kein Ack** |
+| `protocolVersion` ≠ Ganzzahl `2`, `sessionId` nicht kanonisch | Ack `invalid_payload` |
+| wohlgeformte fremde `sessionId` | Ack `stale_session` (ohne Wirkung) |
+| typspezifischer Feldfehler | Ack `invalid_payload` |
+| zweites `hello` | ignoriert |
 
-### Verbindliche Clientregel
+Kein Command-Fehler schließt die Verbindung.
 
-```text
-Hotkey gedrückt
-→ commandId erzeugen
-→ pending
-→ trigger senden
-→ trigger_ack abwarten
-→ erst dann fachliches Feedback
-```
-
-Ein Tastendruck allein ist eine lokale Absicht. Vor dem Ack darf **kein**
-Accepted-Feedback ausgelöst werden. Ein wiederholtes Ack, ein Ack für ein
-unbekanntes Kommando und ein Ack aus einer älteren Verbindungsgeneration
-müssen verworfen werden, damit kein zweiter Feedbackimpuls entsteht.
-
-### Kollisionsverhalten
-
-```mermaid
-sequenceDiagram
-    participant C as Client
-    participant S as Server-Session
-    participant A as ActivationController
-    participant G as Controlled Gate
-
-    C->>S: trigger activate (manual)
-    S->>A: activate("manual")
-    A-->>S: activated, primarySource=manual
-    S->>G: open(activationId, generation)
-    S-->>C: trigger_ack accepted
-
-    Note over S: kurz darauf erkennt der Server ein Wake Word
-    S->>A: activate("wake_word")
-    A-->>S: activation_locked, primarySource bleibt manual
-    Note over G: dieselbe Activation, kein zweites Öffnen
-```
-
-Aus `Manual → Wake Word`, `Wake Word → Manual` und aus nahezu gleichzeitigen
-Triggern entsteht jeweils **genau eine** Activation, **ein** Segment, **ein**
-Final und **eine** Schedulerbelegung. `primarySource` bleibt die Quelle des
-ersten Triggers.
-
-## Sessionlokale Wake-Word-Parameter
-
-
-Das Wake-Word-Profil dieser Session wird beim Upgrade festgelegt:
-
-```text
-/ws/transcribe?wakeWordEnabled=false
-/ws/transcribe?wakeWordEnabled=true&wakeWords=hey_jarvis
-```
-
-Unterstützte Queryparameter sind `wakeWordEnabled`, `wakeWordBackend`,
-`wakeWords`, `wakeWordInferenceFramework`, `wakeWordSensitivity`, `wakeWordActivationDelay`,
-`wakeWordTimeout`, `wakeWordBufferDuration` und
-`wakeWordFollowupWindow`. Die vollständigen Regeln, Fallbacks und
-Clientabläufe stehen unter
-[Triggerquellen und sessionlokale Wake-Word-Konfiguration](09-betriebsmodi-und-serverkonfiguration.md).
-
-Der Server bestätigt nicht nur die Anfrage, sondern die tatsächlich wirksame
-Konfiguration in `hello.sessionConfig` und `ready.sessionConfig`. Interne
-Modellpfade werden dabei nicht veröffentlicht.
-
-## Clientbefehle
-
-Jeder Textframe muss als JSON-Objekt dekodierbar sein.
-
-| Befehl | Payload | Wirkung | Direkte Antwort |
-| --- | --- | --- | --- |
-| Start | `{"type":"start"}` | aktiviert die Audioannahme der Session | ein oder mehrere `status`-Events |
-| Stop | `{"type":"stop"}` | stoppt Streaming, flusht gepuffertes Audio und setzt Status `idle` | `status`; ein ausstehendes `final` kann danach noch folgen |
-| Clear | `{"type":"clear"}` | erhöht Generation, bricht Sessionjobs ab, abortiert Recorder und leert Segment-Timeline | `clear`, danach `status` |
-| Ping | `{"type":"ping"}` | misst Anwendungs-Roundtrip | `pong` |
-| Metrics | `{"type":"metrics"}` | fordert Session-Snapshot an | `metrics` |
-| Trigger | `{"type":"trigger","action":…,"source":…,"commandId":…}` | steuert die Activation; nur wenn die Capability `activationTriggers` gemeldet ist | genau ein `trigger_ack` |
-
-Für `start` und `stop` gibt es kein separates Ack mit Request-ID. Der neue
-Zustand wird über `status` beobachtet. `trigger` ist der einzige Befehl mit
-einer eigenen korrelierten Antwort. Unbekannte Befehle erzeugen `error` mit
-`where: "command"`.
-
-### Reihenfolge beim Start
+### 4.1 `activation.command`
 
 ```json
-{"type":"start"}
+{"type": "activation.command", "protocolVersion": 2,
+ "sessionId": "20000000-0000-4000-8000-000000000001",
+ "commandId": "50000000-0000-4000-8000-000000000001",
+ "action": "activate", "source": "manual"}
 ```
 
-Erst danach:
-
-```text
-binary audio packet 1
-binary audio packet 2
-...
+```json
+{"type": "activation.command", "protocolVersion": 2,
+ "sessionId": "20000000-0000-4000-8000-000000000001",
+ "commandId": "50000000-0000-4000-8000-000000000002",
+ "action": "finish", "activationId": "30000000-0000-4000-8000-000000000001"}
 ```
 
-Audio vor `start` wird im produktiven Recorderpfad abgelehnt. Der WebSocket
-bleibt offen; der Client erhält ein `warning`.
-
-## Binäres Audiopaket
-
-### Byte-Layout
-
-```text
-Offset  Länge                 Inhalt
-0       4 Byte                metadataLength, unsigned 32-bit, Little Endian
-4       metadataLength        UTF-8-kodiertes JSON-Objekt
-4+n     restliche Bytes       interleaved PCM signed 16-bit Little Endian
-```
-
-```mermaid
-flowchart LR
-    A["4 Byte\nmetadataLength\nuint32 LE"] --> B["n Byte\nMetadaten-JSON\nUTF-8"] --> C["Rest\nPCM-Audio\ns16le interleaved"]
-```
-
-Das Diagramm ist schematisch; JSON und Audio haben variable Länge.
-
-### Metadaten
-
-| Feld | Typ | Pflicht | Regel |
+| `action` | Pflicht | verboten | Bedeutung |
 | --- | --- | --- | --- |
-| `sampleRate` | positive Ganzzahl | ja | Quell-Abtastrate; Server resampelt auf 16 kHz |
-| `channels` | positive Ganzzahl | nein | Standard `1`, maximal `8` |
-| `format` | String | nein | Standard und einzig unterstützter Wert: `pcm_s16le` |
-| `frames` | positive Ganzzahl | nein | Wenn gesetzt, muss `frames × channels × 2` exakt der PCM-Länge entsprechen |
+| `activate` | `source: "manual"` | Schlüssel `activationId` | neue Activation öffnen (z. B. PTT gedrückt) |
+| `refresh` | `activationId` | Schlüssel `source` | Frist verlängern |
+| `finish` | `activationId` | Schlüssel `source` | Eingabe geordnet schließen; aufgenommene Segmente werden transkribiert (PTT losgelassen) |
+| `cancel` | `activationId` | Schlüssel `source` | Eingabe schließen und Ergebnisse verwerfen |
 
-Beispiel:
+`source: "wake_word"` und `action: "extend"` sind immer `invalid_payload`.
+
+Ergebnisse je Lage:
+
+| Aktion | Lage | `result` |
+| --- | --- | --- |
+| `activate` | `audioAvailable = false` | `audio_unavailable` |
+| `activate` | Vordergrund nicht `idle` | `activation_locked` |
+| `activate` | `manual` nicht konfiguriert oder unterdrückt | `trigger_suppressed` (danach Event `activation.trigger_suppressed`) |
+| `activate` | sonst | `applied` |
+| Control | Vordergrund `idle` | `not_active` |
+| Control | andere `activationId` als die offene | `stale_activation` |
+| `refresh` | `waiting_first_speech` | `invalid_phase` |
+| `refresh` | `segment_active` | `applied` – Frist = max(aktuell, jetzt + `segmentWatchdogRefreshMs`) |
+| `refresh` | `followup_wait` | `applied` – Frist = jetzt + `followupTimeoutMs` |
+| `refresh` | `closing_input` | `closing_input` |
+| `finish`/`cancel` | offene Phase | `applied` (→ `closing_input`) |
+| `finish`/`cancel` | `closing_input` | `no_change` |
+
+Ein `refresh`, der eine längere Frist nicht verkürzen würde, ist ebenfalls
+`applied`, erzeugt aber kein Event und keinen `stateVersion`-Anstieg.
+
+### 4.2 `trigger_suppression.set`
+
+```json
+{"type": "trigger_suppression.set", "protocolVersion": 2,
+ "sessionId": "…", "commandId": "…", "manual": false, "wakeWord": true}
+```
+
+Beide Bools Pflicht. `applied` bei Änderung, sonst `no_change`. Wirkt auf
+künftige Trigger, beendet keine laufende Activation. Eigenes Event gibt es
+nicht; der neue Zustand steht im Snapshot unter `trigger`.
+
+### 4.3 `audio_availability.set`
+
+```json
+{"type": "audio_availability.set", "protocolVersion": 2,
+ "sessionId": "…", "commandId": "…", "audioAvailable": false}
+```
+
+Meldet generisch, ob der Client ein Eingabegerät hat. `false` bricht eine
+offene Activation ab (`activation.input_closed` mit `reason = "cancelled"`,
+`causedByCommandId = null`) und sperrt neue Activations; Audioframes werden
+weiterhin angenommen. `applied`/`no_change`.
+
+### 4.4 `session_settings.patch`
+
+```json
+{"type": "session_settings.patch", "protocolVersion": 2,
+ "sessionId": "…", "commandId": "…",
+ "baseSettingsRevision": 0,
+ "changes": {"activation.followupTimeoutMs": 4000}}
+```
+
+`baseSettingsRevision` Ganzzahl ≥ 0, `changes` nicht leeres Objekt. Semantik,
+Schlüssel und Fehlercodes: [09](09-betriebsmodi-und-serverkonfiguration.md#session-settings).
+
+### 4.5 `session.snapshot.request`
+
+```json
+{"type": "session.snapshot.request", "protocolVersion": 2,
+ "sessionId": "…", "commandId": "…"}
+```
+
+Antwort: `command.ack` mit `applied`, danach ein `session.snapshot`
+([05](05-client-zustandsmodell.md#2-sessionsnapshot)). Keine Zustandsänderung.
+
+## 5. `command.ack`
 
 ```json
 {
-  "sampleRate": 48000,
-  "channels": 1,
-  "format": "pcm_s16le",
-  "frames": 1920
+  "type": "command.ack",
+  "protocolVersion": 2,
+  "sessionId": "20000000-0000-4000-8000-000000000001",
+  "commandId": "50000000-0000-4000-8000-000000000001",
+  "accepted": true,
+  "result": "applied",
+  "activationId": "30000000-0000-4000-8000-000000000001",
+  "inputPhase": "waiting_first_speech",
+  "stateVersion": 1,
+  "settingsRevision": 0
 }
 ```
 
-### Validierungsgrenzen
+| Feld | Bedeutung |
+| --- | --- |
+| `accepted` | `true` genau für `applied` und `no_change` |
+| `result` | einer der 15 Codes unten |
+| `activationId`, `inputPhase` | Vordergrund-Activation und -Phase beim Beantworten (`null` / `"idle"`) |
+| `stateVersion` | Version des vom Command bewirkten Zustands (bei `finish`/`cancel`: Eintritt in `closing_input`) |
+| `settingsRevision` | aktuelle Session-Settingsrevision |
+| `errors[]` | nur bei `settings_revision_conflict` und `settings_rejected`: `{field, code, message}` |
 
-- Metadaten-JSON: maximal 64 KiB.
-- PCM-Nutzlast: `max_audio_packet_bytes`, standardmäßig 512 KiB.
-- PCM-Länge muss durch `channels × 2` teilbar sein.
-- Mehrkanal-Audio wird durch arithmetisches Mitteln nach Mono konvertiert.
-- Audio wird auf 16 kHz resampelt (SciPy Polyphase, mit Interpolations-Fallback).
-- Ein leeres, formal korrektes Paket wird ignoriert, nicht als Sprache behandelt.
+**Reihenfolge:** Events, die ein Command auslöst, werden **vor** seinem Ack
+gesendet; nur `activation.trigger_suppressed` folgt dem Ack. Ein Ack kann daher
+eine kleinere `stateVersion` tragen als bereits empfangene Events – das Ack
+bestätigt das Command, den aktuellen Zustand liefern Events und Snapshot.
 
-Fehler in Layout oder Metadaten erzeugen `error` mit
-`where: "audio_packet"`; unerwartete Verarbeitungsfehler verwenden
-`where: "audio"`.
+| `result` | `accepted` | Bedeutung | empfohlene Reaktion |
+| --- | --- | --- | --- |
+| `applied` | ✓ | Wirkung eingetreten | Events abwarten |
+| `no_change` | ✓ | Zielzustand bestand schon | nichts |
+| `activation_locked` | ✗ | es ist bereits eine Activation offen | UI an Serverzustand angleichen |
+| `not_active` | ✗ | Control ohne offene Activation | lokale Activation verwerfen |
+| `invalid_phase` | ✗ | `refresh` vor dem ersten Sprechen | später erneut |
+| `closing_input` | ✗ | `refresh` während des Schließens | nichts |
+| `stale_session` | ✗ | Command mit fremder `sessionId` | Clientfehler: aktuelle `sessionId` verwenden |
+| `stale_activation` | ✗ | Control für eine nicht (mehr) offene Activation | Snapshot anfordern |
+| `command_id_conflict` | ✗ | `commandId` mit anderem Payload wiederverwendet | Clientfehler: neue `commandId` |
+| `invalid_payload` | ✗ | Envelope-/Feldfehler | Clientfehler; nicht wiederholen |
+| `trigger_suppressed` | ✗ | Quelle unterdrückt oder nicht konfiguriert | Trigger-UI sperren |
+| `audio_unavailable` | ✗ | `activate` ohne Eingabegerät | Gerät melden |
+| `settings_revision_conflict` | ✗ | veraltete `baseSettingsRevision` | Snapshot lesen, neu anwenden |
+| `settings_rejected` | ✗ | Werte ungültig | `errors[]` anzeigen |
+| `internal_error` | ✗ | unerwarteter Serverzustand | loggen, Snapshot/Reconnect |
 
-### Referenzencoder in JavaScript
+### 5.1 Replay und Konflikte
 
-```js
-function encodeAudioPacket(metadata, pcm16) {
-  const metadataBytes = new TextEncoder().encode(JSON.stringify(metadata));
-  const audioBytes = new Uint8Array(
-    pcm16.buffer,
-    pcm16.byteOffset,
-    pcm16.byteLength,
-  );
-  const packet = new ArrayBuffer(4 + metadataBytes.byteLength + audioBytes.byteLength);
-  const view = new DataView(packet);
-  view.setUint32(0, metadataBytes.byteLength, true); // Little Endian
-  new Uint8Array(packet, 4, metadataBytes.byteLength).set(metadataBytes);
-  new Uint8Array(packet, 4 + metadataBytes.byteLength).set(audioBytes);
-  return packet;
-}
+* Gleiche `commandId` + gleicher Payload → dasselbe Ack wie beim ersten Mal (mit den damaligen `stateVersion`/`settingsRevision`), keine zweite Wirkung, keine neuen Events. Bei `session.snapshot.request` folgt trotzdem ein neuer Snapshot.
+* Gleiche `commandId` + anderer Payload → `command_id_conflict`; das erste Ergebnis bleibt maßgeblich.
+* Bei `activation.command` und `audio_availability.set` vergleicht der Server die Semantik (unbekannte Zusatzfelder machen keinen Konflikt); bei den übrigen Typen den ganzen Payload. Clientregel: Retries byte-gleich senden.
+* Der Replay-Cache lebt so lange wie die Session.
 
-const pcm = new Int16Array(/* mono PCM samples */);
-socket.send(encodeAudioPacket({
-  sampleRate: audioContext.sampleRate,
-  channels: 1,
-  format: "pcm_s16le",
-  frames: pcm.length,
-}, pcm));
-```
+## 6. Nicht quittierte Eingaben
 
-Der mitgelieferte Browserclient bündelt ungefähr 40 ms Audio pro Paket. Das ist
-eine praktische Referenz, aber keine serverseitig erzwungene Paketdauer.
+| Eingabe nach `hello.accepted` | Verhalten |
+| --- | --- |
+| nicht parsebares JSON | ignoriert |
+| unbekannter `type` | ignoriert |
+| Command ohne kanonische `commandId` | ignoriert |
+| ungültiges Audioframe | verworfen |
+| gültiges Audioframe | verarbeitet; nie quittiert |
 
-## Segmentvertrag
+Ein Client darf deshalb nicht auf eine Fehlermeldung für diese Fälle warten.
+Für jedes Command mit kanonischer `commandId` gilt: ausbleibendes Ack =
+Verbindungsproblem.
 
-### Identität
+## 7. Audioframe
 
-- Segment-IDs beginnen je Session bei `1`.
-- Alle Realtime-Versionen einer laufenden Äußerung verwenden dieselbe
-  `segmentId`.
-- Das zugehörige `final` verwendet ebenfalls diese `segmentId` und schließt das
-  Segment ab.
-- Danach beginnt die nächste Äußerung mit der nächsten ID.
-- `clear` erhöht die ID und sendet sie als `nextSegmentId`; bereits verwendete
-  IDs werden innerhalb derselben Verbindung nicht wiederverwendet.
-- Nach Reconnect startet eine neue Session wieder unabhängig bei `1`.
-
-### Empfohlene Merge-Regel
+Identisch mit dem Legacy-V1-Format. Alle Mehrbyte-Zahlen Little-Endian.
 
 ```text
-realtime(segmentId=N): upsert N als vorläufig; Text vollständig ersetzen
-final(segmentId=N):    upsert N als final; finalen Text vollständig setzen
-clear:                 alle Segmente entfernen
+┌──────────────────────┬──────────────────────────────┬─────────────────────────────┐
+│ uint32 LE: N         │ N Bytes UTF-8 JSON-Objekt    │ PCM, signed 16 bit LE,      │
+│ (Metadatenlänge)     │ (Metadaten)                  │ Kanäle interleaved          │
+└──────────────────────┴──────────────────────────────┴─────────────────────────────┘
+ Byte 0..3             Byte 4..4+N-1                  Byte 4+N..Ende
 ```
 
-`stableDelta` ist hilfreich für Animationen oder inkrementelles Rendering, aber
-der robuste Primärpfad ist stets der vollständige `displayText` bzw. `text`.
+Es gibt **kein** Magic, keine Versionsnummer und keine Flags.
 
-### Realtime-Felder und Stabilisierung
+| Metadatum | Pflicht | Regel |
+| --- | --- | --- |
+| `sampleRate` | ja | positive Ganzzahl; jede Rate, der Server resampelt auf 16 000 Hz |
+| `channels` | nein, Standard 1 | Ganzzahl 1–8; der Server mittelt auf Mono |
+| `format` | nein, Standard `"pcm_s16le"` | nur `"pcm_s16le"` |
+| `frames` | nein | falls vorhanden: `frames × channels × 2` = Nutzlastlänge |
 
-Im produktiven Recorderpfad enthält `realtime` neben dem öffentlichen Text auch
-Roh-, Stable-, Unstable- und Consensus-Ansichten. Diese Werte beschreiben
-verschiedene Stufen des internen Textstabilisierers:
+Grenzen: `N` ≤ 65 536 Bytes; Nutzlast ≤ `max_audio_packet_bytes`
+(Standard 524 288 Bytes, sichtbar in `GET /api/config`); Nutzlastlänge ist
+Vielfaches von `channels × 2`. Weitere Metadatenfelder werden ignoriert.
 
-- `rawText`: aktuelle rohe Modellbeobachtung.
-- `displayText`: empfohlener vollständiger UI-Text.
-- `stableText` / `committedStableText`: bereits bestätigter Präfix.
-- `unstableText`: aktuell revidierbarer Rest.
-- `consensusDisplayText`: aus dem Beobachtungskonsens abgeleitete Anzeige.
-- `stableDelta`: seit dem letzten Event neu bestätigter Text.
-- `internalRevision`, `isOutlier`, `stablePrefixConflict`: Diagnosesignale.
+Referenz-Encoder (Python):
 
-Für einen normalen Client gilt: `displayText ?? text` anzeigen und beim
-`final`-Event durch `final.text` ersetzen.
+```python
+import json, struct
 
-## Zeitstempel
-
-Eventzeiten sind Server-Wallclock-Zeit:
-
-```json
-{
-  "timestamp": 1784541600.123,
-  "timestampIso": "2026-07-20T10:00:00.123Z"
-}
+def encode_frame(pcm_s16le: bytes, sample_rate: int, channels: int = 1) -> bytes:
+    meta = json.dumps({
+        "sampleRate": sample_rate,
+        "channels": channels,
+        "format": "pcm_s16le",
+        "frames": len(pcm_s16le) // (2 * channels),
+    }, separators=(",", ":")).encode("utf-8")
+    return struct.pack("<I", len(meta)) + meta + pcm_s16le
 ```
 
-Sie eignen sich für Anzeige und Timeline-Korrelation, nicht für eine präzise
-Roundtripmessung zwischen Rechnern. Dafür sendet der Client `ping`, misst lokal
-mit einer monotonen Uhr und beendet die Messung beim zugehörigen nächsten
-`pong`. Das Protokoll enthält derzeit keine Ping-ID; parallele Pings sollten
-deshalb vermieden werden.
-
-## Verbindungsende und Reconnect
-
-- Bei Sessionüberlast schließt der Server nach dem Admission-Fehler mit Code
-  `1013` („Try Again Later“).
-- Bei gewöhnlichem Disconnect sendet der Server kein Abschluss-Event mehr.
-- Reconnect ist eine neue Session und erfordert erneut `hello` → `ready` →
-  `start`.
-- Audioframes aus der alten Verbindung dürfen nicht gepuffert und ungeprüft in
-  die neue Session übertragen werden; sie würden neue VAD-/Segmentgrenzen
-  verfälschen.
-- Wenn lokale Audiopuffer über einen Disconnect hinweg erhalten bleiben sollen,
-  braucht der Client dafür eine eigene, explizite Produktentscheidung. Das
-  Serverprotokoll bietet keine Resume-ID oder Replay-Bestätigung.
-
-## Minimaler Clientablauf
+Referenz-Encoder (JavaScript, wie `app_browserclient/client.js`):
 
 ```js
-const ws = new WebSocket("wss://stt.voice.marcosudau.com/ws/transcribe");
-let ready = false;
-let sessionId = null;
-
-ws.onmessage = ({ data }) => {
-  const event = JSON.parse(data);
-  if (event.type === "hello") sessionId = event.sessionId;
-  if (event.type === "ready") ready = event.ok === true;
-  dispatchServerEvent(event);
-};
-
-async function startMicrophone() {
-  if (!ready || ws.readyState !== WebSocket.OPEN) return;
-  ws.send(JSON.stringify({ type: "start" }));
-  // Danach PCM-Pakete senden.
-}
-
-function stopMicrophone() {
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify({ type: "stop" }));
-  }
-}
+const meta = new TextEncoder().encode(JSON.stringify({
+  sampleRate, channels: 1, format: "pcm_s16le", frames: pcm.length,
+}));
+const len = new DataView(new ArrayBuffer(4));
+len.setUint32(0, meta.byteLength, true);           // little-endian
+socket.send(new Blob([len.buffer, meta, pcm]));  // pcm: Int16Array – die View,
+                                                  // nicht pcm.buffer (Subarray-Offset!)
 ```
 
-Eine vollständige Reducer-Strategie steht unter
-[Client-Zustandsmodell](05-client-zustandsmodell.md).
+Empfehlungen:
+
+* Audio nach `hello.accepted` **kontinuierlich** senden, auch ohne offene Activation – Wake Word und Sprachbeginn werden serverseitig erkannt.
+* Float-Samples auf [-1, 1] begrenzen, dann auf Int16 skalieren.
+* Gleichmäßige Pakete von 20–100 ms (Browserclient: ~40 ms bei 48 kHz).
+* Fällt das Mikrofon aus: `audio_availability.set` mit `false`; kein Audio mehr senden.
+
+## 8. Close-Codes
+
+| Code | Wann | Nachricht davor |
+| --- | --- | --- |
+| `4400` | erstes Frame kein gültiges `hello`, nicht parsebar oder binär | keine |
+| `4406` | keine gemeinsame Protokollversion | `protocol.incompatible` |
+| `4408` | kein Frame binnen 10 s nach dem Öffnen | keine |
+| `4409` | Sessionadmission abgelehnt | `session.rejected` |
+| `1011` | unerwarteter Serverfehler (Handshake oder später) | keine |
+
+Nach der Annahme schließt der Server nur bei internem Fehler oder beim
+Herunterfahren. Ein Verbindungsende beendet die Session vollständig; siehe
+[Reconnect](05-client-zustandsmodell.md#5-reconnect).

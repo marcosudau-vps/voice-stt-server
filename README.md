@@ -248,8 +248,12 @@ path. v1 and v2 are isolated at the transport level and never fall back into
 each other.
 
 Full endpoint reference: [docs/fastapi-server.md](docs/fastapi-server.md).
-Complete wire contract, event catalog and client state model:
-[docs/client-development](docs/client-development/README.md).
+The canonical v2 client contract (handshake, commands, acks, events, audio
+framing, snapshot/resync, wake words, settings) starts at
+[docs/client-development/README.md](docs/client-development/README.md).
+Legacy v1 documentation is kept separately under
+[docs/client-development/legacy-v1](docs/client-development/legacy-v1/README.md)
+and must not be used for new clients.
 
 ---
 
