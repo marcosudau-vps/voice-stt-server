@@ -1,8 +1,9 @@
 # AP-SRV-080: Soll-/Ist-Vergleich
 
 **Datum:** 28.09.2026
-**Status:** Prüfung offen – lokale Abnahme vollständig grün, öffentliche CI ausstehend
+**Status:** Abgeschlossen
 **Integrationsbasis:** `05a525b8c0667f1c14de328f2b3c7b986b048359`
+**Veröffentlichter Implementierungscommit:** `d410fc61ecf2471bd36d981067460277b132920c`
 
 ## Plan gegen Implementierung
 
@@ -18,7 +19,7 @@
 | Aktive Dokumentation | vollständig | V2-Handshake, 18 Events, Lebenszyklus, Reducer, Authentifizierung, Logging, Betrieb und Architektur aktualisiert |
 | Historische Auditspur | vollständig | Ursprüngliche Audits bleiben auf `f7d2b3c…` bezogen; datierter Follow-up-Bericht beschreibt die spätere Änderung |
 | Lokale Gesamtverifikation | vollständig | siehe Testevidenz unten |
-| Öffentliche Windows-/Linux-CI | offen | wird nach Push ergänzt; bis dahin bleibt der Registerstatus `Prüfung offen` |
+| Öffentliche Windows-/Linux-CI | vollständig | [CI-Lauf 36448981547](https://github.com/marcosudau-vps/voice-stt-server/actions/runs/36448981547): [Ubuntu 24.04](https://github.com/marcosudau-vps/voice-stt-server/actions/runs/36448981547/job/109018513901) und [Windows](https://github.com/marcosudau-vps/voice-stt-server/actions/runs/36448981547/job/109018513661) erfolgreich |
 
 ## Lokale Testevidenz
 
@@ -49,8 +50,11 @@ dokumentiert. Der lokale Wiederherstellungs-WIP entstand während der
 Verlustanalyse vor der formalen AP-Registrierung. Vor Commit und Push wurde er
 gesichert, auf die gemergte PR-#2-Basis gesetzt und vollständig neu geprüft.
 
-## Abschlussbedingung
+## Veröffentlichung und Abschluss
 
-Nach Push werden Commit-SHA und öffentliche CI-Läufe für Ubuntu 24.04 und
-Windows ergänzt. Erst wenn beide erfolgreich sind, werden dieser Bericht und
-der zentrale Registereintrag auf `Abgeschlossen` gesetzt.
+Der Implementierungscommit `d410fc61ecf2471bd36d981067460277b132920c`
+ist auf `origin/feat/einheitliche-triggerarchitektur-distributed`
+veröffentlicht. Der öffentliche CI-Lauf `36448981547` hat Paketbau,
+Wheel-Installation, Installations-Smoke, `pip check`, vollständige Unit-Suite
+und `git diff --check` auf Ubuntu 24.04 und Windows erfolgreich abgeschlossen.
+Damit sind alle Abnahmekriterien erfüllt und AP-SRV-080 ist abgeschlossen.

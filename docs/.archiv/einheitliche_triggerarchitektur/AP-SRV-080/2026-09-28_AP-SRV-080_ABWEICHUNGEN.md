@@ -1,7 +1,7 @@
 # AP-SRV-080: Abweichungen
 
 **Datum:** 28.09.2026
-**Status:** In Umsetzung
+**Status:** Abgeschlossen
 
 ## A-01: Lokaler Wiederherstellungsstand entstand vor der Archivregistrierung
 
@@ -20,6 +20,6 @@ wurde der Stand jedoch gesichert, PR #2 als Dokumentationsbasis gemergt, diese
 Planung angelegt und der gesamte Umfang erneut gegen Plan und Tests geprüft.
 
 **Entscheidung und weiterer Status.** Der WIP wird nicht als historische
-Planung ausgegeben. Diese Abweichung bleibt dauerhaft dokumentiert. Die Aktion
-kann erst nach vollständigem Soll-/Ist-Vergleich und öffentlicher CI auf
-`Abgeschlossen` gesetzt werden.
+Planung ausgegeben. Diese Abweichung bleibt dauerhaft dokumentiert. Die
+vollständige Soll-/Ist-Prüfung und die öffentliche CI auf Windows und Linux
+sind erfolgreich; die Aktion ist abgeschlossen.

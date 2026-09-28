@@ -95,7 +95,7 @@ Bericht und Evidence sowie den Umsetzungsvergleich.
 | AP-SRV-050 Settings-Control-Plane | Root PASS | [AP-SRV-050](einheitliche_triggerarchitektur/AP-SRV-050/) |
 | AP-SRV-060 Wake-Word-Katalog, Detection und Audiogrenze | **Pending Root Review** (Run 01 ROOT FAIL, Run 02 ROOT FAIL, Run 03 Korrektur eingereicht) | [AP-SRV-060](einheitliche_triggerarchitektur/AP-SRV-060/) |
 | AP-SRV-070 Serverbereinigung und Produktionshaertung | In Umsetzung (W5-R04 Release-Infrastruktur und Dokumentations-Rebaseline eingereicht, Root Review ausstehend) | [AP-SRV-070](einheitliche_triggerarchitektur/AP-SRV-070/) |
-| AP-SRV-080 V2-Realtime- und Session-Logzugriff | Prüfung offen (lokal vollständig grün; öffentliche CI ausstehend) | [AP-SRV-080](einheitliche-triggerarchitektur/AP-SRV-080/) |
+| AP-SRV-080 V2-Realtime- und Session-Logzugriff | Abgeschlossen | [AP-SRV-080](einheitliche_triggerarchitektur/AP-SRV-080/) |
 
 Die Gesamtaktion bleibt `In Umsetzung`, bis auch die verbleibenden
 Arbeitspakete abgenommen und Umsetzung, Gegenprüfung,
