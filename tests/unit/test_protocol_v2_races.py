@@ -604,6 +604,64 @@ class SegmentActivationCorrelationInvariantTests(unittest.TestCase):
         ]
         self.assertEqual(accepted, [])
 
+    def test_first_mapping_never_adopts_foreign_foreground_activation(self):
+        state = ProtocolSessionState(schema.new_canonical_id())
+        projector = EventProjector(state)
+        original_activation = schema.new_canonical_id()
+        foreign_activation = schema.new_canonical_id()
+        foreign_context = ProjectionContext(
+            phase=schema.WAITING_FIRST_SPEECH,
+            activation_id=foreign_activation,
+            activation_sequence=2,
+        )
+        # Erste Beobachtung ohne explizite Payload-Activation: trotz Sequenz
+        # darf die fremde Vordergrund-Activation nicht als autoritativ
+        # übernommen und kein Event mit erfundener Activation erzeugt werden.
+        produced = projector.project(
+            "transcription_started",
+            {"segmentId": "s-fix01-first", "segmentSequence": 5},
+            foreign_context,
+        )
+        self.assertEqual(
+            [e for e in produced if e["type"] == schema.EVENT_TRANSCRIPTION_ACCEPTED],
+            [],
+        )
+        self.assertIsNone(projector._segments.get("s-fix01-first"))
+        self.assertEqual(projector.segment_mismatches(), {})
+
+        # Die spätere korrekte Zuordnung gewinnt und bleibt danach stabil.
+        original_context = ProjectionContext(
+            phase=schema.SEGMENT_ACTIVE,
+            activation_id=original_activation,
+            activation_sequence=1,
+        )
+        recorded = projector.project(
+            "recording_started",
+            {
+                "segmentId": "s-fix01-first",
+                "segmentSequence": 5,
+                "activationId": original_activation,
+            },
+            original_context,
+        )
+        self.assertTrue(
+            [e for e in recorded if e["type"] == schema.EVENT_SEGMENT_RECORDING_STARTED]
+        )
+        late = projector.project(
+            "transcription_started",
+            {
+                "segmentId": "s-fix01-first",
+                "segmentSequence": 5,
+                "activationId": foreign_activation,
+            },
+            foreign_context,
+        )
+        late_accepted = [
+            e for e in late if e["type"] == schema.EVENT_TRANSCRIPTION_ACCEPTED
+        ]
+        self.assertEqual(len(late_accepted), 1)
+        self.assertEqual(late_accepted[0]["activationId"], original_activation)
+
 
 @unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
 class SessionCloseRaceTests(unittest.TestCase):

@@ -194,7 +194,14 @@ class EventProjector:
         sequence = payload.get("segmentSequence")
         if sequence is None and context.active_segment_id == segment_id:
             sequence = context.active_segment_sequence
-        activation_id = payload.get("activationId") or context.activation_id
+        # Even on first sight a segment mapping must not adopt the current
+        # foreground activation as authoritative identity: only an explicit
+        # payload activation confirms the correlation. Otherwise a delayed
+        # first observation under an already opened newer activation would
+        # permanently pin the foreign activation.
+        activation_id = payload.get("activationId")
+        if activation_id is None:
+            return
         if sequence is None:
             return
         try:
