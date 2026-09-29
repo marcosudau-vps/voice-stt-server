@@ -1725,5 +1725,53 @@ class ControlledRecordingAdmissionTests(unittest.TestCase):
                 )
 
 
+class SegmentActivationCorrelationNoRegressionTests(unittest.TestCase):
+    """AP-SRV-080-FIX-01 Test C – Keine Regression im Normalbetrieb."""
+
+    def setUp(self):
+        GateAwareRecorder.instances = []
+        self.app = build_app()
+
+    def test_normal_recording_final_and_two_serial_segments(self):
+        with TestClient(self.app) as client:
+            with ControlledSessionHarness(
+                client, "manualTriggerEnabled=true&wakeWordTriggerEnabled=false"
+            ) as session:
+                session.send({"type": "start"})
+                session.send({
+                    "type": "trigger",
+                    "action": "activate",
+                    "source": "manual",
+                    "commandId": "fix01-normal-1",
+                })
+                activation_id = session.drain("trigger_ack")["activationId"]
+
+                session.socket.send_bytes(speech_packet())
+                first_started = session.timeline("recording_started")
+                session.recorder().flush_buffered_audio()
+                session.timeline("recording_ended")
+                session.timeline("transcription_started")
+                first_final = session.drain("final")
+
+                session.socket.send_bytes(speech_packet())
+                second_started = session.timeline("recording_started")
+                session.recorder().flush_buffered_audio()
+                session.timeline("recording_ended")
+                session.timeline("transcription_started")
+                second_final = session.drain("final")
+
+                for event in (first_started, second_started):
+                    self.assertEqual(event["activationId"], activation_id)
+                self.assertNotEqual(
+                    first_started["segmentId"], second_started["segmentId"]
+                )
+                self.assertEqual(
+                    [first_final["segmentSequence"], second_final["segmentSequence"]],
+                    [1, 2],
+                )
+                self.assertEqual(first_final["activationId"], activation_id)
+                self.assertEqual(second_final["activationId"], activation_id)
+
+
 if __name__ == "__main__":
     unittest.main()

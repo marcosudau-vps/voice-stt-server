@@ -61,7 +61,13 @@ Unbekannte `type`-Werte und unbekannte Felder muss ein Client ignorieren.
 
 ### Segment und Transkription
 
-Alle tragen `activationId`, `segmentId`, `segmentSequence`.
+Alle tragen `activationId`, `segmentId`, `segmentSequence`. Die drei Felder
+sind pro Segment unveränderlich: `segment.recording_started`,
+`segment.recording_ended`, `transcription.accepted` und das Terminal
+(`completed` | `discarded` | `failed`) desselben `segmentId` tragen dieselbe
+`activationId` und `segmentSequence` – auch dann, wenn der Vordergrund
+bereits eine neuere Activation geöffnet hat und die Transkription des älteren
+Segments erst danach startet (Background-Drain/Overlap).
 
 | Event | Zusatzfelder | `stateVersion` |
 | --- | --- | --- |

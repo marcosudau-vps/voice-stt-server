@@ -102,6 +102,9 @@ class EventProjector:
         #: segmentId -> (segmentSequence, activationId), learned from the
         #: authoritative context while it is still available.
         self._segments = {}
+        #: segmentId -> count of contradictory later mappings that were
+        #: rejected to preserve the first authoritative correlation.
+        self._segment_mismatches = {}
 
     # -- public API ----------------------------------------------------------
 
@@ -194,28 +197,59 @@ class EventProjector:
         activation_id = payload.get("activationId") or context.activation_id
         if sequence is None:
             return
+        try:
+            sequence_number = int(sequence)
+        except (TypeError, ValueError):
+            return
         with self._lock:
-            self._segments[segment_id] = (int(sequence), activation_id)
+            existing = self._segments.get(segment_id)
+            if existing is None:
+                self._segments[segment_id] = (sequence_number, activation_id)
+                return
+            if existing == (sequence_number, activation_id):
+                return
+            # A confirmed segment-activation correlation is authoritative and
+            # must never be silently replaced by a later foreground value.
+            # Keep the original and make the contradiction diagnosable.
+            self._segment_mismatches[segment_id] = (
+                self._segment_mismatches.get(segment_id, 0) + 1
+            )
+
+    def segment_mismatches(self):
+        """Rejected contradictory segment mappings per segmentId (diagnostic)."""
+        with self._lock:
+            return dict(self._segment_mismatches)
 
     def _segment_fields(self, payload, context):
         segment_id = payload.get("segmentId")
         if segment_id is None:
             return None
-        sequence = payload.get("segmentSequence")
-        activation_id = payload.get("activationId")
         with self._lock:
             remembered = self._segments.get(segment_id)
         if remembered is not None:
-            if sequence is None:
-                sequence = remembered[0]
-            if activation_id is None:
-                activation_id = remembered[1]
+            # The first confirmed correlation wins; a later foreground
+            # activation must never replace it.
+            return {
+                "activationId": remembered[1],
+                "segmentId": str(segment_id),
+                "segmentSequence": int(remembered[0]),
+            }
+        sequence = payload.get("segmentSequence")
+        activation_id = payload.get("activationId")
         if sequence is None:
             return None
+        if activation_id is None:
+            # No authoritative mapping and no segment identity in the payload:
+            # never invent the current foreground activation as a fallback.
+            return None
+        try:
+            sequence_number = int(sequence)
+        except (TypeError, ValueError):
+            return None
         return {
-            "activationId": activation_id or context.activation_id,
+            "activationId": activation_id,
             "segmentId": str(segment_id),
-            "segmentSequence": int(sequence),
+            "segmentSequence": sequence_number,
         }
 
     # -- logical identity ----------------------------------------------------

@@ -184,6 +184,10 @@ Bei Aufnahmebeginn registriert das Ledger genau einen unveränderlichen
 `requestId` des Finaljobs. Der Kontext wird zusammen mit dem aufgenommenen
 Audio durch Recorder, Scheduler und Worker getragen; der aktuelle
 Foreground-Zeiger wird zur Ergebniskorrelation nicht mehr verwendet.
+Die Timeline-Publikationen `recording_started`, `recording_ended` und
+`transcription_started` tragen deshalb ausdrücklich die Felder des
+zugehörigen `SegmentContext` (`activationId`, `activationSequence`,
+`segmentSequence`, `requestId`).
 
 Jedes angenommene Segment endet genau einmal als `completed`, `discarded`,
 `cancelled` oder `failed`. Leeres Audio, Empty-Final, Queue-Trim,
@@ -1021,7 +1025,11 @@ Gemeinsame Pflichtfelder: `type`, `protocolVersion`, `sessionId`, `eventId`,
 
 Die Projektion hängt an genau einem Punkt: dem einen Lifecycle-Funnel
 `_publish_timeline_event`. Dadurch entsteht je logischem Domainereignis genau
-ein v2-Event.
+ein v2-Event. Die erste bestätigte Zuordnung (`segmentId`,
+`activationId`, `segmentSequence`) ist autoritativ: Ein späteres Event mit
+abweichender Vordergrund-Activation ersetzt sie nicht, der Widerspruch wird
+intern über `EventProjector.segment_mismatches()` diagnostizierbar gezählt. Ein Segmentevent ohne
+hinreichende Segmentidentität erfindet keine fremde aktuelle Activation.
 
 | Legacy | v2 |
 | --- | --- |

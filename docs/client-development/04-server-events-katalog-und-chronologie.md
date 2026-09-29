@@ -12,7 +12,11 @@
 
 Es gibt höchstens eine Vordergrund-Activation. Nach `activation.input_closed`
 ist der Vordergrund wieder `idle` und eine neue Activation kann starten,
-während ältere noch drainen.
+während ältere noch drainen. Segment- und Transkriptionsevents gehören dabei
+immer zu der Activation, die das Segment angenommen hat – nicht zum gerade
+offenen Vordergrund. `segment.recording_started`, `segment.recording_ended`,
+`transcription.accepted` und das Terminal desselben `segmentId` teilen
+`activationId` und `segmentSequence`.
 
 ## 2. Vordergrundphasen
 

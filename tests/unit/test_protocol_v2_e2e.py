@@ -1507,6 +1507,106 @@ class ProtocolV2IdentityTests(unittest.TestCase):
 
 
 @unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
+class SegmentActivationCorrelationV2Tests(unittest.TestCase):
+    """AP-SRV-080-FIX-01 Test A – Background Overlap (V2-Ebene).
+
+    A1 erzeugt S1 und S2, schließt ihre Eingabe, A2 wird im Vordergrund
+    geöffnet, erst danach startet die Transkription von S2.
+    ``transcription.accepted`` für S2 muss A1 referenzieren; Recording-,
+    Accepted- und Final-Events desselben Segments müssen dieselbe Activation
+    und SegmentSequence enthalten.
+    """
+
+    def setUp(self):
+        GateAwareRecorder.instances = []
+        self.app = build_app()
+
+    def test_delayed_transcription_keeps_original_activation(self):
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                _command_id, first_ack = session.activate()
+                first_activation = first_ack["activationId"]
+                session.event(schema.EVENT_ACTIVATION_STARTED)
+
+                # S1 normal: recording -> accepted -> completed.
+                session.send_bytes(speech_packet())
+                s1_started = session.event(schema.EVENT_SEGMENT_RECORDING_STARTED)
+                session.recorder().flush_buffered_audio()
+                session.event(schema.EVENT_SEGMENT_RECORDING_ENDED)
+                s1_accepted = session.event(schema.EVENT_TRANSCRIPTION_ACCEPTED)
+                s1_completed = session.event(schema.EVENT_TRANSCRIPTION_COMPLETED)
+                self.assertEqual(s1_started["activationId"], first_activation)
+                self.assertEqual(s1_accepted["segmentId"], s1_started["segmentId"])
+                self.assertEqual(s1_completed["segmentId"], s1_started["segmentId"])
+
+                # S2: Aufnahme starten, Transkription aber gezielt verzögern.
+                # Dazu wird für S2 nur das synchrone recording_stop ausgeführt;
+                # der Hintergrund-Thread (transcription_start + final) wird
+                # unterdrückt und später deterministisch nachgeholt. So ist die
+                # Overlap-Reihenfolge ohne Sleep deterministisch.
+                session.send_bytes(speech_packet())
+                s2_started = session.event(schema.EVENT_SEGMENT_RECORDING_STARTED)
+                self.assertEqual(s2_started["activationId"], first_activation)
+                self.assertNotEqual(
+                    s2_started["segmentId"], s1_started["segmentId"]
+                )
+                server = session.server_session(self.app)
+                recorder = session.recorder()
+                original_flush = recorder.flush_buffered_audio
+                recorder.flush_buffered_audio = (
+                    lambda *args, **kwargs: recorder.on_recording_stop() or True
+                )
+                try:
+                    recorder.flush_buffered_audio()
+                    s2_ended = session.event(schema.EVENT_SEGMENT_RECORDING_ENDED)
+                    self.assertEqual(s2_ended["segmentId"], s2_started["segmentId"])
+                    s2_context = recorder._current_transcription_context
+                    self.assertIsNotNone(s2_context)
+                    # A1 schließen, A2 im Vordergrund öffnen, während S2-Transkription wartet.
+                    finish = session.command({
+                        "type": schema.ACTIVATION_COMMAND,
+                        "action": schema.FINISH,
+                        "activationId": first_activation,
+                    })
+                    session.ack(finish["commandId"])
+                    session.event(schema.EVENT_ACTIVATION_INPUT_CLOSED)
+                    _command_id2, second_ack = session.activate()
+                    second_activation = second_ack["activationId"]
+                    self.assertNotEqual(second_activation, first_activation)
+                    session.event(schema.EVENT_ACTIVATION_STARTED)
+                finally:
+                    recorder.flush_buffered_audio = original_flush
+                # Verzögerte Transkription von S2 erst jetzt starten.
+                server._on_transcription_start(None)
+                s2_accepted = session.event(schema.EVENT_TRANSCRIPTION_ACCEPTED)
+                self.assertEqual(
+                    s2_accepted["segmentId"], s2_started["segmentId"],
+                    "accepted muss dasselbe Segment wie recording_started tragen",
+                )
+                self.assertEqual(
+                    s2_accepted["activationId"], first_activation,
+                    "verzögerte Transkription darf nicht die neuere Activation übernehmen",
+                )
+                self.assertEqual(
+                    s2_accepted["segmentSequence"], s2_started["segmentSequence"],
+                )
+                self.assertEqual(s2_ended["activationId"], first_activation)
+                # Final für S2 über den echten Ledger-Pfad mit dem
+                # unveränderlichen S2-Context nachholen.
+                self.assertTrue(
+                    server._publish_final_text(
+                        "s2 delayed final", context=s2_context
+                    )
+                )
+                s2_completed = session.event(schema.EVENT_TRANSCRIPTION_COMPLETED)
+                self.assertEqual(s2_completed["segmentId"], s2_started["segmentId"])
+                self.assertEqual(s2_completed["activationId"], first_activation)
+                self.assertEqual(
+                    s2_completed["segmentSequence"], s2_started["segmentSequence"],
+                )
+
+
+@unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
 class ProtocolV2IsolationTests(unittest.TestCase):
     """v1 and v2 coexist on the transport layer only (AP-SRV-070 removes v1)."""
 
