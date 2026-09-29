@@ -5184,6 +5184,7 @@ class RecorderBackedRealtimeSession:
     def _on_recording_start(self):
         segment = None
         segment_id = None
+        recording_context = None
         recording_admitted = False
         stop_unadmitted_recording = False
         with self.lock:
@@ -5283,6 +5284,7 @@ class RecorderBackedRealtimeSession:
                             self._active_recording_context = context
                             self._last_final_context = context
                             self.recorder._active_recording_context = context
+                            recording_context = context
                         segment = self.timeline.mark_recording_started(segment_id)
                     else:
                         # The gate-close barrier won a race after the recorder had
@@ -5302,13 +5304,26 @@ class RecorderBackedRealtimeSession:
                     self.session_id,
                 )
         if segment is not None:
-            self._publish_timeline_event(
-                "recording_started",
-                timestamp=segment.get("recordingStartedAt"),
-                segment_id=segment_id,
-                segment=segment,
-                preRecordingBuffer=segment.get("preRecordingBuffer"),
-            )
+            if recording_context is not None:
+                self._publish_timeline_event(
+                    "recording_started",
+                    timestamp=segment.get("recordingStartedAt"),
+                    segment_id=segment_id,
+                    segment=segment,
+                    preRecordingBuffer=segment.get("preRecordingBuffer"),
+                    activationId=recording_context.activation_id,
+                    activationSequence=recording_context.activation_sequence,
+                    segmentSequence=recording_context.segment_sequence,
+                    requestId=recording_context.request_id,
+                )
+            else:
+                self._publish_timeline_event(
+                    "recording_started",
+                    timestamp=segment.get("recordingStartedAt"),
+                    segment_id=segment_id,
+                    segment=segment,
+                    preRecordingBuffer=segment.get("preRecordingBuffer"),
+                )
         self.publish_status(
             "recording" if recording_admitted else self._waiting_state_locked()
         )
@@ -5317,10 +5332,12 @@ class RecorderBackedRealtimeSession:
         self._trim_recorded_audio_queue()
         segment = None
         segment_id = None
+        ended_context = None
         legacy_activation_id = None
         empty_recording_context = None
         with self.lock:
             context = self._active_recording_context
+            ended_context = context
             segment_id = (
                 context.segment_id
                 if context is not None
@@ -5362,14 +5379,28 @@ class RecorderBackedRealtimeSession:
                 legacy_activation_id = context.activation_id
         self.service.deactivate_speaker(self.session_id)
         if segment is not None:
-            self._publish_timeline_event(
-                "recording_ended",
-                timestamp=segment.get("recordingEndedAt"),
-                segment_id=segment_id,
-                segment=segment,
-                durationSeconds=segment.get("durationSeconds"),
-                reason=segment.get("endReason"),
-            )
+            if ended_context is not None:
+                self._publish_timeline_event(
+                    "recording_ended",
+                    timestamp=segment.get("recordingEndedAt"),
+                    segment_id=segment_id,
+                    segment=segment,
+                    durationSeconds=segment.get("durationSeconds"),
+                    reason=segment.get("endReason"),
+                    activationId=ended_context.activation_id,
+                    activationSequence=ended_context.activation_sequence,
+                    segmentSequence=ended_context.segment_sequence,
+                    requestId=ended_context.request_id,
+                )
+            else:
+                self._publish_timeline_event(
+                    "recording_ended",
+                    timestamp=segment.get("recordingEndedAt"),
+                    segment_id=segment_id,
+                    segment=segment,
+                    durationSeconds=segment.get("durationSeconds"),
+                    reason=segment.get("endReason"),
+                )
         if empty_recording_context is not None:
             self._dispatch_ledger_operation(
                 self.segment_ledger.resolve_terminal,
@@ -5391,6 +5422,7 @@ class RecorderBackedRealtimeSession:
         self.publish_status(self._waiting_state_locked())
 
     def _on_transcription_start(self, *_):
+        transcription_context = None
         with self._ledger_dispatch_lock:
             with self.lock:
                 rejected = self.reject_current_recording
@@ -5404,6 +5436,7 @@ class RecorderBackedRealtimeSession:
                     )
                 self.recorder._current_transcription_context = context
                 self._active_text_context = context
+                transcription_context = context
                 segment_id = (
                     context.segment_id
                     if context is not None
@@ -5423,11 +5456,22 @@ class RecorderBackedRealtimeSession:
                     context.segment_sequence if context is not None else None
                 ),
             )
-        self._publish_timeline_event(
-            "transcription_started",
-            segment_id=segment_id,
-            segment=self._timeline_snapshot(segment_id),
-        )
+        if transcription_context is not None:
+            self._publish_timeline_event(
+                "transcription_started",
+                segment_id=segment_id,
+                segment=self._timeline_snapshot(segment_id),
+                activationId=transcription_context.activation_id,
+                activationSequence=transcription_context.activation_sequence,
+                segmentSequence=transcription_context.segment_sequence,
+                requestId=transcription_context.request_id,
+            )
+        else:
+            self._publish_timeline_event(
+                "transcription_started",
+                segment_id=segment_id,
+                segment=self._timeline_snapshot(segment_id),
+            )
         if self._activation is None:
             self.publish_status("transcribing")
         return bool(rejected)

@@ -533,6 +533,137 @@ class ReplayRaceTests(unittest.TestCase):
 
 
 @unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
+class SegmentActivationCorrelationInvariantTests(unittest.TestCase):
+    """AP-SRV-080-FIX-01 Test B – Projektor-Invariante.
+
+    Eine bereits bestätigte (segmentId, activationId, segmentSequence)
+    Zuordnung darf durch ein späteres Event mit fremder Activation nicht
+    stillschweigend überschrieben werden.
+    """
+
+    def test_late_event_must_not_overwrite_confirmed_segment_mapping(self):
+        state = ProtocolSessionState(schema.new_canonical_id())
+        projector = EventProjector(state)
+        first_activation = schema.new_canonical_id()
+        foreign_activation = schema.new_canonical_id()
+        context_a1 = ProjectionContext(
+            phase=schema.SEGMENT_ACTIVE,
+            activation_id=first_activation,
+            activation_sequence=1,
+        )
+        recorded = projector.project(
+            "recording_started",
+            {
+                "segmentId": "s-fix01",
+                "segmentSequence": 1,
+                "activationId": first_activation,
+            },
+            context_a1,
+        )
+        self.assertTrue(
+            [e for e in recorded if e["type"] == schema.EVENT_SEGMENT_RECORDING_STARTED]
+        )
+
+        context_a2 = ProjectionContext(
+            phase=schema.WAITING_FIRST_SPEECH,
+            activation_id=foreign_activation,
+            activation_sequence=2,
+        )
+        accepted = projector.project(
+            "transcription_started",
+            {
+                "segmentId": "s-fix01",
+                "segmentSequence": 1,
+                "activationId": foreign_activation,
+            },
+            context_a2,
+        )
+        accepted_events = [
+            e for e in accepted if e["type"] == schema.EVENT_TRANSCRIPTION_ACCEPTED
+        ]
+        self.assertEqual(len(accepted_events), 1)
+        self.assertEqual(accepted_events[0]["activationId"], first_activation)
+        self.assertEqual(accepted_events[0]["segmentSequence"], 1)
+
+    def test_segment_event_without_identity_invents_no_foreground_activation(self):
+        state = ProtocolSessionState(schema.new_canonical_id())
+        projector = EventProjector(state)
+        foreground_activation = schema.new_canonical_id()
+        context = ProjectionContext(
+            phase=schema.WAITING_FIRST_SPEECH,
+            activation_id=foreground_activation,
+            activation_sequence=9,
+        )
+        produced = projector.project(
+            "transcription_started",
+            {"segmentId": "s-unknown-fix01"},
+            context,
+        )
+        accepted = [
+            e for e in produced if e["type"] == schema.EVENT_TRANSCRIPTION_ACCEPTED
+        ]
+        self.assertEqual(accepted, [])
+
+    def test_first_mapping_never_adopts_foreign_foreground_activation(self):
+        state = ProtocolSessionState(schema.new_canonical_id())
+        projector = EventProjector(state)
+        original_activation = schema.new_canonical_id()
+        foreign_activation = schema.new_canonical_id()
+        foreign_context = ProjectionContext(
+            phase=schema.WAITING_FIRST_SPEECH,
+            activation_id=foreign_activation,
+            activation_sequence=2,
+        )
+        # Erste Beobachtung ohne explizite Payload-Activation: trotz Sequenz
+        # darf die fremde Vordergrund-Activation nicht als autoritativ
+        # übernommen und kein Event mit erfundener Activation erzeugt werden.
+        produced = projector.project(
+            "transcription_started",
+            {"segmentId": "s-fix01-first", "segmentSequence": 5},
+            foreign_context,
+        )
+        self.assertEqual(
+            [e for e in produced if e["type"] == schema.EVENT_TRANSCRIPTION_ACCEPTED],
+            [],
+        )
+        self.assertIsNone(projector._segments.get("s-fix01-first"))
+        self.assertEqual(projector.segment_mismatches(), {})
+
+        # Die spätere korrekte Zuordnung gewinnt und bleibt danach stabil.
+        original_context = ProjectionContext(
+            phase=schema.SEGMENT_ACTIVE,
+            activation_id=original_activation,
+            activation_sequence=1,
+        )
+        recorded = projector.project(
+            "recording_started",
+            {
+                "segmentId": "s-fix01-first",
+                "segmentSequence": 5,
+                "activationId": original_activation,
+            },
+            original_context,
+        )
+        self.assertTrue(
+            [e for e in recorded if e["type"] == schema.EVENT_SEGMENT_RECORDING_STARTED]
+        )
+        late = projector.project(
+            "transcription_started",
+            {
+                "segmentId": "s-fix01-first",
+                "segmentSequence": 5,
+                "activationId": foreign_activation,
+            },
+            foreign_context,
+        )
+        late_accepted = [
+            e for e in late if e["type"] == schema.EVENT_TRANSCRIPTION_ACCEPTED
+        ]
+        self.assertEqual(len(late_accepted), 1)
+        self.assertEqual(late_accepted[0]["activationId"], original_activation)
+
+
+@unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
 class SessionCloseRaceTests(unittest.TestCase):
     def test_no_v2_mutation_survives_the_session_close(self):
         for repetition in range(REPETITIONS):
