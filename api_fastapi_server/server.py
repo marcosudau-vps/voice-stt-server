@@ -9857,40 +9857,30 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                             {receive_task, close_task},
                             return_when=asyncio.FIRST_COMPLETED,
                         )
-                    except BaseException:
-                        # asyncio.CancelledError is not an Exception: an outer
-                        # cancellation must still cancel and await both child
-                        # tasks so no orphaned receive/close task survives.
-                        receive_task.cancel()
-                        close_task.cancel()
+
+                        if close_task in done:
+                            # Transport-Close hat Vorrang, auch wenn beide
+                            # Signale gleichzeitig eintreten.
+                            break
+
+                        # Keine Cancellation-verschluckende Await-Operation
+                        # für den Child-Task: result() wirft synchron, sodass
+                        # WebSocketDisconnect, RuntimeError und andere Fehler
+                        # direkt den äußeren Fehlerbehandlungspfad erreichen.
+                        message = receive_task.result()
+                    finally:
+                        # Einheitlicher Child-Lebenszyklus für beide Tasks:
+                        # noch laufende Tasks canceln, beide gemeinsam
+                        # einsammeln. CancelledError aus receive_task oder
+                        # close_task bedeutet hier den erwarteten Abbruch;
+                        # eine Cancellation der übergeordneten Endpoint-Task
+                        # wird dabei nie in eine normale Rückkehr umgewandelt.
+                        for task in (receive_task, close_task):
+                            if not task.done():
+                                task.cancel()
                         await asyncio.gather(
                             receive_task, close_task, return_exceptions=True
                         )
-                        raise
-                    if close_task in done:
-                        receive_task.cancel()
-                        try:
-                            await receive_task
-                        except asyncio.CancelledError:
-                            pass
-                        except Exception:
-                            pass
-                        try:
-                            await close_task
-                        except asyncio.CancelledError:
-                            pass
-                        break
-                    close_task.cancel()
-                    try:
-                        await close_task
-                    except asyncio.CancelledError:
-                        pass
-                    try:
-                        message = receive_task.result()
-                    except WebSocketDisconnect:
-                        raise
-                    except (asyncio.CancelledError, RuntimeError, Exception):
-                        raise
                 else:
                     try:
                         message = await asyncio.wait_for(

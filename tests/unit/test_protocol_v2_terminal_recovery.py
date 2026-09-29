@@ -8,6 +8,8 @@ Tests A–D gegen den echten produktiven Endpoint ``/ws/v2`` mit echter Session.
 - D: keine Regression (Disconnect, Handshake-Fehler, finish/cancel).
 - E: äußere Endpoint-Cancellation räumt Receive-/Close-Tasks ohne Waisen auf.
 - F: fataler Writerfehler schließt mit internem Close-Code 1011.
+- G: äußere Cancellation während des Child-Task-Cleanups endet mit
+  CancelledError (keine Umwandlung in normale Rückkehr), ohne Waisen.
 """
 
 import asyncio
@@ -104,18 +106,24 @@ class _FakeWebSocket:
     """Minimaler Transport-Stub für die echte Endpoint-Closure.
 
     Führt den produktiven ``websocket_protocol_v2``-Code aus (Sink, Writer,
-    Receive-Schleife, Cleanup), nur der Socket ist gestellt.
+    Receive-Schleife, Cleanup), nur der Socket ist gestellt. Mit
+    ``hold_on_cancel`` hält ein abgebrochener Receive-Task die Cleanup-Phase
+    kontrolliert offen, sodass eine äußere Cancellation deterministisch in
+    genau diese Phase gelegt werden kann.
     """
 
-    def __init__(self, inbound_texts=(), fail_send=False):
+    def __init__(self, inbound_texts=(), fail_send=False, hold_on_cancel=False):
         self.query_params = {}
         self.headers = {}
         self._inbound = list(inbound_texts)
         self._fail_send = fail_send
+        self._hold_on_cancel = hold_on_cancel
         self.sent_texts = []
         self.close_code = None
         self.accepted = False
         self.blocked = asyncio.Event()
+        self.cancel_observed = asyncio.Event()
+        self.cleanup_release = asyncio.Event()
 
     async def accept(self):
         self.accepted = True
@@ -124,7 +132,13 @@ class _FakeWebSocket:
         if self._inbound:
             return {"type": "websocket.receive", "text": self._inbound.pop(0)}
         self.blocked.set()
-        await asyncio.Future()
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            self.cancel_observed.set()
+            if self._hold_on_cancel:
+                await self.cleanup_release.wait()
+            raise
 
     async def send_text(self, text):
         if self._fail_send:
@@ -440,6 +454,50 @@ class EndpointFailureTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(fake.sent_texts, [])
         self.assertEqual(fake.close_code, schema.CLOSE_INTERNAL_ERROR)
         self.assertEqual(len(service.sessions.all()), 0)
+
+    async def test_g_outer_cancellation_during_child_cleanup(self):
+        GateAwareRecorder.instances = []
+        app = build_app()
+        service = app.state.voicestt_service
+        endpoint = _v2_endpoint(app)
+        fake = _FakeWebSocket(
+            inbound_texts=[json.dumps(hello_message())], hold_on_cancel=True
+        )
+        endpoint_task = asyncio.create_task(endpoint(fake))
+        try:
+            accepted = await _wait_for_sent(fake, schema.HELLO_ACCEPTED)
+            session_id = accepted["sessionId"]
+            session = service.sessions.get(session_id)
+            self.assertIsNotNone(session)
+            # Der Endpoint blockiert kontrolliert im Receive-Task.
+            await asyncio.wait_for(fake.blocked.wait(), timeout=15.0)
+            # Transport-Close über die echte Session auslösen.
+            session.fail_closed_for_recovery(
+                "30000000-0000-4000-8000-000000000001"
+            )
+            # Bis in die Child-Cleanup-Phase steuern: Der Endpoint hat den
+            # Receive-Task abgebrochen und wartet auf ihn.
+            await asyncio.wait_for(
+                fake.cancel_observed.wait(), timeout=15.0
+            )
+            # Äußere Cancellation genau während des Cleanup-Awaits: Sie darf
+            # nicht in eine normale Rückkehr umgewandelt werden.
+            endpoint_task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await endpoint_task
+        finally:
+            fake.cleanup_release.set()
+        for _ in range(50):
+            pending = [
+                task for task in asyncio.all_tasks()
+                if task is not asyncio.current_task() and not task.done()
+            ]
+            if not pending:
+                break
+            await asyncio.sleep(0)
+        self.assertEqual(pending, [])
+        self.assertIsNone(service.sessions.get(session_id))
+        self.assertEqual(fake.close_code, schema.CLOSE_INTERNAL_ERROR)
 
 
 if __name__ == "__main__":  # pragma: no cover
