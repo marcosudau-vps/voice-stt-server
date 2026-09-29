@@ -9834,7 +9834,13 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                     )
                 except Exception:
                     # A fatal send must wake the receive/cleanup path instead
-                    # of returning silently while it stays blocked.
+                    # of returning silently while it stays blocked. The
+                    # connection also owns the internal close code: without
+                    # request_close the endpoint would fall back to 1000 and
+                    # lose the 1011 cause.
+                    connection.request_close(
+                        protocol_v2_schema.CLOSE_INTERNAL_ERROR
+                    )
                     transport_close.set()
                     return
 
@@ -9851,9 +9857,15 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                             {receive_task, close_task},
                             return_when=asyncio.FIRST_COMPLETED,
                         )
-                    except Exception:
+                    except BaseException:
+                        # asyncio.CancelledError is not an Exception: an outer
+                        # cancellation must still cancel and await both child
+                        # tasks so no orphaned receive/close task survives.
                         receive_task.cancel()
                         close_task.cancel()
+                        await asyncio.gather(
+                            receive_task, close_task, return_exceptions=True
+                        )
                         raise
                     if close_task in done:
                         receive_task.cancel()
@@ -9910,8 +9922,14 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             LOGGER.exception("v2-Verbindung ist unerwartet gescheitert")
             connection.request_close(protocol_v2_schema.CLOSE_INTERNAL_ERROR)
         finally:
+            # Final close-code evaluation: a concurrent terminal close (1011)
+            # may win the request_close race after the first read, so the
+            # code is re-read after ensuring a close was requested. The
+            # first request wins (request_close is idempotent); the local
+            # variable must reflect the winner for websocket.close().
             close_code = connection.close_code
             connection.request_close(close_code or 1000)
+            close_code = connection.close_code
             try:
                 await asyncio.wait_for(writer_task, timeout=5.0)
             except (asyncio.TimeoutError, asyncio.CancelledError):

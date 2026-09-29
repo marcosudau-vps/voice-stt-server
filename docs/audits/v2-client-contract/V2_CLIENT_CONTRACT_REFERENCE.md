@@ -698,12 +698,7 @@ Es gibt keine Sessionwiederaufnahme. Nach einem Verbindungsabbruch:
 | `4406` | keine gemeinsame Protokollversion (nach `protocol.incompatible`) |
 | `4408` | kein Frame binnen 10 s vor der Annahme |
 | `4409` | Sessionadmission abgelehnt (nach `session.rejected`) |
-| `1011` | unerwarteter Serverfehler (Handshake oder laufende Verbindung), einschließlich terminaler Recovery einer angenommenen Session |
-
-Eine terminale Recovery beendet die Domain-Session irreparabel und schließt
-die zugehörige `/ws/v2`-Verbindung mit `1011`, ohne weitere Clientnachricht
-und ohne neue Wire-Nachricht. Der Session-Slot wird freigegeben; Weiterarbeit
-erfordert ein neues `hello` (neue `sessionId`).
+| `1011` | unerwarteter Serverfehler (Handshake oder laufende Verbindung) |
 
 Nach der Annahme führen fehlerhafte Commands und Audioframes **nie** zu einem
 Close. Ohne jede Antwort bleiben: nicht parsebares JSON, unbekannter `type`,

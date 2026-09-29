@@ -950,8 +950,11 @@ betriebsbereiten V2-WebSocket zurück: Die terminale Recovery schließt die
 zugehörige `/ws/v2`-Verbindung mit `1011`, gibt den Session-Slot frei und
 erfordert für Weiterarbeit ein neues `hello` (neue `sessionId`).
 
-In keinem dieser Fälle entsteht eine `sessionId` oder eine halb aufgebaute
-Session. Fachlich abgelehnte Commands schließen die Verbindung dagegen nie.
+Bei den Handshake-Fällen (`4400`, `4406`, `4408`, `4409`) entsteht keine
+`sessionId` und keine halb aufgebaute Session. Die terminale Recovery
+betrifft dagegen eine bereits angenommene Session: Deren Slot wird
+freigegeben, Weiterarbeit erfordert ein neues `hello` mit neuer `sessionId`.
+Fachlich abgelehnte Commands schließen die Verbindung dagegen nie.
 
 `serverCommit` wird aus der Umgebungsvariablen `VOICESTT_SERVER_COMMIT`
 gelesen und fällt sonst auf `unknown` zurück; ein Git-Aufruf zur Laufzeit

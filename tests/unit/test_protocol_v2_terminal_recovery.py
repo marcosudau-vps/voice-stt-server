@@ -6,8 +6,11 @@ Tests A–D gegen den echten produktiven Endpoint ``/ws/v2`` mit echter Session.
 - B: Ressourcenfreigabe (Registry, Slot, neuer Handshake).
 - C: Idempotenz doppelter/konkurrierender Closes.
 - D: keine Regression (Disconnect, Handshake-Fehler, finish/cancel).
+- E: äußere Endpoint-Cancellation räumt Receive-/Close-Tasks ohne Waisen auf.
+- F: fataler Writerfehler schließt mit internem Close-Code 1011.
 """
 
+import asyncio
 import json
 import queue
 import threading
@@ -88,6 +91,63 @@ def start_background_reader(socket):
     reader = threading.Thread(target=read_forever, daemon=True)
     reader.start()
     return inbox, stop, reader
+
+
+def _v2_endpoint(app):
+    for route in app.routes:
+        if getattr(route, "path", None) == "/ws/v2":
+            return route.endpoint
+    raise AssertionError("keine /ws/v2-Route gefunden")
+
+
+class _FakeWebSocket:
+    """Minimaler Transport-Stub für die echte Endpoint-Closure.
+
+    Führt den produktiven ``websocket_protocol_v2``-Code aus (Sink, Writer,
+    Receive-Schleife, Cleanup), nur der Socket ist gestellt.
+    """
+
+    def __init__(self, inbound_texts=(), fail_send=False):
+        self.query_params = {}
+        self.headers = {}
+        self._inbound = list(inbound_texts)
+        self._fail_send = fail_send
+        self.sent_texts = []
+        self.close_code = None
+        self.accepted = False
+        self.blocked = asyncio.Event()
+
+    async def accept(self):
+        self.accepted = True
+
+    async def receive(self):
+        if self._inbound:
+            return {"type": "websocket.receive", "text": self._inbound.pop(0)}
+        self.blocked.set()
+        await asyncio.Future()
+
+    async def send_text(self, text):
+        if self._fail_send:
+            raise RuntimeError("boom")
+        self.sent_texts.append(text)
+
+    async def close(self, code=1000):
+        self.close_code = code
+
+
+async def _wait_for_sent(fake, expected_type, timeout=15.0):
+    async def _poll():
+        while True:
+            for raw in list(fake.sent_texts):
+                try:
+                    message = json.loads(raw)
+                except ValueError:
+                    continue
+                if message.get("type") == expected_type:
+                    return message
+            await asyncio.sleep(0.01)
+
+    return await asyncio.wait_for(_poll(), timeout=timeout)
 
 
 class TerminalRecoveryTransportTests(unittest.TestCase):
@@ -245,18 +305,24 @@ class TerminalRecoveryTransportTests(unittest.TestCase):
             self.assertIsNone(
                 app.state.voicestt_service.sessions.get(session_id)
             )
-            # Ungültiger Handshake → 4400, keine Session.
+            # Ungültiger Handshake → 4400, keine Session (strikt, begrenzt).
             with client.websocket_connect("/ws/v2") as bad:
                 bad.send_text("{not json")
+                inbox, stop, reader = start_background_reader(bad)
                 try:
-                    while True:
-                        bad.receive_json()
-                except WebSocketDisconnect as disconnect:
-                    self.assertEqual(
-                        disconnect.code, schema.CLOSE_INVALID_HANDSHAKE
-                    )
-                except Exception:
-                    pass
+                    close_code, seen = wait_for_disconnect(inbox)
+                finally:
+                    stop.set()
+                    try:
+                        bad.close()
+                    except Exception:
+                        pass
+                    reader.join(timeout=10.0)
+                self.assertEqual(
+                    close_code,
+                    schema.CLOSE_INVALID_HANDSHAKE,
+                    f"erwartet 4400; close={close_code} interim={seen[-5:]}",
+                )
             # Reguläres finish/cancel funktioniert weiter.
             with client.websocket_connect("/ws/v2") as socket2:
                 socket2.send_text(json.dumps(hello_message()))
@@ -305,16 +371,75 @@ class TerminalRecoveryTransportTests(unittest.TestCase):
         ):
             with TestClient(app) as client:
                 with client.websocket_connect("/ws/v2") as socket:
+                    inbox, stop, reader = start_background_reader(socket)
                     try:
-                        while True:
-                            socket.receive_json()
-                    except WebSocketDisconnect as disconnect:
-                        self.assertEqual(
-                            disconnect.code, schema.CLOSE_HANDSHAKE_TIMEOUT
-                        )
-                    except Exception:
-                        pass
+                        close_code, seen = wait_for_disconnect(inbox)
+                    finally:
+                        stop.set()
+                        try:
+                            socket.close()
+                        except Exception:
+                            pass
+                        reader.join(timeout=10.0)
+                    self.assertEqual(
+                        close_code,
+                        schema.CLOSE_HANDSHAKE_TIMEOUT,
+                        f"erwartet 4408; close={close_code} "
+                        f"interim={seen[-5:]}",
+                    )
         self.assertEqual(len(app.state.voicestt_service.sessions.all()), 0)
+
+
+class EndpointFailureTests(unittest.IsolatedAsyncioTestCase):
+    """Gezielte Failure-Tests gegen die produktive Endpoint-Closure."""
+
+    async def test_e_outer_cancellation_awaits_child_tasks(self):
+        GateAwareRecorder.instances = []
+        app = build_app()
+        service = app.state.voicestt_service
+        endpoint = _v2_endpoint(app)
+        fake = _FakeWebSocket(inbound_texts=[json.dumps(hello_message())])
+        endpoint_task = asyncio.create_task(endpoint(fake))
+        try:
+            accepted = await _wait_for_sent(fake, schema.HELLO_ACCEPTED)
+            session_id = accepted["sessionId"]
+            self.assertIsNotNone(service.sessions.get(session_id))
+            # Deterministisch: Der Endpoint blockiert jetzt in asyncio.wait.
+            await asyncio.wait_for(fake.blocked.wait(), timeout=15.0)
+            endpoint_task.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await endpoint_task
+        finally:
+            if not endpoint_task.done():
+                endpoint_task.cancel()
+                try:
+                    await endpoint_task
+                except asyncio.CancelledError:
+                    pass
+        for _ in range(50):
+            pending = [
+                task for task in asyncio.all_tasks()
+                if task is not asyncio.current_task() and not task.done()
+            ]
+            if not pending:
+                break
+            await asyncio.sleep(0)
+        self.assertEqual(pending, [])
+        self.assertIsNone(service.sessions.get(session_id))
+
+    async def test_f_fatal_writer_error_closes_with_1011(self):
+        GateAwareRecorder.instances = []
+        app = build_app()
+        service = app.state.voicestt_service
+        endpoint = _v2_endpoint(app)
+        fake = _FakeWebSocket(
+            inbound_texts=[json.dumps(hello_message())], fail_send=True
+        )
+        # Muss regulär zurückkehren (nicht hängen) und mit 1011 schließen.
+        await asyncio.wait_for(endpoint(fake), timeout=15.0)
+        self.assertEqual(fake.sent_texts, [])
+        self.assertEqual(fake.close_code, schema.CLOSE_INTERNAL_ERROR)
+        self.assertEqual(len(service.sessions.all()), 0)
 
 
 if __name__ == "__main__":  # pragma: no cover
