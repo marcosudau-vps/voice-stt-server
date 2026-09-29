@@ -4286,6 +4286,18 @@ class RecorderBackedRealtimeSession:
                     self.session_id,
                 )
             return False
+        finally:
+            # Terminal internal signal for the v2 transport (AP-SRV-080-FIX-02).
+            # Outside critical domain locks; _notify_protocol_observer contains
+            # observer failures. Runs even if best-effort cleanup raised.
+            # Not a public domain event, never published to legacy clients.
+            self._notify_protocol_observer(
+                self.SESSION_TERMINAL_NOTIFICATION,
+                {
+                    "reason": "recovery_failed",
+                    "activationId": activation_id,
+                },
+            )
 
         return True
 
@@ -5801,6 +5813,12 @@ class RecorderBackedRealtimeSession:
     #: this marker to version a visible state change that has no own event.
     #: It is not a domain event and never becomes one.
     INPUT_CLOSING_NOTIFICATION = "__input_closing__"
+
+    #: Private internal marker for the terminal recovery path. It is not a
+    #: public domain event, never reaches legacy clients and never enters the
+    #: session state machine. Only the v2 projection interprets it to close
+    #: its transport (AP-SRV-080-FIX-02).
+    SESSION_TERMINAL_NOTIFICATION = "__session_terminal__"
 
     def _notify_input_closing(self, plan):
         self._notify_protocol_observer(
@@ -9783,10 +9801,22 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         connection = ProtocolV2Connection(service, client_id=client_id)
         loop = asyncio.get_running_loop()
         outbound = asyncio.Queue()
+        # Transport-Close-Signal (AP-SRV-080-FIX-02): wakes a coroutine blocked
+        # in ``websocket.receive()`` when ``request_close()`` arrives from a
+        # domain thread. No polling, no artificial periodic timeout.
+        transport_close = asyncio.Event()
 
         def sink(payload):
+            def _deliver():
+                try:
+                    outbound.put_nowait(payload)
+                except Exception:
+                    pass
+                if payload is None:
+                    transport_close.set()
+
             try:
-                loop.call_soon_threadsafe(outbound.put_nowait, payload)
+                loop.call_soon_threadsafe(_deliver)
             except RuntimeError:
                 # The loop is gone; the connection is being torn down anyway.
                 pass
@@ -9803,13 +9833,52 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                         json.dumps(payload, separators=(",", ":"))
                     )
                 except Exception:
+                    # A fatal send must wake the receive/cleanup path instead
+                    # of returning silently while it stays blocked.
+                    transport_close.set()
                     return
 
         writer_task = asyncio.create_task(writer())
         try:
             while True:
                 if connection.accepted:
-                    message = await websocket.receive()
+                    if transport_close.is_set() or connection.closed:
+                        break
+                    receive_task = asyncio.create_task(websocket.receive())
+                    close_task = asyncio.create_task(transport_close.wait())
+                    try:
+                        done, _pending = await asyncio.wait(
+                            {receive_task, close_task},
+                            return_when=asyncio.FIRST_COMPLETED,
+                        )
+                    except Exception:
+                        receive_task.cancel()
+                        close_task.cancel()
+                        raise
+                    if close_task in done:
+                        receive_task.cancel()
+                        try:
+                            await receive_task
+                        except asyncio.CancelledError:
+                            pass
+                        except Exception:
+                            pass
+                        try:
+                            await close_task
+                        except asyncio.CancelledError:
+                            pass
+                        break
+                    close_task.cancel()
+                    try:
+                        await close_task
+                    except asyncio.CancelledError:
+                        pass
+                    try:
+                        message = receive_task.result()
+                    except WebSocketDisconnect:
+                        raise
+                    except (asyncio.CancelledError, RuntimeError, Exception):
+                        raise
                 else:
                     try:
                         message = await asyncio.wait_for(

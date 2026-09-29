@@ -687,6 +687,19 @@ class ProtocolV2Connection:
 
     def _on_domain_event(self, legacy_event, payload):
         """Single subscription to the one AP-SRV-030 lifecycle funnel."""
+        # Terminal internal signal (AP-SRV-080-FIX-02): intercept BEFORE the
+        # normal event projection. Uses the existing 1011 close, introduces no
+        # public wire message and no new close code. request_close stays
+        # idempotent. Never forwarded to legacy clients (v2 is not registered
+        # in the legacy ConnectionManager at all).
+        if legacy_event == "__session_terminal__":
+            try:
+                self.request_close(schema.CLOSE_INTERNAL_ERROR)
+            except Exception:
+                LOGGER.exception(
+                    "v2-Terminal-Close für '%s' ist fehlgeschlagen", legacy_event
+                )
+            return
         projector = self.projector
         if projector is None:
             return

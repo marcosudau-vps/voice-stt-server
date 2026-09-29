@@ -412,8 +412,13 @@ Empfehlungen:
 | `4406` | keine gemeinsame Protokollversion | `protocol.incompatible` |
 | `4408` | kein Frame binnen 10 s nach dem Öffnen | keine |
 | `4409` | Sessionadmission abgelehnt | `session.rejected` |
-| `1011` | unerwarteter Serverfehler (Handshake oder später) | keine |
+| `1011` | unerwarteter Serverfehler (Handshake oder später), einschließlich terminaler Recovery einer angenommenen Session | keine |
 
-Nach der Annahme schließt der Server nur bei internem Fehler oder beim
-Herunterfahren. Ein Verbindungsende beendet die Session vollständig; siehe
+Nach der Annahme schließt der Server nur bei internem Fehler, bei terminaler
+Recovery oder beim Herunterfahren. Eine terminale Recovery beendet die
+Domain-Session irreparabel und schließt die zugehörige WebSocket-Verbindung
+mit `1011`, ohne dass der Client noch etwas senden muss und ohne neue
+Wire-Nachricht. Der Session-Slot wird freigegeben; Weiterarbeit erfordert
+einen Reconnect mit neuem `hello` (neue `sessionId`). Ein Verbindungsende
+beendet die Session vollständig; siehe
 [Reconnect](05-client-zustandsmodell.md#5-reconnect).
