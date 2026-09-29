@@ -352,7 +352,14 @@ F1/F5/F10:
   bleibt die Session **nicht** dauerhaft in `closing_input`: sie wird über den
   bestehenden Session-Close-Pfad technisch beendet. Es wird kein wieder
   benutzbares `idle` behauptet; offene Ledgerarbeit wird cancel-/terminalisiert
-  und eine neue Session muss aufgebaut werden.
+  und eine neue Session muss aufgebaut werden. Fachlich terminale Session
+  versus Transportverbindung: Die V2-Projektion erhält dafür einen privaten
+  internen Marker (kein öffentliches Domain-Event, kein Legacy-Publish) und
+  schließt die übernommene WebSocket-Verbindung mit `1011` — auch ohne
+  weitere Clientnachricht. Bereits an den Writer übergebene Nachrichten werden
+  noch geordnet zugestellt; scheitert der Writer selbst fatal, weckt auch das
+  den Empfangs-/Cleanup-Pfad. Der Session-Slot wird freigegeben; ein Reconnect
+  erfordert ein neues `hello` mit neuer `sessionId`.
 
 - Läuft der Recoverytimeout in `closing_input` ordentlich ab, wird das Gate
   abgebrochen, der Recorder defensiv gestoppt, ein nicht mehr einreihbares
@@ -940,10 +947,18 @@ Ablehnungen und Close-Codes:
 | keine gemeinsame Protokollversion | `protocol.incompatible` | `4406` |
 | Handshake-Timeout (10 s ohne erstes Frame) | – | `4408` |
 | Sessionadmission abgelehnt | `session.rejected` mit `errors[]` | `4409` |
-| unerwarteter interner Fehler | – | `1011` |
+| unerwarteter interner Fehler, einschließlich terminaler Recovery einer angenommenen Session | – | `1011` |
 
-In keinem dieser Fälle entsteht eine `sessionId` oder eine halb aufgebaute
-Session. Fachlich abgelehnte Commands schließen die Verbindung dagegen nie.
+Eine irreparabel geschlossene Session bleibt nicht mit einem scheinbar
+betriebsbereiten V2-WebSocket zurück: Die terminale Recovery schließt die
+zugehörige `/ws/v2`-Verbindung mit `1011`, gibt den Session-Slot frei und
+erfordert für Weiterarbeit ein neues `hello` (neue `sessionId`).
+
+Bei den Handshake-Fällen (`4400`, `4406`, `4408`, `4409`) entsteht keine
+`sessionId` und keine halb aufgebaute Session. Die terminale Recovery
+betrifft dagegen eine bereits angenommene Session: Deren Slot wird
+freigegeben, Weiterarbeit erfordert ein neues `hello` mit neuer `sessionId`.
+Fachlich abgelehnte Commands schließen die Verbindung dagegen nie.
 
 `serverCommit` wird aus der Umgebungsvariablen `VOICESTT_SERVER_COMMIT`
 gelesen und fällt sonst auf `unknown` zurück; ein Git-Aufruf zur Laufzeit
