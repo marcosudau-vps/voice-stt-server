@@ -29,6 +29,7 @@ class RealtimeTextStabilizerTests(unittest.TestCase):
         sequence,
         completed_at=None,
         recording_id="rec-1",
+        segment_id="seg-1",
         publish_allowed=True,
         audio_start_sample=0,
         audio_end_sample_exclusive=None,
@@ -40,7 +41,7 @@ class RealtimeTextStabilizerTests(unittest.TestCase):
             audio_end_sample_exclusive = sequence * 1600
         return RealtimeTextObservation(
             recording_id=recording_id,
-            segment_id="seg-1",
+            segment_id=segment_id,
             sequence=sequence,
             raw_text=text,
             audio_start_sample=audio_start_sample,
@@ -382,6 +383,7 @@ class RealtimeTextStabilizerTests(unittest.TestCase):
             1,
             completed_at=0.00,
             recording_id="rec-2",
+            segment_id="seg-2",
         )
 
         self.assertEqual(snapshot.stable_text, "")
@@ -536,6 +538,87 @@ class AudioRecorderRealtimeStabilizerIntegrationTests(unittest.TestCase):
             recorder.realtime_text_stabilizer.snapshot().stable_text,
             "",
         )
+
+
+class RealtimeRecordingIdentityTests(unittest.TestCase):
+    """AUFTRAG 3/3 Tests B und F – Identität am Stabilizer.
+
+    Test B: Eine Observation darf nicht `recording_id=R1` mit
+    `segment_id=S2` mischen; eine fremde Segmentidentität derselben
+    Recording-Generation wird abgewiesen, ohne den Stabilizer zu
+    re-initialisieren. Test F: Reguläre Interims derselben aktiven Aufnahme
+    (inkl. Outlier-/Consensus-Pfad) funktionieren weiterhin.
+    """
+
+    def _observation(self, text, sequence, recording_id, segment_id,
+                     completed_at=None):
+        if completed_at is None:
+            completed_at = sequence * 0.85
+        return RealtimeTextObservation(
+            recording_id=recording_id,
+            segment_id=segment_id,
+            sequence=sequence,
+            raw_text=text,
+            audio_start_sample=0,
+            audio_end_sample_exclusive=sequence * 1600,
+            sample_rate=16000,
+            created_at_monotonic=max(0.0, completed_at - 0.02),
+            completed_at_monotonic=completed_at,
+            trigger_reason="timer",
+        )
+
+    def test_mixed_recording_segment_identity_is_rejected(self):
+        stabilizer = RealtimeTextStabilizer()
+        stabilizer.reset("rec-R1", segment_id="seg-S1")
+        first = stabilizer.observe(
+            self._observation("hello world", 1, "rec-R1", "seg-S1")
+        )
+        self.assertTrue(first.accepted)
+
+        mixed = stabilizer.observe(
+            self._observation("hello world", 2, "rec-R1", "seg-S2",
+                              completed_at=0.9)
+        )
+        self.assertFalse(mixed.accepted)
+        self.assertEqual(mixed.ignored_reason, "wrong-segment")
+        # Der Stabilizer wurde nicht auf das fremde Segment umgestellt.
+        self.assertEqual(stabilizer.snapshot().segment_id, "seg-S1")
+        self.assertEqual(stabilizer.snapshot().recording_id, "rec-R1")
+
+        stale_recording = stabilizer.observe(
+            self._observation("old recording", 3, "rec-R0", "seg-S1")
+        )
+        self.assertFalse(stale_recording.accepted)
+        self.assertEqual(stabilizer.snapshot().recording_id, "rec-R1")
+
+        # Gültige Beobachtungen derselben Aufnahme laufen weiter.
+        third = stabilizer.observe(
+            self._observation("hello world", 4, "rec-R1", "seg-S1",
+                              completed_at=3.0)
+        )
+        self.assertTrue(third.accepted)
+        self.assertIn("hello", third.display_text)
+
+    def test_regular_interims_of_active_recording_still_work(self):
+        stabilizer = RealtimeTextStabilizer()
+        stabilizer.reset("rec-R2", segment_id="seg-S2")
+        first = stabilizer.observe(
+            self._observation("hello", 1, "rec-R2", "seg-S2",
+                              completed_at=0.0)
+        )
+        second = stabilizer.observe(
+            self._observation("hello world", 2, "rec-R2", "seg-S2",
+                              completed_at=0.9)
+        )
+        third = stabilizer.observe(
+            self._observation("hello world", 3, "rec-R2", "seg-S2",
+                              completed_at=1.8)
+        )
+        self.assertTrue(first.accepted)
+        self.assertTrue(second.accepted)
+        self.assertTrue(third.accepted)
+        self.assertEqual(third.display_text, "hello world")
+        self.assertTrue(third.stable_text.startswith("hello"))
 
 
 if __name__ == "__main__":

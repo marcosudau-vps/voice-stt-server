@@ -66,6 +66,9 @@ from api_fastapi_server.wake_admission import (
     WakeAdmissionCoordinator,
 )
 from VoiceSTT.core import wakeword_catalog as wakeword_catalog_module
+from VoiceSTT.core.realtime_callbacks import (
+    simple_callback_provenance as realtime_simple_provenance,
+)
 from VoiceSTT.core.wake_detection import (
     WakeAttemptPolicy,
     WakeDetectionEvaluator,
@@ -4879,7 +4882,49 @@ class RecorderBackedRealtimeSession:
         with self.lock:
             if self.reject_current_recording:
                 return
-            segment_id = self.segment_state.realtime()
+            # Follow-up 1: Mitgeführte Herkunft des einfachen Callbacks gegen
+            # den aktuellen Aufnahmestand prüfen – unmittelbar vor der
+            # Publikation, unter derselben Sperre wie die Segmentableitung.
+            # Die Signatur bleibt text-kompatibel; ohne Provenienz (Legacy/
+            # direkte Aufrufe) gilt das bisherige Verhalten.
+            provenance = getattr(
+                realtime_simple_provenance, "identity", None
+            )
+            current_recording_id = getattr(
+                getattr(self, "recorder", None),
+                "realtime_recording_id",
+                None,
+            )
+            current_context = getattr(
+                self, "_active_recording_context", None
+            )
+            if provenance is not None:
+                provenance_recording_id, provenance_segment_id = provenance
+                if (
+                    provenance_recording_id is not None
+                    and current_recording_id is not None
+                    and provenance_recording_id != current_recording_id
+                ):
+                    return
+                if (
+                    provenance_segment_id is not None
+                    and current_context is not None
+                    and provenance_segment_id != current_context.segment_id
+                ):
+                    return
+                if provenance_segment_id is not None:
+                    segment_id = provenance_segment_id
+                elif (
+                    provenance_recording_id is not None
+                    and provenance_recording_id == current_recording_id
+                ):
+                    segment_id = self.segment_state.realtime()
+                else:
+                    # Bekannte, aber unvollständige Herkunft: niemals durch
+                    # eine fremde Vordergrundidentität ersetzen.
+                    return
+            else:
+                segment_id = self.segment_state.realtime()
             segment = self._timeline_snapshot(segment_id)
         text = (text or "").strip()
         if not text:
@@ -4918,6 +4963,33 @@ class RecorderBackedRealtimeSession:
         with self.lock:
             if self.reject_current_recording:
                 return
+            # Teil C: aktuelle Aufnahmeidentität vor Verlassen der
+            # Synchronisationsgrenze sichern (PR-#3-Muster). Die eigentliche
+            # Validierung erfolgt danach ohne Lock anhand der vom Event
+            # mitgeführten ursprünglichen Identität.
+            current_recording_id = getattr(
+                getattr(self, "recorder", None),
+                "realtime_recording_id",
+                None,
+            )
+            current_context = getattr(
+                self, "_active_recording_context", None
+            )
+
+        event_recording_id = getattr(event, "recording_id", None)
+        if (
+            event_recording_id is not None
+            and current_recording_id is not None
+            and event_recording_id != current_recording_id
+        ):
+            # Verspätetes Ergebnis einer älteren Aufnahme: weder S2 zuordnen
+            # noch den R2-Stabilizer beeinflussen noch als Vorschau
+            # veröffentlichen.
+            return
+        event_segment_id = getattr(event, "segment_id", None)
+        if event_segment_id is not None and current_context is not None:
+            if event_segment_id != current_context.segment_id:
+                return
 
         raw_text = (getattr(event, "raw_observation_text", "") or "").strip()
         committed_stable_text = getattr(event, "stable_text", "") or ""
@@ -4938,6 +5010,13 @@ class RecorderBackedRealtimeSession:
 
         segment_id = getattr(event, "segment_id", None)
         if segment_id is None:
+            if event_recording_id is not None:
+                # Follow-up 2: Bekannte, aber unvollständige Herkunft –
+                # eine vorhandene Recording-ID ohne Segment-ID darf nicht
+                # durch den aktuellen Vordergrund ersetzt werden. Nur
+                # tatsächlich identitätslose Legacy-Aufrufe behalten den
+                # bisherigen Fallback.
+                return
             segment_id = self.segment_state.realtime()
 
         text = (

@@ -15,6 +15,7 @@ from .realtime_text_stabilizer import (
 from .realtime_callbacks import (
     publish_realtime_transcription_stabilized,
     publish_realtime_transcription_update,
+    simple_callback_provenance,
 )
 from .state import run_callback
 from .text_formatting import preprocess_output
@@ -514,6 +515,8 @@ def run_realtime_worker(recorder):
         sample_count,
         sample_rate,
         recording_id,
+        segment_id,
+        original_context,
         recording_started_at_monotonic,
         recording_start_time,
         created_at_monotonic,
@@ -524,6 +527,11 @@ def run_realtime_worker(recorder):
     ):
         """
         Publishes realtime text with timing and language metadata.
+
+        ``recording_id``/``segment_id``/``original_context`` sind die VOR der
+        Modellinferenz gesicherte Identität derselben Aufnahme (Teil A); sie
+        werden hier NICHT aus dem inzwischen veränderten Recorderzustand neu
+        abgeleitet.
         """
 
         raw_text = "" if realtime_text is None else str(realtime_text)
@@ -533,6 +541,18 @@ def run_realtime_worker(recorder):
 
         if not self.is_recording:
             return
+
+        # Veraltete Ergebnisse vor dem Stabilizer abweisen (Teil B): Eine neue
+        # Aufnahme kann `is_recording` bereits wieder gesetzt haben, daher
+        # genügt diese Prüfung allein nicht.
+        if getattr(self, "realtime_recording_id", None) is not None:
+            if recording_id != getattr(self, "realtime_recording_id", None):
+                return
+        if original_context is not None:
+            if getattr(self, "_active_recording_context", None) != (
+                original_context
+            ):
+                return
 
         publish_allowed = (
             completed_at_wall_time - recording_start_time
@@ -550,6 +570,7 @@ def run_realtime_worker(recorder):
 
         observation = RealtimeTextObservation(
             recording_id=recording_id,
+            segment_id=segment_id,
             sequence=sequence,
             raw_text=raw_text,
             audio_start_sample=0,
@@ -575,6 +596,12 @@ def run_realtime_worker(recorder):
             awaiting_speech_end=getattr(self, "awaiting_speech_end", False),
         )
         event = realtime_text_stabilizer.observe(observation)
+        if event.ignored_reason in ("wrong-recording", "wrong-segment"):
+            # Fremdes/überholtes Ergebnis derselben Worker-Passage: weder den
+            # Stabilizer der neuen Aufnahme beeinflussen noch als Vorschau der
+            # neuen Aufnahme veröffentlichen. Andere Ablehnungen (Outlier,
+            # Consensus, Revision) behalten ihre bestehende Semantik.
+            return
         self.realtime_text_stabilization_event = event
 
         if event.accepted:
@@ -605,44 +632,55 @@ def run_realtime_worker(recorder):
         if not raw_text.strip() or not publish_allowed:
             return
 
-        structured_callback = getattr(
-            self,
-            "on_realtime_text_stabilization_update",
-            None,
+        # Die eingefrorene Herkunft bis zur einfachen Server-Callback-Grenze
+        # transportieren (Provenienz gilt pro Worker-Aufruf auf diesem Thread;
+        # öffentliche Text-Signaturen bleiben unverändert). Die Session
+        # validiert unmittelbar vor der Publikation erneut (Follow-up 1).
+        simple_callback_provenance.identity = (
+            recording_id,
+            segment_id,
         )
-        if structured_callback:
-            _safe_realtime_callback(structured_callback, event)
+        try:
+            structured_callback = getattr(
+                self,
+                "on_realtime_text_stabilization_update",
+                None,
+            )
+            if structured_callback:
+                _safe_realtime_callback(structured_callback, event)
 
-        stabilized_display_text = event.display_text or raw_text.strip()
-        _safe_realtime_callback(
-            publish_realtime_transcription_stabilized,
-            self,
-            preprocess_output(
-                stabilized_display_text,
-                preview=True,
-                ensure_sentence_starting_uppercase=(
-                    self.ensure_sentence_starting_uppercase
+            stabilized_display_text = event.display_text or raw_text.strip()
+            _safe_realtime_callback(
+                publish_realtime_transcription_stabilized,
+                self,
+                preprocess_output(
+                    stabilized_display_text,
+                    preview=True,
+                    ensure_sentence_starting_uppercase=(
+                        self.ensure_sentence_starting_uppercase
+                    ),
+                    ensure_sentence_ends_with_period=(
+                        self.ensure_sentence_ends_with_period
+                    ),
                 ),
-                ensure_sentence_ends_with_period=(
-                    self.ensure_sentence_ends_with_period
-                ),
-            ),
-        )
+            )
 
-        _safe_realtime_callback(
-            publish_realtime_transcription_update,
-            self,
-            preprocess_output(
-                raw_text.strip(),
-                preview=True,
-                ensure_sentence_starting_uppercase=(
-                    self.ensure_sentence_starting_uppercase
+            _safe_realtime_callback(
+                publish_realtime_transcription_update,
+                self,
+                preprocess_output(
+                    raw_text.strip(),
+                    preview=True,
+                    ensure_sentence_starting_uppercase=(
+                        self.ensure_sentence_starting_uppercase
+                    ),
+                    ensure_sentence_ends_with_period=(
+                        self.ensure_sentence_ends_with_period
+                    ),
                 ),
-                ensure_sentence_ends_with_period=(
-                    self.ensure_sentence_ends_with_period
-                ),
-            ),
-        )
+            )
+        finally:
+            simple_callback_provenance.identity = None
 
     last_transcription_time = time.time()
 
@@ -655,9 +693,33 @@ def run_realtime_worker(recorder):
 
         last_transcription_time = time.time()
 
+        # Teil A: Aufnahmekonstellation VOR Snapshot und Inferenz einfrieren.
+        # Während der Modellinferenz darf kein Session-/Recorder-Lock gehalten
+        # werden; stattdessen validieren wir vorher/nachher, dass Audio und
+        # Identität derselben Aufnahme entstammen (PR-#3-SegmentContext
+        # wiederverwenden, kein zweites Segment-ID-System).
+        frozen_recording_id = getattr(self, "realtime_recording_id", 0)
+        frozen_context = getattr(self, "_active_recording_context", None)
+        frozen_segment_id = getattr(frozen_context, "segment_id", None)
+        frozen_start_monotonic = getattr(
+            self,
+            "recording_start_monotonic",
+            None,
+        )
+        frozen_start_time = getattr(self, "recording_start_time", None)
+
         frames_snapshot = _snapshot_frames()
+        if getattr(self, "realtime_recording_id", 0) != frozen_recording_id:
+            # Die Aufnahme hat sich zwischen Identitätslesung und Snapshot
+            # verändert; Audio und Identität gehören nicht zusammen.
+            return False
+        if frozen_context is not None:
+            snapshot_context = getattr(
+                self, "_active_recording_context", None
+            )
+            if snapshot_context != frozen_context:
+                return False
         sample_rate = _safe_get_sample_rate()
-        recording_id = getattr(self, "realtime_recording_id", 0)
         streaming_target = _streaming_realtime_target()
         created_at_monotonic = time.monotonic()
 
@@ -671,7 +733,7 @@ def run_realtime_worker(recorder):
             transcription_result = _transcribe_with_realtime_streaming_model(
                 frames_snapshot,
                 sample_rate,
-                recording_id,
+                frozen_recording_id,
             )
             if transcription_result is None:
                 return False
@@ -696,16 +758,24 @@ def run_realtime_worker(recorder):
             + 1
         )
 
+        # Nach der Inferenz: Hat inzwischen eine neue Aufnahme begonnen (oder
+        # wurde die ursprüngliche ungültig), gehört das Ergebnis nicht mehr
+        # hierher. Weder Sequenzzähler noch Stabilizer noch Callbacks berühren.
+        if getattr(self, "realtime_recording_id", 0) != frozen_recording_id:
+            return False
+        if frozen_context is not None:
+            current_context = getattr(
+                self, "_active_recording_context", None
+            )
+            if current_context != frozen_context:
+                return False
+
         self.realtime_observation_sequence = (
             getattr(self, "realtime_observation_sequence", 0) + 1
         )
         observation_sequence = self.realtime_observation_sequence
-        recording_started_at_monotonic = getattr(
-            self,
-            "recording_start_monotonic",
-            None,
-        )
-        recording_start_time = getattr(self, "recording_start_time", None)
+        recording_started_at_monotonic = frozen_start_monotonic
+        recording_start_time = frozen_start_time
 
         completed_at_monotonic = time.monotonic()
         completed_at_wall_time = time.time()
@@ -727,7 +797,9 @@ def run_realtime_worker(recorder):
                 frame_count,
                 sample_count,
                 sample_rate,
-                recording_id,
+                frozen_recording_id,
+                frozen_segment_id,
+                frozen_context,
                 recording_started_at_monotonic,
                 recording_start_time,
                 created_at_monotonic,
@@ -748,7 +820,9 @@ def run_realtime_worker(recorder):
             frame_count,
             sample_count,
             sample_rate,
-            recording_id,
+            frozen_recording_id,
+            frozen_segment_id,
+            frozen_context,
             recording_started_at_monotonic,
             recording_start_time,
             created_at_monotonic,

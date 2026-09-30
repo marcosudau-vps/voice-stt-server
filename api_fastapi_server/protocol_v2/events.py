@@ -105,6 +105,9 @@ class EventProjector:
         #: segmentId -> count of contradictory later mappings that were
         #: rejected to preserve the first authoritative correlation.
         self._segment_mismatches = {}
+        #: segmentId with a projected terminal (completed/discarded/failed);
+        #: late interims for these segments are dropped before minting.
+        self._terminal_segments = set()
 
     # -- public API ----------------------------------------------------------
 
@@ -116,6 +119,15 @@ class EventProjector:
         event_type = LEGACY_EVENT_TYPES.get(legacy_event)
         if event_type is None:
             return []
+
+        if event_type == schema.EVENT_TRANSCRIPTION_INTERIM:
+            # Teil D: Spätes Interim nach Segmentterminal bereits VOR jeder
+            # Event-Erzeugung verwerfen – kein eventId, kein eventSeq, keine
+            # Lücke. Unabhängige letzte Sicherheitsgrenze zur quellseitigen
+            # Absicherung.
+            with self._lock:
+                if payload.get("segmentId") in self._terminal_segments:
+                    return []
 
         self._remember_segment(payload, context)
 
@@ -136,6 +148,15 @@ class EventProjector:
         )
         envelope.update(fields)
         events.append(envelope)
+        if event_type in (
+            schema.EVENT_TRANSCRIPTION_COMPLETED,
+            schema.EVENT_TRANSCRIPTION_DISCARDED,
+            schema.EVENT_TRANSCRIPTION_FAILED,
+        ):
+            segment_id = payload.get("segmentId")
+            if segment_id is not None:
+                with self._lock:
+                    self._terminal_segments.add(segment_id)
         if event_type not in _CATALOG_LEVEL:
             self._observe_phase(event_type, context)
         return events
