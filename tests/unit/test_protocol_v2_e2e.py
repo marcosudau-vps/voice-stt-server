@@ -1826,6 +1826,129 @@ class RealtimeOverlapSessionTests(unittest.TestCase):
                 self.assertEqual(
                     completed["activationId"], first_activation)
 
+    def test_blocked_simple_callback_release_after_new_recording(self):
+        """Follow-up Befund 1: R1-Simple-Callback erst nach R2-Start freigeben.
+
+        Der R1-Text passiert die Quellenprüfung (Provenienz R1/S1), wird an
+        der kontrollierten Übergabestelle blockiert, R2/S2 startet, erst dann
+        läuft der alte Callback weiter. Kein R1-Text als S2-Interim.
+        """
+        import threading as _threading
+        from VoiceSTT.core import realtime_callbacks as _rt_callbacks
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                _cid, first_ack = session.activate()
+                session.event(schema.EVENT_ACTIVATION_STARTED)
+                session.send_bytes(speech_packet())
+                s1_started = session.event(
+                    schema.EVENT_SEGMENT_RECORDING_STARTED)
+                server = session.server_session(self.app)
+                recorder = session.recorder()
+                recorder.realtime_recording_id = 501
+                s1_id = s1_started["segmentId"]
+
+                entered = _threading.Event()
+                release = _threading.Event()
+                original = server._on_realtime_text
+
+                def gated(text):
+                    entered.set()
+                    self.assertTrue(
+                        release.wait(timeout=15.0),
+                        "gated simple callback was never released",
+                    )
+                    return original(text)
+
+                server._on_realtime_text = gated
+                worker_error = []
+                try:
+                    # Simulierter Worker-Aufruf mit eingefrorener R1-Provenienz.
+                    def invoke():
+                        try:
+                            _rt_callbacks.simple_callback_provenance.identity = (
+                                501, s1_id)
+                            try:
+                                server._on_realtime_text("R1-HELD-TEXT")
+                            finally:
+                                _rt_callbacks.simple_callback_provenance.identity = (
+                                    None)
+                        except Exception as exc:  # pragma: no cover
+                            worker_error.append(exc)
+
+                    invoker = _threading.Thread(target=invoke, daemon=True)
+                    invoker.start()
+                    self.assertTrue(
+                        entered.wait(timeout=15.0),
+                        "worker never reached the simple callback",
+                    )
+
+                    session.recorder().flush_buffered_audio()
+                    session.event(schema.EVENT_SEGMENT_RECORDING_ENDED)
+                    finish = session.command({
+                        "type": schema.ACTIVATION_COMMAND,
+                        "action": schema.FINISH,
+                        "activationId": first_ack["activationId"],
+                    })
+                    session.ack(finish["commandId"])
+                    session.event(schema.EVENT_ACTIVATION_INPUT_CLOSED)
+                    _cid2, _ack2 = session.activate()
+                    session.event(schema.EVENT_ACTIVATION_STARTED)
+                    session.send_bytes(speech_packet())
+                    s2_started = session.event(
+                        schema.EVENT_SEGMENT_RECORDING_STARTED)
+                    recorder.realtime_recording_id = 502
+                finally:
+                    release.set()
+                invoker.join(timeout=15.0)
+                self.assertFalse(invoker.is_alive())
+                self.assertEqual(worker_error, [])
+                server._on_realtime_text = original
+                session.settle()
+                held = self._interims_with_text(session, "R1-HELD-TEXT")
+                self.assertEqual(held, [])
+                for interim in session.collected(
+                        schema.EVENT_TRANSCRIPTION_INTERIM):
+                    if interim.get("segmentId") == s2_started["segmentId"]:
+                        self.assertNotEqual(
+                            interim.get("text"), "R1-HELD-TEXT")
+
+    def test_structured_recording_without_segment_uses_no_foreground(self):
+        """Follow-up Befund 2: Recording-ID ohne Segment-ID.
+
+        Ein strukturiertes Event mit bekannter Recording-ID, aber ohne
+        Segment-ID, darf nicht auf den aktuellen Vordergrund zurückfallen,
+        solange dieselbe Recording-Generation nicht bestätigt ist.
+        Identitätslose Legacy-Aufrufe behalten ihre Kompatibilität.
+        """
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                _cid, _ack = session.activate()
+                session.event(schema.EVENT_ACTIVATION_STARTED)
+                session.send_bytes(speech_packet())
+                session.event(schema.EVENT_SEGMENT_RECORDING_STARTED)
+                server = session.server_session(self.app)
+
+                server._on_realtime_stabilization_event(
+                    self._stabilization_event(
+                        recording_id="rec-unknown-1", segment_id=None,
+                        sequence=3, raw_text="ORPHAN-REC-TEXT"))
+                session.settle()
+                self.assertEqual(
+                    self._interims_with_text(session, "ORPHAN-REC-TEXT"),
+                    [],
+                    "recording without segment must not invent a segment",
+                )
+
+                # Tatsächlich identitätsloser Legacy-Aufruf: kompatibel.
+                server._on_realtime_stabilization_event(
+                    self._stabilization_event(
+                        recording_id=None, segment_id=None, sequence=4,
+                        raw_text="LEGACY-NO-ID-TEXT"))
+                session.settle()
+                legacy_hit = self._interims_with_text(
+                    session, "LEGACY-NO-ID-TEXT")
+                self.assertEqual(len(legacy_hit), 1)
+
 
 @unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
 class ProtocolV2IsolationTests(unittest.TestCase):

@@ -1075,9 +1075,11 @@ enthalten. Ein neueres Interim ersetzt die vorläufige Darstellung desselben
 Segments. Das Event ist durch `eventSeq` geordnet, erhöht als Dataplane-Update
 aber nicht `stateVersion`; ein Transkriptionsterminal beendet die vorläufige
 Darstellung. Jede Realtime-Beobachtung trägt die vor der Modellinferenz
-eingefrorene ursprüngliche Recording-/Segment-Identität derselben Aufnahme;
-verspätete Ergebnisse einer älteren Aufnahme werden verworfen, statt sie einer
-neueren zuzuordnen. Nach einem projizierten Segmentterminal
+eingefrorene ursprüngliche Recording-/Segment-Identität derselben Aufnahme –
+auch über den einfachen Text-Callback bis zur Session-Grenze, wo sie erneut
+validiert wird; verspätete Ergebnisse einer älteren Aufnahme werden verworfen,
+statt sie einer neueren zuzuordnen. Eine bekannte, aber unvollständige
+Herkunft wird niemals durch eine fremde Vordergrundidentität ersetzt. Nach einem projizierten Segmentterminal
 (`completed`/`discarded`/`failed`) erzeugt ein spätes `realtime_transcript`
 kein `transcription.interim` mehr – ohne neue `eventId`, ohne zusätzlichen
 `eventSeq`, ohne Lücke.

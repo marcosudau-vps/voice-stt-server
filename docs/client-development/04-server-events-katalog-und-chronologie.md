@@ -68,9 +68,15 @@ segment.recording_started ─┬─► transcription.interim (0..n, ersetzbare V
   können aber nahe am Aufnahmeende verzögert eintreffen. Ein verspätetes
   Ergebnis einer älteren Aufnahme wird verworfen: Es wird weder einem neueren
   Segment zugeordnet noch in dessen Stabilizer eingespeist noch als dessen
-  Vorschau veröffentlicht. Nach einem Terminal sendet der Server für dasselbe
-  Segment kein weiteres Interim (kein `eventSeq`-Verbrauch, keine Lücke); ein
-  späteres Interim darf die endgültige Darstellung nicht mehr verändern.
+  Vorschau veröffentlicht. Auch der einfache Text-Callback transportiert die
+  eingefrorene Herkunft bis zur Session-Grenze und wird dort erneut gegen den
+  aktuellen Aufnahmestand validiert. Nach einem Terminal sendet der Server
+  für dasselbe Segment kein weiteres Interim (kein `eventSeq`-Verbrauch,
+  keine Lücke); ein späteres Interim darf die endgültige Darstellung nicht
+  mehr verändern. Eine bekannte, aber unvollständige Herkunft (z. B.
+  Recording-ID ohne Segment-ID) wird niemals durch eine fremde
+  Vordergrundidentität ersetzt; nur tatsächlich identitätslose
+  Legacy-Aufrufe behalten ihren bisherigen Fallback.
 * Genau ein Terminal je Segment. Beim Abbruch kann `transcription.discarded` (`reason = cancelled`) **vor** `recording_ended`/`accepted` desselben Segments eintreffen. Regel: das erste Terminal ist endgültig; spätere nicht-terminale Events dieses Segments nur noch protokollieren.
 * `transcription.interim` ist revidierbarer Live-Text und verändert `stateVersion` nicht. Der Client ersetzt die Vorschau desselben `segmentId`; nur `completed` ist endgültig. Ein leerer Recordertext wird `transcription.discarded` mit `reason = empty_final`.
 * Das Activation-Terminal (`activation.completed`/`.cancelled`/`.failed`) folgt, wenn alle angenommenen Segmente terminal sind.

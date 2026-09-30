@@ -15,6 +15,7 @@ from .realtime_text_stabilizer import (
 from .realtime_callbacks import (
     publish_realtime_transcription_stabilized,
     publish_realtime_transcription_update,
+    simple_callback_provenance,
 )
 from .state import run_callback
 from .text_formatting import preprocess_output
@@ -595,14 +596,13 @@ def run_realtime_worker(recorder):
             awaiting_speech_end=getattr(self, "awaiting_speech_end", False),
         )
         event = realtime_text_stabilizer.observe(observation)
-        self.realtime_text_stabilization_event = event
-
         if event.ignored_reason in ("wrong-recording", "wrong-segment"):
             # Fremdes/überholtes Ergebnis derselben Worker-Passage: weder den
             # Stabilizer der neuen Aufnahme beeinflussen noch als Vorschau der
             # neuen Aufnahme veröffentlichen. Andere Ablehnungen (Outlier,
             # Consensus, Revision) behalten ihre bestehende Semantik.
             return
+        self.realtime_text_stabilization_event = event
 
         if event.accepted:
             self.realtime_stabilization_accepted_count = (
@@ -632,44 +632,55 @@ def run_realtime_worker(recorder):
         if not raw_text.strip() or not publish_allowed:
             return
 
-        structured_callback = getattr(
-            self,
-            "on_realtime_text_stabilization_update",
-            None,
+        # Die eingefrorene Herkunft bis zur einfachen Server-Callback-Grenze
+        # transportieren (Provenienz gilt pro Worker-Aufruf auf diesem Thread;
+        # öffentliche Text-Signaturen bleiben unverändert). Die Session
+        # validiert unmittelbar vor der Publikation erneut (Follow-up 1).
+        simple_callback_provenance.identity = (
+            recording_id,
+            segment_id,
         )
-        if structured_callback:
-            _safe_realtime_callback(structured_callback, event)
+        try:
+            structured_callback = getattr(
+                self,
+                "on_realtime_text_stabilization_update",
+                None,
+            )
+            if structured_callback:
+                _safe_realtime_callback(structured_callback, event)
 
-        stabilized_display_text = event.display_text or raw_text.strip()
-        _safe_realtime_callback(
-            publish_realtime_transcription_stabilized,
-            self,
-            preprocess_output(
-                stabilized_display_text,
-                preview=True,
-                ensure_sentence_starting_uppercase=(
-                    self.ensure_sentence_starting_uppercase
+            stabilized_display_text = event.display_text or raw_text.strip()
+            _safe_realtime_callback(
+                publish_realtime_transcription_stabilized,
+                self,
+                preprocess_output(
+                    stabilized_display_text,
+                    preview=True,
+                    ensure_sentence_starting_uppercase=(
+                        self.ensure_sentence_starting_uppercase
+                    ),
+                    ensure_sentence_ends_with_period=(
+                        self.ensure_sentence_ends_with_period
+                    ),
                 ),
-                ensure_sentence_ends_with_period=(
-                    self.ensure_sentence_ends_with_period
-                ),
-            ),
-        )
+            )
 
-        _safe_realtime_callback(
-            publish_realtime_transcription_update,
-            self,
-            preprocess_output(
-                raw_text.strip(),
-                preview=True,
-                ensure_sentence_starting_uppercase=(
-                    self.ensure_sentence_starting_uppercase
+            _safe_realtime_callback(
+                publish_realtime_transcription_update,
+                self,
+                preprocess_output(
+                    raw_text.strip(),
+                    preview=True,
+                    ensure_sentence_starting_uppercase=(
+                        self.ensure_sentence_starting_uppercase
+                    ),
+                    ensure_sentence_ends_with_period=(
+                        self.ensure_sentence_ends_with_period
+                    ),
                 ),
-                ensure_sentence_ends_with_period=(
-                    self.ensure_sentence_ends_with_period
-                ),
-            ),
-        )
+            )
+        finally:
+            simple_callback_provenance.identity = None
 
     last_transcription_time = time.time()
 

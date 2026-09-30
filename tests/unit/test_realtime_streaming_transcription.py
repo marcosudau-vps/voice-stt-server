@@ -223,5 +223,167 @@ class AudioRecorderRealtimeStreamingTests(unittest.TestCase):
         self.assertIn(3200, model.transcribe_calls)
 
 
+class RealtimeWorkerOverlapRaceTests(unittest.TestCase):
+    """Follow-up: echter Worker mit blockierendem Modell-Double (R1/R2).
+
+    R1-Inferenz wird im Modell blockiert, R2 startet (neue Recording-ID,
+    neuer SegmentContext, Stabilizer-Reset, frische Frames), erst dann wird
+    R1 freigegeben. Das freigegebene R1-Ergebnis darf weder R2-Stabilizer
+    noch R2-Vorschau beeinflussen; R2 läuft normal weiter.
+    """
+
+    def setUp(self):
+        if IMPORT_ERROR is not None:
+            self.skipTest(f"AudioToTextRecorder import failed: {IMPORT_ERROR}")
+        if np is None:
+            self.skipTest("NumPy is required for realtime streaming tests")
+
+    def test_blocked_r1_inference_released_after_r2_start(self):
+        from types import SimpleNamespace
+
+        entered = threading.Event()
+        release = threading.Event()
+
+        class BlockingModel:
+            engine_name = "blocking_race"
+            supports_streaming = False
+
+            def __init__(self):
+                self.calls = []
+
+            def transcribe(self, audio, language=None, use_prompt=True):
+                self.calls.append(int(getattr(audio, "size", 0)))
+                if len(self.calls) == 1:
+                    entered.set()
+                    self.assertTrue(
+                        release.wait(timeout=15.0),
+                        "R1 model was never released",
+                    )
+                    return TranscriptionResult(
+                        text="R1-LATE-TEXT",
+                        info=TranscriptionInfo(
+                            language="en", language_probability=1.0
+                        ),
+                    )
+                return TranscriptionResult(
+                    text="R2-LIVE-TEXT",
+                    info=TranscriptionInfo(
+                        language="en", language_probability=1.0
+                    ),
+                )
+
+        model = BlockingModel()
+        recorder = AudioToTextRecorder.__new__(AudioToTextRecorder)
+        recorder.enable_realtime_transcription = True
+        recorder.is_running = True
+        recorder.is_recording = True
+        recorder.realtime_processing_pause = 0.01
+        recorder.sample_rate = 16000
+        recorder.frames = [
+            np.arange(1600, dtype=np.int16).tobytes(),
+            np.arange(1600, dtype=np.int16).tobytes(),
+        ]
+        recorder.last_frames = []
+        recorder.realtime_transcription_model = model
+        recorder.use_main_model_for_realtime = False
+        recorder._uses_external_realtime_transcription_executor = False
+        recorder.realtime_transcription_executor = None
+        recorder.language = "en"
+        recorder.realtime_transcription_count = 0
+        recorder.realtime_transcription_success_count = 0
+        recorder.realtime_transcription_empty_count = 0
+        recorder.realtime_transcription_trigger_counts = {}
+        recorder.realtime_observation_sequence = 0
+        recorder.realtime_recording_id = 1
+        recorder.recording_start_monotonic = time.monotonic()
+        recorder.recording_start_time = time.time() - 1.0
+        recorder._active_recording_context = SimpleNamespace(
+            segment_id="seg-S1"
+        )
+        recorder.init_realtime_after_seconds = 0.0
+        recorder.realtime_text_stabilizer = RealtimeTextStabilizer()
+        recorder.realtime_text_stabilizer.reset(
+            recorder.realtime_recording_id,
+            started_at_monotonic=recorder.recording_start_monotonic,
+            started_at_wall_time=recorder.recording_start_time,
+        )
+        recorder.text_storage = []
+        recorder.realtime_transcription_text = ""
+        recorder.realtime_stabilized_text = ""
+        recorder.realtime_stabilized_safetext = ""
+        recorder.realtime_text_stabilization_event = None
+        recorder.realtime_stabilization_accepted_count = 0
+        recorder.realtime_stabilization_outlier_count = 0
+        recorder.realtime_stabilization_stable_delta_count = 0
+        recorder.realtime_transcription_use_syllable_boundaries = False
+        recorder.awaiting_speech_end = False
+        simple_texts = []
+        structured_events = []
+        recorder.on_realtime_text_stabilization_update = (
+            structured_events.append
+        )
+        recorder.on_realtime_transcription_update = simple_texts.append
+        recorder.on_realtime_transcription_stabilized = None
+        recorder.start_callback_in_new_thread = False
+        recorder.ensure_sentence_starting_uppercase = False
+        recorder.ensure_sentence_ends_with_period = False
+        recorder.realtime_model_type = "fake"
+
+        thread = threading.Thread(
+            target=run_realtime_worker, args=(recorder,), daemon=True
+        )
+        thread.start()
+        try:
+            self.assertTrue(
+                entered.wait(timeout=15.0),
+                "R1 inference never started",
+            )
+            # R2 beginnt, während R1 im Modell blockiert ist.
+            recorder.realtime_recording_id = 2
+            recorder._active_recording_context = SimpleNamespace(
+                segment_id="seg-S2"
+            )
+            recorder.realtime_observation_sequence = 0
+            recorder.recording_start_monotonic = time.monotonic()
+            recorder.recording_start_time = time.time()
+            recorder.realtime_text_stabilizer.reset(
+                recorder.realtime_recording_id,
+                started_at_monotonic=recorder.recording_start_monotonic,
+                started_at_wall_time=recorder.recording_start_time,
+            )
+            recorder.frames = [
+                np.arange(1600, dtype=np.int16).tobytes(),
+            ]
+            release.set()
+            self.assertTrue(
+                wait_until(
+                    lambda: "R2-LIVE-TEXT" in simple_texts, timeout=15.0
+                ),
+                f"R2 preview never arrived: {simple_texts}",
+            )
+        finally:
+            release.set()
+            recorder.is_recording = False
+            recorder.is_running = False
+            thread.join(timeout=10.0)
+            self.assertFalse(thread.is_alive())
+
+        self.assertNotIn("R1-LATE-TEXT", simple_texts)
+        self.assertTrue(
+            all(
+                event.raw_observation_text != "R1-LATE-TEXT"
+                for event in structured_events
+            ),
+            "stale R1 must not reach the stabilization consumer",
+        )
+        snapshot = recorder.realtime_text_stabilizer.snapshot()
+        self.assertEqual(snapshot.recording_id, 2)
+        self.assertNotIn("R1-LATE-TEXT", snapshot.display_text)
+        stabilization_event = recorder.realtime_text_stabilization_event
+        self.assertIsNotNone(stabilization_event)
+        self.assertEqual(stabilization_event.recording_id, 2)
+        self.assertEqual(recorder.realtime_observation_sequence, 1)
+
+
 if __name__ == "__main__":
     unittest.main()
