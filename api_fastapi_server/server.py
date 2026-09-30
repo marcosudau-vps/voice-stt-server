@@ -4918,6 +4918,33 @@ class RecorderBackedRealtimeSession:
         with self.lock:
             if self.reject_current_recording:
                 return
+            # Teil C: aktuelle Aufnahmeidentität vor Verlassen der
+            # Synchronisationsgrenze sichern (PR-#3-Muster). Die eigentliche
+            # Validierung erfolgt danach ohne Lock anhand der vom Event
+            # mitgeführten ursprünglichen Identität.
+            current_recording_id = getattr(
+                getattr(self, "recorder", None),
+                "realtime_recording_id",
+                None,
+            )
+            current_context = getattr(
+                self, "_active_recording_context", None
+            )
+
+        event_recording_id = getattr(event, "recording_id", None)
+        if (
+            event_recording_id is not None
+            and current_recording_id is not None
+            and event_recording_id != current_recording_id
+        ):
+            # Verspätetes Ergebnis einer älteren Aufnahme: weder S2 zuordnen
+            # noch den R2-Stabilizer beeinflussen noch als Vorschau
+            # veröffentlichen.
+            return
+        event_segment_id = getattr(event, "segment_id", None)
+        if event_segment_id is not None and current_context is not None:
+            if event_segment_id != current_context.segment_id:
+                return
 
         raw_text = (getattr(event, "raw_observation_text", "") or "").strip()
         committed_stable_text = getattr(event, "stable_text", "") or ""
@@ -4938,6 +4965,9 @@ class RecorderBackedRealtimeSession:
 
         segment_id = getattr(event, "segment_id", None)
         if segment_id is None:
+            # Nur ohne jede mitgeführte Identität (Legacy/simple Pfade) auf
+            # den aktuellen Vordergrund zurückfallen; eine vorhandene fremde
+            # Identität wird oben abgewiesen, nie ersetzt.
             segment_id = self.segment_state.realtime()
 
         text = (

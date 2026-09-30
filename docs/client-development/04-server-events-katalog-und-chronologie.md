@@ -62,7 +62,15 @@ segment.recording_started ─┬─► transcription.interim (0..n, ersetzbare V
 ```
 
 * Schlüssel ist `segmentId`; Reihenfolge der Segmente ist `segmentSequence`.
-* Realtime-Jobs laufen asynchron. Interims entstehen typischerweise während der Aufnahme, können aber nahe am Aufnahmeende verzögert eintreffen. Nach einem Terminal darf ein späteres Interim die endgültige Darstellung nicht mehr verändern.
+* Realtime-Jobs laufen asynchron. Jede Beobachtung trägt die vor der
+  Modellinferenz eingefrorene ursprüngliche Recording-/Segment-Identität
+  derselben Aufnahme. Interims entstehen typischerweise während der Aufnahme,
+  können aber nahe am Aufnahmeende verzögert eintreffen. Ein verspätetes
+  Ergebnis einer älteren Aufnahme wird verworfen: Es wird weder einem neueren
+  Segment zugeordnet noch in dessen Stabilizer eingespeist noch als dessen
+  Vorschau veröffentlicht. Nach einem Terminal sendet der Server für dasselbe
+  Segment kein weiteres Interim (kein `eventSeq`-Verbrauch, keine Lücke); ein
+  späteres Interim darf die endgültige Darstellung nicht mehr verändern.
 * Genau ein Terminal je Segment. Beim Abbruch kann `transcription.discarded` (`reason = cancelled`) **vor** `recording_ended`/`accepted` desselben Segments eintreffen. Regel: das erste Terminal ist endgültig; spätere nicht-terminale Events dieses Segments nur noch protokollieren.
 * `transcription.interim` ist revidierbarer Live-Text und verändert `stateVersion` nicht. Der Client ersetzt die Vorschau desselben `segmentId`; nur `completed` ist endgültig. Ein leerer Recordertext wird `transcription.discarded` mit `reason = empty_final`.
 * Das Activation-Terminal (`activation.completed`/`.cancelled`/`.failed`) folgt, wenn alle angenommenen Segmente terminal sind.

@@ -170,7 +170,7 @@ Regeln für `apply`:
 | `activation.input_closed` | Activation `inputClosed = true`; `input` nur dann auf `idle` setzen, wenn `input.activationId === e.activationId` – eine neue Activation kann ihr `activation.started` **vor** dem `input_closed` der vorigen senden |
 | `activation.completed`/`.cancelled`/`.failed` | Activation `terminal` setzen; darf **vor** `input_closed` kommen – dann `input` erst bei `input_closed` zurücksetzen |
 | `segment.*`, `transcription.accepted` | Segment anlegen/Stufe erhöhen, falls noch nicht terminal |
-| `transcription.interim` | falls noch nicht terminal: `interimText` desselben Segments ersetzen; optionale Stabilisierungsfelder nur als Vorschau behandeln |
+| `transcription.interim` | falls noch nicht terminal: `interimText` desselben Segments ersetzen; optionale Stabilisierungsfelder nur als Vorschau behandeln (der Server sendet nach einem Terminal kein weiteres Interim; die Regel bleibt clientseitig als Verteidigung bestehen) |
 | `transcription.completed`/`.discarded`/`.failed` | `interimText` entfernen und Segment terminal setzen (erstes Terminal gewinnt) |
 | `settings.changed` | `settingsRevision` übernehmen; Werte per Snapshot nachladen, falls benötigt |
 | `wakeword.availability_changed` | `wakeWords.available`/`catalogRevision` ersetzen; bei geänderter Revision den Katalog (`GET /api/v2/wake-words`) neu laden – das Event trägt keine Metadaten (Anzeigenamen, Aliase, Backends) und kommt auch bei reinen Metadatenänderungen |

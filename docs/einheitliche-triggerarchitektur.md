@@ -1074,7 +1074,13 @@ kann die vorhandenen Stabilisierungs-, Consensus-, Revision- und Timingfelder
 enthalten. Ein neueres Interim ersetzt die vorläufige Darstellung desselben
 Segments. Das Event ist durch `eventSeq` geordnet, erhöht als Dataplane-Update
 aber nicht `stateVersion`; ein Transkriptionsterminal beendet die vorläufige
-Darstellung.
+Darstellung. Jede Realtime-Beobachtung trägt die vor der Modellinferenz
+eingefrorene ursprüngliche Recording-/Segment-Identität derselben Aufnahme;
+verspätete Ergebnisse einer älteren Aufnahme werden verworfen, statt sie einer
+neueren zuzuordnen. Nach einem projizierten Segmentterminal
+(`completed`/`discarded`/`failed`) erzeugt ein spätes `realtime_transcript`
+kein `transcription.interim` mehr – ohne neue `eventId`, ohne zusätzlichen
+`eventSeq`, ohne Lücke.
 
 Ein Transportretry desselben logischen Ereignisses liefert dieselbe `eventId`,
 dieselbe `eventSeq` und dieselbe `stateVersion`.
