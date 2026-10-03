@@ -18,6 +18,12 @@ If you are working from a source checkout:
 python -m pip install -e ".[faster-whisper]"
 ```
 
+> Compatibility note: `faster-whisper 1.2.1` still decodes audio via
+> `av.open(..., metadata_errors="ignore")`, an argument PyAV 19 removed.
+> The `faster-whisper` extra therefore pins `av>=11,<19` (see
+> `requirements.txt` / `setup.py`); installing the extra resolves PyAV
+> below 19 automatically.
+
 ## Basic Use
 
 ```python
