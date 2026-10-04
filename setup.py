@@ -252,7 +252,14 @@ base_requirements = [
     requirement("soundfile"),
 ]
 
-faster_whisper_requirements = [requirement("faster-whisper")]
+faster_whisper_requirements = [
+    requirement("faster-whisper"),
+    # PyAV compat: faster-whisper 1.2.1 needs av.open(metadata_errors=...),
+    # removed in PyAV 19. Keep the pin next to the engine in every path that
+    # installs it (faster-whisper/recommended/default/all extras and the
+    # public server distributions).
+    requirement("av"),
+]
 whisper_cpp_requirements = ["pywhispercpp"]
 openai_whisper_requirements = ["openai-whisper"]
 sherpa_onnx_requirements = ["sherpa-onnx"]
