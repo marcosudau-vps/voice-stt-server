@@ -663,6 +663,105 @@ class SegmentActivationCorrelationInvariantTests(unittest.TestCase):
         self.assertEqual(late_accepted[0]["activationId"], original_activation)
 
 
+class RealtimePostTerminalSuppressionTests(unittest.TestCase):
+    """AUFTRAG 3/3 Tests C und D – kein Interim nach Segmentterminal.
+
+    Nach `completed`/`discarded`/`failed` darf ein spätes
+    `realtime_transcript` desselben Segments kein `transcription.interim`
+    mehr erzeugen: keine neue `eventId`, kein zusätzlicher `eventSeq`,
+    Finaltext erhalten, Folgesequenz lückenlos.
+    """
+
+    def _terminal_case(self, legacy_terminal, terminal_type):
+        state = ProtocolSessionState(schema.new_canonical_id())
+        projector = EventProjector(state)
+        activation = schema.new_canonical_id()
+        context = ProjectionContext(
+            phase=schema.SEGMENT_ACTIVE,
+            activation_id=activation,
+            activation_sequence=1,
+        )
+        projector.project(
+            "recording_started",
+            {"segmentId": "s-rt1", "segmentSequence": 1,
+             "activationId": activation},
+            context,
+        )
+        interim = projector.project(
+            "realtime_transcript",
+            {"segmentId": "s-rt1", "segmentSequence": 1,
+             "activationId": activation, "text": "vorläufig"},
+            context,
+        )
+        self.assertTrue(
+            [e for e in interim
+             if e["type"] == schema.EVENT_TRANSCRIPTION_INTERIM]
+        )
+        terminal = projector.project(
+            legacy_terminal,
+            {"segmentId": "s-rt1", "segmentSequence": 1,
+             "activationId": activation, "text": "final",
+             "reason": "test-terminal"},
+            context,
+        )
+        terminal_events = [
+            e for e in terminal if e["type"] == terminal_type
+        ]
+        self.assertEqual(len(terminal_events), 1)
+        seq_after_terminal = state.last_event_seq
+
+        late = projector.project(
+            "realtime_transcript",
+            {"segmentId": "s-rt1", "segmentSequence": 1,
+             "activationId": activation, "text": "verspätet"},
+            context,
+        )
+        self.assertEqual(
+            [e for e in late
+             if e["type"] == schema.EVENT_TRANSCRIPTION_INTERIM],
+            [],
+        )
+        self.assertEqual(state.last_event_seq, seq_after_terminal)
+
+        # Die Sequenz bleibt lückenlos: nächstes gültiges Event folgt direkt.
+        projector.project(
+            "recording_started",
+            {"segmentId": "s-rt2", "segmentSequence": 2,
+             "activationId": activation},
+            context,
+        )
+        follower = projector.project(
+            "realtime_transcript",
+            {"segmentId": "s-rt2", "segmentSequence": 2,
+             "activationId": activation, "text": "neu"},
+            context,
+        )
+        follower_interims = [
+            e for e in follower
+            if e["type"] == schema.EVENT_TRANSCRIPTION_INTERIM
+        ]
+        self.assertEqual(len(follower_interims), 1)
+        self.assertEqual(
+            follower_interims[0]["eventSeq"], seq_after_terminal + 2
+        )
+
+    def test_late_interim_after_completed_is_suppressed(self):
+        self._terminal_case("final_transcript",
+                            schema.EVENT_TRANSCRIPTION_COMPLETED)
+
+    def test_late_interim_after_discarded_and_failed(self):
+        for legacy_terminal, terminal_type in (
+            ("final_transcript_discarded",
+             schema.EVENT_TRANSCRIPTION_DISCARDED),
+            ("final_transcript_cancelled",
+             schema.EVENT_TRANSCRIPTION_DISCARDED),
+            ("final_transcript_failed",
+             schema.EVENT_TRANSCRIPTION_FAILED),
+        ):
+            with self.subTest(terminal=legacy_terminal):
+                self._terminal_case(legacy_terminal, terminal_type)
+
+
 @unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
 class SessionCloseRaceTests(unittest.TestCase):
     def test_no_v2_mutation_survives_the_session_close(self):

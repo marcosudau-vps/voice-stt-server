@@ -2,7 +2,16 @@
 Internal realtime callback publication helpers.
 """
 
+import threading
+
 from .state import run_callback
+
+
+#: Provenance of the simple realtime text callback currently being dispatched
+#: on this thread: ``(recording_id, segment_id)`` frozen before inference, or
+#: absent. Lets the session re-validate immediately before publication without
+#: changing the public text-only callback signatures.
+simple_callback_provenance = threading.local()
 
 
 def publish_realtime_transcription_stabilized(recorder, text):

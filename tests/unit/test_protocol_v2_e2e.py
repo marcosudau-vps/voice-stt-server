@@ -1607,6 +1607,350 @@ class SegmentActivationCorrelationV2Tests(unittest.TestCase):
 
 
 @unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
+class RealtimeOverlapSessionTests(unittest.TestCase):
+    """AUFTRAG 3/3 Tests A, E, G – stale Realtime an der Session-Grenze.
+
+    Deterministisch ohne Sleep: Die verspätete Modellrückkehr wird als
+    strukturiertes Stabilizer-Event mit alter Recording-Identität
+    nachgestellt, nachdem bereits die neue Aufnahme läuft.
+    """
+
+    def setUp(self):
+        GateAwareRecorder.instances = []
+        self.app = build_app()
+
+    def _stabilization_event(self, *, recording_id, segment_id, sequence,
+                             raw_text):
+        from VoiceSTT.core.realtime_text_stabilizer import (
+            RealtimeTextEvidenceDiagnostics,
+            RealtimeTextObservationTiming,
+            RealtimeTextStabilizationEvent,
+        )
+        return RealtimeTextStabilizationEvent(
+            recording_id=recording_id,
+            segment_id=segment_id,
+            sequence=sequence,
+            accepted=True,
+            ignored_reason=None,
+            publish_allowed=True,
+            should_publish=True,
+            raw_observation_text=raw_text,
+            stable_text="",
+            stable_delta="",
+            unstable_text=raw_text,
+            display_text=raw_text,
+            stable_normalized_offset=0,
+            stable_raw_end_offset=None,
+            stable_audio_end_sample_exclusive=None,
+            has_new_stable_text=False,
+            is_outlier=False,
+            stable_prefix_conflict=False,
+            commit_reason="none",
+            evidence=RealtimeTextEvidenceDiagnostics(),
+            timing=RealtimeTextObservationTiming(),
+            trigger_reason="timer",
+        )
+
+    def _interims_with_text(self, session, text):
+        return [
+            m for m in session.collected(schema.EVENT_TRANSCRIPTION_INTERIM)
+            if m.get("text") == text
+        ]
+
+    def test_stale_inference_after_new_recording_is_rejected(self):
+        """Test A: R1-Ergebnis trifft erst nach R2-Start ein."""
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                _cid, first_ack = session.activate()
+                first_activation = first_ack["activationId"]
+                session.event(schema.EVENT_ACTIVATION_STARTED)
+                session.send_bytes(speech_packet())
+                s1_started = session.event(
+                    schema.EVENT_SEGMENT_RECORDING_STARTED)
+                server = session.server_session(self.app)
+                recorder = session.recorder()
+                recorder.realtime_recording_id = 101
+                session.recorder().flush_buffered_audio()
+                session.event(schema.EVENT_SEGMENT_RECORDING_ENDED)
+
+                finish = session.command({
+                    "type": schema.ACTIVATION_COMMAND,
+                    "action": schema.FINISH,
+                    "activationId": first_activation,
+                })
+                session.ack(finish["commandId"])
+                session.event(schema.EVENT_ACTIVATION_INPUT_CLOSED)
+                _cid2, second_ack = session.activate()
+                second_activation = second_ack["activationId"]
+                session.event(schema.EVENT_ACTIVATION_STARTED)
+                session.send_bytes(speech_packet())
+                s2_started = session.event(
+                    schema.EVENT_SEGMENT_RECORDING_STARTED)
+                recorder.realtime_recording_id = 102
+
+                # Verspätete R1-Modellrückkehr: alte Recording-ID, keine
+                # Segmentidentität (wie der reale Worker vor Teil B).
+                server._on_realtime_stabilization_event(
+                    self._stabilization_event(
+                        recording_id=101, segment_id=None, sequence=7,
+                        raw_text="STALE-R1-TEXT"))
+                session.settle()
+                self.assertEqual(
+                    self._interims_with_text(session, "STALE-R1-TEXT"), [],
+                    "stale R1 text must never appear as any interim",
+                )
+                for interim in session.collected(
+                        schema.EVENT_TRANSCRIPTION_INTERIM):
+                    self.assertNotEqual(
+                        interim.get("segmentId"),
+                        s2_started["segmentId"],
+                        "S2 must not carry the stale R1 text",
+                    )
+
+                # Gültige R2-Beobachtung funktioniert weiterhin.
+                server._on_realtime_stabilization_event(
+                    self._stabilization_event(
+                        recording_id=102,
+                        segment_id=s2_started["segmentId"], sequence=1,
+                        raw_text="FRESH-R2-TEXT"))
+                fresh = session.event(schema.EVENT_TRANSCRIPTION_INTERIM)
+                self.assertEqual(fresh["text"], "FRESH-R2-TEXT")
+                self.assertEqual(
+                    fresh["segmentId"], s2_started["segmentId"])
+                self.assertEqual(
+                    fresh["activationId"], second_activation)
+
+    def test_stale_result_after_cancel_publishes_nothing(self):
+        """Test E: Spätes Ergebnis nach Cancel belebt nichts wieder."""
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                _cid, ack = session.activate()
+                session.event(schema.EVENT_ACTIVATION_STARTED)
+                session.send_bytes(speech_packet())
+                s1_started = session.event(
+                    schema.EVENT_SEGMENT_RECORDING_STARTED)
+                server = session.server_session(self.app)
+                recorder = session.recorder()
+                recorder.realtime_recording_id = 301
+
+                cancel = session.command({
+                    "type": schema.ACTIVATION_COMMAND,
+                    "action": schema.CANCEL,
+                    "activationId": ack["activationId"],
+                })
+                session.ack(cancel["commandId"])
+                session.event(schema.EVENT_ACTIVATION_INPUT_CLOSED)
+                session.event(schema.EVENT_TRANSCRIPTION_DISCARDED)
+                session.event(schema.EVENT_ACTIVATION_CANCELLED)
+
+                server._on_realtime_stabilization_event(
+                    self._stabilization_event(
+                        recording_id=301,
+                        segment_id=s1_started["segmentId"], sequence=9,
+                        raw_text="STALE-AFTER-CANCEL"))
+                session.settle()
+                self.assertEqual(
+                    self._interims_with_text(
+                        session, "STALE-AFTER-CANCEL"), [],
+                    "no post-terminal interim after cancel",
+                )
+                snapshot = session.snapshot()
+                self.assertEqual(snapshot["input"]["phase"], schema.IDLE)
+                self.assertIsNone(snapshot["input"]["activationId"])
+
+    def test_background_final_parallelism_with_realtime_identity(self):
+        """Test G: Final-Parallelität + beide Realtime-Callback-Grenzen."""
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                _cid, first_ack = session.activate()
+                first_activation = first_ack["activationId"]
+                session.event(schema.EVENT_ACTIVATION_STARTED)
+                session.send_bytes(speech_packet())
+                s1_started = session.event(
+                    schema.EVENT_SEGMENT_RECORDING_STARTED)
+                server = session.server_session(self.app)
+                recorder = session.recorder()
+                recorder.realtime_recording_id = 201
+                session.recorder().flush_buffered_audio()
+                session.event(schema.EVENT_SEGMENT_RECORDING_ENDED)
+
+                finish = session.command({
+                    "type": schema.ACTIVATION_COMMAND,
+                    "action": schema.FINISH,
+                    "activationId": first_activation,
+                })
+                session.ack(finish["commandId"])
+                session.event(schema.EVENT_ACTIVATION_INPUT_CLOSED)
+                _cid2, second_ack = session.activate()
+                second_activation = second_ack["activationId"]
+                session.event(schema.EVENT_ACTIVATION_STARTED)
+                session.send_bytes(speech_packet())
+                s2_started = session.event(
+                    schema.EVENT_SEGMENT_RECORDING_STARTED)
+                recorder.realtime_recording_id = 202
+
+                # Fremde strukturierte Beobachtung (R1) wird verworfen.
+                server._on_realtime_stabilization_event(
+                    self._stabilization_event(
+                        recording_id=201, segment_id=None, sequence=5,
+                        raw_text="STALE-G-TEXT"))
+                # Strukturierter R2-Pfad + einfacher Legacy-Pfad.
+                server._on_realtime_stabilization_event(
+                    self._stabilization_event(
+                        recording_id=202,
+                        segment_id=s2_started["segmentId"], sequence=1,
+                        raw_text="G-R2-STRUCTURED"))
+                server._on_realtime_text("G-R2-SIMPLE")
+                session.settle()
+
+                self.assertEqual(
+                    self._interims_with_text(session, "STALE-G-TEXT"), [],
+                )
+                structured = self._interims_with_text(
+                    session, "G-R2-STRUCTURED")
+                self.assertEqual(len(structured), 1)
+                self.assertEqual(
+                    structured[0]["segmentId"], s2_started["segmentId"])
+                self.assertEqual(
+                    structured[0]["activationId"], second_activation)
+                simple = self._interims_with_text(session, "G-R2-SIMPLE")
+                self.assertEqual(len(simple), 1)
+                self.assertEqual(
+                    simple[0]["segmentId"], s2_started["segmentId"])
+
+                # Hintergrund-Final von A1 trägt weiterhin A1.
+                completed = session.event(
+                    schema.EVENT_TRANSCRIPTION_COMPLETED)
+                self.assertEqual(
+                    completed["segmentId"], s1_started["segmentId"])
+                self.assertEqual(
+                    completed["activationId"], first_activation)
+
+    def test_blocked_simple_callback_release_after_new_recording(self):
+        """Follow-up Befund 1: R1-Simple-Callback erst nach R2-Start freigeben.
+
+        Der R1-Text passiert die Quellenprüfung (Provenienz R1/S1), wird an
+        der kontrollierten Übergabestelle blockiert, R2/S2 startet, erst dann
+        läuft der alte Callback weiter. Kein R1-Text als S2-Interim.
+        """
+        import threading as _threading
+        from VoiceSTT.core import realtime_callbacks as _rt_callbacks
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                _cid, first_ack = session.activate()
+                session.event(schema.EVENT_ACTIVATION_STARTED)
+                session.send_bytes(speech_packet())
+                s1_started = session.event(
+                    schema.EVENT_SEGMENT_RECORDING_STARTED)
+                server = session.server_session(self.app)
+                recorder = session.recorder()
+                recorder.realtime_recording_id = 501
+                s1_id = s1_started["segmentId"]
+
+                entered = _threading.Event()
+                release = _threading.Event()
+                original = server._on_realtime_text
+
+                def gated(text):
+                    entered.set()
+                    self.assertTrue(
+                        release.wait(timeout=15.0),
+                        "gated simple callback was never released",
+                    )
+                    return original(text)
+
+                server._on_realtime_text = gated
+                worker_error = []
+                try:
+                    # Simulierter Worker-Aufruf mit eingefrorener R1-Provenienz.
+                    def invoke():
+                        try:
+                            _rt_callbacks.simple_callback_provenance.identity = (
+                                501, s1_id)
+                            try:
+                                server._on_realtime_text("R1-HELD-TEXT")
+                            finally:
+                                _rt_callbacks.simple_callback_provenance.identity = (
+                                    None)
+                        except Exception as exc:  # pragma: no cover
+                            worker_error.append(exc)
+
+                    invoker = _threading.Thread(target=invoke, daemon=True)
+                    invoker.start()
+                    self.assertTrue(
+                        entered.wait(timeout=15.0),
+                        "worker never reached the simple callback",
+                    )
+
+                    session.recorder().flush_buffered_audio()
+                    session.event(schema.EVENT_SEGMENT_RECORDING_ENDED)
+                    finish = session.command({
+                        "type": schema.ACTIVATION_COMMAND,
+                        "action": schema.FINISH,
+                        "activationId": first_ack["activationId"],
+                    })
+                    session.ack(finish["commandId"])
+                    session.event(schema.EVENT_ACTIVATION_INPUT_CLOSED)
+                    _cid2, _ack2 = session.activate()
+                    session.event(schema.EVENT_ACTIVATION_STARTED)
+                    session.send_bytes(speech_packet())
+                    s2_started = session.event(
+                        schema.EVENT_SEGMENT_RECORDING_STARTED)
+                    recorder.realtime_recording_id = 502
+                finally:
+                    release.set()
+                invoker.join(timeout=15.0)
+                self.assertFalse(invoker.is_alive())
+                self.assertEqual(worker_error, [])
+                server._on_realtime_text = original
+                session.settle()
+                held = self._interims_with_text(session, "R1-HELD-TEXT")
+                self.assertEqual(held, [])
+                for interim in session.collected(
+                        schema.EVENT_TRANSCRIPTION_INTERIM):
+                    if interim.get("segmentId") == s2_started["segmentId"]:
+                        self.assertNotEqual(
+                            interim.get("text"), "R1-HELD-TEXT")
+
+    def test_structured_recording_without_segment_uses_no_foreground(self):
+        """Follow-up Befund 2: Recording-ID ohne Segment-ID.
+
+        Ein strukturiertes Event mit bekannter Recording-ID, aber ohne
+        Segment-ID, darf nicht auf den aktuellen Vordergrund zurückfallen,
+        solange dieselbe Recording-Generation nicht bestätigt ist.
+        Identitätslose Legacy-Aufrufe behalten ihre Kompatibilität.
+        """
+        with TestClient(self.app) as client:
+            with V2Session(client) as session:
+                _cid, _ack = session.activate()
+                session.event(schema.EVENT_ACTIVATION_STARTED)
+                session.send_bytes(speech_packet())
+                session.event(schema.EVENT_SEGMENT_RECORDING_STARTED)
+                server = session.server_session(self.app)
+
+                server._on_realtime_stabilization_event(
+                    self._stabilization_event(
+                        recording_id="rec-unknown-1", segment_id=None,
+                        sequence=3, raw_text="ORPHAN-REC-TEXT"))
+                session.settle()
+                self.assertEqual(
+                    self._interims_with_text(session, "ORPHAN-REC-TEXT"),
+                    [],
+                    "recording without segment must not invent a segment",
+                )
+
+                # Tatsächlich identitätsloser Legacy-Aufruf: kompatibel.
+                server._on_realtime_stabilization_event(
+                    self._stabilization_event(
+                        recording_id=None, segment_id=None, sequence=4,
+                        raw_text="LEGACY-NO-ID-TEXT"))
+                session.settle()
+                legacy_hit = self._interims_with_text(
+                    session, "LEGACY-NO-ID-TEXT")
+                self.assertEqual(len(legacy_hit), 1)
+
+
+@unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
 class ProtocolV2IsolationTests(unittest.TestCase):
     """v1 and v2 coexist on the transport layer only (AP-SRV-070 removes v1)."""
 

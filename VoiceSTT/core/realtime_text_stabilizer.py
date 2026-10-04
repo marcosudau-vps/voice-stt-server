@@ -306,6 +306,17 @@ class RealtimeTextStabilizer:
         if observation.recording_id != self._recording_id:
             return self._ignored_event(observation, "wrong-recording")
 
+        if self._segment_id is None and observation.segment_id is not None:
+            # Ersteinordnung aus derselben (recording-validierten) Aufnahme;
+            # keine Neu-Initialisierung, nur Segmentnachführung.
+            self._segment_id = observation.segment_id
+        elif (
+            self._segment_id is not None
+            and observation.segment_id is not None
+            and observation.segment_id != self._segment_id
+        ):
+            return self._ignored_event(observation, "wrong-segment")
+
         if self._finalized:
             return self._ignored_event(observation, "finalized")
 

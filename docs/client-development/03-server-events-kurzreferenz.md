@@ -83,7 +83,9 @@ Je `segmentId` gibt es genau ein Terminal (`completed` | `discarded` |
 `failed`). `transcription.interim` ist eine revidierbare Vorschau: Das neueste
 Interim desselben Segments ersetzt die vorherige Vorschau. Es ist über
 `eventSeq` geordnet, erhöht `stateVersion` aber nicht. Ein Terminal beendet und
-entfernt die Vorschau.
+entfernt die Vorschau. Nach einem Terminal sendet der Server für dasselbe
+Segment kein weiteres Interim (keine neue `eventId`, kein zusätzlicher
+`eventSeq`, keine Lücke in der öffentlichen Sequenz).
 
 #### 3.1 Optionale Felder von `transcription.interim`
 
