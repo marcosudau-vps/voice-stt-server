@@ -126,6 +126,7 @@ class OpenWakeWordEngine:
         self._total_samples = 0
         self._frame_index = 0
         self._closed = False
+        self._reset_failed = False
 
     # -- identity ------------------------------------------------------------
 
@@ -163,11 +164,13 @@ class OpenWakeWordEngine:
 
     # -- inference -----------------------------------------------------------
 
-    def process(self, data, *, gain: Optional[float] = None) -> Tuple[PredictionFrame, ...]:
+    def process(self, data, *, gain: Optional[float] = None,
+                end_sample: Optional[int] = None) -> Tuple[PredictionFrame, ...]:
         """Submits one recorder chunk and returns the *new* prediction frames.
 
         ``data`` is never modified: the gain runs on a copy that only the wake
-        inference sees.
+        inference sees. ``end_sample`` is the recorder's absolute chunk end;
+        unlike inferred sample counts it includes audio skipped while latched.
         """
         if self._closed:
             return ()
@@ -182,12 +185,17 @@ class OpenWakeWordEngine:
         payload = apply_detector_gain(pcm, factor)
 
         with self._lock:
+            if self._closed or self._reset_failed:
+                return ()
             try:
                 self._model.predict(payload)
             except Exception:  # noqa: BLE001 - one bad chunk is not fatal
                 logger.exception("OpenWakeWord-Inferenz ist fehlgeschlagen")
                 return ()
-            self._total_samples += sample_count
+            self._total_samples = (
+                self._total_samples + sample_count
+                if end_sample is None else int(end_sample)
+            )
             self._pending_samples += sample_count
             new_frames = self._pending_samples // PREDICTION_FRAME_SAMPLES
             if new_frames <= 0:
@@ -240,15 +248,22 @@ class OpenWakeWordEngine:
     # -- lifecycle -----------------------------------------------------------
 
     def reset(self) -> None:
-        """Drops the buffered audio accounting and the upstream score buffer."""
+        """Clears upstream PCM/features/predictions before another inference.
+
+        A failed or unavailable upstream reset is not a successful rearm:
+        inference stays disabled until a reset succeeds. Absolute positions and
+        frame identity remain monotone; only the partial prediction is dropped.
+        """
         with self._lock:
-            self._pending_samples = 0
+            self._reset_failed = True
+            if self._closed:
+                raise RuntimeError("OpenWakeWord engine is closed")
             reset = getattr(self._model, "reset", None)
-            if callable(reset):
-                try:
-                    reset()
-                except Exception:  # noqa: BLE001 - a reset must not be fatal
-                    logger.exception("OpenWakeWord-Reset ist fehlgeschlagen")
+            if not callable(reset):
+                raise RuntimeError("OpenWakeWord model has no reset method")
+            reset()
+            self._pending_samples = 0
+            self._reset_failed = False
 
     def close(self) -> None:
         """Releases the engine. The upstream model is dropped, never reused."""
@@ -270,4 +285,5 @@ class OpenWakeWordEngine:
                 "noiseSuppressionEnabled": self._noise_suppression_enabled,
                 "vadThreshold": self._vad_threshold,
                 "closed": self._closed,
+                "resetFailed": self._reset_failed,
             }

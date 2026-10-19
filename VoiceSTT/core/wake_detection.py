@@ -58,10 +58,13 @@ is no mixed-revision attempt.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
+
+logger = logging.getLogger("voicestt")
 
 
 #: One OpenWakeWord embedding frame advances the stream by 1280 samples.
@@ -625,30 +628,51 @@ class WakeDetectionEvaluator:
             self._cooldown_until = None
             self._last_hit = None
             self._active_policy = self._read_policy()
-            return self._tracker.reset()
+            generation = self._tracker.reset()
+            self._reset_engine_locked()
+            return generation
+
+    def _reset_engine_locked(self) -> bool:
+        if self._engine is None:
+            return True
+        try:
+            self._engine.reset()
+        except Exception:
+            logger.exception(
+                "Wake-Modellreset fehlgeschlagen; Wake-Erkennung bleibt "
+                "gesperrt, manuelle Trigger bleiben verfuegbar"
+            )
+            return False
+        return True
 
     # -- evaluation ----------------------------------------------------------
 
-    def process(self, data, *, now: Optional[float] = None) -> Tuple[WakeHit, ...]:
+    def process(self, data, *, now: Optional[float] = None,
+                end_sample: Optional[int] = None) -> Tuple[WakeHit, ...]:
         """Feeds one recorder chunk through the engine and the tracker.
 
         The gain and the threshold of one attempt come from the *same* frozen
         snapshot, so the amplification a running attempt was scored with can
         never belong to a newer revision than the attempt (Root F11).
         """
-        engine = self._engine
-        if engine is None:
-            return ()
-        policy = self._tracker.current_policy()
-        frames = engine.process(data, gain=policy.detector_gain)
-        hits: List[WakeHit] = []
-        for frame in frames:
-            hit = self.observe_scores(
-                frame.scores, end_sample=frame.end_sample, now=now
+        # No session/admission callbacks under this lock. A lifecycle reset
+        # cannot split inference from the tracker consuming its frames.
+        with self._lock:
+            engine = self._engine
+            if engine is None or self._latched_activation_id is not None:
+                return ()
+            policy = self._tracker.current_policy()
+            frames = engine.process(
+                data, gain=policy.detector_gain, end_sample=end_sample
             )
-            if hit is not None:
-                hits.append(hit)
-        return tuple(hits)
+            hits: List[WakeHit] = []
+            for frame in frames:
+                hit = self.observe_scores(
+                    frame.scores, end_sample=frame.end_sample, now=now
+                )
+                if hit is not None:
+                    hits.append(hit)
+            return tuple(hits)
 
     def observe_scores(
         self,
@@ -730,8 +754,10 @@ class WakeDetectionEvaluator:
                 return False
             if activation_id is not None and str(activation_id) != self._latched_activation_id:
                 return False
+            if not self._reset_engine_locked():
+                return False
             self._latched_activation_id = None
-            self._tracker.reset(generation=self._tracker.generation)
+            self._tracker.reset()
             self._active_policy = self._read_policy()
             return True
 

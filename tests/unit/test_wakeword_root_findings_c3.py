@@ -1164,6 +1164,7 @@ class FakeEvaluator:
     def __init__(self):
         self.latched = None
         self.refusals = 0
+        self.generation = 0
 
     def accept(self, hit, *, activation_id, boundary=None, now=None):
         self.latched = activation_id
@@ -1185,7 +1186,8 @@ class FakeEvaluator:
 
     def new_generation(self):
         self.latched = None
-        return 1
+        self.generation += 1
+        return self.generation
 
     def diagnostics(self):
         return {}

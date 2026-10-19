@@ -13,6 +13,7 @@ import threading
 import time
 import uuid
 import wave
+from contextlib import nullcontext
 from dataclasses import asdict, dataclass, field, fields, replace
 from pathlib import Path
 from typing import Any, Callable, Deque, Dict, List, Optional, Tuple
@@ -2695,7 +2696,7 @@ class RecorderBackedRealtimeSession:
     def _release_wake_latch(self, activation_id=None):
         """Releases the wake latch at the safe input close of that activation."""
         coordinator = getattr(self, "_wake_admission", None)
-        if coordinator is None:
+        if coordinator is None or activation_id is None:
             return False
         released = coordinator.release(activation_id)
         if released:
@@ -2707,6 +2708,12 @@ class RecorderBackedRealtimeSession:
                 except Exception:  # pragma: no cover - fakes may differ
                     pass
         return released
+
+    def _reset_wake_detector(self):
+        """Invalidate pending hits outside session/ledger locks."""
+        coordinator = getattr(self, "_wake_admission", None)
+        if coordinator is not None:
+            coordinator.reset()
 
     def publish_wake_word_availability(self, catalog_revision, available_ids):
         """``wakeword.availability_changed`` through the AP-SRV-040 funnel."""
@@ -2838,6 +2845,8 @@ class RecorderBackedRealtimeSession:
         return recorder_factory(**config)
 
     def start_streaming(self):
+        if self._lifecycle_epoch and not self.streaming:
+            self._reset_wake_detector()
         with self.lock:
             self._lifecycle_epoch += 1
             self._wake_detection_epoch = None
@@ -2858,6 +2867,7 @@ class RecorderBackedRealtimeSession:
             self.status = "idle"
             # An activation cannot outlive the audio stream it belongs to.
             closed = self._reset_activation_locked("stream_stopped")
+        self._reset_wake_detector()
         try:
             self.recorder.flush_buffered_audio()
             self._trim_recorded_audio_queue()
@@ -2893,6 +2903,7 @@ class RecorderBackedRealtimeSession:
             self._clear_recorder_followup_gate_locked()
             # A reconnect must never revive an activation of the old session.
             closed_activation = self._reset_activation_locked("session_closed")
+        self._reset_wake_detector()
         if closed_activation is not None:
             self._publish_timeline_event(
                 closed_activation[0], **closed_activation[1]
@@ -2934,23 +2945,26 @@ class RecorderBackedRealtimeSession:
             self._wake_detection_epoch = None
 
     def clear(self):
-        with self.lock:
-            cancelled_generation = self.generation
-            cancelled_segment = self.segment_state.current()
-            should_cancel = self.status in {"recording", "transcribing"}
-            self.generation += 1
-            next_segment = self.segment_state.reset()
-            self.timeline.reset()
-            self._performance_first_text_segments.clear()
-            self._realtime_event_stats.clear()
-            self.reject_current_recording = True
-            self.recording_sample_count = 0
-            self._wakeword_voice_window = False
-            self._wakeword_followup_generation += 1
-            self._clear_recorder_followup_gate_locked()
-            # `clear` discards the current turn, so the activation goes with it.
-            cleared_activation = self._reset_activation_locked("client_clear")
-            self.status = self._waiting_state_locked()
+        coordinator = getattr(self, "_wake_admission", None)
+        with coordinator.suspend_admission() if coordinator is not None else nullcontext():
+            with self.lock:
+                cancelled_generation = self.generation
+                cancelled_segment = self.segment_state.current()
+                should_cancel = self.status in {"recording", "transcribing"}
+                self.generation += 1
+                next_segment = self.segment_state.reset()
+                self.timeline.reset()
+                self._performance_first_text_segments.clear()
+                self._realtime_event_stats.clear()
+                self.reject_current_recording = True
+                self.recording_sample_count = 0
+                self._wakeword_voice_window = False
+                self._wakeword_followup_generation += 1
+                self._clear_recorder_followup_gate_locked()
+                # `clear` discards the current turn, so the activation goes with it.
+                cleared_activation = self._reset_activation_locked("client_clear")
+                self.status = self._waiting_state_locked()
+            self._reset_wake_detector()
         had_pending_ledger_segment = (
             self.segment_ledger.snapshot()["pendingSegmentCount"] > 0
         )
@@ -3797,6 +3811,8 @@ class RecorderBackedRealtimeSession:
             if cancel_update is not None:
                 self._apply_ledger_update(cancel_update)
 
+        if changed:
+            self._reset_wake_detector()
         if plan is not None:
             self._run_input_close(plan)
         return dict(ack)

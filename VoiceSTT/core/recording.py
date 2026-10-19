@@ -81,7 +81,7 @@ def _wake_detection_step(recorder, data, frame_index, stream_sample_position):
         return None
 
     if getattr(evaluator, "engine", None) is not None:
-        hits = evaluator.process(data)
+        hits = evaluator.process(data, end_sample=stream_sample_position)
     else:  # pragma: no cover - a session without an engine has no v2 path
         hits = ()
     if not hits:
@@ -112,6 +112,11 @@ def _wake_detection_step(recorder, data, frame_index, stream_sample_position):
         # admission authority already recorded the refusal.
         return None
 
+    if (
+        detection.detector_generation != evaluator.generation
+        or evaluator.latched_activation_id != detection.activation_id
+    ):
+        return None
     recorder.accepted_wake_detection = detection
     return boundary
 
@@ -222,10 +227,21 @@ def run_recording_worker(recorder):
             if self.use_extended_logging:
                 logger.debug('Debug: Initializing failed_stop_attempt')
             failed_stop_attempt = False
+            evaluator = getattr(self, "wake_detection_evaluator", None)
+            detection = getattr(self, "accepted_wake_detection", None)
+            if (
+                evaluator is not None
+                and detection is not None
+                and detection.detector_generation != evaluator.generation
+            ):
+                self.wake_audio_boundary = None
+                self.accepted_wake_detection = None
 
             if self.use_extended_logging:
                 logger.debug('Debug: Checking if not recording')
             if not self.is_recording:
+                if evaluator is not None:
+                    self.wakeword_detected = evaluator.latched
                 if self.use_extended_logging:
                     logger.debug('Debug: Handling not recording state')
                 time_since_listen_start = (time.time() - self.listen_start
@@ -277,7 +293,11 @@ def run_recording_worker(recorder):
                 if (
                     self.use_wake_words
                     and wake_word_activation_delay_passed
-                    and not self.wakeword_detected
+                    and not (
+                        evaluator.latched
+                        if evaluator is not None
+                        else self.wakeword_detected
+                    )
                 ):
                     wake_boundary = None
                     wakeword_index = -1

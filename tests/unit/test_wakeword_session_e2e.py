@@ -7,6 +7,7 @@ transcription model are faked.
 
 import threading
 import unittest
+from unittest import mock
 
 from api_fastapi_server.protocol_v2 import schema
 
@@ -133,7 +134,7 @@ class WakeEventTests(unittest.TestCase):
         return sessions[0]
 
     @staticmethod
-    def _candidate(identifier=BUNDLED_WAKE_WORD, score=0.91):
+    def _candidate(identifier=BUNDLED_WAKE_WORD, score=0.91, *, generation=0):
         """One finalized hit region, as the C3 tracker hands it over."""
         from VoiceSTT.core.wake_detection import WakeAttemptPolicy, WakeHit
 
@@ -148,6 +149,7 @@ class WakeEventTests(unittest.TestCase):
             operational_zero_point_sample=32000,
             prediction_frame_count=1,
             policy=WakeAttemptPolicy(sensitivity=0.5),
+            detector_generation=generation,
         )
 
     def test_an_accepted_hit_publishes_exactly_one_wakeword_detected(self):
@@ -226,7 +228,9 @@ class WakeEventTests(unittest.TestCase):
                 )
 
                 # Only now may a new utterance be admitted again.
-                second = domain._on_wakeword_detected(self._candidate())
+                second = domain._on_wakeword_detected(self._candidate(
+                    generation=domain._wake_admission.evaluator.generation,
+                ))
                 self.assertIsNotNone(second)
                 self.assertNotEqual(
                     second.activation_id, first.activation_id
@@ -254,6 +258,290 @@ class WakeEventTests(unittest.TestCase):
                 )
                 snapshot = session.snapshot()
         self.assertEqual(snapshot["input"]["phase"], schema.IDLE)
+
+    def _stateful_engine(self, domain):
+        from VoiceSTT.core.openwakeword_engine import OpenWakeWordEngine
+        from .test_wakeword_recording_path import FakeSelection, RetainedHistoryModel
+
+        model = RetainedHistoryModel()
+        engine = OpenWakeWordEngine(
+            selection=FakeSelection(), model_factory=lambda **_kwargs: model
+        )
+        evaluator = domain._wake_admission.evaluator
+        evaluator._engine = engine
+        self.addCleanup(engine.close)
+        domain._wake_detection_epoch = domain._lifecycle_epoch
+        return model, evaluator
+
+    @staticmethod
+    def _speak(evaluator):
+        evaluator.process(b"\x01\x00" * 1280)
+        return evaluator.process(b"\0\0" * 1280)
+
+    def test_stateful_finish_cancel_keep_wire_score_identity_and_event_order(self):
+        for action in (schema.FINISH, schema.CANCEL):
+            with self.subTest(action=action), TestClient(self.app) as client:
+                with V2Session(client, hello=wake_hello()) as session:
+                    domain = self._session_object()
+                    model, evaluator = self._stateful_engine(domain)
+                    with mock.patch.object(
+                        domain, "_emit_structured_event",
+                        wraps=domain._emit_structured_event,
+                    ) as emit:
+                        first = domain._on_wakeword_detected(self._speak(evaluator)[0])
+                        first_event = session.drain(schema.EVENT_WAKEWORD_DETECTED)
+                        sent = session.command({
+                            "type": schema.ACTIVATION_COMMAND,
+                            "action": action, "activationId": first.activation_id,
+                        })
+                        self.assertTrue(session.ack(sent["commandId"])["accepted"])
+                        closed = session.drain(schema.EVENT_ACTIVATION_INPUT_CLOSED)
+                        self.assertEqual(model.reset_calls, 1)
+                        self.assertEqual(evaluator.process(b"\0\0" * (1280 * 20)), ())
+                        self.assertFalse(domain._release_wake_latch(first.activation_id))
+                        self.assertFalse(domain._release_wake_latch())
+                        second = domain._on_wakeword_detected(self._speak(evaluator)[0])
+                        second_event = session.drain(schema.EVENT_WAKEWORD_DETECTED)
+                        self.assertEqual(first_event["score"], 0.91)
+                        self.assertEqual(second_event["score"], 0.91)
+                        self.assertEqual(first_event["activationId"], first.activation_id)
+                        self.assertEqual(second_event["activationId"], second.activation_id)
+                        self.assertNotEqual(first.activation_id, second.activation_id)
+                        self.assertEqual(set(first_event), set(second_event))
+                        events = session.collected(schema.EVENT_WAKEWORD_DETECTED)
+                        self.assertEqual(len(events), 2)
+                        self.assertLess(first_event["eventSeq"], closed["eventSeq"])
+                        self.assertLess(closed["eventSeq"], second_event["eventSeq"])
+                        self.assertEqual(domain._wake_admission.logical_event_count(), 2)
+                        wake_logs = [
+                            call.kwargs["score"] for call in emit.call_args_list
+                            if call.args[:2] == ("transcription", "wakeword.detected")
+                        ]
+                        self.assertEqual(wake_logs, [0.91, 0.91])
+
+    def test_stream_clear_audio_loss_and_session_close_invalidate_pending_hits(self):
+        for path in ("stream", "clear", "audio_loss", "session_close"):
+            with self.subTest(path=path), TestClient(self.app) as client:
+                with V2Session(client, hello=wake_hello()) as session:
+                    domain = self._session_object()
+                    model, evaluator = self._stateful_engine(domain)
+                    old_hit = self._speak(evaluator)[0]
+                    if path == "stream":
+                        domain.stop_streaming()
+                        domain.start_streaming()
+                    elif path == "clear":
+                        domain.clear()
+                    elif path == "audio_loss":
+                        for available in (False, True):
+                            ack = domain.handle_audio_availability_command({
+                                "commandId": f"audio-{available}",
+                                "audioAvailable": available,
+                            })
+                            self.assertTrue(ack["accepted"])
+                    else:
+                        domain.close()
+                    domain._on_wakeword_detection_start()
+                    self.assertGreater(model.reset_calls, 0)
+                    self.assertIsNone(domain._on_wakeword_detected(old_hit))
+                    self.assertEqual(domain._wake_admission.logical_event_count(), 0)
+                    if path == "session_close":
+                        self.assertEqual(domain.status, "closed")
+                        self.assertFalse(domain.streaming)
+                    else:
+                        self.assertEqual(evaluator.process(b"\0\0" * (1280 * 20)), ())
+                        current = self._speak(evaluator)[0]
+                        self.assertIsNotNone(domain._on_wakeword_detected(current))
+                        self.assertEqual(
+                            session.drain(schema.EVENT_WAKEWORD_DETECTED)["score"],
+                            0.91,
+                        )
+
+    def test_reset_error_does_not_prevent_input_close_or_manual_activation(self):
+        with TestClient(self.app) as client:
+            with V2Session(client, hello=wake_hello()) as session:
+                domain = self._session_object()
+                model, evaluator = self._stateful_engine(domain)
+                first = domain._on_wakeword_detected(self._speak(evaluator)[0])
+                session.drain(schema.EVENT_WAKEWORD_DETECTED)
+                with mock.patch.object(model, "reset", side_effect=RuntimeError("failed")):
+                    with self.assertLogs("voicestt", level="ERROR"):
+                        sent = session.command({
+                            "type": schema.ACTIVATION_COMMAND,
+                            "action": schema.FINISH,
+                            "activationId": first.activation_id,
+                        })
+                        self.assertTrue(session.ack(sent["commandId"])["accepted"])
+                        session.drain(schema.EVENT_ACTIVATION_INPUT_CLOSED)
+                    self.assertTrue(evaluator.latched)
+                    self.assertEqual(evaluator.process(b"\0\0" * (1280 * 20)), ())
+                    _command_id, manual = session.activate()
+                    self.assertTrue(manual["accepted"])
+                    self.assertEqual(
+                        session.snapshot()["input"]["primarySource"], "manual"
+                    )
+                    self.assertEqual(domain._wake_admission.logical_event_count(), 1)
+
+    def test_clear_serializes_pending_hit_admission_until_detector_invalidation(self):
+        with TestClient(self.app) as client:
+            with V2Session(client, hello=wake_hello()) as session:
+                domain = self._session_object()
+                _model, evaluator = self._stateful_engine(domain)
+                old_hit = self._speak(evaluator)[0]
+                generation = domain.generation
+                cleared = threading.Event()
+                resume_reset = threading.Event()
+                offered = threading.Event()
+                admitted = threading.Event()
+                results = {}
+                errors = []
+                reset = domain._reset_wake_detector
+                coordinator_lock = domain._wake_admission._lock
+
+                class ObservedLock:
+                    def __enter__(self):
+                        if threading.current_thread() is admission:
+                            acquired = coordinator_lock.acquire(blocking=False)
+                            results["admission_blocked"] = not acquired
+                            offered.set()
+                            if not acquired:
+                                coordinator_lock.acquire()
+                        else:
+                            coordinator_lock.acquire()
+
+                    def __exit__(self, *_args):
+                        coordinator_lock.release()
+
+                def pause_reset():
+                    cleared.set()
+                    if not resume_reset.wait(10):
+                        raise AssertionError("clear reset was never resumed")
+                    reset()
+
+                def clear():
+                    try:
+                        domain.clear()
+                    except Exception as exc:
+                        errors.append(exc)
+
+                def admit():
+                    try:
+                        results["detection"] = domain._on_wakeword_detected(old_hit)
+                    except Exception as exc:
+                        errors.append(exc)
+                    finally:
+                        admitted.set()
+
+                clearer = threading.Thread(target=clear, daemon=True)
+                admission = threading.Thread(target=admit, daemon=True)
+                with mock.patch.object(domain, "_reset_wake_detector", pause_reset), \
+                        mock.patch.object(domain._wake_admission, "_lock", ObservedLock()):
+                    clearer.start()
+                    try:
+                        self.assertTrue(cleared.wait(10))
+                        with domain.lock:
+                            self.assertEqual(domain.generation, generation + 1)
+                            self.assertEqual(domain._activation.snapshot()["phase"], schema.IDLE)
+                        self.assertEqual(evaluator.generation, old_hit.detector_generation)
+                        admission.start()
+                        self.assertTrue(offered.wait(10))
+                        if not results["admission_blocked"]:
+                            self.assertTrue(admitted.wait(10))
+                    finally:
+                        resume_reset.set()
+                        for thread in (clearer, admission):
+                            if thread.ident is not None:
+                                thread.join(10)
+                                self.assertFalse(thread.is_alive())
+                self.assertEqual(errors, [])
+                self.assertIsNone(results["detection"])
+                self.assertEqual(domain._activation.snapshot()["phase"], schema.IDLE)
+                self.assertEqual(domain._wake_admission.logical_event_count(), 0)
+                self.assertIsNone(domain._on_wakeword_detected(old_hit))
+                self.assertEqual(evaluator.process(b"\0\0" * (1280 * 20)), ())
+                current = self._speak(evaluator)[0]
+                detection = domain._on_wakeword_detected(current)
+                self.assertIsNotNone(detection)
+                self.assertIsNone(domain._on_wakeword_detected(current))
+                event = session.drain(schema.EVENT_WAKEWORD_DETECTED)
+                self.assertEqual(event["activationId"], detection.activation_id)
+                self.assertEqual(event["score"], 0.91)
+                self.assertEqual(domain._wake_admission.logical_event_count(), 1)
+                self.assertEqual(len(session.collected(schema.EVENT_WAKEWORD_DETECTED)), 1)
+
+    def test_clear_waits_for_inflight_inference_without_holding_session_lock(self):
+        with TestClient(self.app) as client:
+            with V2Session(client, hello=wake_hello()) as session:
+                domain = self._session_object()
+                model, evaluator = self._stateful_engine(domain)
+                evaluator.process(b"\x01\x00" * 1280)
+                inferring = threading.Event()
+                resume_inference = threading.Event()
+                resetting = threading.Event()
+                clear_done = threading.Event()
+                hits = []
+                errors = []
+                predict = model.predict
+                reset = domain._reset_wake_detector
+
+                def pause_inference(data):
+                    inferring.set()
+                    if not resume_inference.wait(10):
+                        raise AssertionError("inference was never resumed")
+                    return predict(data)
+
+                def infer():
+                    try:
+                        hits.extend(evaluator.process(b"\0\0" * 1280))
+                    except Exception as exc:
+                        errors.append(exc)
+
+                def observe_reset():
+                    resetting.set()
+                    reset()
+
+                def clear():
+                    try:
+                        domain.clear()
+                    except Exception as exc:
+                        errors.append(exc)
+                    finally:
+                        clear_done.set()
+
+                inference = threading.Thread(target=infer, daemon=True)
+                clearer = threading.Thread(target=clear, daemon=True)
+                with mock.patch.object(model, "predict", pause_inference), \
+                        mock.patch.object(domain, "_reset_wake_detector", observe_reset):
+                    inference.start()
+                    try:
+                        self.assertTrue(inferring.wait(10))
+                        clearer.start()
+                        self.assertTrue(resetting.wait(10))
+                        self.assertFalse(clear_done.is_set())
+                        acquired = domain.lock.acquire(timeout=5)
+                        self.assertTrue(acquired, "clear held Session while awaiting inference")
+                        if acquired:
+                            domain.lock.release()
+                    finally:
+                        resume_inference.set()
+                        for thread in (inference, clearer):
+                            if thread.ident is not None:
+                                thread.join(10)
+                                self.assertFalse(thread.is_alive())
+                self.assertEqual(errors, [])
+                self.assertTrue(clear_done.is_set())
+                self.assertEqual(len(hits), 1)
+                self.assertLess(hits[0].detector_generation, evaluator.generation)
+                self.assertIsNone(domain._on_wakeword_detected(hits[0]))
+                self.assertEqual(domain._wake_admission.logical_event_count(), 0)
+                current = self._speak(evaluator)[0]
+                detection = domain._on_wakeword_detected(current)
+                self.assertIsNotNone(detection)
+                self.assertIsNone(domain._on_wakeword_detected(current))
+                event = session.drain(schema.EVENT_WAKEWORD_DETECTED)
+                self.assertEqual(event["activationId"], detection.activation_id)
+                self.assertEqual(event["score"], 0.91)
+                self.assertEqual(domain._wake_admission.logical_event_count(), 1)
+                self.assertEqual(len(session.collected(schema.EVENT_WAKEWORD_DETECTED)), 1)
 
 
 class CatalogRefreshRaceTests(unittest.TestCase):

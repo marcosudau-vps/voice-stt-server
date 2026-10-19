@@ -69,6 +69,7 @@ from __future__ import annotations
 import logging
 import threading
 import uuid
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -254,6 +255,11 @@ class WakeAdmissionCoordinator:
         if hit is None:
             return None
         with self._lock:
+            if (
+                hit.detector_generation != self._evaluator.generation
+                or self._evaluator.latched
+            ):
+                return None
             try:
                 outcome = _as_outcome(self._activate(hit, boundary))
             except Exception as exc:  # noqa: BLE001
@@ -362,6 +368,15 @@ class WakeAdmissionCoordinator:
             if released:
                 self._accepted = None
             return released
+
+    @contextmanager
+    def suspend_admission(self):
+        """Serialize a session reset and detector invalidation with admission.
+
+        Enter before taking the session lock; release that lock before reset.
+        """
+        with self._lock:
+            yield
 
     def reset(self) -> int:
         """Starts a new detector generation; older callbacks become stale."""
