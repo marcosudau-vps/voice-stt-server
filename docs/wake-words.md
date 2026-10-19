@@ -407,7 +407,13 @@ not turn silence into a wake event or terminate the session.
 
 Stream stop/restart, session close, clear and audio loss invalidate pending
 detector work through the same generation mechanism, outside session and
-ledger locks. The recorder's legacy `wakeword_detected` flag is only a mirror
+ledger locks. For `clear`, the existing admission-coordinator lock covers both
+the session reset and detector invalidation. It is acquired before the session
+lock, which is released before waiting for the evaluator/engine reset.
+A hit computed before that boundary cannot commit into the cleared session;
+after invalidation, a new phrase can be admitted normally.
+
+The recorder's legacy `wakeword_detected` flag is only a mirror
 on the v2 path, not the authority that can re-latch or unlock detection.
 The legacy path without a v2 evaluator is unchanged.
 

@@ -468,6 +468,81 @@ class WakeEventTests(unittest.TestCase):
                 self.assertEqual(domain._wake_admission.logical_event_count(), 1)
                 self.assertEqual(len(session.collected(schema.EVENT_WAKEWORD_DETECTED)), 1)
 
+    def test_clear_waits_for_inflight_inference_without_holding_session_lock(self):
+        with TestClient(self.app) as client:
+            with V2Session(client, hello=wake_hello()) as session:
+                domain = self._session_object()
+                model, evaluator = self._stateful_engine(domain)
+                evaluator.process(b"\x01\x00" * 1280)
+                inferring = threading.Event()
+                resume_inference = threading.Event()
+                resetting = threading.Event()
+                clear_done = threading.Event()
+                hits = []
+                errors = []
+                predict = model.predict
+                reset = domain._reset_wake_detector
+
+                def pause_inference(data):
+                    inferring.set()
+                    if not resume_inference.wait(10):
+                        raise AssertionError("inference was never resumed")
+                    return predict(data)
+
+                def infer():
+                    try:
+                        hits.extend(evaluator.process(b"\0\0" * 1280))
+                    except Exception as exc:
+                        errors.append(exc)
+
+                def observe_reset():
+                    resetting.set()
+                    reset()
+
+                def clear():
+                    try:
+                        domain.clear()
+                    except Exception as exc:
+                        errors.append(exc)
+                    finally:
+                        clear_done.set()
+
+                inference = threading.Thread(target=infer, daemon=True)
+                clearer = threading.Thread(target=clear, daemon=True)
+                with mock.patch.object(model, "predict", pause_inference), \
+                        mock.patch.object(domain, "_reset_wake_detector", observe_reset):
+                    inference.start()
+                    try:
+                        self.assertTrue(inferring.wait(10))
+                        clearer.start()
+                        self.assertTrue(resetting.wait(10))
+                        self.assertFalse(clear_done.is_set())
+                        acquired = domain.lock.acquire(timeout=5)
+                        self.assertTrue(acquired, "clear held Session while awaiting inference")
+                        if acquired:
+                            domain.lock.release()
+                    finally:
+                        resume_inference.set()
+                        for thread in (inference, clearer):
+                            if thread.ident is not None:
+                                thread.join(10)
+                                self.assertFalse(thread.is_alive())
+                self.assertEqual(errors, [])
+                self.assertTrue(clear_done.is_set())
+                self.assertEqual(len(hits), 1)
+                self.assertLess(hits[0].detector_generation, evaluator.generation)
+                self.assertIsNone(domain._on_wakeword_detected(hits[0]))
+                self.assertEqual(domain._wake_admission.logical_event_count(), 0)
+                current = self._speak(evaluator)[0]
+                detection = domain._on_wakeword_detected(current)
+                self.assertIsNotNone(detection)
+                self.assertIsNone(domain._on_wakeword_detected(current))
+                event = session.drain(schema.EVENT_WAKEWORD_DETECTED)
+                self.assertEqual(event["activationId"], detection.activation_id)
+                self.assertEqual(event["score"], 0.91)
+                self.assertEqual(domain._wake_admission.logical_event_count(), 1)
+                self.assertEqual(len(session.collected(schema.EVENT_WAKEWORD_DETECTED)), 1)
+
 
 class CatalogRefreshRaceTests(unittest.TestCase):
     def setUp(self):
