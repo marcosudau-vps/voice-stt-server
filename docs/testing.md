@@ -22,6 +22,37 @@ Use the Python executable from your active virtual environment.
 
 Without golden-test environment variables, the slow model tests are skipped intentionally. A result with skipped tests means the fast tests passed and the opt-in model tests did not run.
 
+## Build identity and unchanged Client V2 qualification
+
+The normal fast suite (`python -m pytest -q tests/unit`) includes identity,
+HTTP/Wire and synthetic release-gate regressions. Real packaging is explicitly
+selected with `python -m pytest -q tests/packaging/test_identity_installation.py`
+in an environment with build, setuptools, wheel, packaging and pytest.
+It creates fresh consumer venvs, builds and installs real Legacy/Free/Pro
+packages (stable/alpha/beta/RC/build metadata), preserves sdist provenance and
+reproduces the original installed F02/F03 defects. Optional
+`VOICESTT_IDENTITY_EVIDENCE_DIR` writes hash-bound artifact/installation JSON
+outside the checkout. These installs use `--no-deps`; their synthetic native
+fixtures are **not** full-dependency/native/platform qualification. The separate
+[official RC gates](../build/BUILD.md#offizielle-kandidatengates-und-reproduzierbarkeit)
+cover those obligations.
+
+A new-pair loopback check is separately opt-in:
+
+```powershell
+$env:VOICESTT_CLIENT_V2_ROOT = "<isolated unchanged feat/client-v2 checkout>"
+$env:VOICESTT_CLIENT_V2_COMMIT = "<exact client qualification commit>"
+python -m pytest -q tests\compatibility\test_client_v2_identity.py
+```
+
+Use an isolated test environment with both projects' relevant dependencies.
+This starts and stops only a temporary loopback backend and verifies the
+unchanged client's actual transport, settings bootstrap, media/audio codec,
+controls, reliable logs, reconnect and identity/refusal decoding. Physical
+capture and server ASR/recorder are explicit fixtures; no native model, GUI,
+device, remote proxy, productive endpoint or historical pair is qualified.
+Pinned historical client tests/evidence are neither rewritten nor retargeted.
+
 ## Golden Tests
 
 Golden tests download or load real speech models and compare a fixture transcription against expected text. They are disabled by default because they are slower, may require network access on the first run, and can need extra platform permissions.

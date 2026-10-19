@@ -18,64 +18,17 @@ import re
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
-from urllib.parse import unquote, urlparse
 
 from VoiceSTT._version import resolve_version
+from VoiceSTT._build_identity import (
+    IdentityError, installed_distribution, validate_commit, validated_build_identity,
+)
 from . import schema
 
 UNKNOWN_COMMIT = "unknown"
-PRODUCT_DISTRIBUTIONS = ("voicestt", "voice-stt-server", "voice-stt-server-pro")
 
 
-class IdentityError(ValueError):
-    """Invalid or conflicting identity, safe to report without input values."""
-
-
-def validate_commit(value):
-    text = (value or "").strip()
-    if not text or text == UNKNOWN_COMMIT:
-        return UNKNOWN_COMMIT
-    if not re.fullmatch(r"[0-9a-f]{40}", text):
-        raise IdentityError("VOICESTT_SERVER_COMMIT must be a full lowercase Git SHA")
-    return text
-
-
-def installed_distribution():
-    """Only metadata owning this import location may describe this product."""
-    root = Path(__file__).resolve().parents[2]
-    candidates = []
-    for name in PRODUCT_DISTRIBUTIONS:
-        try:
-            dist = metadata.distribution(name)
-        except metadata.PackageNotFoundError:
-            continue
-        owns_package = any(
-            str(entry).replace("\\", "/") == "VoiceSTT/_version.py"
-            and Path(dist.locate_file(entry)).resolve() == root / "VoiceSTT" / "_version.py"
-            for entry in dist.files or ()
-        )
-        direct_url = dist.read_text("direct_url.json")
-        if direct_url:
-            try:
-                direct = json.loads(direct_url)
-                url = urlparse(direct.get("url", ""))
-                path = unquote(url.path)
-                if os.name == "nt":
-                    path = path.lstrip("/")
-                owns_package |= (
-                    direct.get("dir_info", {}).get("editable") is True
-                    and url.scheme == "file" and Path(path).resolve() == root
-                )
-            except (ValueError, TypeError, AttributeError):
-                raise IdentityError("invalid product distribution metadata") from None
-        if owns_package:
-            candidates.append((name, dist.version))
-    if len(candidates) > 1:
-        raise IdentityError("multiple product distributions own this installation")
-    return candidates[0] if candidates else (None, None)
-
-
-def runtime_variant(distribution_name=None, package_version=None):
+def runtime_variant(distribution_name=None, package_version=None, product_version=None):
     """Read existing provenance only; never import a native runtime."""
     embedded_path = (
         Path(__file__).resolve().parents[2]
@@ -93,7 +46,7 @@ def runtime_variant(distribution_name=None, package_version=None):
             or payload["schemaVersion"] != 1
             or payload.get("variant") not in ("free", "pro")
             or payload.get("distribution") != distribution_name
-            or payload.get("productVersion") != package_version
+            or payload.get("productVersion") != (product_version or package_version)
         ):
             raise IdentityError("invalid or conflicting embedded Kroko identity")
         embedded_variant = payload["variant"]
@@ -156,13 +109,21 @@ class RuntimeIdentity:
 
 
 def resolve_runtime_identity():
+    build = validated_build_identity()
     name, package_version = installed_distribution()
+    version = server_version()
+    variant = runtime_variant(name, package_version, version)
+    if build and build.krokoVariant and variant != build.krokoVariant:
+        raise IdentityError("package identity and installed Kroko provenance conflict")
     return RuntimeIdentity(
-        version=server_version(),
+        version=version,
         commit=server_commit(),
         distribution_name=name,
         package_version=package_version,
-        kroko_variant=runtime_variant(name, package_version),
+        kroko_variant=variant,
+        source_tree=build.sourceTree if build else None,
+        source_dirty=build.sourceDirty if build else None,
+        source_date=build.sourceDate if build else None,
     )
 
 
@@ -171,4 +132,7 @@ def server_version():
 
 
 def server_commit():
+    build = validated_build_identity()
+    if build is not None:
+        return build.sourceCommit or UNKNOWN_COMMIT
     return validate_commit(os.environ.get("VOICESTT_SERVER_COMMIT"))

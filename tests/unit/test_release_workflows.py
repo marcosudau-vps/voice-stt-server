@@ -67,6 +67,49 @@ class WorkflowInventoryTests(unittest.TestCase):
                 self.assertIsInstance(load(path), dict)
 
 
+class IdentityQualificationTests(unittest.TestCase):
+    def test_native_install_reports_are_required_before_manifest_qualification(self):
+        jobs = load(CANDIDATE)["jobs"]
+        for platform in ("linux", "windows"):
+            steps = jobs[f"candidate-{platform}"]["steps"]
+            native = next(step for step in steps if step.get("name") == f"Qualify installed {platform.title()} package identities")
+            self.assertIn(f"--platform {platform} --install", native["run"])
+        steps = jobs["candidate"]["steps"]
+        names = [step.get("name") for step in steps]
+        self.assertLess(
+            names.index("Validate all package identities and installed qualification reports"),
+            names.index("Qualify candidate manifest (Option A)"),
+        )
+        self.assertNotIn("runner.temp", str(load(CANDIDATE).get("env", {})))
+        self.assertIn(
+            "tests/packaging/test_identity_installation.py",
+            str(jobs["candidate-linux"]["steps"]),
+        )
+
+    def test_runner_local_candidate_inventory_program_executes(self):
+        import json
+        import os
+        import shlex
+        import subprocess
+        import sys
+        import tempfile
+
+        steps = load(CANDIDATE)["jobs"]["candidate"]["steps"]
+        script = next(step["run"] for step in steps if step.get("name") == "Build final SHA256 inventory")
+        program = shlex.split(script.splitlines()[-1])[-1]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "rc-manifest.json").write_text("{}")
+            result = subprocess.run(
+                [sys.executable, "-c", program], cwd=REPO_ROOT,
+                env={**os.environ, "CANDIDATE_DIR": directory},
+                text=True, capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            files = json.loads((root / "sha256-inventory.json").read_text())["files"]
+            self.assertTrue(any(item["path"] == "rc-manifest.json" for item in files))
+
+
 class TriggerSafetyTests(unittest.TestCase):
     def test_ci_runs_on_ordinary_events(self):
         self.assertEqual(

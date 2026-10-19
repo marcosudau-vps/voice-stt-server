@@ -320,6 +320,7 @@ class WindowsCandidateBuildTests(unittest.TestCase):
     def test_build_windows_candidate_produces_distribution_manifests(self):
         from unittest.mock import patch
         from release_support import CommandResult, RecordingRunner
+        from VoiceSTT._build_identity import BuildIdentity
 
         fake_describe = {
             "artifact": {
@@ -335,6 +336,7 @@ class WindowsCandidateBuildTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp) / "candidate-win"
             fake_dist = {
+                "path": "dummy_distribution.whl",
                 "distribution": "voice-stt-server",
                 "filename": "voice_stt_server-2.0.0-cp312-cp312-win_amd64.whl",
                 "sha256": "7" * 64,
@@ -342,7 +344,15 @@ class WindowsCandidateBuildTests(unittest.TestCase):
                 "abiTag": "cp312",
                 "platformTag": "win_amd64",
             }
-            with patch("build_distribution.build_distribution", return_value=fake_dist):
+            source = BuildIdentity(
+                1, "2.0.0", "2.0.0", COMMIT, TREE, False,
+                "2026-10-19T21:34:01Z", "voicestt", None, "git",
+            )
+            with patch("build_distribution.build_distribution", return_value=fake_dist), \
+                 patch.object(release_candidate, "candidate_source", return_value=source), \
+                 patch.object(release_candidate, "validate_distribution"), \
+                 patch.object(release_candidate.build_production.kroko_artifacts,
+                              "sha256_of", return_value="3" * 64):
                 produced = release_candidate.build_windows_candidate(
                     out_dir=out_dir,
                     candidate_id="gh-123-1",

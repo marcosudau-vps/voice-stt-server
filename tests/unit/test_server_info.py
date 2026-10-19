@@ -105,3 +105,15 @@ def test_complete_requires_all_provenance_and_clean_source():
         replace(full, commit="unknown"), replace(full, distribution_name=None),
     ):
         assert missing.public_info("instance")["identityStatus"] == "incomplete"
+
+
+def test_info_before_model_readiness_does_not_start_the_service():
+    app = build_app()
+    service = app.state.voicestt_service
+    # No lifespan startup: the existing HTTP projection is usable before models.
+    with mock.patch.object(service, "start", side_effect=AssertionError), \
+         mock.patch("subprocess.run", side_effect=AssertionError):
+        client = TestClient(app)
+        assert client.get("/health").json()["ready"] is False
+        assert client.get("/api/v2/info").status_code == 200
+        assert not service.ready.is_set()

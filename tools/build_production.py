@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -42,6 +43,8 @@ if str(REPO_ROOT) not in sys.path:
 from VoiceSTT._version import resolve_version  # noqa: E402
 from VoiceSTT.kroko import artifacts as kroko_artifacts  # noqa: E402
 from VoiceSTT.kroko.buildinputs import SUPPORTED_VARIANTS as KROKO_VARIANTS  # noqa: E402
+from VoiceSTT._build_identity import BuildIdentity, IdentityError  # noqa: E402
+from build_identity_support import capture_identity, match_identity, wheel_identity  # noqa: E402
 
 PRODUCTION_DOCKERFILE = REPO_ROOT / "Dockerfile"
 KROKO_BUILDER_DOCKERFILE = REPO_ROOT / "build" / "kroko-builder.Dockerfile"
@@ -247,21 +250,36 @@ def build_voicestt_wheel(
     *,
     dist_dir: Path,
     runner: CommandRunner = default_runner,
+    source_identity: Optional[BuildIdentity] = None,
 ) -> Path:
     """Builds the VoiceSTT wheel reproducibly with PEP 517 ``build``."""
     out_dir = dist_dir / "voicestt"
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True)
+    source_identity = source_identity or capture_identity(
+        REPO_ROOT, resolve_voicestt_version(), "voicestt", runner=runner
+    )
+    source_identity.require_complete()
+    assert source_identity.sourceDate is not None
+    env = dict(os.environ)
+    env.pop("VOICESTT_DISTRIBUTION_VARIANT", None)
+    env["SOURCE_DATE_EPOCH"] = str(int(datetime.fromisoformat(
+        source_identity.sourceDate.replace("Z", "+00:00")
+    ).timestamp()))
     runner(
         [sys.executable, "-m", "build", "--wheel", "--outdir", str(out_dir)],
         cwd=REPO_ROOT,
+        env=env,
     )
     wheels = sorted(out_dir.glob("voicestt-*.whl"))
     if not wheels:
         raise BuildError(f"VoiceSTT wheel build produced no wheel in {out_dir}")
     if len(wheels) > 1:
         raise BuildError(f"VoiceSTT wheel build produced more than one wheel: {wheels}")
+    built_identity = wheel_identity(wheels[0])
+    built_identity.require_complete()
+    match_identity(built_identity, source_identity)
     return wheels[0]
 
 
@@ -490,6 +508,14 @@ def require_dist_dir_inside_build_context(
     return resolved
 
 
+def require_image_version(version: str) -> None:
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", version):
+        raise BuildError(
+            "product version is not a supported Docker tag; SemVer build metadata "
+            "is supported for packaging, not the unchanged registry tag contract"
+        )
+
+
 def build_production_image(
     *,
     variant: str,
@@ -508,15 +534,33 @@ def build_production_image(
     instructions reference ``dist/...`` and ``api_fastapi_server/...``
     relative to it.
     """
+    require_image_version(voicestt_version)
     variant = normalize_variant(variant)
     image = image_name_for(variant)
     version_tag = f"{image}:{voicestt_version}"
     commit_tag = f"{image}:{git_commit[:12]}"
 
-    if not list((dist_dir / "voicestt").glob("*.whl")):
+    product_wheels = list((dist_dir / "voicestt").glob("*.whl"))
+    runtime_wheels = list((dist_dir / "kroko").glob("*.whl"))
+    if not product_wheels:
         raise BuildError(f"no VoiceSTT wheel found under {dist_dir / 'voicestt'}")
-    if not list((dist_dir / "kroko").glob("*.whl")):
+    if not runtime_wheels:
         raise BuildError(f"no Kroko wheel found under {dist_dir / 'kroko'}")
+    if len(product_wheels) != 1 or len(runtime_wheels) != 1:
+        raise BuildError("production image requires exactly one product and one Kroko wheel")
+    try:
+        identity = wheel_identity(product_wheels[0])
+        identity.require_complete()
+        if (identity.distributionName, identity.productVersion, identity.sourceCommit) != (
+            "voicestt", voicestt_version, git_commit
+        ):
+            raise IdentityError("Docker build arguments conflict with product wheel identity")
+        metadata_tag = kroko_artifacts.read_wheel_metadata(runtime_wheels[0]).get("build", "")
+        filename_tag = kroko_artifacts.parse_wheel_filename(runtime_wheels[0].name)["build"]
+        if metadata_tag != filename_tag or not re.fullmatch(r"\d+" + variant, metadata_tag):
+            raise IdentityError("Docker image variant conflicts with Kroko wheel identity")
+    except (IdentityError, kroko_artifacts.KrokoArtifactError) as exc:
+        raise BuildError(str(exc)) from None
 
     cmd = [
         "docker", "build",
@@ -551,6 +595,42 @@ def inspect_image(image_ref: str, runner: CommandRunner = default_runner) -> Dic
     if not payload:
         raise BuildError(f"docker inspect returned no data for {image_ref}")
     return payload[0]
+
+
+def validate_image_identity(image_ref: str, details: Dict[str, Any], *,
+                            source_identity: BuildIdentity, variant: str,
+                            build_date: str, runner=default_runner) -> None:
+    """Read lightweight installed metadata in an isolated, networkless container."""
+    labels = (details.get("Config") or {}).get("Labels") or {}
+    for key, expected in {
+        "org.opencontainers.image.version": source_identity.productVersion,
+        "org.opencontainers.image.revision": source_identity.sourceCommit,
+        "org.opencontainers.image.created": build_date,
+        "com.voicestt.kroko-variant": variant,
+    }.items():
+        if labels.get(key) != expected:
+            raise BuildError("production image labels conflict with source identity")
+    result = runner([
+        "docker", "run", "--rm", "--network", "none",
+        "--entrypoint", "/opt/venv/bin/python", image_ref, "-c",
+        "import json; from api_fastapi_server.protocol_v2.identity import "
+        "resolve_runtime_identity; print(json.dumps(resolve_runtime_identity().public_info(None)))",
+    ])
+    try:
+        actual = json.loads(result.stdout)
+    except ValueError:
+        raise BuildError("production image returned invalid identity JSON") from None
+    expected = {
+        "serverVersion": source_identity.productVersion,
+        "serverCommit": source_identity.sourceCommit,
+        "identityStatus": "complete",
+        "distribution": {"name": "voicestt", "packageVersion": source_identity.packageVersion},
+        "runtime": {"krokoVariant": variant},
+        "build": {"sourceTree": source_identity.sourceTree, "sourceDirty": False,
+                  "sourceDate": source_identity.sourceDate},
+    }
+    if not isinstance(actual, dict) or any(actual.get(key) != value for key, value in expected.items()):
+        raise BuildError("installed production image identity conflicts with source/Kroko inputs")
 
 
 # --------------------------------------------------------------------------
@@ -604,6 +684,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def run(target: str, *, dist_dir: Path, kroko_artifact_store: Optional[Path] = None,
         kroko_work_dir: Optional[Path] = None, build_date: Optional[str] = None,
+        source_identity: Optional[BuildIdentity] = None,
         runner: CommandRunner = default_runner) -> Dict[str, Any]:
     """Runs the full orchestrated build for one target and returns the manifest."""
     variants = variants_for_target(target)
@@ -611,14 +692,22 @@ def run(target: str, *, dist_dir: Path, kroko_artifact_store: Optional[Path] = N
     artifact_store = kroko_artifact_store or kroko_artifacts.default_store_root()
     work_dir = kroko_work_dir or (dist_dir / "kroko-work")
 
-    tool_versions = preflight(runner)
-    git_commit = resolve_git_commit(runner)
-    dirty = resolve_dirty(runner)
     voicestt_version = resolve_voicestt_version()
+    require_image_version(voicestt_version)
+    tool_versions = preflight(runner)
+    source_identity = source_identity or capture_identity(
+        REPO_ROOT, voicestt_version, "voicestt", runner=runner
+    )
+    source_identity.require_complete()
+    git_commit = source_identity.sourceCommit
+    assert git_commit is not None
+    dirty = source_identity.sourceDirty
     resolved_build_date = build_date or resolve_source_build_date(git_commit, runner)
 
     dist_dir.mkdir(parents=True, exist_ok=True)
-    wheel_path = build_voicestt_wheel(dist_dir=dist_dir, runner=runner)
+    wheel_path = build_voicestt_wheel(
+        dist_dir=dist_dir, runner=runner, source_identity=source_identity
+    )
 
     builder_image = build_kroko_builder_image(runner=runner)
 
@@ -662,6 +751,10 @@ def run(target: str, *, dist_dir: Path, kroko_artifact_store: Optional[Path] = N
             runner=runner,
         )
         image_details = inspect_image(image_info["versionTag"], runner=runner)
+        validate_image_identity(
+            image_info["versionTag"], image_details, source_identity=source_identity,
+            variant=variant, build_date=resolved_build_date, runner=runner,
+        )
         manifest["variants"][variant] = {
             "kroko": kroko_payload,
             "image": image_info,
@@ -682,7 +775,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             kroko_work_dir=args.kroko_work_dir,
             build_date=args.build_date,
         )
-    except BuildError as exc:
+    except (BuildError, IdentityError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 

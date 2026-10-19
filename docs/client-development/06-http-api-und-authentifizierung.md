@@ -79,6 +79,15 @@ Fehlende optionale Herkunft erlaubt Entwicklungsstart; ungueltige verwendete
 Identitaet ist ein expliziter Initialisierungsfehler, keine normale
 `unknown`-/`invalid`-Antwort.
 
+Neue Paketartefakte erhalten urspruengliche Produkt-SemVer getrennt von der
+normalisierten Python-Paketversion; beispielsweise bleibt `serverVersion`
+`2.0.0-rc.1`, auch wenn `distribution.packageVersion` `2.0.0rc1` ist.
+Abweichende nichtleere Paketoverrides werden nicht als neue Serveridentitaet
+akzeptiert; [Build-/Fallbackregeln](../../build/BUILD.md#paketressource-und-aufloesung).
+Ein geaenderter Servercommit ist ein neuer Clientqualifikationsstand.
+Historische Pair-Pins und Belege bleiben historisch; ihre Umschreibung ist
+kein Kompatibilitaetsnachweis fuer den neuen Stand.
+
 ### Admin-API
 
 Bevorzugter Header:

@@ -109,7 +109,7 @@ Modelle. Die vollstaendige Testmatrix steht in
 
 ## Grundsaetzliche Trennung
 
-### Runtimeidentitaet (Issue #9, Stufe A)
+### Build- und Runtimeidentitaet (Issue #9, A+B)
 
 `VOICESTT_GIT_COMMIT` wird im Runtime-Stage sowohl an das OCI-Revisionslabel
 als auch an `VOICESTT_SERVER_COMMIT` gebunden. Letzteres akzeptiert unbekannt
@@ -127,6 +127,79 @@ Info-/Settings-/Wire-/OpenAPI-Identitaet wird einmal je App validiert;
 Fehlende Zusatzherkunft bleibt incomplete, kein pauschaler Startabbruch.
 Ein offizieller Kandidat verlangt trotzdem extern belegte saubere Quellen
 und Bindung zwischen Wheel, Krokoartefakt und Image.
+
+#### Paketressource und Aufloesung
+
+Neue Builds schreiben `VoiceSTT/_build_identity.json` (Schema 1) nur in das
+Wheel-/sdist-Staging, nie in die Quellen. Der Datensatz enthaelt
+`productVersion`, `packageVersion`, `sourceCommit`, `sourceTree`,
+`sourceDirty`, `sourceDate`, `distributionName`, `krokoVariant` und
+`provenance` (`git` oder `manual`). Commit/Tree sind volle kleine Git-SHAs;
+`sourceDate` ist der UTC-Commitzeitpunkt, keine aktuelle Buildzeit. Der
+Datensatz ist eine validierte Selbstauskunft, keine Signatur.
+
+Installierte Pakete verwenden zuerst diese unveraenderliche Ressource und
+pruefen sie gegen die tatsaechlich besitzende Distribution und vorhandene
+Kroko-Provenienz. Zufalls-`VERSION`-Dateien und fremde installierte Produkte
+sind keine Authority. Mehrdeutige besitzende Distributionen sind Fehler.
+Ein Quellcheckout verwendet weiter `VERSION`/Buildoverride und ignoriert
+stale generierte Ressourcen. Ein extrahiertes sdist erhaelt seine
+urspruengliche Identitaet beim Wheelbau auch ohne Git oder unter einem fremden
+Gitroot; abweichende Version-/Distributionseingaenge werden abgewiesen.
+
+`VOICESTT_BUILD_VERSION` und `VOICESTT_SERVER_COMMIT` duerfen paketierte
+Identitaet nicht veraendern: nicht gesetzt/leer oder identisch ist erlaubt,
+abweichende Werte sind Initialisierungsfehler. Explizites `unknown`
+widerspricht einem bekannten Paketcommit. `VOICESTT_DISTRIBUTION_VARIANT`
+waehlt beim Packaging `free`/`pro`; generisches Docker-Packaging bleibt
+`voicestt`. `VOICESTT_VERSION` bleibt das OCI-Versionsargument, keine zweite
+Produktversionsquelle. Runtimekeys waehlen nie eine Variante.
+
+Produkt-SemVer bleibt exakt erhalten, waehrend `packaging.version.Version`
+die Python-Darstellung bestimmt. Unterstuetzt sind stabile Versionen,
+`alpha.N`, `beta.N`, `rc.N` und darstellbare SemVer-Buildmetadaten:
+`2.0.0-rc.1+Build.5` wird beispielsweise `2.0.0rc1+build.5` in METADATA,
+nicht in `serverVersion`. Andere Vorabformen scheitern beim Packaging
+explizit. Eine alte Installation ohne Ressource bleibt fuer stabile
+Metadatenversionen nutzbar; verlorene urspruengliche RC-Schreibweisen werden
+nicht aus `2.0.0rc1` zurueckgeraten.
+Der bestehende Docker-/Registry-Tagvertrag erlaubt kein `+`: solche
+Produktversionen bleiben reine Packagingfaelle und scheitern vor einem
+Production-Imagebuild explizit, statt still anders getaggt zu werden.
+Dieses Issue fuehrt kein neues Publikations-/Taggingschema ein.
+
+Gewoehnliche Entwicklung, Altinstallationen und manuelle Builds ohne Git
+haben keine neue Vollprovenienzpflicht. Sie duerfen incomplete starten;
+unbekannter Dirty-Status ist `null`, nicht `false`. Beschaedigte oder
+widerspruechliche verwendete Ressourcen scheitern dagegen vor normaler
+HTTP-/Sessionannahme mit redigiertem `IdentityError`.
+
+#### Offizielle Kandidatengates und Reproduzierbarkeit
+
+Production-/Distributions-/RC-Werkzeuge verlangen vollstaendige, saubere
+Quellherkunft und vergleichen dasselbe Herkunftsobjekt mit Paketmetadaten,
+nativen Free-/Pro-Wheeltags, eingebetteter Kroko-Provenienz und OCI-Labels.
+Das fertige generische Image wird zusaetzlich netzlos ueber den installierten
+Metadatenresolver geprueft. Release-Manifestformat, Promotion, Publikation
+und Resume bleiben unveraendert; qualifizierte Bytes werden nicht neu gebaut.
+
+Der vorhandene dispatch-only RC-Workflow fuehrt die echte Packagingmatrix
+gezielt aus, installiert danach die kompletten oeffentlichen Free-/Pro-Wheels
+in frische Umgebungen auf Linux und Windows und prueft native Imports,
+`pip check`, HTTP-/Wireidentitaet und Info bei `ready=false`. Vor der
+bestehenden Manifestqualifikation bindet `tools/qualify_build_identity.py`
+beide Installationsberichte an alle vier Wheelbytes und deren native
+Herkunft. Zusaetzliche Berichte und Packagingbelege sind externe
+Workflowartefakte, keine neuen RC-Manifestfelder. Diese schweren Pfade
+laufen nicht bei jedem PR.
+
+Die vorhandenen deterministischen Zeitstempel bleiben bindend:
+orchestrierte Wheelbuilds setzen `SOURCE_DATE_EPOCH` aus dem Quellcommit;
+fuer vergleichbare private Wiederholungsbuilds denselben Wert und dieselben
+Toolchain-/Abhaengigkeitseingaenge verwenden. Gesamtartefakthashes werden
+nach dem Build extern gebildet. Eine gruen synthetisch gepruefte Variante
+ersetzt keinen nativen Plattform-/Dockerbeleg; fehlende reale Pruefungen
+bleiben `NOT_RUN`/`NOT_PROVEN`.
 
 Ein reproduzierbarer VoiceSTT-Build besteht aus mehreren getrennten Ebenen:
 

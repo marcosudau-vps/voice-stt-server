@@ -52,8 +52,21 @@ import build_production  # noqa: E402
 from release_tooling import candidate as candidate_module  # noqa: E402
 from release_tooling import config as release_config  # noqa: E402
 from release_tooling import rc_manifest  # noqa: E402
+from VoiceSTT._build_identity import IdentityError  # noqa: E402
+from build_identity_support import capture_identity  # noqa: E402
+from tools.qualify_build_identity import validate_distribution  # noqa: E402
 
 VARIANTS = rc_manifest.VARIANTS
+
+
+def candidate_source(source_tree, runner):
+    source = capture_identity(
+        REPO_ROOT, build_production.resolve_voicestt_version(), "voicestt", runner=runner
+    )
+    source.require_complete()
+    if source.sourceTree != source_tree:
+        raise CandidateError("candidate source tree does not match the actual checkout")
+    return source
 
 
 class CandidateError(RuntimeError):
@@ -192,6 +205,7 @@ def build_candidate(
     runner=build_production.default_runner,
 ) -> Dict[str, Any]:
     """Builds every candidate artifact and (optionally) the RC manifest."""
+    source = candidate_source(source_tree, runner)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     dist_dir = build_production.default_dist_dir()
@@ -207,6 +221,7 @@ def build_candidate(
             kroko_artifact_store=kroko_artifact_store,
             kroko_work_dir=kroko_work_dir,
             runner=runner,
+            source_identity=source,
         )
         _write_json(
             out_dir / candidate_module.BUILD_MANIFEST_TEMPLATE.format(variant=variant),
@@ -225,6 +240,14 @@ def build_candidate(
             timestamp=datetime.fromisoformat(
                 build_manifest["buildDate"].replace("Z", "+00:00")
             ),
+            source_identity=source,
+        )
+        validate_distribution(
+            Path(distribution["path"]), source, variant,
+            kroko_sha256=build_production.kroko_artifacts.sha256_of(
+                Path(kroko_payload["hostWheelPath"])
+            ),
+            fingerprint=kroko_payload["fingerprint"],
         )
         _write_json(
             out_dir / candidate_module.DISTRIBUTION_MANIFEST_TEMPLATE.format(variant=variant),
@@ -286,6 +309,7 @@ def build_windows_candidate(
     runner=build_production.default_runner,
 ) -> Dict[str, Any]:
     """Builds Windows AMD64 distribution wheels for Free and Pro (AP-SRV-070 B2)."""
+    source = candidate_source(source_tree, runner)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     dist_dir = out_dir / "dist"
@@ -336,6 +360,12 @@ def build_windows_candidate(
             kroko_wheel=kroko_wheel,
             out_dir=dist_dir,
             work_dir=work_dir,
+            fingerprint=fingerprint,
+            source_identity=source,
+        )
+        validate_distribution(
+            Path(distribution["path"]), source, variant,
+            kroko_sha256=build_production.kroko_artifacts.sha256_of(kroko_wheel),
             fingerprint=fingerprint,
         )
 
@@ -486,7 +516,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 push_staging=args.push_staging,
                 assemble_manifest=not args.no_manifest,
             )
-    except (CandidateError, build_production.BuildError,
+    except (CandidateError, IdentityError, build_production.BuildError,
             build_distribution.DistributionBuildError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

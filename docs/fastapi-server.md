@@ -66,7 +66,11 @@ recorder/VAD state and feeds work into the shared scheduler.
 The server exposes:
 
 - `GET /api/v2/info`: public, cached identity projection with `no-store`,
-  available even when models are not ready. See the
+  available even when models are not ready. App initialization validates
+  packaged provenance and owning-distribution/native metadata once; requests
+  never resolve packages or load models again. Missing optional provenance
+  remains incomplete, while corrupt/conflicting used identity prevents startup.
+  See the
   [identity contract](client-development/06-http-api-und-authentifizierung.md#oeffentliche-serveridentitaet).
 - `GET /`: browser UI.
 - `GET /health`: readiness, active sessions/speakers, startup errors,
