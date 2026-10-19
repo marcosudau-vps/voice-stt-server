@@ -317,6 +317,20 @@ class InventoryTests(unittest.TestCase):
 
 
 class WindowsCandidateBuildTests(unittest.TestCase):
+    def test_windows_builder_module_imports_in_an_uninstalled_checkout(self):
+        import os
+        import subprocess
+        import sys
+
+        env = dict(os.environ)
+        env.pop("PYTHONPATH", None)
+        result = subprocess.run(
+            [sys.executable, "-m", "VoiceSTT.install_kroko", "--help"],
+            cwd=release_candidate.REPO_ROOT, env=env, text=True, capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--describe-artifact", result.stdout)
+
     def test_build_windows_candidate_produces_distribution_manifests(self):
         from unittest.mock import patch
         from release_support import CommandResult, RecordingRunner
@@ -330,7 +344,7 @@ class WindowsCandidateBuildTests(unittest.TestCase):
             "fingerprint": "fp-dummy",
         }
         runner = RecordingRunner([
-            ("install_kroko.py", CommandResult(args=[], returncode=0, stdout=json.dumps(fake_describe), stderr=""))
+            ("VoiceSTT.install_kroko", CommandResult(args=[], returncode=0, stdout=json.dumps(fake_describe), stderr=""))
         ])
 
         with tempfile.TemporaryDirectory() as tmp:

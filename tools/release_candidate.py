@@ -326,7 +326,7 @@ def build_windows_candidate(
         # 1. Build or reuse Kroko Windows artifact via install_kroko.py
         cmd = [
             sys.executable,
-            str(REPO_ROOT / "VoiceSTT" / "install_kroko.py"),
+            "-m", "VoiceSTT.install_kroko",
             "--variant", variant,
             "--build",
             "--skip-install",
@@ -338,7 +338,7 @@ def build_windows_candidate(
         # 2. Describe artifact to read fingerprint and wheelPath
         desc_cmd = [
             sys.executable,
-            str(REPO_ROOT / "VoiceSTT" / "install_kroko.py"),
+            "-m", "VoiceSTT.install_kroko",
             "--variant", variant,
             "--describe-artifact",
             "--artifact-store", str(store_path),
