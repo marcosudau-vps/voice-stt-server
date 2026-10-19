@@ -79,7 +79,7 @@ Begründung im Archiv erhalten.
 | Einheitliche serverseitige Triggerarchitektur | 12.08.2026 | In Umsetzung | [einheitliche_triggerarchitektur](einheitliche_triggerarchitektur/) |
 | V2-Segment-Activation-Korrelation (Nachtrag zu PR #3) | 29.09.2026 | Prüfung offen | [v2_segment_activation_correlation](v2_segment_activation_correlation/) |
 | V2-Realtime-Identitäten und verspätete Interims | 30.09.2026 | In Umsetzung | [v2_realtime_identity](v2_realtime_identity/) |
-| Issue #7: sichere Wake-Wiederfreigabe | 19.10.2026 | Geplant | [issue_7_wake_rearm](issue_7_wake_rearm/) |
+| Issue #7: sichere Wake-Wiederfreigabe | 19.10.2026 | Prüfung offen | [issue_7_wake_rearm](issue_7_wake_rearm/) |
 
 ### Arbeitspaketakten „Einheitliche serverseitige Triggerarchitektur“
 
