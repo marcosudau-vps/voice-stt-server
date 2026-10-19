@@ -34,6 +34,8 @@ from VoiceSTT.core.wake_detection import (
     WakeAttemptPolicy,
     WakeDetectionEvaluator,
 )
+from api_fastapi_server.activation import ActivationController
+from api_fastapi_server.wake_admission import WakeAdmissionCoordinator
 
 
 SAMPLE_RATE = 16000
@@ -351,6 +353,98 @@ class LegacyPathTests(unittest.TestCase):
         # The FIND-011 guard applies to the legacy path as well: the detector
         # is not called again once a hit is latched.
         self.assertEqual(process.call_count, 1)
+
+
+class RetainedHistoryModel(ScriptedModel):
+    """A real input hit leaves delayed feature history, not just a cached score."""
+
+    def __init__(self):
+        super().__init__([])
+        self._audio = b""
+        self._tail = collections.deque()
+        self.reset_calls = 0
+
+    def predict(self, pcm):
+        self.predict_calls += 1
+        self._audio += np.asarray(pcm, dtype=np.int16).tobytes()
+        produced = False
+        while len(self._audio) >= 2 * PREDICTION_FRAME_SAMPLES:
+            frame, self._audio = (
+                self._audio[:2 * PREDICTION_FRAME_SAMPLES],
+                self._audio[2 * PREDICTION_FRAME_SAMPLES:],
+            )
+            if any(frame):
+                score = 0.91
+                self._tail = collections.deque([0.0, 0.83, 0.0])
+            else:
+                score = self._tail.popleft() if self._tail else 0.0
+            self.prediction_buffer[self.model_key].append(score)
+            produced = True
+        if not produced:
+            values = self.prediction_buffer[self.model_key]
+            values.append(values[-1] if values else 0.0)
+
+    def reset(self):
+        self.reset_calls += 1
+        self._audio = b""
+        self._tail.clear()
+        self.prediction_buffer[self.model_key].clear()
+
+
+class WakeRearmRegressionTests(unittest.TestCase):
+    def test_input_close_then_digital_silence_never_opens_a_second_activation(self):
+        controller = ActivationController(
+            manual_trigger_enabled=True, wake_word_trigger_enabled=True
+        )
+        accepted = []
+        closed = []
+
+        def activate(_hit, _boundary):
+            decision = controller.activate("wake_word")
+            return decision.snapshot["activationId"] if decision.accepted else None
+
+        recorder = build_recorder(0, admission=lambda *_args: None)
+        model = RetainedHistoryModel()
+        engine = OpenWakeWordEngine(
+            selection=FakeSelection(), model_factory=lambda **_kwargs: model
+        )
+        recorder.wake_engine = engine
+        evaluator = WakeDetectionEvaluator(engine=engine)
+        recorder.wake_detection_evaluator = evaluator
+        coordinator = WakeAdmissionCoordinator(
+            evaluator=evaluator, activate=activate, publish=accepted.append
+        )
+        recorder.on_wakeword_detected = coordinator.admit
+
+        # The first two chunks finalize the genuine hit. The activation stays
+        # open for ten more chunks, which the production worker must not infer.
+        recorder.audio_queue.put(np.ones(CHUNK_SAMPLES, dtype=np.int16).tobytes())
+        for _ in range(25):
+            recorder.audio_queue.put(CHUNK)
+
+        def close_on_chunk(_data):
+            if len(recorder.last_words_buffer) != 13:
+                return
+            self.assertEqual(model.predict_calls, 2)
+            activation_id = controller.snapshot()["activationId"]
+            controller.finish(activation_id=activation_id)
+            decision = controller.input_closed(
+                activation_id=activation_id,
+                activation_sequence=controller.snapshot()["activationSequence"],
+            )
+            self.assertTrue(decision.accepted)
+            closed.append(activation_id)
+            self.assertTrue(coordinator.release(activation_id))
+            recorder.wakeword_detected = False
+            recorder.wake_word_detect_time = 0
+
+        recorder.on_recorded_chunk = close_on_chunk
+        drain(recorder)
+
+        self.assertEqual(len(closed), 1)
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(coordinator.logical_event_count(), 1)
+        self.assertEqual(controller.snapshot()["phase"], "idle")
 
 
 if __name__ == "__main__":
