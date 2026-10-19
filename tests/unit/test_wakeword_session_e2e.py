@@ -381,6 +381,93 @@ class WakeEventTests(unittest.TestCase):
                     )
                     self.assertEqual(domain._wake_admission.logical_event_count(), 1)
 
+    def test_clear_serializes_pending_hit_admission_until_detector_invalidation(self):
+        with TestClient(self.app) as client:
+            with V2Session(client, hello=wake_hello()) as session:
+                domain = self._session_object()
+                _model, evaluator = self._stateful_engine(domain)
+                old_hit = self._speak(evaluator)[0]
+                generation = domain.generation
+                cleared = threading.Event()
+                resume_reset = threading.Event()
+                offered = threading.Event()
+                admitted = threading.Event()
+                results = {}
+                errors = []
+                reset = domain._reset_wake_detector
+                coordinator_lock = domain._wake_admission._lock
+
+                class ObservedLock:
+                    def __enter__(self):
+                        if threading.current_thread() is admission:
+                            acquired = coordinator_lock.acquire(blocking=False)
+                            results["admission_blocked"] = not acquired
+                            offered.set()
+                            if not acquired:
+                                coordinator_lock.acquire()
+                        else:
+                            coordinator_lock.acquire()
+
+                    def __exit__(self, *_args):
+                        coordinator_lock.release()
+
+                def pause_reset():
+                    cleared.set()
+                    if not resume_reset.wait(10):
+                        raise AssertionError("clear reset was never resumed")
+                    reset()
+
+                def clear():
+                    try:
+                        domain.clear()
+                    except Exception as exc:
+                        errors.append(exc)
+
+                def admit():
+                    try:
+                        results["detection"] = domain._on_wakeword_detected(old_hit)
+                    except Exception as exc:
+                        errors.append(exc)
+                    finally:
+                        admitted.set()
+
+                clearer = threading.Thread(target=clear, daemon=True)
+                admission = threading.Thread(target=admit, daemon=True)
+                with mock.patch.object(domain, "_reset_wake_detector", pause_reset), \
+                        mock.patch.object(domain._wake_admission, "_lock", ObservedLock()):
+                    clearer.start()
+                    try:
+                        self.assertTrue(cleared.wait(10))
+                        with domain.lock:
+                            self.assertEqual(domain.generation, generation + 1)
+                            self.assertEqual(domain._activation.snapshot()["phase"], schema.IDLE)
+                        self.assertEqual(evaluator.generation, old_hit.detector_generation)
+                        admission.start()
+                        self.assertTrue(offered.wait(10))
+                        if not results["admission_blocked"]:
+                            self.assertTrue(admitted.wait(10))
+                    finally:
+                        resume_reset.set()
+                        for thread in (clearer, admission):
+                            if thread.ident is not None:
+                                thread.join(10)
+                                self.assertFalse(thread.is_alive())
+                self.assertEqual(errors, [])
+                self.assertIsNone(results["detection"])
+                self.assertEqual(domain._activation.snapshot()["phase"], schema.IDLE)
+                self.assertEqual(domain._wake_admission.logical_event_count(), 0)
+                self.assertIsNone(domain._on_wakeword_detected(old_hit))
+                self.assertEqual(evaluator.process(b"\0\0" * (1280 * 20)), ())
+                current = self._speak(evaluator)[0]
+                detection = domain._on_wakeword_detected(current)
+                self.assertIsNotNone(detection)
+                self.assertIsNone(domain._on_wakeword_detected(current))
+                event = session.drain(schema.EVENT_WAKEWORD_DETECTED)
+                self.assertEqual(event["activationId"], detection.activation_id)
+                self.assertEqual(event["score"], 0.91)
+                self.assertEqual(domain._wake_admission.logical_event_count(), 1)
+                self.assertEqual(len(session.collected(schema.EVENT_WAKEWORD_DETECTED)), 1)
+
 
 class CatalogRefreshRaceTests(unittest.TestCase):
     def setUp(self):
