@@ -14,6 +14,7 @@ Administration und abgeschlossenen Audiodateien.
 | --- | --- | --- | --- |
 | `GET` | `/` | keine | integrierte Browseroberfläche |
 | `GET` | `/health` | keine | kompakter Readiness-/Health-Snapshot |
+| `GET` | `/api/v2/info` | keine | gecachte Produkt-/Paket-/Runtimeidentitaet, `Cache-Control: no-store` |
 | `GET` | `/api/config` | keine | öffentliche Konfiguration und Runtime-Vertrag |
 | `PATCH` | `/api/config` | Admin | Runtime-Settings ändern |
 | `GET` | `/api/metrics` | keine | vollständige Server-/Session-/Scheduler-Metriken |
@@ -46,6 +47,37 @@ Anfrage ohne Authentifizierung zu. Im versionierten Deployment werden Keys über
 Umgebungs-Secrets vorgesehen.
 
 ## Authentifizierungsbereiche
+
+### Oeffentliche Serveridentitaet
+
+`GET /api/v2/info` liefert `schemaVersion: 1`, die bestehende
+`protocolVersion`, `serverVersion`, `serverCommit`, `identityStatus`,
+`build: {sourceTree, sourceDirty, sourceDate}`,
+`distribution: {name, packageVersion}`, `runtime: {krokoVariant}` und
+`serverInstanceId`. Fehlende optionale Werte sind `null`; der unbekannte
+Commit bleibt `"unknown"`. `complete` erfordert vollstaendige konsistente
+Herkunft und einen nachweislich sauberen Quellstand, nicht einen Release
+oder kryptografischen Integritaetsnachweis.
+
+Die Hubkennung ist oeffentlich, nicht geheim und kein Authentifizierungstoken.
+Sie bleibt fuer dieselbe Hubinstanz konstant und wechselt bei einer neuen
+Instanz, auch bei mehreren Apps im selben Prozess. Mehrere Backends duerfen
+verschiedene Kennungen liefern; Vergleiche muessen dieselbe Backendinstanz
+adressieren. Proxies duerfen die `no-store`-Antwort nicht zwischenspeichern.
+Info ist nach HTTP-Start auch ohne bereite Modelle erreichbar und loest
+keine Modell-, Git-, Docker- oder Netzabfrage aus. Keine neue Startzeitgarantie.
+
+Paketname ist die tatsaechliche Distribution: generische Free/Pro-Images
+installieren `voicestt`, oeffentliche Produktwheels dagegen
+`voice-stt-server` oder `voice-stt-server-pro`. Die davon getrennte
+Kroko-Variante stammt nur aus Runtimeprovenienz, niemals aus einem Key.
+Die Imagevariante wird extern qualifiziert, nicht im Handler abgefragt.
+Settings-HTTP, OpenAPI sowie bestehende V2-Annahme, Snapshot und Refusals
+verwenden dieselbe beim Appaufbau validierte Identitaet. Wirefelder und
+Pflichtfelder bleiben unveraendert; Info ist keine neue Clientpflicht.
+Fehlende optionale Herkunft erlaubt Entwicklungsstart; ungueltige verwendete
+Identitaet ist ein expliziter Initialisierungsfehler, keine normale
+`unknown`-/`invalid`-Antwort.
 
 ### Admin-API
 

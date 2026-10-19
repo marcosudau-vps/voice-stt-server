@@ -109,6 +109,25 @@ Modelle. Die vollstaendige Testmatrix steht in
 
 ## Grundsaetzliche Trennung
 
+### Runtimeidentitaet (Issue #9, Stufe A)
+
+`VOICESTT_GIT_COMMIT` wird im Runtime-Stage sowohl an das OCI-Revisionslabel
+als auch an `VOICESTT_SERVER_COMMIT` gebunden. Letzteres akzeptiert unbekannt
+(`unknown`, leer, nicht gesetzt) oder einen vollen kleinen 40-stelligen SHA;
+andere explizite Werte sind Identitaetsfehler. `VOICESTT_VERSION` bleibt
+das Versionslabel-Buildargument, `VOICESTT_BUILD_VERSION` der zentrale
+SemVer-Build-/Entwicklungseingang. Kein zweiter Versionszaehler.
+
+Im generischen Production-Image ist die installierte Distribution weiterhin
+`voicestt`, auch wenn das Image `voice-stt-server-pro` und die nachgewiesene
+Kroko-Runtime `pro` heissen. Oeffentliche Produktwheels sind getrennte
+Distributionen. Weder Lizenzkey noch Modellname belegen die Runtimevariante.
+Info-/Settings-/Wire-/OpenAPI-Identitaet wird einmal je App validiert;
+[API-Vertrag](../docs/client-development/06-http-api-und-authentifizierung.md#oeffentliche-serveridentitaet).
+Fehlende Zusatzherkunft bleibt incomplete, kein pauschaler Startabbruch.
+Ein offizieller Kandidat verlangt trotzdem extern belegte saubere Quellen
+und Bindung zwischen Wheel, Krokoartefakt und Image.
+
 Ein reproduzierbarer VoiceSTT-Build besteht aus mehreren getrennten Ebenen:
 
 | Ebene | Inhalt | Darf in Git/Image liegen? |

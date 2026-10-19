@@ -8093,11 +8093,19 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
     # hardcoded literal next to the v2 handshake's serverVersion.
     from api_fastapi_server.protocol_v2 import identity as _app_identity
 
+    app_identity = _app_identity.resolve_runtime_identity()
     app = FastAPI(
         title="VoiceSTT FastAPI-Server",
-        version=_app_identity.server_version(),
+        version=app_identity.version,
         lifespan=lifespan,
     )
+
+    @app.get("/api/v2/info")
+    async def server_info_v2():
+        return JSONResponse(
+            app_identity.public_info(service.events.server_instance_id),
+            headers={"Cache-Control": "no-store"},
+        )
 
     @app.get("/")
     async def index():
@@ -8421,12 +8429,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
     # -- AP-SRV-050 settings REST-v2 surface ---------------------------------
 
     def _settings_server_identity():
-        try:
-            from api_fastapi_server.protocol_v2 import identity as _identity
-
-            return _identity.server_version(), _identity.server_commit()
-        except Exception:  # noqa: BLE001 - metadata must never break REST
-            return "unknown", "unknown"
+        return app_identity.version, app_identity.commit
 
     @app.get("/api/v2/settings/schema")
     async def settings_schema_v2():
@@ -9937,7 +9940,11 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             websocket.query_params.get("clientId")
             or websocket.headers.get("x-voicestt-client-id")
         )
-        connection = ProtocolV2Connection(service, client_id=client_id)
+        connection = ProtocolV2Connection(
+            service, client_id=client_id,
+            server_version=app_identity.version,
+            server_commit=app_identity.commit,
+        )
         loop = asyncio.get_running_loop()
         outbound = asyncio.Queue()
         # Transport-Close-Signal (AP-SRV-080-FIX-02): wakes a coroutine blocked

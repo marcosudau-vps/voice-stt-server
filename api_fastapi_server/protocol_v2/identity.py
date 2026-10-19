@@ -12,11 +12,158 @@ happens at runtime - a container has no repository, and a slow or failing
 subprocess must never be able to delay a handshake.
 """
 
+import json
 import os
+import re
+from dataclasses import dataclass
+from importlib import metadata
+from pathlib import Path
+from urllib.parse import unquote, urlparse
 
 from VoiceSTT._version import resolve_version
+from . import schema
 
 UNKNOWN_COMMIT = "unknown"
+PRODUCT_DISTRIBUTIONS = ("voicestt", "voice-stt-server", "voice-stt-server-pro")
+
+
+class IdentityError(ValueError):
+    """Invalid or conflicting identity, safe to report without input values."""
+
+
+def validate_commit(value):
+    text = (value or "").strip()
+    if not text or text == UNKNOWN_COMMIT:
+        return UNKNOWN_COMMIT
+    if not re.fullmatch(r"[0-9a-f]{40}", text):
+        raise IdentityError("VOICESTT_SERVER_COMMIT must be a full lowercase Git SHA")
+    return text
+
+
+def installed_distribution():
+    """Only metadata owning this import location may describe this product."""
+    root = Path(__file__).resolve().parents[2]
+    candidates = []
+    for name in PRODUCT_DISTRIBUTIONS:
+        try:
+            dist = metadata.distribution(name)
+        except metadata.PackageNotFoundError:
+            continue
+        owns_package = any(
+            str(entry).replace("\\", "/") == "VoiceSTT/_version.py"
+            and Path(dist.locate_file(entry)).resolve() == root / "VoiceSTT" / "_version.py"
+            for entry in dist.files or ()
+        )
+        direct_url = dist.read_text("direct_url.json")
+        if direct_url:
+            try:
+                direct = json.loads(direct_url)
+                url = urlparse(direct.get("url", ""))
+                path = unquote(url.path)
+                if os.name == "nt":
+                    path = path.lstrip("/")
+                owns_package |= (
+                    direct.get("dir_info", {}).get("editable") is True
+                    and url.scheme == "file" and Path(path).resolve() == root
+                )
+            except (ValueError, TypeError, AttributeError):
+                raise IdentityError("invalid product distribution metadata") from None
+        if owns_package:
+            candidates.append((name, dist.version))
+    if len(candidates) > 1:
+        raise IdentityError("multiple product distributions own this installation")
+    return candidates[0] if candidates else (None, None)
+
+
+def runtime_variant(distribution_name=None, package_version=None):
+    """Read existing provenance only; never import a native runtime."""
+    embedded_path = (
+        Path(__file__).resolve().parents[2]
+        / "voice_stt_server" / "_embedded_kroko.json"
+    )
+    embedded_variant = None
+    if embedded_path.is_file():
+        try:
+            payload = json.loads(embedded_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raise IdentityError("unreadable embedded Kroko identity") from None
+        if (
+            not isinstance(payload, dict)
+            or type(payload.get("schemaVersion")) is not int
+            or payload["schemaVersion"] != 1
+            or payload.get("variant") not in ("free", "pro")
+            or payload.get("distribution") != distribution_name
+            or payload.get("productVersion") != package_version
+        ):
+            raise IdentityError("invalid or conflicting embedded Kroko identity")
+        embedded_variant = payload["variant"]
+    separate_variant = None
+    try:
+        wheel = metadata.distribution("kroko-onnx").read_text("WHEEL") or ""
+    except metadata.PackageNotFoundError:
+        wheel = ""
+    tags = re.findall(r"(?mi)^Build:\s*(\S+)\s*$", wheel)
+    if tags:
+        if len(tags) != 1 or not re.fullmatch(r"\d+(free|pro)", tags[0]):
+            raise IdentityError("invalid Kroko WHEEL variant")
+        separate_variant = "pro" if tags[0].endswith("pro") else "free"
+    if embedded_variant and separate_variant:
+        raise IdentityError("embedded and separately installed Kroko runtimes conflict")
+    variant = embedded_variant or separate_variant
+    expected = {"voice-stt-server": "free", "voice-stt-server-pro": "pro"}.get(
+        distribution_name
+    )
+    if expected and variant and expected != variant:
+        raise IdentityError("product and Kroko runtime variants conflict")
+    return variant
+
+
+@dataclass(frozen=True)
+class RuntimeIdentity:
+    version: str
+    commit: str
+    distribution_name: str | None
+    package_version: str | None
+    kroko_variant: str | None
+    source_tree: str | None = None
+    source_dirty: bool | None = None
+    source_date: str | None = None
+
+    def public_info(self, instance_id):
+        complete = (
+            self.commit != UNKNOWN_COMMIT and self.source_tree is not None
+            and self.source_dirty is False and self.source_date is not None
+            and self.distribution_name is not None and self.kroko_variant is not None
+        )
+        return {
+            "schemaVersion": 1,
+            "protocolVersion": schema.PROTOCOL_VERSION,
+            "serverVersion": self.version,
+            "serverCommit": self.commit,
+            "identityStatus": "complete" if complete else "incomplete",
+            "build": {
+                "sourceTree": self.source_tree,
+                "sourceDirty": self.source_dirty,
+                "sourceDate": self.source_date,
+            },
+            "distribution": {
+                "name": self.distribution_name,
+                "packageVersion": self.package_version,
+            },
+            "runtime": {"krokoVariant": self.kroko_variant},
+            "serverInstanceId": instance_id,
+        }
+
+
+def resolve_runtime_identity():
+    name, package_version = installed_distribution()
+    return RuntimeIdentity(
+        version=server_version(),
+        commit=server_commit(),
+        distribution_name=name,
+        package_version=package_version,
+        kroko_variant=runtime_variant(name, package_version),
+    )
 
 
 def server_version():
@@ -24,8 +171,4 @@ def server_version():
 
 
 def server_commit():
-    commit = os.environ.get("VOICESTT_SERVER_COMMIT")
-    if commit is None:
-        return UNKNOWN_COMMIT
-    commit = commit.strip()
-    return commit or UNKNOWN_COMMIT
+    return validate_commit(os.environ.get("VOICESTT_SERVER_COMMIT"))

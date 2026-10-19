@@ -1210,8 +1210,11 @@ class ServerIdentityTests(unittest.TestCase):
         previous = os.environ.pop("VOICESTT_SERVER_COMMIT", None)
         try:
             self.assertEqual(identity.server_commit(), "unknown")
-            os.environ["VOICESTT_SERVER_COMMIT"] = "  deadbeef "
-            self.assertEqual(identity.server_commit(), "deadbeef")
+            os.environ["VOICESTT_SERVER_COMMIT"] = "  " + "deadbeef" * 5 + " "
+            self.assertEqual(identity.server_commit(), "deadbeef" * 5)
+            os.environ["VOICESTT_SERVER_COMMIT"] = "deadbeef"
+            with self.assertRaises(identity.IdentityError):
+                identity.server_commit()
             os.environ["VOICESTT_SERVER_COMMIT"] = "   "
             self.assertEqual(identity.server_commit(), "unknown")
         finally:

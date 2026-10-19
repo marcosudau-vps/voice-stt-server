@@ -72,6 +72,7 @@ LABEL org.opencontainers.image.title="voice-stt-server" \
       com.voicestt.kroko-variant="${VOICESTT_KROKO_VARIANT}"
 
 ENV DEBIAN_FRONTEND=noninteractive \
+    VOICESTT_SERVER_COMMIT="${VOICESTT_GIT_COMMIT}" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/opt/venv/bin:${PATH}" \

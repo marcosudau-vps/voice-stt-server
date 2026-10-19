@@ -130,6 +130,13 @@ def test_production_dockerfile_declares_required_oci_labels():
         assert label in DOCKERFILE
 
 
+def test_runtime_commit_is_bound_to_the_same_build_arg_as_oci_revision():
+    runtime = DOCKERFILE.split(" AS runtime", 1)[1]
+    assert "ARG VOICESTT_GIT_COMMIT=unknown" in runtime
+    assert 'VOICESTT_SERVER_COMMIT="${VOICESTT_GIT_COMMIT}"' in runtime
+    assert 'org.opencontainers.image.revision="${VOICESTT_GIT_COMMIT}"' in runtime
+
+
 def test_production_dockerfile_healthcheck_never_requires_ready_or_ok():
     """AP-SRV-070 W4C, section 10: a missing STT model must never fail Docker health."""
     healthcheck_line = next(

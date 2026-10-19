@@ -65,6 +65,9 @@ recorder/VAD state and feeds work into the shared scheduler.
 
 The server exposes:
 
+- `GET /api/v2/info`: public, cached identity projection with `no-store`,
+  available even when models are not ready. See the
+  [identity contract](client-development/06-http-api-und-authentifizierung.md#oeffentliche-serveridentitaet).
 - `GET /`: browser UI.
 - `GET /health`: readiness, active sessions/speakers, startup errors,
   scheduler state, and canonical SQLite event-store state/cursors.
