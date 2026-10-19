@@ -254,6 +254,11 @@ class WakeAdmissionCoordinator:
         if hit is None:
             return None
         with self._lock:
+            if (
+                hit.detector_generation != self._evaluator.generation
+                or self._evaluator.latched
+            ):
+                return None
             try:
                 outcome = _as_outcome(self._activate(hit, boundary))
             except Exception as exc:  # noqa: BLE001

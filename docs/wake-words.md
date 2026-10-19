@@ -389,6 +389,32 @@ The latch is released at the safe input close of the same activation - not at
 VAD end, not at segment end, not when a final inference starts or ends, and not
 when a cooldown expires.
 
+### Safe rearm after an inference pause
+
+At that input close, the v2 evaluator resets the upstream model's PCM,
+feature and prediction history **before** releasing its latch. Reset and
+inference use the existing engine lock; inference and tracker consumption
+are also serialized against evaluator resets. A completed rearm advances the
+existing detector generation, so a previously computed hit cannot be admitted
+later as a new activation. Duplicate or foreign activation closes do not reset
+the current detector.
+
+A reset that fails or is unavailable is logged and does **not** release the
+latch. The engine remains inference-disabled until an explicit successful
+reset (for example a stream restart) or a new session runtime. Input close,
+session commands and manual activations remain available; this failure does
+not turn silence into a wake event or terminate the session.
+
+Stream stop/restart, session close, clear and audio loss invalidate pending
+detector work through the same generation mechanism, outside session and
+ledger locks. The recorder's legacy `wakeword_detected` flag is only a mirror
+on the v2 path, not the authority that can re-latch or unlock detection.
+The legacy path without a v2 evaluator is unchanged.
+
+No additional cooldown or artificial delay is introduced.
+`wakeWord.cooldownMs`, score/threshold logic, prediction-frame grouping and
+next-attempt settings snapshots keep their existing semantics.
+
 ### Exactly-once eventing
 
 Minting the logical event and delivering it are two separate steps:
@@ -424,6 +450,14 @@ The recorder additionally does not run the detector at all while a hit is
 latched (FIND-011).
 
 ## Audio boundary and pre-roll
+
+The recording worker supplies its existing absolute stream sample cursor to
+the v2 evaluator and engine. This cursor includes audio received during an
+open activation, even though wake inference is paused. After rearm, prediction
+frame ends and the winning hit's zero point therefore refer to the current
+stream, not to the shorter concatenation of audio the wake model has seen.
+Reset discards an incomplete prediction frame without resetting this stream
+position. Pre-roll and history clamping use the same absolute coordinates.
 
 The transcript must not contain the wake word, and the first user word must not
 be cut. The anchor is the **operational audio zero point**, a deliberate
