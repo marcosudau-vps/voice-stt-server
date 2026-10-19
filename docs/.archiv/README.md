@@ -84,7 +84,10 @@ Begründung im Archiv erhalten.
 Nachtrag zu Issue #7 / PR #8: Die unabhaengige P1-Reviewkorrektur zur
 Clear-/Wake-Admission-Race ist vor Umsetzung in
 [2026-10-19_P1_CLEAR_PLAN.md](issue_7_wake_rearm/2026-10-19_P1_CLEAR_PLAN.md)
-registriert (Status: In Umsetzung). Die urspruengliche Aktion bleibt Pruefung offen.
+registriert. Der getrennte
+[Soll-/Ist-Nachtrag](issue_7_wake_rearm/2026-10-19_P1_CLEAR_UMSETZUNGSVERGLEICH.md)
+dokumentiert ROT/GRUEN und den geprueften Korrekturcommit
+(Status: Prüfung offen). Die urspruengliche Aktion bleibt Pruefung offen.
 
 ### Arbeitspaketakten „Einheitliche serverseitige Triggerarchitektur“
 
