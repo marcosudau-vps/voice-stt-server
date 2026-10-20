@@ -335,8 +335,12 @@ WINDOWS_XWIN_SHA256 = (
 
 #: Microsoft Channel Manifest (AP-SRV-070 W4A-C4, Root Finding L).
 #: Pinned to the exact VisualStudio 17.14.39 (August 2026) release manifest
-#: captured during W4A-C3.
-WINDOWS_XWIN_MANIFEST_URL = "https://aka.ms/vs/17/release/channel"
+#: captured during W4A-C3. The rolling Microsoft alias no longer serves these
+#: bytes; the commit-bound archive must satisfy the original size and hash.
+WINDOWS_XWIN_MANIFEST_URL = (
+    "https://raw.githubusercontent.com/roblabla/msvc-manifest-history/"
+    "77f6f8ee89705a855ff14c6305ca8ebc9a2a861f/raw_channel.json"
+)
 WINDOWS_XWIN_MANIFEST_CACHE_NAME = "manifest_17.json"
 WINDOWS_XWIN_MANIFEST_BYTES = 91833
 WINDOWS_XWIN_MANIFEST_SHA256 = (

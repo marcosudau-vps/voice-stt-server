@@ -196,7 +196,7 @@ laufen nicht bei jedem PR.
 Windows-Zielwheels werden im Job `build-windows` auf Ubuntu 24.04
 cross-kompiliert. `tools/release_candidate.py --platform windows` verwendet
 die bestehenden V2-Checkout-/Patchhelfer, den gepinnten Windows-
-Compilercontainer und den unveraenderten Windows-/AMD64-/CP312-Fingerprint,
+Compilercontainer und den vorhandenen Windows-/AMD64-/CP312-Fingerprintrechner,
 nicht die Toolchain des Linuxhosts. Verifizierte Free-/Pro-Artefakte bleiben
 variantengetrennt wiederverwendbar. Der nativen Kompilation folgt dasselbe
 Retagging mit den gepinnten Container-Werkzeugen; kein NSIS-Installer wird
@@ -218,6 +218,15 @@ deklarierten Windows-Toolchaininputs passen. Liefert die URL andere Bytes,
 bricht der Builder vor der nativen Kompilation ab; ein anderer Buildhost
 behebt keinen solchen Provenienzkonflikt. Es gibt kein automatisches
 Hash-/Versionsupdate oder ungeprueftes Manifestfallback.
+
+Das eingefrorene VS-17.14.39-Channelmanifest wird deshalb aus einer
+commitgebundenen Archivkopie bezogen und weiterhin gegen den urspruenglichen
+Microsoft-Bytecount und SHA-256 geprueft. Die Quelle ist keine neue
+Inhaltsautoritaet und darf keine anderen Bytes liefern. Die explizite URL
+ist selbst Teil der vorhandenen Toolchainauthority: Ein Locatorwechsel
+erzeugt korrekt neue Windows-Fingerprints, waehrend alte Artefakte ihren
+alten Inputs zugeordnet bleiben. Die Toolchainversionen und die native
+Build-/Patchlogik werden dafuer nicht geaendert.
 
 Die vorhandenen deterministischen Zeitstempel bleiben bindend:
 orchestrierte Wheelbuilds setzen `SOURCE_DATE_EPOCH` aus dem Quellcommit;
