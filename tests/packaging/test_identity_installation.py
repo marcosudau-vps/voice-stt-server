@@ -236,7 +236,15 @@ def test_installed_public_native_provenance_with_explicit_synthetic_runtime_fixt
     assert result["embedded"]["productVersion"] == "2.0.0-rc.1"
     script = """
 import json
+from email.parser import Parser
+from importlib import metadata
+from packaging.tags import parse_tag, sys_tags
+from VoiceSTT._build_identity import installed_distribution
 from api_fastapi_server.protocol_v2.identity import resolve_runtime_identity
+headers = Parser().parsestr(metadata.distribution(installed_distribution()[0]).read_text("WHEEL"))
+assert headers["Root-Is-Purelib"] == "false"
+tags = {tag for value in headers.get_all("Tag", []) for tag in parse_tag(value)}
+assert tags & set(sys_tags()), "installed WHEEL lacks compatible platform tags"
 print(json.dumps(resolve_runtime_identity().public_info("synthetic-native-fixture")))
 """
     runtime = json.loads(run([consumer, "-I", "-c", script], tmp_path, env=build_env()).stdout)

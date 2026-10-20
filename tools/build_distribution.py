@@ -423,7 +423,7 @@ def _rewrite_wheel_metadata(text: str, *, tag: str) -> str:
     lines = [
         line
         for line in text.splitlines()
-        if not line.lower().startswith(("tag:", "root-is-purelib:"))
+        if line.strip() and not line.lower().startswith(("tag:", "root-is-purelib:"))
     ]
     lines.append("Root-Is-Purelib: false")
     lines.append(f"Tag: {tag}")
