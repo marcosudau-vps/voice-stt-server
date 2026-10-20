@@ -193,6 +193,25 @@ Herkunft. Zusaetzliche Berichte und Packagingbelege sind externe
 Workflowartefakte, keine neuen RC-Manifestfelder. Diese schweren Pfade
 laufen nicht bei jedem PR.
 
+Windows-Zielwheels werden im Job `build-windows` auf Ubuntu 24.04
+cross-kompiliert. `tools/release_candidate.py --platform windows` verwendet
+die bestehenden V2-Checkout-/Patchhelfer, den gepinnten Windows-
+Compilercontainer und den unveraenderten Windows-/AMD64-/CP312-Fingerprint,
+nicht die Toolchain des Linuxhosts. Verifizierte Free-/Pro-Artefakte bleiben
+variantengetrennt wiederverwendbar. Der nativen Kompilation folgt dasselbe
+Retagging mit den gepinnten Container-Werkzeugen; kein NSIS-Installer wird
+fuer Produktwheels benoetigt.
+
+Das Zwischenartefakt `candidate-windows-build` enthaelt fertige Produktwheels
+und Distributionsmanifeste. Vor dem Upload und nach dem Download werden
+Wheelhashes, native Variante/Tags und Quellprovenienz geprueft.
+`candidate-windows` installiert genau diese Bytes auf `windows-latest`
+unter CPython 3.12 x64: getrennte frische Free-/Pro-Umgebungen, kein Docker
+und kein erneuter Build auf Windows. Nur der erfolgreiche native
+Installationsbericht fliesst zusammen mit den Linuxbelegen in die bestehende
+Vier-Wheel-RC-Abnahme ein. Manifestformat, private Staging-/Publikations-
+grenzen, Promotion und Resume bleiben unveraendert.
+
 Die vorhandenen deterministischen Zeitstempel bleiben bindend:
 orchestrierte Wheelbuilds setzen `SOURCE_DATE_EPOCH` aus dem Quellcommit;
 fuer vergleichbare private Wiederholungsbuilds denselben Wert und dieselben
