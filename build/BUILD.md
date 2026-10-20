@@ -212,6 +212,13 @@ Installationsbericht fliesst zusammen mit den Linuxbelegen in die bestehende
 Vier-Wheel-RC-Abnahme ein. Manifestformat, private Staging-/Publikations-
 grenzen, Promotion und Resume bleiben unveraendert.
 
+Ein gepinnter Hash macht eine rollierende Download-URL nicht unveraenderlich.
+Insbesondere muss das Microsoft-Channel-Manifest bytegenau zu den
+deklarierten Windows-Toolchaininputs passen. Liefert die URL andere Bytes,
+bricht der Builder vor der nativen Kompilation ab; ein anderer Buildhost
+behebt keinen solchen Provenienzkonflikt. Es gibt kein automatisches
+Hash-/Versionsupdate oder ungeprueftes Manifestfallback.
+
 Die vorhandenen deterministischen Zeitstempel bleiben bindend:
 orchestrierte Wheelbuilds setzen `SOURCE_DATE_EPOCH` aus dem Quellcommit;
 fuer vergleichbare private Wiederholungsbuilds denselben Wert und dieselben
