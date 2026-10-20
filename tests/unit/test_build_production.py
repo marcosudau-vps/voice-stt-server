@@ -405,6 +405,54 @@ def test_image_runtime_and_labels_are_both_checked(tmp_path):
         )
 
 
+@pytest.mark.parametrize("variant", ["free", "pro"])
+@pytest.mark.parametrize("broken", [None, "missing", "malformed", "duplicate", "native", "identity", "exit"])
+def test_image_endpoints_require_isolated_native_hash_bound_evidence(tmp_path, variant, broken):
+    source = _stage_identity_wheels(tmp_path)
+    labels = {
+        "org.opencontainers.image.version": source.productVersion,
+        "org.opencontainers.image.revision": source.sourceCommit,
+        "org.opencontainers.image.created": source.sourceDate,
+        "com.voicestt.kroko-variant": variant,
+    }
+    info = {
+        "serverVersion": source.productVersion, "serverCommit": source.sourceCommit,
+        "identityStatus": "complete",
+        "distribution": {"name": "voicestt", "packageVersion": source.packageVersion},
+        "runtime": {"krokoVariant": variant},
+        "build": {"sourceTree": source.sourceTree, "sourceDirty": False,
+                  "sourceDate": source.sourceDate},
+    }
+    evidence = {"info": dict(info), "nativeImport": broken != "native"}
+    if broken == "identity":
+        evidence["info"]["serverCommit"] = "f" * 40
+    marker = "IDENTITY_QUALIFICATION=" + json.dumps(evidence)
+    output = {"missing": "{}", "malformed": "IDENTITY_QUALIFICATION=broken",
+              "duplicate": marker + "\n" + marker}.get(broken, marker)
+    runner = RecordingRunner()
+    runner.respond(lambda cmd: "resolve_runtime_identity" in cmd[-1], stdout=json.dumps(info))
+    runner.respond(contains("-I", "-c", bp.INSTALLED_CHECK), stdout=output,
+                   returncode=1 if broken == "exit" else 0)
+    if broken:
+        with pytest.raises(bp.BuildError):
+            bp.validate_image_identity(
+                "image:test", {"Config": {"Labels": labels}}, source_identity=source,
+                variant=variant, build_date=source.sourceDate, runner=runner,
+            )
+    else:
+        bp.validate_image_identity(
+            "image:test", {"Config": {"Labels": labels}}, source_identity=source,
+            variant=variant, build_date=source.sourceDate, runner=runner,
+        )
+    assert len(runner.calls) == 2
+    for command in runner.calls:
+        assert command[:8] == [
+            "docker", "run", "--rm", "--network", "none",
+            "--entrypoint", "/opt/venv/bin/python", "image:test",
+        ]
+    assert runner.calls[1][-2:] == [source.to_json(), variant]
+
+
 def test_a_dist_dir_outside_the_build_context_fails_immediately(tmp_path):
     """AP-SRV-070 W5-R04.
 

@@ -179,8 +179,13 @@ HTTP-/Sessionannahme mit redigiertem `IdentityError`.
 Production-/Distributions-/RC-Werkzeuge verlangen vollstaendige, saubere
 Quellherkunft und vergleichen dasselbe Herkunftsobjekt mit Paketmetadaten,
 nativen Free-/Pro-Wheeltags, eingebetteter Kroko-Provenienz und OCI-Labels.
-Das fertige generische Image wird zusaetzlich netzlos ueber den installierten
-Metadatenresolver geprueft. Release-Manifestformat, Promotion, Publikation
+Das fertige generische Image wird zusaetzlich ueber den installierten
+Metadatenresolver und echte HTTP-/WebSocket-Endpunkte geprueft: ein frischer
+unprivilegierter Container mit `--network none` startet den unveraenderten
+Server nur auf containerinternem Loopback. Beide nativen Varianten,
+Info-/Settings-/OpenAPI-/Refusalidentitaet und `ready=false` ohne Modelle
+muessen bestehen; keine Hostports, Modellmounts oder Downloads.
+Release-Manifestformat, Promotion, Publikation
 und Resume bleiben unveraendert; qualifizierte Bytes werden nicht neu gebaut.
 
 Der vorhandene dispatch-only RC-Workflow fuehrt die echte Packagingmatrix

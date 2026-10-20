@@ -58,19 +58,47 @@ def validate_distribution(path: Path, source: BuildIdentity, variant: str,
 
 
 INSTALLED_CHECK = r"""
-import json, os, pathlib, sys, tempfile
+import contextlib, json, socket, sys, tempfile, threading, time
+import httpx, uvicorn
+from websockets.sync.client import connect
 from VoiceSTT._build_identity import validated_build_identity
-from api_fastapi_server.protocol_v2.identity import resolve_runtime_identity
 from VoiceSTT.kroko.artifacts import verify_installed_runtime
 from api_fastapi_server.server import ServerSettings, create_app
-from fastapi.testclient import TestClient
+
+@contextlib.contextmanager
+def running_app(app):
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+        server = uvicorn.Server(uvicorn.Config(
+            app, host="127.0.0.1", port=port, log_level="critical", access_log=False,
+        ))
+        worker = threading.Thread(
+            target=lambda: server.run(sockets=[listener]),
+            name="identity-qualification-http", daemon=True,
+        )
+        worker.start()
+        try:
+            deadline = time.monotonic() + 30
+            while not server.started and worker.is_alive() and time.monotonic() < deadline:
+                time.sleep(.01)
+            assert server.started and worker.is_alive(), "qualification server did not start"
+            with httpx.Client(
+                base_url=f"http://127.0.0.1:{port}", timeout=10, trust_env=False,
+            ) as client:
+                yield client, f"ws://127.0.0.1:{port}/ws/v2"
+        finally:
+            server.should_exit = True
+            worker.join(30)
+            assert not worker.is_alive(), "qualification server did not stop"
 
 expected = json.loads(sys.argv[1])
+variant = sys.argv[2] if len(sys.argv) > 2 else expected["krokoVariant"]
 identity = validated_build_identity()
 assert identity is not None
 identity.require_complete()
 assert json.loads(identity.to_json()) == expected
-runtime = verify_installed_runtime(expected["krokoVariant"])
+runtime = verify_installed_runtime(variant)
 assert runtime["ok"], "native Kroko import/variant qualification failed"
 with tempfile.TemporaryDirectory() as data:
     settings = ServerSettings(
@@ -81,37 +109,66 @@ with tempfile.TemporaryDirectory() as data:
         transcription_logging_enabled=False,
     )
     app = create_app(settings)
-    with TestClient(app) as client:
+    with running_app(app) as (client, ws_url):
         response = client.get("/api/v2/info")
+        assert response.status_code == 200
         info = response.json()
         assert response.headers["cache-control"] == "no-store"
         assert info["identityStatus"] == "complete"
         assert info["serverVersion"] == expected["productVersion"]
         assert info["serverCommit"] == expected["sourceCommit"]
         assert info["distribution"]["name"] == expected["distributionName"]
-        assert info["runtime"]["krokoVariant"] == expected["krokoVariant"]
+        assert info["runtime"]["krokoVariant"] == variant
+        assert info["distribution"]["packageVersion"] == expected["packageVersion"]
+        assert info["build"] == {
+            "sourceTree": expected["sourceTree"], "sourceDirty": False,
+            "sourceDate": expected["sourceDate"],
+        }
         assert info["serverInstanceId"] == app.state.voicestt_service.events.server_instance_id
         assert client.get("/api/v2/info").json() == info
         for path in ("/api/v2/settings/schema", "/api/v2/settings/server"):
-            payload = client.get(path).json()
+            response = client.get(path)
+            assert response.status_code == 200
+            payload = response.json()
             assert payload["serverVersion"] == info["serverVersion"]
             assert payload["serverCommit"] == info["serverCommit"]
         assert client.get("/openapi.json").json()["info"]["version"] == info["serverVersion"]
-        assert client.get("/health").json()["ready"] is False
-        with client.websocket_connect("/ws/v2") as ws:
-            ws.send_json({
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json()["ready"] is False
+        with socket.create_connection(("127.0.0.1", client.base_url.port), timeout=10) as connection, \
+                connect(ws_url, sock=connection, open_timeout=10, close_timeout=10) as ws:
+            ws.send(json.dumps({
                 "type": "hello", "supportedProtocolVersions": [999],
                 "clientVersion": "2.0.0", "clientCommit": "unknown",
                 "clientRunId": "10000000-0000-4000-8000-000000000001",
                 "requestedSession": {"trigger": {"manual": True, "wakeWord": False}, "wakeWordIds": []},
                 "runtimeSuppression": {"manual": False, "wakeWord": False},
-            })
-            refusal = ws.receive_json()
+            }))
+            refusal = json.loads(ws.recv(timeout=10))
             assert refusal["type"] == "protocol.incompatible"
             assert refusal["serverVersion"] == info["serverVersion"]
             assert refusal["serverCommit"] == info["serverCommit"]
 print("IDENTITY_QUALIFICATION=" + json.dumps({"info": info, "nativeImport": runtime["ok"]}))
 """
+
+
+def qualification_evidence(stdout: str) -> dict:
+    markers = [line.partition("=")[2] for line in stdout.splitlines()
+               if line.startswith("IDENTITY_QUALIFICATION=")]
+    if len(markers) != 1:
+        raise IdentityError("installed qualification must produce exactly one evidence record")
+    try:
+        evidence = json.loads(markers[0])
+    except ValueError:
+        raise IdentityError("unreadable installed qualification evidence") from None
+    if (
+        not isinstance(evidence, dict)
+        or evidence.get("nativeImport") is not True
+        or not isinstance(evidence.get("info"), dict)
+    ):
+        raise IdentityError("installed qualification lacks native HTTP evidence")
+    return evidence
 
 
 def qualify_installed_wheel(path: Path, identity: BuildIdentity) -> dict:
@@ -139,13 +196,7 @@ def qualify_installed_wheel(path: Path, identity: BuildIdentity) -> dict:
             if result.returncode:
                 print(result.stderr, file=sys.stderr)
                 raise IdentityError("installed wheel qualification failed; see qualification log")
-        marker = next(
-            (line for line in result.stdout.splitlines() if line.startswith("IDENTITY_QUALIFICATION=")),
-            None,
-        )
-        if marker is None:
-            raise IdentityError("installed wheel qualification did not produce evidence")
-        return json.loads(marker.partition("=")[2])
+        return qualification_evidence(result.stdout)
 
 
 def qualify_candidate(directory: Path, *, platform: str | None = None,

@@ -97,6 +97,9 @@ Die anschliessende autonome Fortsetzung registriert vor Umsetzung die
 [bytegleiche Manifest-Wiederbeschaffung](issue_9_build_runtime_identity/2026-10-20_MANIFEST_LOCATOR_PLAN.md).
 Die neue explizite Bezugsquelle muss korrekt neue Windows-Fingerprints
 ableiten; alte Identitaeten werden nicht fuer geaenderte Inputs verwendet.
+Der bisher offene echte Image-Endpunktnachweis wird vor Umsetzung unter
+[2026-10-20_IMAGE_ENDPOINT_PLAN.md](issue_9_build_runtime_identity/2026-10-20_IMAGE_ENDPOINT_PLAN.md)
+registriert; keine zusaetzliche Publikationsautoritaet.
 
 Nachtrag zu Issue #7 / PR #8: Die unabhaengige P1-Reviewkorrektur zur
 Clear-/Wake-Admission-Race ist vor Umsetzung in

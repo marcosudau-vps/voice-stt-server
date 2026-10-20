@@ -190,3 +190,80 @@ def test_rc_source_tree_mismatch_fails(source, monkeypatch):
     monkeypatch.setattr(rc, "capture_identity", lambda *args, **kwargs: source)
     with pytest.raises(CandidateError, match="tree"):
         candidate_source("e" * 40, None)
+
+
+@pytest.mark.parametrize("distribution,variant", [
+    ("voicestt", "free"), ("voicestt", "pro"),
+    ("voice-stt-server", "free"), ("voice-stt-server-pro", "pro"),
+])
+@pytest.mark.parametrize("failure", [None, "http", "websocket"])
+def test_installed_probe_uses_real_loopback_and_cleans_up(
+    source, monkeypatch, capsys, distribution, variant, failure,
+):
+    import sys
+    import threading
+    from fastapi import FastAPI, WebSocket
+    from fastapi.responses import JSONResponse
+    from api_fastapi_server import server
+    from VoiceSTT import _build_identity
+    from VoiceSTT.kroko import artifacts
+
+    identity = replace(
+        source, distributionName=distribution,
+        krokoVariant=None if distribution == "voicestt" else variant,
+    )
+    info = {
+        "serverVersion": source.productVersion, "serverCommit": source.sourceCommit,
+        "identityStatus": "complete", "serverInstanceId": "probe-instance",
+        "distribution": {"name": distribution, "packageVersion": source.packageVersion},
+        "runtime": {"krokoVariant": variant},
+        "build": {"sourceTree": source.sourceTree, "sourceDirty": False,
+                  "sourceDate": source.sourceDate},
+    }
+    app = FastAPI(version=source.productVersion)
+    app.state.voicestt_service = SimpleNamespace(
+        events=SimpleNamespace(server_instance_id=info["serverInstanceId"]),
+    )
+
+    @app.get("/api/v2/info")
+    def get_info():
+        return JSONResponse(info, status_code=503 if failure == "http" else 200,
+                            headers={"Cache-Control": "no-store"})
+
+    @app.get("/api/v2/settings/schema")
+    @app.get("/api/v2/settings/server")
+    def get_settings():
+        return {"serverVersion": source.productVersion, "serverCommit": source.sourceCommit}
+
+    @app.get("/health")
+    def health():
+        return {"ready": False}
+
+    @app.websocket("/ws/v2")
+    async def incompatible(ws: WebSocket):
+        await ws.accept()
+        hello = await ws.receive_json()
+        assert hello["supportedProtocolVersions"] == [999]
+        await ws.send_json({
+            "type": "protocol.incompatible", "serverVersion": source.productVersion,
+            "serverCommit": "f" * 40 if failure == "websocket" else source.sourceCommit,
+        })
+        await ws.close()
+
+    monkeypatch.setattr(server, "create_app", lambda settings: app)
+    monkeypatch.setattr(_build_identity, "validated_build_identity", lambda: identity)
+    monkeypatch.setattr(artifacts, "verify_installed_runtime",
+                        lambda expected: {"ok": expected == variant})
+    argv = ["qualification", identity.to_json()]
+    if distribution == "voicestt":
+        argv.append(variant)
+    monkeypatch.setattr(sys, "argv", argv)
+    if failure:
+        with pytest.raises(AssertionError):
+            exec(compile(q.INSTALLED_CHECK, "<installed-probe>", "exec"), {})
+        assert "IDENTITY_QUALIFICATION=" not in capsys.readouterr().out
+    else:
+        exec(compile(q.INSTALLED_CHECK, "<installed-probe>", "exec"), {})
+        evidence = q.qualification_evidence(capsys.readouterr().out)
+        assert evidence == {"nativeImport": True, "info": info}
+    assert not any(worker.name == "identity-qualification-http" for worker in threading.enumerate())

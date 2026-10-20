@@ -45,6 +45,7 @@ from VoiceSTT.kroko import artifacts as kroko_artifacts  # noqa: E402
 from VoiceSTT.kroko.buildinputs import SUPPORTED_VARIANTS as KROKO_VARIANTS  # noqa: E402
 from VoiceSTT._build_identity import BuildIdentity, IdentityError  # noqa: E402
 from build_identity_support import capture_identity, match_identity, wheel_identity  # noqa: E402
+from tools.qualify_build_identity import INSTALLED_CHECK, qualification_evidence  # noqa: E402
 
 PRODUCTION_DOCKERFILE = REPO_ROOT / "Dockerfile"
 KROKO_BUILDER_DOCKERFILE = REPO_ROOT / "build" / "kroko-builder.Dockerfile"
@@ -600,7 +601,7 @@ def inspect_image(image_ref: str, runner: CommandRunner = default_runner) -> Dic
 def validate_image_identity(image_ref: str, details: Dict[str, Any], *,
                             source_identity: BuildIdentity, variant: str,
                             build_date: str, runner=default_runner) -> None:
-    """Read lightweight installed metadata in an isolated, networkless container."""
+    """Bind labels, installed metadata and real endpoints in isolated containers."""
     labels = (details.get("Config") or {}).get("Labels") or {}
     for key, expected in {
         "org.opencontainers.image.version": source_identity.productVersion,
@@ -631,6 +632,18 @@ def validate_image_identity(image_ref: str, details: Dict[str, Any], *,
     }
     if not isinstance(actual, dict) or any(actual.get(key) != value for key, value in expected.items()):
         raise BuildError("installed production image identity conflicts with source/Kroko inputs")
+    result = runner([
+        "docker", "run", "--rm", "--network", "none",
+        "--entrypoint", "/opt/venv/bin/python", image_ref, "-I", "-c",
+        INSTALLED_CHECK, source_identity.to_json(), variant,
+    ])
+    print(result.stdout)
+    try:
+        evidence = qualification_evidence(result.stdout)
+    except IdentityError as exc:
+        raise BuildError(f"production image endpoint qualification failed: {exc}") from None
+    if any(evidence["info"].get(key) != value for key, value in expected.items()):
+        raise BuildError("production image endpoints conflict with source/Kroko inputs")
 
 
 # --------------------------------------------------------------------------
