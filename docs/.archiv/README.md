@@ -82,6 +82,12 @@ Begründung im Archiv erhalten.
 | Issue #7: sichere Wake-Wiederfreigabe | 19.10.2026 | Prüfung offen | [issue_7_wake_rearm](issue_7_wake_rearm/) |
 | Issue #9: Build-/Runtimeidentitaet A+B | 20.10.2026 | Prüfung offen | [issue_9_build_runtime_identity](issue_9_build_runtime_identity/) |
 
+Die zugehörigen [Vor-Merge-Soll-/Ist-Prüfung](issue_9_build_runtime_identity/2026-10-20_PREMERGE_HAERTUNG_UMSETZUNGSVERGLEICH.md)
+und [Abweichungsakte](issue_9_build_runtime_identity/2026-10-20_PREMERGE_HAERTUNG_ABWEICHUNGEN.md)
+halten den zum Erstellungszeitpunkt offenen CI-/RC-Status korrekt fest;
+nach dem finalen neuen Kandidatenlauf sind dessen realen Nachweise separat
+an PR #10 zu binden.
+
 Vor-Merge-Nachtrag zu Issue #9: [Plan der lokalen Manifestkopie und
 Builddeklaration](issue_9_build_runtime_identity/2026-10-20_PREMERGE_HAERTUNG_PLAN.md);
 Implementierung und neuer RC sind gesondert zu qualifizieren.
