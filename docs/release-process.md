@@ -86,6 +86,20 @@ every reused artifact is revalidated against the fingerprint/artifact authority
 before use, and a cache miss simply builds from source. The first build on an
 empty cache works.
 
+**Identity qualification (Issue #9).** The candidate workflow additionally
+checks real wheel/sdist packaging paths, then fresh full-dependency Free/Pro
+installations on the existing Linux/Windows targets, native imports and
+HTTP/Wire projections without downloading speech models. Before the existing
+manifest-qualification step it compares both installation reports against
+the exact four wheel hashes, source commit/tree and per-wheel Kroko provenance.
+Reports and packaging evidence travel as additional candidate artifacts; the
+RC manifest format, publishing, promotion and resume contracts are unchanged.
+Missing resources in new official artifacts, dirty sources or mismatches fail
+the gate, not an old/manual installation merely lacking optional provenance.
+The canonical rules are in
+[build/BUILD.md](../build/BUILD.md#offizielle-kandidatengates-und-reproduzierbarkeit).
+An unexecuted native/image/platform check is NOT_RUN/NOT_PROVEN, not QUALIFIED.
+
 **Staging retention.** Candidate images live in private GHCR packages tagged by
 candidate id; workflow artifacts are retained for 90 days. A candidate older
 than that must be rebuilt (which produces a new candidate id and a new manifest

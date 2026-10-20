@@ -153,8 +153,9 @@ class ResolveVersionTests(unittest.TestCase):
             _version, "_version_file_path",
             return_value=pathlib.Path("Z:/does/not/exist/VERSION"),
         ):
-            with mock.patch.object(
-                importlib_metadata, "version", return_value="3.4.5",
+            with mock.patch(
+                "VoiceSTT._build_identity.installed_distribution",
+                return_value=("voicestt", "3.4.5"),
             ):
                 self.assertEqual(_version.resolve_version(), "3.4.5")
 

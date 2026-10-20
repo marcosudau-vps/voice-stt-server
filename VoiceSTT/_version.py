@@ -8,27 +8,15 @@ established v2 server identity was ``2.0.0``). This module is now the only
 place that decides the product version; every other consumer - package
 metadata, the running server, the v2 handshake - reads through it.
 
-Resolution order, most specific first:
+Installed wheels and extracted sdists first use their validated immutable
+build resource. It preserves original SemVer separately from normalized
+Python package metadata; conflicting nonempty environment overrides fail.
 
-1. An explicit build/release override (``VOICESTT_BUILD_VERSION``). This is
-   how a future release candidate (W5/W6) computes and qualifies a candidate
-   version, and how a wheel/sdist build stamps one specific version into its
-   metadata, without permanently rewriting the source-controlled ``VERSION``
-   file before the release is actually tagged.
-2. The source-controlled ``VERSION`` file at the repository root, whenever
-   this module is running from an actual source checkout (a normal
-   ``setup.py`` build, an editable install, or the unit suite run directly
-   from source). Reading it straight from disk here - instead of trusting
-   whatever this Python environment happens to have installed - is what
-   keeps a build deterministic even if a stale ``voicestt`` distribution is
-   already installed in the same environment.
-3. The version already recorded in the installed distribution's metadata
-   (``importlib.metadata``), for a runtime that has no source tree at all -
-   an installed wheel/sdist in a container, for example. ``setup.py``
-   resolves the version the same way this module does (override, else the
-   ``VERSION`` file) and stamps the result into the wheel/sdist it builds, so
-   this is exactly the value that build used - nothing here is a second
-   value to keep in sync by hand.
+Source checkouts ignore stale generated resources and use the explicit
+``VOICESTT_BUILD_VERSION`` override, otherwise their root ``VERSION``.
+Older installs without a resource use a validated override or the metadata
+of the distribution that actually owns this import (legacy, Free or Pro).
+An old normalized prerelease cannot recover lost original SemVer spelling.
 
 A value that reaches this module - the override or the ``VERSION`` file
 content - is always validated as SemVer 2.0.0. An invalid value is a hard
@@ -173,15 +161,27 @@ def resolve_version() -> str:
     """The one product version this build/runtime reports everywhere.
 
     Never derived from commit messages or branch names - only the explicit
-    override or the source-controlled ``VERSION`` file (directly, or via the
-    installed distribution metadata that was stamped from it).
+    override/source ``VERSION``, an immutable resource, or unambiguous
+    owning-distribution metadata for older stable installs.
     """
+    from ._build_identity import (
+        installed_distribution, package_root, validated_build_identity,
+    )
+
+    identity = validated_build_identity()
+    if identity is not None:
+        return identity.productVersion
     override = _build_override()
     if override:
         return validate_semver(override)
-    if _version_file_path().is_file():
+    if (package_root() / "setup.py").is_file() and _version_file_path().is_file():
         return read_version_file()
-    return validate_semver(_metadata.version(DISTRIBUTION_NAME))
+    name, version = installed_distribution()
+    if name is None:
+        raise _metadata.PackageNotFoundError("no distribution owns the VoiceSTT import")
+    # Old normalized prereleases have lost their original SemVer spelling.
+    # Reject them explicitly rather than inventing that spelling.
+    return validate_semver(version)
 
 
 __all__ = [

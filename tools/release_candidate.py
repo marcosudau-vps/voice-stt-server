@@ -34,7 +34,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
+import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
@@ -52,8 +54,23 @@ import build_production  # noqa: E402
 from release_tooling import candidate as candidate_module  # noqa: E402
 from release_tooling import config as release_config  # noqa: E402
 from release_tooling import rc_manifest  # noqa: E402
+from VoiceSTT._build_identity import IdentityError  # noqa: E402
+from VoiceSTT import install_kroko  # noqa: E402
+from VoiceSTT.kroko import fingerprint as kroko_fingerprint  # noqa: E402
+from build_identity_support import capture_identity  # noqa: E402
+from tools.qualify_build_identity import validate_distribution  # noqa: E402
 
 VARIANTS = rc_manifest.VARIANTS
+
+
+def candidate_source(source_tree, runner):
+    source = capture_identity(
+        REPO_ROOT, build_production.resolve_voicestt_version(), "voicestt", runner=runner
+    )
+    source.require_complete()
+    if source.sourceTree != source_tree:
+        raise CandidateError("candidate source tree does not match the actual checkout")
+    return source
 
 
 class CandidateError(RuntimeError):
@@ -192,6 +209,7 @@ def build_candidate(
     runner=build_production.default_runner,
 ) -> Dict[str, Any]:
     """Builds every candidate artifact and (optionally) the RC manifest."""
+    source = candidate_source(source_tree, runner)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     dist_dir = build_production.default_dist_dir()
@@ -207,6 +225,7 @@ def build_candidate(
             kroko_artifact_store=kroko_artifact_store,
             kroko_work_dir=kroko_work_dir,
             runner=runner,
+            source_identity=source,
         )
         _write_json(
             out_dir / candidate_module.BUILD_MANIFEST_TEMPLATE.format(variant=variant),
@@ -225,6 +244,14 @@ def build_candidate(
             timestamp=datetime.fromisoformat(
                 build_manifest["buildDate"].replace("Z", "+00:00")
             ),
+            source_identity=source,
+        )
+        validate_distribution(
+            Path(distribution["path"]), source, variant,
+            kroko_sha256=build_production.kroko_artifacts.sha256_of(
+                Path(kroko_payload["hostWheelPath"])
+            ),
+            fingerprint=kroko_payload["fingerprint"],
         )
         _write_json(
             out_dir / candidate_module.DISTRIBUTION_MANIFEST_TEMPLATE.format(variant=variant),
@@ -276,6 +303,83 @@ def build_candidate(
     return produced
 
 
+def windows_kroko_fingerprint(variant: str) -> Dict[str, Any]:
+    return kroko_fingerprint.compute_fingerprint(
+        variant=variant, target_platform="windows", architecture="amd64",
+        python_tag="cp312", abi_tag="cp312",
+    )
+
+
+def resolve_windows_kroko(
+    variant: str, *, artifact_store: Path, work_dir: Path,
+    runner=build_production.default_runner,
+) -> build_production.kroko_artifacts.ArtifactRecord:
+    """Cross-build with the existing V2 container inputs, never host tools."""
+    if (
+        not sys.platform.startswith("linux")
+        or kroko_fingerprint.detect_architecture() != "amd64"
+        or kroko_fingerprint.detect_python_tag() != "cp312"
+        or sys.maxsize <= 2**32
+    ):
+        raise CandidateError(
+            "Windows candidates must be cross-built on Linux AMD64 with CPython 3.12; "
+            "install and qualify the resulting wheels on Windows separately"
+        )
+    computed = windows_kroko_fingerprint(variant)
+    store = build_production.kroko_artifacts.KrokoArtifactStore(artifact_store)
+    record, problems = store.lookup(
+        variant=variant, fingerprint=computed["fingerprint"], inputs=computed["inputs"],
+    )
+    if record is not None:
+        print(f"Reusing verified Windows Kroko artifact: {record.wheel_path}")
+        return record
+    print(f"No reusable Windows Kroko artifact: {'; '.join(problems)}")
+    work_dir = Path(work_dir).resolve()
+    args = install_kroko.parse_args([
+        "--build", "--skip-install", "--variant", variant, "--work-dir", str(work_dir),
+    ])
+    repo = install_kroko.prepare_checkout(args, work_dir)
+    install_kroko.prepare_windows_checkout(repo)
+    env = install_kroko.windows_build_env()
+    image = f"voicestt-kroko-windows-builder:{kroko_fingerprint.windows_toolchain_authority()}"
+    runner([
+        "docker", "build", "--platform", "linux/amd64", "--file",
+        str(repo / "Dockerfile.windows"), "--tag", image, str(repo),
+    ], cwd=repo, env=env)
+    with tempfile.TemporaryDirectory(prefix="windows-output-", dir=work_dir) as temporary:
+        output = Path(temporary)
+        mount = ["--volume", f"{output}:/out"]
+        owner = f"{os.getuid()}:{os.getgid()}"
+        try:
+            runner([
+                "docker", "run", "--rm", "--platform", "linux/amd64",
+                "--env", f"BUILD_VARIANT={variant}",
+                "--volume", f"{repo}:/src:ro", *mount, image,
+            ], cwd=repo, env=env)
+        finally:
+            # The pinned compiler runs as root; restore only this private output.
+            runner([
+                "docker", "run", "--rm", "--platform", "linux/amd64",
+                "--entrypoint", "chown", *mount, image, "-R", owner, "/out",
+            ], cwd=repo, env=env)
+        wheels = list((output / "wheel").glob("*.whl"))
+        if len(wheels) != 1:
+            raise CandidateError("Windows cross-build must produce exactly one native wheel")
+        runner([
+            "docker", "run", "--rm", "--platform", "linux/amd64", "--user", owner,
+            "--entrypoint", "python3", *mount, image, "-m", "wheel", "tags",
+            "--build", f"1{variant}", "--remove", f"/out/wheel/{wheels[0].name}",
+        ], cwd=repo, env=env)
+        wheels = list((output / "wheel").glob("*.whl"))
+        if len(wheels) != 1:
+            raise CandidateError("Windows retagging must leave exactly one native wheel")
+        record = store.store(
+            wheel_path=wheels[0], fingerprint=computed["fingerprint"],
+            inputs=computed["inputs"],
+        )
+    return record
+
+
 def build_windows_candidate(
     *,
     out_dir: Path,
@@ -285,7 +389,8 @@ def build_windows_candidate(
     kroko_work_dir: Optional[Path] = None,
     runner=build_production.default_runner,
 ) -> Dict[str, Any]:
-    """Builds Windows AMD64 distribution wheels for Free and Pro (AP-SRV-070 B2)."""
+    """Cross-builds Free/Pro Windows wheels on Linux; qualification is native."""
+    source = candidate_source(source_tree, runner)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     dist_dir = out_dir / "dist"
@@ -299,36 +404,11 @@ def build_windows_candidate(
     produced: Dict[str, Any] = {"candidateId": candidate_id, "variants": {}}
 
     for variant in VARIANTS:
-        # 1. Build or reuse Kroko Windows artifact via install_kroko.py
-        cmd = [
-            sys.executable,
-            str(REPO_ROOT / "VoiceSTT" / "install_kroko.py"),
-            "--variant", variant,
-            "--build",
-            "--skip-install",
-            "--artifact-store", str(store_path),
-            "--work-dir", str(work_path),
-        ]
-        runner(cmd, cwd=REPO_ROOT)
-
-        # 2. Describe artifact to read fingerprint and wheelPath
-        desc_cmd = [
-            sys.executable,
-            str(REPO_ROOT / "VoiceSTT" / "install_kroko.py"),
-            "--variant", variant,
-            "--describe-artifact",
-            "--artifact-store", str(store_path),
-        ]
-        res = runner(desc_cmd, cwd=REPO_ROOT)
-        desc_payload = json.loads(res.stdout)
-        artifact = desc_payload.get("artifact")
-        if not artifact:
-            raise CandidateError(
-                f"could not resolve Windows Kroko artifact for {variant}: {desc_payload.get('problems')}"
-            )
-
-        kroko_wheel = Path(artifact["wheelPath"])
-        fingerprint = desc_payload["fingerprint"]
+        record = resolve_windows_kroko(
+            variant, artifact_store=store_path, work_dir=work_path, runner=runner,
+        )
+        kroko_wheel = record.wheel_path
+        fingerprint = record.fingerprint
 
         # 3. Build Windows distribution wheel
         distribution = build_distribution.build_distribution(
@@ -336,6 +416,12 @@ def build_windows_candidate(
             kroko_wheel=kroko_wheel,
             out_dir=dist_dir,
             work_dir=work_dir,
+            fingerprint=fingerprint,
+            source_identity=source,
+        )
+        validate_distribution(
+            Path(distribution["path"]), source, variant,
+            kroko_sha256=build_production.kroko_artifacts.sha256_of(kroko_wheel),
             fingerprint=fingerprint,
         )
 
@@ -448,7 +534,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.print_fingerprints:
         try:
             print(json.dumps(
-                print_fingerprints(
+                {variant: windows_kroko_fingerprint(variant)["fingerprint"] for variant in VARIANTS}
+                if args.platform == "windows" else print_fingerprints(
                     kroko_artifact_store=args.kroko_artifact_store,
                     kroko_work_dir=args.kroko_work_dir,
                 ),
@@ -486,7 +573,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 push_staging=args.push_staging,
                 assemble_manifest=not args.no_manifest,
             )
-    except (CandidateError, build_production.BuildError,
+    except (CandidateError, IdentityError, install_kroko.KrokoInstallError,
+            build_production.kroko_artifacts.KrokoArtifactError, build_production.BuildError,
             build_distribution.DistributionBuildError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1

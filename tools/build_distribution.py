@@ -51,6 +51,8 @@ import subprocess
 import sys
 import zipfile
 from datetime import datetime, timezone
+from dataclasses import replace
+from email.parser import Parser
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -59,6 +61,9 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from VoiceSTT.kroko import buildinputs as kroko_buildinputs  # noqa: E402
+from VoiceSTT.kroko.artifacts import read_wheel_metadata, KrokoArtifactError  # noqa: E402
+from VoiceSTT._build_identity import BuildIdentity, IdentityError  # noqa: E402
+from build_identity_support import capture_identity, match_identity, wheel_identity  # noqa: E402
 
 #: Must stay identical to ``setup.py``'s mapping - a guard test enforces it.
 DISTRIBUTION_VARIANT_ENV = "VOICESTT_DISTRIBUTION_VARIANT"
@@ -146,6 +151,7 @@ def build_base_wheel(
     out_dir: Path,
     runner=None,
     repo_root: Path = REPO_ROOT,
+    source_identity: Optional[BuildIdentity] = None,
 ) -> Path:
     """Builds the variant-named, still platform-independent VoiceSTT wheel.
 
@@ -162,6 +168,12 @@ def build_base_wheel(
 
     env = dict(os.environ)
     env[DISTRIBUTION_VARIANT_ENV] = variant
+    if source_identity is not None:
+        source_identity.require_complete()
+        assert source_identity.sourceDate is not None
+        env["SOURCE_DATE_EPOCH"] = str(int(datetime.fromisoformat(
+            source_identity.sourceDate.replace("Z", "+00:00")
+        ).timestamp()))
     cmd = [sys.executable, "-m", "build", "--wheel", "--outdir", str(out_dir)]
     if runner is None:
         completed = subprocess.run(
@@ -306,6 +318,26 @@ def merge_kroko_runtime(
                 "the Kroko runtime and the VoiceSTT wheel both provide "
                 f"{collisions[:5]} - refusing to silently overwrite payload"
             )
+        try:
+            metadata_build = read_wheel_metadata(kroko_wheel).get("build", "")
+        except KrokoArtifactError:
+            raise DistributionBuildError("unreadable Kroko wheel variant") from None
+        if (
+            metadata_build != kroko_tags["build"]
+            or not re.fullmatch(r"\d+" + variant, metadata_build)
+        ):
+            raise DistributionBuildError("Kroko wheel variant conflicts with distribution variant")
+        base_metadata = Parser().parsestr(
+            base_zip.read(f"{base_dist_info}/METADATA").decode("utf-8")
+        )
+        if (base_metadata["Name"], base_metadata["Version"]) != (distribution, version):
+            raise DistributionBuildError("base wheel metadata conflicts with distribution variant/version")
+        base_identity = wheel_identity(base_wheel, required=False)
+        if base_identity is not None and (
+            base_identity.distributionName != distribution
+            or base_identity.krokoVariant != variant
+        ):
+            raise DistributionBuildError("base identity conflicts with embedded Kroko variant")
 
         entries: List[Tuple[str, bytes]] = []
 
@@ -338,7 +370,7 @@ def merge_kroko_runtime(
             kroko_wheel=kroko_wheel,
             kroko_wheel_sha256=sha256_of(kroko_wheel),
             fingerprint=fingerprint,
-            product_version=version,
+            product_version=base_identity.productVersion if base_identity else version,
         )
         entries.append((
             f"{EMBEDDED_PACKAGE}/{EMBEDDED_MANIFEST_NAME}",
@@ -391,7 +423,7 @@ def _rewrite_wheel_metadata(text: str, *, tag: str) -> str:
     lines = [
         line
         for line in text.splitlines()
-        if not line.lower().startswith(("tag:", "root-is-purelib:"))
+        if line.strip() and not line.lower().startswith(("tag:", "root-is-purelib:"))
     ]
     lines.append("Root-Is-Purelib: false")
     lines.append(f"Tag: {tag}")
@@ -412,13 +444,26 @@ def build_distribution(
     fingerprint: Optional[str] = None,
     timestamp: Optional[datetime] = None,
     runner=None,
+    source_identity: Optional[BuildIdentity] = None,
 ) -> Dict[str, Any]:
     """Builds one complete public distribution wheel end to end."""
     variant = normalize_variant(variant)
+    if source_identity is None:
+        from VoiceSTT._version import resolve_version
+        source_identity = capture_identity(REPO_ROOT, resolve_version(), distribution_name_for(variant))
+    else:
+        source_identity = replace(
+            source_identity, distributionName=distribution_name_for(variant), krokoVariant=variant
+        )
+    source_identity.require_complete()
     base_wheel = build_base_wheel(
-        variant=variant, out_dir=Path(work_dir) / f"base-{variant}", runner=runner
+        variant=variant, out_dir=Path(work_dir) / f"base-{variant}", runner=runner,
+        source_identity=source_identity,
     )
-    return merge_kroko_runtime(
+    built_identity = wheel_identity(base_wheel)
+    built_identity.require_complete()
+    match_identity(built_identity, source_identity)
+    result = merge_kroko_runtime(
         base_wheel=base_wheel,
         kroko_wheel=Path(kroko_wheel),
         variant=variant,
@@ -426,6 +471,8 @@ def build_distribution(
         fingerprint=fingerprint,
         timestamp=timestamp,
     )
+    match_identity(wheel_identity(Path(result["path"])), source_identity)
+    return result
 
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
@@ -466,7 +513,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             fingerprint=args.fingerprint,
             timestamp=timestamp,
         )
-    except DistributionBuildError as exc:
+    except (DistributionBuildError, IdentityError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
 

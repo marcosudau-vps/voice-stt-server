@@ -1,9 +1,11 @@
 import os
 import re
 import sys
+from pathlib import Path
 
 import setuptools
 from setuptools.command.build_py import build_py as _build_py
+from setuptools.command.sdist import sdist as _sdist
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -15,12 +17,13 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from VoiceSTT._version import resolve_version
+from build_identity_support import capture_identity, write_identity
+from VoiceSTT._build_identity import load_build_identity
 from wakeword_package_resources import bundled_package_data_files
 
 # AP-SRV-070: the single product version authority. See VoiceSTT/_version.py
-# for the resolution order (build/release override, else the source-controlled
-# VERSION file, else the installed distribution's own metadata) - this is
-# deliberately not a second, independently maintained version constant.
+# for source/build inputs, immutable sdist provenance and older-install
+# fallbacks. This is not an independently maintained version constant.
 current_version = resolve_version()
 
 # ---------------------------------------------------------------------------
@@ -66,6 +69,13 @@ def resolve_distribution_variant():
     """"free"/"pro" for a public distribution build, else None."""
     value = os.environ.get(DISTRIBUTION_VARIANT_ENV, "").strip().lower()
     if not value:
+        inherited = load_build_identity()
+        if inherited:
+            return next(
+                (variant for variant, name in PUBLIC_DISTRIBUTION_NAMES.items()
+                 if name == inherited.distributionName),
+                None,
+            )
         return None
     if value not in PUBLIC_DISTRIBUTION_NAMES:
         raise SystemExit(
@@ -85,6 +95,7 @@ distribution_name = (
     if distribution_variant
     else LEGACY_DISTRIBUTION_NAME
 )
+build_identity = capture_identity(Path(REPO_ROOT), current_version, distribution_name)
 
 # AP-SRV-070: the exact, manifest-derived wake-word asset file list. Replaces
 # the previous broad "*.onnx"/"*.tflite" package_data globs, which would also
@@ -229,6 +240,10 @@ def is_local_backup_file(path):
 
 
 class build_py(_build_py):
+    def run(self):
+        super().run()
+        write_identity(Path(self.build_lib), build_identity)
+
     def find_package_modules(self, package, package_dir):
         modules = super().find_package_modules(package, package_dir)
         return [
@@ -238,9 +253,16 @@ class build_py(_build_py):
         ]
 
 
+class sdist(_sdist):
+    def make_release_tree(self, base_dir, files):
+        super().make_release_tree(base_dir, files)
+        write_identity(Path(base_dir), build_identity)
+
+
 requirements = parse_requirements(req_path)
 
 base_requirements = [
+    requirement("packaging", "packaging>=24.0"),
     requirement("PyAudio"),
     requirement("webrtcvad-wheels"),
     requirement("halo"),
@@ -448,6 +470,8 @@ setuptools.setup(
             # upstream redistribution grant is not unambiguous (see the
             # manifest's licensePolicy block).
             "assets/kroko/models.json",
+            # Byte-pinned Visual Studio channel manifest for offline Windows cross-build input.
+            "assets/build_inputs/windows/visual-studio-17.14.39-channel.json",
             # AP-SRV-060: the wake-word build assets ship with the package, so
             # an installed wheel on Windows and on Ubuntu resolves them without
             # any runtime download. AP-SRV-070: the exact file list is the
@@ -457,7 +481,7 @@ setuptools.setup(
         "api_fastapi_server": ["static/index.html"],
     },
     include_package_data=True,
-    cmdclass={"build_py": build_py},
+    cmdclass={"build_py": build_py, "sdist": sdist},
     entry_points={
         'console_scripts': [
             # AP-SRV-070 W5-R04: the canonical public CLI. The three short

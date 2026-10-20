@@ -954,6 +954,8 @@ class KrokoArtifactStore:
         try:
             staged_wheel = staging / source.name
             shutil.copy2(source, staged_wheel)
+            # Non-secret wheels must remain readable outside a root-run builder.
+            staged_wheel.chmod(0o644)
             (staging / ARTIFACT_METADATA_NAME).write_text(
                 json.dumps(metadata, indent=2, sort_keys=True) + "\n",
                 encoding="utf-8",

@@ -7,6 +7,8 @@ include LICENSE
 # wake-word package data (see wakeword_package_resources.py); an sdist must
 # carry both so it stays independently rebuildable.
 include VERSION
+include build_identity_support.py
+include VoiceSTT/assets/build_inputs/windows/visual-studio-17.14.39-channel.json
 include wakeword_package_resources.py
 # AP-SRV-070: the wake-word build assets are added to the sdist by setup.py's
 # manifest-derived package_data list (see wakeword_package_resources.py), not

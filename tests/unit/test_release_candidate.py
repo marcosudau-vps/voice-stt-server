@@ -16,6 +16,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 for extra in (REPO_ROOT, REPO_ROOT / "tools", Path(__file__).resolve().parent):
@@ -317,24 +318,34 @@ class InventoryTests(unittest.TestCase):
 
 
 class WindowsCandidateBuildTests(unittest.TestCase):
+    def test_windows_builder_module_imports_in_an_uninstalled_checkout(self):
+        import os
+        import subprocess
+        import sys
+
+        env = dict(os.environ)
+        env.pop("PYTHONPATH", None)
+        result = subprocess.run(
+            [sys.executable, "-m", "VoiceSTT.install_kroko", "--help"],
+            cwd=release_candidate.REPO_ROOT, env=env, text=True, capture_output=True,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("--describe-artifact", result.stdout)
+
     def test_build_windows_candidate_produces_distribution_manifests(self):
         from unittest.mock import patch
-        from release_support import CommandResult, RecordingRunner
+        from release_support import RecordingRunner
+        from VoiceSTT._build_identity import BuildIdentity
 
-        fake_describe = {
-            "artifact": {
-                "wheelPath": "dummy_kroko.whl",
-                "wheelSha256": "3" * 64,
-            },
-            "fingerprint": "fp-dummy",
-        }
-        runner = RecordingRunner([
-            ("install_kroko.py", CommandResult(args=[], returncode=0, stdout=json.dumps(fake_describe), stderr=""))
-        ])
+        from types import SimpleNamespace
+
+        runner = RecordingRunner()
+        record = SimpleNamespace(wheel_path=Path("dummy_kroko.whl"), fingerprint="fp-dummy")
 
         with tempfile.TemporaryDirectory() as tmp:
             out_dir = Path(tmp) / "candidate-win"
             fake_dist = {
+                "path": "dummy_distribution.whl",
                 "distribution": "voice-stt-server",
                 "filename": "voice_stt_server-2.0.0-cp312-cp312-win_amd64.whl",
                 "sha256": "7" * 64,
@@ -342,7 +353,16 @@ class WindowsCandidateBuildTests(unittest.TestCase):
                 "abiTag": "cp312",
                 "platformTag": "win_amd64",
             }
-            with patch("build_distribution.build_distribution", return_value=fake_dist):
+            source = BuildIdentity(
+                1, "2.0.0", "2.0.0", COMMIT, TREE, False,
+                "2026-10-19T21:34:01Z", "voicestt", None, "git",
+            )
+            with patch("build_distribution.build_distribution", return_value=fake_dist), \
+                 patch.object(release_candidate, "candidate_source", return_value=source), \
+                 patch.object(release_candidate, "resolve_windows_kroko", return_value=record) as resolve, \
+                 patch.object(release_candidate, "validate_distribution"), \
+                 patch.object(release_candidate.build_production.kroko_artifacts,
+                              "sha256_of", return_value="3" * 64):
                 produced = release_candidate.build_windows_candidate(
                     out_dir=out_dir,
                     candidate_id="gh-123-1",
@@ -352,6 +372,125 @@ class WindowsCandidateBuildTests(unittest.TestCase):
             self.assertEqual(produced["candidateId"], "gh-123-1")
             self.assertTrue((out_dir / "distribution-free-win_amd64.json").is_file())
             self.assertTrue((out_dir / "distribution-pro-win_amd64.json").is_file())
+            self.assertEqual([call.args[0] for call in resolve.call_args_list], ["free", "pro"])
+
+
+class WindowsCrossBuildTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        self.work = self.root / "work"
+        self.repo = self.work / "kroko-onnx"
+        self.repo.mkdir(parents=True)
+        self.calls = []
+        self.output_variant = "free"
+        self.output_tag = "cp312-cp312-win_amd64"
+        for patcher in (
+            mock.patch.object(release_candidate.sys, "platform", "linux"),
+            mock.patch.object(release_candidate.kroko_fingerprint, "detect_architecture", return_value="amd64"),
+            mock.patch.object(release_candidate.kroko_fingerprint, "detect_python_tag", return_value="cp312"),
+            mock.patch.object(release_candidate.os, "getuid", return_value=1001, create=True),
+            mock.patch.object(release_candidate.os, "getgid", return_value=1001, create=True),
+            mock.patch.object(release_candidate.install_kroko, "prepare_checkout", return_value=self.repo),
+            mock.patch.object(release_candidate.install_kroko, "prepare_windows_checkout"),
+        ):
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def run_command(self, cmd, **kwargs):
+        from release_support import CommandResult
+        from test_kroko_artifact_store import make_wheel
+
+        self.calls.append((cmd, kwargs))
+        if "BUILD_VARIANT=free" in cmd:
+            output = next(value.removesuffix(":/out") for value in cmd if value.endswith(":/out"))
+            make_wheel(Path(output) / "wheel", variant=self.output_variant, tag=self.output_tag)
+        return CommandResult(args=cmd, returncode=0, stdout="", stderr="")
+
+    def resolve(self, runner=None):
+        return release_candidate.resolve_windows_kroko(
+            "free", artifact_store=self.root / "store", work_dir=self.work,
+            runner=runner or self.run_command,
+        )
+
+    def test_cross_build_matches_both_installer_fingerprints(self):
+        installer = release_candidate.install_kroko
+        with mock.patch.object(installer.kroko_fingerprint, "detect_target_platform", return_value="windows"):
+            for variant in ("free", "pro"):
+                args = installer.parse_args(["--variant", variant])
+                self.assertEqual(
+                    release_candidate.windows_kroko_fingerprint(variant),
+                    installer.fingerprint_for(args),
+                )
+        self.assertEqual(release_candidate.windows_kroko_fingerprint("free")["fingerprint"], "60eadb3428690d3d")
+
+    def test_cross_build_uses_current_patches_container_retag_and_real_store(self):
+        with mock.patch.dict(release_candidate.os.environ, {"KROKO_API_KEY": "test-secret"}):
+            record = self.resolve()
+        self.assertEqual(record.fingerprint, "60eadb3428690d3d")
+        self.assertEqual(record.metadata["targetPlatform"], "windows")
+        self.assertEqual(record.metadata["wheelSha256"], release_candidate.sha256_of(record.wheel_path))
+        release_candidate.install_kroko.prepare_windows_checkout.assert_called_once_with(self.repo)
+        commands = [call[0] for call in self.calls]
+        self.assertEqual(commands[0][:5], ["docker", "build", "--platform", "linux/amd64", "--file"])
+        self.assertIn(str(self.repo / "Dockerfile.windows"), commands[0])
+        self.assertIn("BUILD_VARIANT=free", commands[1])
+        self.assertIn(f"{self.repo}:/src:ro", commands[1])
+        self.assertEqual(commands[2][-3:], ["-R", "1001:1001", "/out"])
+        self.assertIn("--user", commands[3])
+        self.assertIn("1free", commands[3])
+        self.assertIn("--remove", commands[3])
+        for _, kwargs in self.calls:
+            self.assertNotIn("KROKO_API_KEY", kwargs["env"])
+
+    def test_verified_artifact_reuse_does_not_invoke_docker(self):
+        first = self.resolve()
+        self.calls.clear()
+        second = self.resolve()
+        self.assertEqual(first.wheel_sha256, second.wheel_sha256)
+        self.assertEqual(self.calls, [])
+
+    def test_corrupt_cached_bytes_are_not_reused(self):
+        first = self.resolve()
+        first.wheel_path.write_bytes(b"corrupt")
+        self.calls.clear()
+        second = self.resolve()
+        self.assertTrue(self.calls)
+        self.assertEqual(second.wheel_sha256, release_candidate.sha256_of(second.wheel_path))
+        self.assertNotEqual(second.wheel_path.read_bytes(), b"corrupt")
+
+    def test_linux_native_output_is_rejected_for_windows_fingerprint(self):
+        self.output_tag = "cp312-cp312-linux_x86_64"
+        with self.assertRaises(release_candidate.build_production.kroko_artifacts.KrokoArtifactError):
+            self.resolve()
+
+    def test_wrong_native_variant_is_rejected(self):
+        self.output_variant = "pro"
+        with self.assertRaises(release_candidate.build_production.kroko_artifacts.KrokoArtifactError):
+            self.resolve()
+
+    def test_compile_failure_is_not_hidden_by_output_ownership_cleanup(self):
+        def fail_compile(cmd, **kwargs):
+            if "BUILD_VARIANT=free" in cmd:
+                raise release_candidate.build_production.BuildError("cross-compile failed")
+            return self.run_command(cmd, **kwargs)
+
+        with self.assertRaisesRegex(release_candidate.build_production.BuildError, "cross-compile failed"):
+            self.resolve(fail_compile)
+        self.assertEqual(self.calls[-1][0][-3:], ["-R", "1001:1001", "/out"])
+
+    def test_missing_native_output_fails(self):
+        from release_support import RecordingRunner
+
+        with self.assertRaisesRegex(release_candidate.CandidateError, "exactly one native wheel"):
+            self.resolve(RecordingRunner())
+
+    def test_candidate_build_never_uses_windows_docker_host(self):
+        with mock.patch.object(release_candidate.sys, "platform", "win32"):
+            with self.assertRaisesRegex(release_candidate.CandidateError, "cross-built on Linux"):
+                self.resolve()
+        self.assertFalse(self.calls)
 
 
 if __name__ == "__main__":

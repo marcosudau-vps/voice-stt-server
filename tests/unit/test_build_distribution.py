@@ -44,7 +44,7 @@ def make_base_wheel(directory: Path, distribution: str = "voice-stt-server") -> 
         )
         archive.writestr(
             f"{dist_info}/WHEEL",
-            "Wheel-Version: 1.0\nGenerator: setuptools\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+            "Wheel-Version: 1.0\nGenerator: setuptools\nRoot-Is-Purelib: true\nTag: py3-none-any\n\n",
         )
         archive.writestr(f"{dist_info}/RECORD", "")
     return path
@@ -160,6 +160,10 @@ class MergeTests(unittest.TestCase):
         self.assertIn("Tag: cp312-cp312-linux_x86_64", wheel_metadata)
         self.assertIn("Root-Is-Purelib: false", wheel_metadata)
         self.assertNotIn("py3-none-any", wheel_metadata)
+        from email.parser import Parser
+        headers = Parser().parsestr(wheel_metadata)
+        self.assertEqual(headers.get_all("Tag"), ["cp312-cp312-linux_x86_64"])
+        self.assertEqual(headers["Root-Is-Purelib"], "false")
 
     def test_a_windows_kroko_wheel_produces_a_windows_distribution(self):
         result = self._merge(platform="win_amd64")

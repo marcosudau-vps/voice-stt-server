@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -248,10 +249,7 @@ def test_build_production_image_requires_kroko_wheel(tmp_path):
 
 
 def test_build_production_image_tags_free_and_pro_distinctly(tmp_path):
-    (tmp_path / "voicestt").mkdir()
-    (tmp_path / "voicestt" / "voicestt-2.0.0-py3-none-any.whl").write_bytes(b"x")
-    (tmp_path / "kroko").mkdir()
-    (tmp_path / "kroko" / "kroko_onnx-1.12.9-1free-cp312-cp312-manylinux_2_28_x86_64.whl").write_bytes(b"x")
+    _stage_identity_wheels(tmp_path)
 
     runner = RecordingRunner()
     runner.respond(lambda cmd: cmd[:2] == ("docker", "build"), stdout="")
@@ -260,6 +258,10 @@ def test_build_production_image_tags_free_and_pro_distinctly(tmp_path):
         variant="free", git_commit="a" * 40, voicestt_version="2.0.0",
         dist_dir=tmp_path, build_date="2026-09-07T19:06:57Z", runner=runner,
     )
+    for wheel in (tmp_path / "kroko").glob("*.whl"):
+        wheel.unlink()
+    from tests.unit.test_build_distribution import make_kroko_wheel
+    make_kroko_wheel(tmp_path / "kroko", "pro")
     pro_info = bp.build_production_image(
         variant="pro", git_commit="a" * 40, voicestt_version="2.0.0",
         dist_dir=tmp_path, build_date="2026-09-07T19:06:57Z", runner=runner,
@@ -326,11 +328,129 @@ def _staged_dist_dir():
     import tempfile
 
     root = Path(tempfile.mkdtemp())
-    (root / "voicestt").mkdir()
-    (root / "voicestt" / "voicestt-2.0.0-py3-none-any.whl").write_bytes(b"x")
-    (root / "kroko").mkdir()
-    (root / "kroko" / "kroko_onnx-1.12.9-1free-cp312-cp312-linux_x86_64.whl").write_bytes(b"x")
+    _stage_identity_wheels(root)
     return root
+
+
+def _stage_identity_wheels(root):
+    from tests.unit.test_build_distribution import make_base_wheel, make_kroko_wheel
+    from VoiceSTT._build_identity import BuildIdentity
+
+    (root / "voicestt").mkdir()
+    (root / "kroko").mkdir()
+    wheel = make_base_wheel(root / "voicestt", "voicestt")
+    identity = BuildIdentity(
+        1, "2.0.0", "2.0.0", "a" * 40, "b" * 40, False,
+        "2026-09-07T19:06:57Z", "voicestt", None, "git",
+    )
+    with zipfile.ZipFile(wheel, "a") as archive:
+        archive.writestr("VoiceSTT/_build_identity.json", identity.to_json())
+    make_kroko_wheel(root / "kroko")
+    return identity
+
+
+def test_image_variant_cannot_override_the_actual_runtime(tmp_path):
+    _stage_identity_wheels(tmp_path)
+    with pytest.raises(bp.BuildError, match="variant"):
+        bp.build_production_image(
+            variant="pro", git_commit="a" * 40, voicestt_version="2.0.0",
+            dist_dir=tmp_path, build_date="2026-09-07T19:06:57Z",
+            runner=RecordingRunner(),
+        )
+
+
+def test_build_metadata_is_not_silently_retagged_as_a_different_docker_version(tmp_path):
+    runner = RecordingRunner()
+    with pytest.raises(bp.BuildError, match="unchanged registry tag contract"):
+        bp.build_production_image(
+            variant="free", git_commit="a" * 40, voicestt_version="2.0.0-rc.1+build.5",
+            dist_dir=tmp_path, build_date="2026-09-07T19:06:57Z", runner=runner,
+        )
+    assert runner.calls == []
+
+
+@pytest.mark.parametrize("commit,version", [("c" * 40, "2.0.0"), ("a" * 40, "3.0.0")])
+def test_docker_build_args_must_match_product_resource(tmp_path, commit, version):
+    _stage_identity_wheels(tmp_path)
+    with pytest.raises(bp.BuildError, match="arguments"):
+        bp.build_production_image(
+            variant="free", git_commit=commit, voicestt_version=version,
+            dist_dir=tmp_path, build_date="2026-09-07T19:06:57Z",
+            runner=RecordingRunner(),
+        )
+
+
+def test_image_runtime_and_labels_are_both_checked(tmp_path):
+    source = _stage_identity_wheels(tmp_path)
+    labels = {
+        "org.opencontainers.image.version": source.productVersion,
+        "org.opencontainers.image.revision": source.sourceCommit,
+        "org.opencontainers.image.created": source.sourceDate,
+        "com.voicestt.kroko-variant": "free",
+    }
+    runner = RecordingRunner()
+    runner.respond(lambda cmd: cmd[:2] == ("docker", "run"), stdout="{}")
+    with pytest.raises(bp.BuildError, match="installed"):
+        bp.validate_image_identity(
+            "image:test", {"Config": {"Labels": labels}},
+            source_identity=source, variant="free", build_date=source.sourceDate,
+            runner=runner,
+        )
+    labels["org.opencontainers.image.revision"] = "d" * 40
+    with pytest.raises(bp.BuildError, match="labels"):
+        bp.validate_image_identity(
+            "image:test", {"Config": {"Labels": labels}},
+            source_identity=source, variant="free", build_date=source.sourceDate,
+            runner=RecordingRunner(),
+        )
+
+
+@pytest.mark.parametrize("variant", ["free", "pro"])
+@pytest.mark.parametrize("broken", [None, "missing", "malformed", "duplicate", "native", "identity", "exit"])
+def test_image_endpoints_require_isolated_native_hash_bound_evidence(tmp_path, variant, broken):
+    source = _stage_identity_wheels(tmp_path)
+    labels = {
+        "org.opencontainers.image.version": source.productVersion,
+        "org.opencontainers.image.revision": source.sourceCommit,
+        "org.opencontainers.image.created": source.sourceDate,
+        "com.voicestt.kroko-variant": variant,
+    }
+    info = {
+        "serverVersion": source.productVersion, "serverCommit": source.sourceCommit,
+        "identityStatus": "complete",
+        "distribution": {"name": "voicestt", "packageVersion": source.packageVersion},
+        "runtime": {"krokoVariant": variant},
+        "build": {"sourceTree": source.sourceTree, "sourceDirty": False,
+                  "sourceDate": source.sourceDate},
+    }
+    evidence = {"info": dict(info), "nativeImport": broken != "native"}
+    if broken == "identity":
+        evidence["info"]["serverCommit"] = "f" * 40
+    marker = "IDENTITY_QUALIFICATION=" + json.dumps(evidence)
+    output = {"missing": "{}", "malformed": "IDENTITY_QUALIFICATION=broken",
+              "duplicate": marker + "\n" + marker}.get(broken, marker)
+    runner = RecordingRunner()
+    runner.respond(lambda cmd: "resolve_runtime_identity" in cmd[-1], stdout=json.dumps(info))
+    runner.respond(contains("-I", "-c", bp.INSTALLED_CHECK), stdout=output,
+                   returncode=1 if broken == "exit" else 0)
+    if broken:
+        with pytest.raises(bp.BuildError):
+            bp.validate_image_identity(
+                "image:test", {"Config": {"Labels": labels}}, source_identity=source,
+                variant=variant, build_date=source.sourceDate, runner=runner,
+            )
+    else:
+        bp.validate_image_identity(
+            "image:test", {"Config": {"Labels": labels}}, source_identity=source,
+            variant=variant, build_date=source.sourceDate, runner=runner,
+        )
+    assert len(runner.calls) == 2
+    for command in runner.calls:
+        assert command[:8] == [
+            "docker", "run", "--rm", "--network", "none",
+            "--entrypoint", "/opt/venv/bin/python", "image:test",
+        ]
+    assert runner.calls[1][-2:] == [source.to_json(), variant]
 
 
 def test_a_dist_dir_outside_the_build_context_fails_immediately(tmp_path):

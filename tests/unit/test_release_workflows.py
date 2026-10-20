@@ -67,6 +67,72 @@ class WorkflowInventoryTests(unittest.TestCase):
                 self.assertIsInstance(load(path), dict)
 
 
+class IdentityQualificationTests(unittest.TestCase):
+    def test_windows_cross_build_is_transferred_then_qualified_on_native_host(self):
+        jobs = load(CANDIDATE)["jobs"]
+        build = jobs["build-windows"]
+        native = jobs["candidate-windows"]
+        self.assertEqual(build["runs-on"], "ubuntu-24.04")
+        self.assertEqual(native["runs-on"], "windows-latest")
+        self.assertEqual(native["needs"], "build-windows")
+        self.assertIn("--platform windows", str(build["steps"]))
+        self.assertIn("--platform windows --print-fingerprints", str(build["steps"]))
+        upload = next(step for step in build["steps"] if step.get("uses", "").startswith("actions/upload-artifact@"))
+        download = next(step for step in native["steps"] if step.get("uses", "").startswith("actions/download-artifact@"))
+        self.assertEqual(upload["with"]["name"], download["with"]["name"])
+        self.assertEqual(upload["with"]["name"], "candidate-windows-build")
+        names = [step.get("name") for step in build["steps"]]
+        self.assertLess(names.index("Validate Windows wheel identities before transfer"),
+                        names.index("Upload Windows candidate build"))
+        scripts = "\n".join(step.get("run", "") for step in native["steps"])
+        self.assertNotIn("docker", scripts.lower())
+        self.assertNotIn("release_candidate.py", scripts)
+        self.assertFalse(any("buildx" in step.get("uses", "") for step in native["steps"]))
+        setup = next(step for step in native["steps"] if step.get("uses", "").startswith("actions/setup-python@"))
+        self.assertEqual(setup["with"]["architecture"], "x64")
+
+    def test_native_install_reports_are_required_before_manifest_qualification(self):
+        jobs = load(CANDIDATE)["jobs"]
+        for platform in ("linux", "windows"):
+            steps = jobs[f"candidate-{platform}"]["steps"]
+            native = next(step for step in steps if step.get("name") == f"Qualify installed {platform.title()} package identities")
+            self.assertIn(f"--platform {platform} --install", native["run"])
+        steps = jobs["candidate"]["steps"]
+        names = [step.get("name") for step in steps]
+        self.assertLess(
+            names.index("Validate all package identities and installed qualification reports"),
+            names.index("Qualify candidate manifest (Option A)"),
+        )
+        self.assertNotIn("runner.temp", str(load(CANDIDATE).get("env", {})))
+        self.assertIn(
+            "tests/packaging/test_identity_installation.py",
+            str(jobs["candidate-linux"]["steps"]),
+        )
+
+    def test_runner_local_candidate_inventory_program_executes(self):
+        import json
+        import os
+        import shlex
+        import subprocess
+        import sys
+        import tempfile
+
+        steps = load(CANDIDATE)["jobs"]["candidate"]["steps"]
+        script = next(step["run"] for step in steps if step.get("name") == "Build final SHA256 inventory")
+        program = shlex.split(script.splitlines()[-1])[-1]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "rc-manifest.json").write_text("{}")
+            result = subprocess.run(
+                [sys.executable, "-c", program], cwd=REPO_ROOT,
+                env={**os.environ, "CANDIDATE_DIR": directory},
+                text=True, capture_output=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            files = json.loads((root / "sha256-inventory.json").read_text())["files"]
+            self.assertTrue(any(item["path"] == "rc-manifest.json" for item in files))
+
+
 class TriggerSafetyTests(unittest.TestCase):
     def test_ci_runs_on_ordinary_events(self):
         self.assertEqual(
@@ -112,6 +178,7 @@ class PermissionTests(unittest.TestCase):
         # else. No contents:write means it cannot tag or create a release.
         jobs = load(CANDIDATE)["jobs"]
         self.assertEqual(jobs["candidate-linux"]["permissions"], {"contents": "read", "packages": "write"})
+        self.assertEqual(jobs["build-windows"]["permissions"], {"contents": "read"})
         self.assertEqual(jobs["candidate-windows"]["permissions"], {"contents": "read"})
         self.assertEqual(jobs["candidate"]["permissions"], {"contents": "read"})
 
@@ -335,25 +402,28 @@ class PortabilityTests(unittest.TestCase):
         self.assertIn("candidate-windows", jobs)
         self.assertIn("candidate", jobs)
         self.assertEqual(jobs["candidate-linux"]["runs-on"], "ubuntu-24.04")
+        self.assertEqual(jobs["build-windows"]["runs-on"], "ubuntu-24.04")
         self.assertEqual(jobs["candidate-windows"]["runs-on"], "windows-latest")
         self.assertEqual(sorted(jobs["candidate"]["needs"]), ["candidate-linux", "candidate-windows"])
 
     def test_the_kroko_cache_is_keyed_per_variant_by_fingerprint(self):
         # W5R4-G13: Free and Pro caches can never cross.
         document = load(CANDIDATE)
-        cache_steps = [
-            step for _, step in steps_of(document)
-            if (step.get("uses") or "").startswith("actions/cache@")
-        ]
-        self.assertEqual(len(cache_steps), 2)
-        keys = sorted(step["with"]["key"] for step in cache_steps)
-        self.assertTrue(keys[0].startswith("kroko-free-"))
-        self.assertTrue(keys[1].startswith("kroko-pro-"))
-        self.assertIn("fingerprints.outputs.free", keys[0])
-        self.assertIn("fingerprints.outputs.pro", keys[1])
-        paths = sorted(step["with"]["path"] for step in cache_steps)
-        self.assertTrue(paths[0].endswith("/free"))
-        self.assertTrue(paths[1].endswith("/pro"))
+        for job in ("candidate-linux", "build-windows"):
+            with self.subTest(job=job):
+                cache_steps = [
+                    step for step in document["jobs"][job]["steps"]
+                    if (step.get("uses") or "").startswith("actions/cache@")
+                ]
+                self.assertEqual(len(cache_steps), 2)
+                keys = sorted(step["with"]["key"] for step in cache_steps)
+                self.assertTrue(keys[0].startswith("kroko-free-"))
+                self.assertTrue(keys[1].startswith("kroko-pro-"))
+                self.assertIn("fingerprints.outputs.free", keys[0])
+                self.assertIn("fingerprints.outputs.pro", keys[1])
+                paths = sorted(step["with"]["path"] for step in cache_steps)
+                self.assertTrue(paths[0].endswith("/free"))
+                self.assertTrue(paths[1].endswith("/pro"))
 
     def test_the_candidate_workflow_requires_a_clean_checkout(self):
         # A candidate must bind an exact committed source.

@@ -1,4 +1,5 @@
 PyAudio==0.2.14
+packaging>=24.0
 faster-whisper==1.2.1
 # faster-whisper 1.2.1 still calls av.open(..., metadata_errors="ignore");
 # PyAV 19 removed that argument, so pin the compatible range explicitly.

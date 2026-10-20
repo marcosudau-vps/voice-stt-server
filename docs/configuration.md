@@ -25,6 +25,24 @@ recorder = AudioToTextRecorder(
 
 ## Model And Engine Parameters
 
+Build/version inputs are not recorder settings. `VOICESTT_BUILD_VERSION`
+selects an explicit validated development/build SemVer;
+`VOICESTT_SERVER_COMMIT` is the legacy runtime commit input (empty or
+`unknown` means unavailable; otherwise a full lowercase 40-character SHA
+is required). Docker binds its existing `VOICESTT_GIT_COMMIT` build argument
+to this runtime input and the OCI revision. Product distribution, Kroko
+runtime and image variant are distinct; runtime credentials never select
+them. The canonical build/variant/input reference is
+[build/BUILD.md](../build/BUILD.md).
+
+New packaged artifacts validate their immutable identity before normal app
+operation. Blank or identical version/commit overrides are allowed; conflicting
+values, including `unknown` over a known package commit, fail with a redacted
+`IdentityError`. Missing optional provenance in development/manual/older
+installs remains allowed and incomplete. Stable older installs use the actual
+owning distribution; old normalized prereleases without their original SemVer
+cannot be guessed. These are identity inputs, not runtime-settings API fields.
+
 | Parameter | Default | Description |
 | --- | --- | --- |
 | `model` | `"tiny"` | Main transcription model name or model path. Interpretation depends on `transcription_engine`. |
