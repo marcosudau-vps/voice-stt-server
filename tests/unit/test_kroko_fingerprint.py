@@ -24,7 +24,7 @@ from VoiceSTT import install_kroko
 from VoiceSTT.kroko import buildinputs, fingerprint
 
 
-_PINNED_CHANNEL_PATH = "VoiceSTT/assets/kroko/visual-studio-17.14.39-channel.json"
+_PINNED_CHANNEL_PATH = "VoiceSTT/assets/build_inputs/windows/visual-studio-17.14.39-channel.json"
 
 
 class FingerprintStabilityTests(unittest.TestCase):
@@ -59,7 +59,7 @@ class FingerprintStabilityTests(unittest.TestCase):
         int(value, 16)  # raises if it is not hex
 
     def test_declared_windows_fingerprints_are_stable(self):
-        for variant, expected in (("free", "2c5c203bf1a4b367"), ("pro", "a847152ec7e2d030")):
+        for variant, expected in (("free", "60eadb3428690d3d"), ("pro", "e4f939933cd9985d")):
             with self.subTest(variant=variant):
                 computed = fingerprint.compute_fingerprint(
                     variant=variant, target_platform="windows", architecture="amd64",
@@ -1412,7 +1412,7 @@ class RootFindingLMWindowsToolchainAuthorityTests(RootFindingJWindowsToolchainAu
         self.assertIn("cp /tmp/voicestt-pinned-channel-manifest.json /tmp/.xwin-cache/dl/manifest_17.json", dockerfile)
         self.assertNotIn("roblabla/msvc-manifest-history", dockerfile)
         self.assertNotIn("https://aka.ms/vs/17/release/channel", dockerfile)
-        self.assertIn("-o /tmp/.xwin-cache/dl/manifest_17.json", dockerfile)
+        self.assertNotIn("-o /tmp/.xwin-cache/dl/manifest_17.json", dockerfile)
         self.assertIn(
             'test "$(stat -c %s /tmp/.xwin-cache/dl/manifest_17.json)" = "91833"',
             dockerfile,
@@ -1533,10 +1533,11 @@ class LinuxBuilderContainerAuthorityTests(unittest.TestCase):
     def test_the_declared_revision_is_the_one_w5_r04_established(self):
         self.assertEqual(buildinputs.LINUX_BUILDER_REVISION, 2)
 
-    def test_the_windows_authority_was_not_disturbed(self):
-        # The already-qualified Windows artifact must not be invalidated by a
-        # Linux-only correction.
-        self.assertEqual(buildinputs.WINDOWS_BUILDER_REVISION, 4)
+    def test_linux_only_revision_unchanged_when_windows_manifest_is_vendored(self):
+        # The Windows revision intentionally advances for the vendored channel
+        # file; the native Linux builder remains on its established revision.
+        self.assertEqual(buildinputs.LINUX_BUILDER_REVISION, 2)
+        self.assertEqual(buildinputs.WINDOWS_BUILDER_REVISION, 5)
 
     def test_the_base_image_is_pinned_by_an_immutable_digest(self):
         declaration = buildinputs.linux_builder_declaration()

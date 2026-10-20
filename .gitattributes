@@ -12,7 +12,7 @@ Dockerfile text eol=lf
 *.ps1 text eol=crlf
 
 # Preserve exact signed Microsoft channel manifest bytes (including CRLF).
-VoiceSTT/assets/kroko/visual-studio-17.14.39-channel.json -text -diff
+VoiceSTT/assets/build_inputs/windows/visual-studio-17.14.39-channel.json -text -diff
 
 # Test audio and model fixtures are binary.
 *.wav binary

@@ -17,3 +17,7 @@ Das P2-Thema „manuelle Dockerbuilds“ wurde als ausdrücklich dokumentierte P
 Die erste frühere RC-Qualifikation gehört zum unveränderten d99633a. Der neue Implementierungscommit und jede weitere reine Dokumentationsrevision sind andere Gitquellen. Vor der Übernahme eines neuen Kandidaten braucht es vollständige CI und einen eigenen, auf dem endgültigen Commit/Tree basierenden RC. Ein lediglich grüner Packagingtest ist kein echter Windows-Docker-Crossbuildbeleg.
 
 **Stand beim Schreiben:** Neue CI läuft; neuer RC noch nicht ausgeführt. Merge, Release und Deployment bleiben gesperrt, bis die notwendigen tatsächlich erfolgreichen Nachweise vorliegen.
+
+## A4 – Nachträgliche CI-Regressionen und Ressourcentrennung
+
+Die erste CI der Manifest-Vendoring-Änderung (`ff5924f…`, Run #39373447927) war auf beiden Plattformen rot (je 5 Tests): alte Downloadparameter-Annahme, alte Windows-Builderrevision, zwei ältere Golden-Fingerprints im RC-Test sowie die zuvor exklusive Kroko-Modellmetadaten-Assetliste. Das waren Versäumnisse bei der ersten Implementierung des kleinen Nachtrags; kein neuer Nachweis eines Produkt- oder Nativebuild-Fehlers. Die Channeldatei wurde daher aus `assets/kroko/` nach `assets/build_inputs/windows/` verschoben, um die bestehende Modell-Lizenzgrenze unangetastet zu lassen. Alle an die neue Windows-Authority gebundenen Golden-Werte wurden folgerichtig neu abgeleitet; der historische Baseline-Test bleibt erhalten. Der korrigierte Stand benötigt erneut erfolgreiche CI und einen echten vollständigen RC, bevor ein Merge zulässig ist.

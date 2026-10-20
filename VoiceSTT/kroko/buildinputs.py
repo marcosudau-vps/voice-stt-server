@@ -339,7 +339,7 @@ WINDOWS_XWIN_SHA256 = (
 #: bytes. A byte-identical copy is part of this repository *and the installed
 #: Python package*; the pinned builder must stage it, rather than downloading
 #: it from the historical community mirror. Size/hash remain authoritative.
-WINDOWS_XWIN_MANIFEST_BUNDLED_PATH = "VoiceSTT/assets/kroko/visual-studio-17.14.39-channel.json"
+WINDOWS_XWIN_MANIFEST_BUNDLED_PATH = "VoiceSTT/assets/build_inputs/windows/visual-studio-17.14.39-channel.json"
 WINDOWS_XWIN_MANIFEST_CACHE_NAME = "manifest_17.json"
 WINDOWS_XWIN_MANIFEST_BYTES = 91833
 WINDOWS_XWIN_MANIFEST_SHA256 = (

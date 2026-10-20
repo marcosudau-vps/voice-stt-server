@@ -108,7 +108,7 @@ Checkout nutzen; vor offiziellen Images committen und den exakten RC-Lauf
 verwenden. Es gibt keinen verdeckten `--skip-provenance`-Schalter.
 
 Der Windows-Crossbuilder verwendet das bytegenau gebuendelte Channelmanifest
-`VoiceSTT/assets/kroko/visual-studio-17.14.39-channel.json` aus der
+`VoiceSTT/assets/build_inputs/windows/visual-studio-17.14.39-channel.json` aus der
 Repository-/Paketressource. Groesse und SHA-256 werden beim Staging und
 nochmals im Container geprueft; fuer dieses Channelmanifest ist keine externe
 Downloadquelle und kein Netzfallback zulaessig. Andere explizit gepinnte
