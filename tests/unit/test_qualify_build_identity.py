@@ -202,6 +202,7 @@ def test_installed_probe_uses_real_loopback_and_cleans_up(
 ):
     import sys
     import threading
+    from contextlib import asynccontextmanager
     from fastapi import FastAPI, WebSocket
     from fastapi.responses import JSONResponse
     from api_fastapi_server import server
@@ -220,7 +221,14 @@ def test_installed_probe_uses_real_loopback_and_cleans_up(
         "build": {"sourceTree": source.sourceTree, "sourceDirty": False,
                   "sourceDate": source.sourceDate},
     }
-    app = FastAPI(version=source.productVersion)
+    @asynccontextmanager
+    async def lifespan(app):
+        app.state.initialized = True
+        yield
+        app.state.initialized = False
+
+    app = FastAPI(version=source.productVersion, lifespan=lifespan)
+    app.state.initialized = False
     app.state.voicestt_service = SimpleNamespace(
         events=SimpleNamespace(server_instance_id=info["serverInstanceId"]),
     )
@@ -237,7 +245,7 @@ def test_installed_probe_uses_real_loopback_and_cleans_up(
 
     @app.get("/health")
     def health():
-        return {"ready": False}
+        return {"ready": app.state.initialized, "sttReady": False, "ok": False}
 
     @app.websocket("/ws/v2")
     async def incompatible(ws: WebSocket):

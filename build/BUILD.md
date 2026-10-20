@@ -183,8 +183,11 @@ Das fertige generische Image wird zusaetzlich ueber den installierten
 Metadatenresolver und echte HTTP-/WebSocket-Endpunkte geprueft: ein frischer
 unprivilegierter Container mit `--network none` startet den unveraenderten
 Server nur auf containerinternem Loopback. Beide nativen Varianten,
-Info-/Settings-/OpenAPI-/Refusalidentitaet und `ready=false` ohne Modelle
-muessen bestehen; keine Hostports, Modellmounts oder Downloads.
+Info-/Settings-/OpenAPI-/Refusalidentitaet muessen bestehen: zuerst
+`ready=false` vor dem Lifespanstart, dann unveraenderte Identitaet nach
+normalem Startup ohne Modelle bei `sttReady=false` und `ok=false`.
+Das bestehende `ready` signalisiert abgeschlossene Initialisierung, nicht
+gesunde Modelle. Keine Hostports, Modellmounts oder Downloads.
 Release-Manifestformat, Promotion, Publikation
 und Resume bleiben unveraendert; qualifizierte Bytes werden nicht neu gebaut.
 

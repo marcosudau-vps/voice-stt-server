@@ -66,12 +66,13 @@ from VoiceSTT.kroko.artifacts import verify_installed_runtime
 from api_fastapi_server.server import ServerSettings, create_app
 
 @contextlib.contextmanager
-def running_app(app):
+def running_app(app, *, lifespan="on"):
     with socket.socket() as listener:
         listener.bind(("127.0.0.1", 0))
         port = listener.getsockname()[1]
         server = uvicorn.Server(uvicorn.Config(
             app, host="127.0.0.1", port=port, log_level="critical", access_log=False,
+            lifespan=lifespan,
         ))
         worker = threading.Thread(
             target=lambda: server.run(sockets=[listener]),
@@ -109,10 +110,19 @@ with tempfile.TemporaryDirectory() as data:
         transcription_logging_enabled=False,
     )
     app = create_app(settings)
+    # Prove cold identity before startup, independently of model-worker timing.
+    with running_app(app, lifespan="off") as (client, _):
+        response = client.get("/api/v2/info")
+        assert response.status_code == 200
+        cold_info = response.json()
+        response = client.get("/health")
+        assert response.status_code == 200
+        assert response.json()["ready"] is False, "cold readiness must precede startup"
     with running_app(app) as (client, ws_url):
         response = client.get("/api/v2/info")
         assert response.status_code == 200
         info = response.json()
+        assert info == cold_info
         assert response.headers["cache-control"] == "no-store"
         assert info["identityStatus"] == "complete"
         assert info["serverVersion"] == expected["productVersion"]
@@ -135,7 +145,9 @@ with tempfile.TemporaryDirectory() as data:
         assert client.get("/openapi.json").json()["info"]["version"] == info["serverVersion"]
         response = client.get("/health")
         assert response.status_code == 200
-        assert response.json()["ready"] is False
+        health = response.json()
+        assert health["sttReady"] is False, "model-less startup must not claim model readiness"
+        assert health["ok"] is False
         with socket.create_connection(("127.0.0.1", client.base_url.port), timeout=10) as connection, \
                 connect(ws_url, sock=connection, open_timeout=10, close_timeout=10) as ws:
             ws.send(json.dumps({
