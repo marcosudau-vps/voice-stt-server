@@ -82,6 +82,10 @@ Begründung im Archiv erhalten.
 | Issue #7: sichere Wake-Wiederfreigabe | 19.10.2026 | Prüfung offen | [issue_7_wake_rearm](issue_7_wake_rearm/) |
 | Issue #9: Build-/Runtimeidentitaet A+B | 20.10.2026 | Prüfung offen | [issue_9_build_runtime_identity](issue_9_build_runtime_identity/) |
 
+Vor-Merge-Nachtrag zu Issue #9: [Plan der lokalen Manifestkopie und
+Builddeklaration](issue_9_build_runtime_identity/2026-10-20_PREMERGE_HAERTUNG_PLAN.md);
+Implementierung und neuer RC sind gesondert zu qualifizieren.
+
 Nachtrag zu Issue #9 / PR #10: Der benutzerbeauftragte Windows-RC-Fix ist
 vor Umsetzung in
 [2026-10-20_WINDOWS_RC_PLAN.md](issue_9_build_runtime_identity/2026-10-20_WINDOWS_RC_PLAN.md)

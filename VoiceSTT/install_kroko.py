@@ -772,6 +772,9 @@ def _pinned_windows_dockerfile_edits(newline):
                 "",
                 "ENV DEBIAN_FRONTEND=noninteractive",
                 "",
+                "# Pin the vendored channel bytes into the Docker build context.",
+                "COPY .voicestt-build-inputs/manifest_17.json /tmp/voicestt-pinned-channel-manifest.json",
+                "",
                 "# AP-SRV-070 W4A-C3, Root Finding J: resolve every apt package against",
                 "# one immutable Ubuntu archive snapshot. The base image digest alone",
                 "# does not fix the compiler and linker that actually produce the wheel.",
@@ -919,8 +922,7 @@ def _pinned_windows_dockerfile_edits(newline):
             ),
             block(
                 " && mkdir -p /tmp/.xwin-cache/dl \\",
-                ' && curl -sLf "{0}" \\'.format(channel_manifest["url"]),
-                "        -o /tmp/.xwin-cache/dl/{0} \\".format(channel_manifest["cacheName"]),
+                " && cp /tmp/voicestt-pinned-channel-manifest.json /tmp/.xwin-cache/dl/{0} \\".format(channel_manifest["cacheName"]),
                 ' && test "$(stat -c %s /tmp/.xwin-cache/dl/{0})" = "{1}" \\'.format(
                     channel_manifest["cacheName"], channel_manifest["bytes"]
                 ),
@@ -1316,6 +1318,25 @@ def patch_license_quiet_env(repo_dir):
         print("Patched Kroko license client to honor {0}.".format(KROKO_LICENSE_QUIET_ENV))
 
 
+def stage_windows_channel_manifest(repo_dir):
+    """Copy verified repository-owned channel bytes into Kroko's Docker context.
+
+    This runs before docker build; no network fallback is permitted.
+    """
+    source = Path(__file__).resolve().parent.parent / buildinputs.WINDOWS_XWIN_MANIFEST_BUNDLED_PATH
+    try:
+        data = source.read_bytes()
+    except OSError:
+        raise KrokoInstallError("bundled Windows channel manifest missing/unreadable") from None
+    if (len(data) != buildinputs.WINDOWS_XWIN_MANIFEST_BYTES
+            or hashlib.sha256(data).hexdigest() != buildinputs.WINDOWS_XWIN_MANIFEST_SHA256):
+        raise KrokoInstallError("bundled Windows channel manifest fails size/SHA-256 pin")
+    target = Path(repo_dir) / ".voicestt-build-inputs" / buildinputs.WINDOWS_XWIN_MANIFEST_CACHE_NAME
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(data)
+    return target
+
+
 def prepare_windows_checkout(repo_dir):
     """
     Prepares Windows-specific Kroko build files.
@@ -1329,6 +1350,7 @@ def prepare_windows_checkout(repo_dir):
     patch_windows_bat(repo_dir)
     sanitize_batch_ascii(repo_dir / "build_windows.bat")
     patch_windows_dockerfile(repo_dir)
+    stage_windows_channel_manifest(repo_dir)
     patch_license_quiet_env(repo_dir)
 
 

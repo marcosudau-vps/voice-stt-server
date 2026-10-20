@@ -73,7 +73,7 @@ PATCHED_UPSTREAM_SOURCES = (
 #: against declared byte counts and source-controlled SHA-256 digests, and
 #: invokes xwin with explicit --manifest, --sdk-version, and --crt-version
 #: arguments without relying on unpinned upstream latest fallbacks.
-PATCH_SET_REVISION = 3
+PATCH_SET_REVISION = 4
 
 #: Revision of the builder logic itself: which revision gets checked out, which
 #: patches are applied, how the compiler is invoked, and which produced wheel is
@@ -125,7 +125,7 @@ PATCH_SET_REVISION = 3
 #: :data:`WINDOWS_PACKAGING_TOOLS` - so a previously stored Linux artifact must
 #: stop matching rather than be silently reused for a build that would now
 #: produce different bytes.
-WINDOWS_BUILDER_REVISION = 4
+WINDOWS_BUILDER_REVISION = 5
 LINUX_BUILDER_REVISION = 2
 
 #: Backwards-compatible name for callers that described the original,
@@ -336,11 +336,10 @@ WINDOWS_XWIN_SHA256 = (
 #: Microsoft Channel Manifest (AP-SRV-070 W4A-C4, Root Finding L).
 #: Pinned to the exact VisualStudio 17.14.39 (August 2026) release manifest
 #: captured during W4A-C3. The rolling Microsoft alias no longer serves these
-#: bytes; the commit-bound archive must satisfy the original size and hash.
-WINDOWS_XWIN_MANIFEST_URL = (
-    "https://raw.githubusercontent.com/roblabla/msvc-manifest-history/"
-    "77f6f8ee89705a855ff14c6305ca8ebc9a2a861f/raw_channel.json"
-)
+#: bytes. A byte-identical copy is part of this repository *and the installed
+#: Python package*; the pinned builder must stage it, rather than downloading
+#: it from the historical community mirror. Size/hash remain authoritative.
+WINDOWS_XWIN_MANIFEST_BUNDLED_PATH = "VoiceSTT/assets/kroko/visual-studio-17.14.39-channel.json"
 WINDOWS_XWIN_MANIFEST_CACHE_NAME = "manifest_17.json"
 WINDOWS_XWIN_MANIFEST_BYTES = 91833
 WINDOWS_XWIN_MANIFEST_SHA256 = (
@@ -503,7 +502,7 @@ def windows_toolchain_declaration():
             "url": windows_xwin_url(),
             "sha256": WINDOWS_XWIN_SHA256,
             "channelManifest": {
-                "url": WINDOWS_XWIN_MANIFEST_URL,
+                "bundledPath": WINDOWS_XWIN_MANIFEST_BUNDLED_PATH,
                 "cacheName": WINDOWS_XWIN_MANIFEST_CACHE_NAME,
                 "bytes": WINDOWS_XWIN_MANIFEST_BYTES,
                 "sha256": WINDOWS_XWIN_MANIFEST_SHA256,

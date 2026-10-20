@@ -24,6 +24,7 @@ import zipfile
 import pytest
 
 from VoiceSTT._build_identity import RESOURCE_NAME
+from VoiceSTT.kroko import buildinputs
 from build_identity_support import wheel_identity
 from tools.build_distribution import merge_kroko_runtime
 from tests.unit.test_build_distribution import make_kroko_wheel
@@ -77,7 +78,7 @@ def source(tmp_path_factory):
         )
     for name in ("setup.py", "build_identity_support.py", "wakeword_package_resources.py",
                  "VERSION", "requirements.txt", "README.md", "RELEASE_NOTES.md", "LICENSE",
-                 "MANIFEST.in"):
+                 "MANIFEST.in", ".gitattributes", "pyproject.toml"):
         shutil.copy2(ROOT / name, root / name)
     (root / ".gitignore").write_text(
         "build/\n*.egg-info/\n__pycache__/\n*.pyc\nVoiceSTT/_build_identity.json\n"
@@ -94,13 +95,21 @@ def build(source, destination, *, version=None, variant=None, sdist=False, isola
          "--sdist" if sdist else "--wheel", "--outdir", destination],
         source, env=build_env(version, variant))
     artifact = next(destination.glob("*.tar.gz" if sdist else "*.whl"))
+    manifest_path = buildinputs.WINDOWS_XWIN_MANIFEST_BUNDLED_PATH
     if sdist:
         with tarfile.open(artifact) as archive:
             resource = next(item for item in archive.getmembers()
                             if item.name.endswith("/VoiceSTT/" + RESOURCE_NAME))
             identity = json.loads(archive.extractfile(resource).read())
+            bundled = next(item for item in archive.getmembers()
+                           if item.name.endswith("/" + manifest_path))
+            channel_bytes = archive.extractfile(bundled).read()
     else:
         identity = json.loads(wheel_identity(artifact).to_json())
+        with zipfile.ZipFile(artifact) as archive:
+            channel_bytes = archive.read(manifest_path)
+    assert len(channel_bytes) == buildinputs.WINDOWS_XWIN_MANIFEST_BYTES
+    assert hashlib.sha256(channel_bytes).hexdigest() == buildinputs.WINDOWS_XWIN_MANIFEST_SHA256
     record_evidence({
         "kind": "sdist" if sdist else "wheel", "filename": artifact.name,
         "sha256": hashlib.sha256(artifact.read_bytes()).hexdigest(),

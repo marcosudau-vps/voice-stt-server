@@ -470,6 +470,8 @@ setuptools.setup(
             # upstream redistribution grant is not unambiguous (see the
             # manifest's licensePolicy block).
             "assets/kroko/models.json",
+            # Byte-pinned Visual Studio channel manifest for offline Windows cross-build input.
+            "assets/kroko/visual-studio-17.14.39-channel.json",
             # AP-SRV-060: the wake-word build assets ship with the package, so
             # an installed wheel on Windows and on Ubuntu resolves them without
             # any runtime download. AP-SRV-070: the exact file list is the

@@ -94,6 +94,28 @@ nutzbar; Custom-Model-Pfade daraus sind jetzt optional statt Pflichtwerte.
 Die produktive VPS-Variante bleibt unter [`build/vps`](vps/README.md)
 festgelegt und ist nicht Teil des oeffentlichen Pfads.
 
+### Manuelle Entwicklungsbuilds und offizielle Imagekandidaten
+
+`python -m build` beziehungsweise eine lokale editable-Installation bleiben
+auch ohne vollstaendige Git-Provenienz erlaubt. Eine fehlende Herkunft fuehrt
+dort zu einer ausdruecklich unvollstaendigen Identitaet und ist **keine**
+Releasefreigabe. `tools/build_production.py` baut dagegen produktionsfaehige
+Imagekandidaten und verlangt deshalb absichtlich vollstaendige, saubere
+Commit-/Tree-/Versionsinformationen: ein dirty oder unvollstaendiger
+Sourcecheckout wird abgewiesen, statt ein scheinbar qualifiziertes Image
+zu erzeugen. Fuer lokale Codeentwicklung daher venv/Serverstart aus dem
+Checkout nutzen; vor offiziellen Images committen und den exakten RC-Lauf
+verwenden. Es gibt keinen verdeckten `--skip-provenance`-Schalter.
+
+Der Windows-Crossbuilder verwendet das bytegenau gebuendelte Channelmanifest
+`VoiceSTT/assets/kroko/visual-studio-17.14.39-channel.json` aus der
+Repository-/Paketressource. Groesse und SHA-256 werden beim Staging und
+nochmals im Container geprueft; fuer dieses Channelmanifest ist keine externe
+Downloadquelle und kein Netzfallback zulaessig. Andere explizit gepinnte
+Windows-Toolchain-Artefakte, insbesondere das Visual-Studio-Paketmanifest,
+werden weiterhin separat per SHA-256 verifiziert extern bezogen; der native
+Build ist daher **nicht insgesamt offline**.
+
 ### Vor einem Release pruefen
 
 ```bash

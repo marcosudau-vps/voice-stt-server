@@ -24,10 +24,7 @@ from VoiceSTT import install_kroko
 from VoiceSTT.kroko import buildinputs, fingerprint
 
 
-_PINNED_CHANNEL_URL = (
-    "https://raw.githubusercontent.com/roblabla/msvc-manifest-history/"
-    "77f6f8ee89705a855ff14c6305ca8ebc9a2a861f/raw_channel.json"
-)
+_PINNED_CHANNEL_PATH = "VoiceSTT/assets/kroko/visual-studio-17.14.39-channel.json"
 
 
 class FingerprintStabilityTests(unittest.TestCase):
@@ -62,7 +59,7 @@ class FingerprintStabilityTests(unittest.TestCase):
         int(value, 16)  # raises if it is not hex
 
     def test_declared_windows_fingerprints_are_stable(self):
-        for variant, expected in (("free", "b28bc64f9ce3e8e0"), ("pro", "26d5afecf0f5cc17")):
+        for variant, expected in (("free", "2c5c203bf1a4b367"), ("pro", "a847152ec7e2d030")):
             with self.subTest(variant=variant):
                 computed = fingerprint.compute_fingerprint(
                     variant=variant, target_platform="windows", architecture="amd64",
@@ -70,34 +67,35 @@ class FingerprintStabilityTests(unittest.TestCase):
                 )
                 self.assertEqual(computed["fingerprint"], expected)
 
-    def test_manifest_locator_changes_no_other_inputs_or_linux_identity(self):
+    def test_bundled_manifest_authority_and_historical_locator_identity(self):
         kwargs = dict(architecture="amd64", python_tag="cp312", abi_tag="cp312")
-        linux = fingerprint.compute_fingerprint(variant="free", target_platform="linux", **kwargs)
-        for variant, old_id in (("free", "28594e6d201fc4a7"), ("pro", "08cb569da5feda2e")):
+        linux_before = fingerprint.compute_fingerprint(
+            variant="free", target_platform="linux", **kwargs
+        )
+        for variant, old_id in (("free", "b28bc64f9ce3e8e0"), ("pro", "26d5afecf0f5cc17")):
             with self.subTest(variant=variant):
                 current = fingerprint.compute_fingerprint(
-                    variant=variant, target_platform="windows", **kwargs,
+                    variant=variant, target_platform="windows", **kwargs
                 )
-                with mock.patch.object(
-                    buildinputs, "WINDOWS_XWIN_MANIFEST_URL", "https://aka.ms/vs/17/release/channel",
-                ):
-                    previous = fingerprint.compute_fingerprint(
-                        variant=variant, target_platform="windows", **kwargs,
-                    )
-                    self.assertEqual(
-                        linux, fingerprint.compute_fingerprint(
-                            variant="free", target_platform="linux", **kwargs,
-                        ),
-                    )
-                self.assertEqual(previous["fingerprint"], old_id)
                 self.assertNotEqual(current["fingerprint"], old_id)
                 restored = json.loads(current["canonical"])
                 toolchain = restored["toolchain"]
                 channel = toolchain["inputs"]["xwin"]["channelManifest"]
-                self.assertEqual(channel["url"], _PINNED_CHANNEL_URL)
-                channel["url"] = "https://aka.ms/vs/17/release/channel"
+                self.assertEqual(channel["bundledPath"], _PINNED_CHANNEL_PATH)
+                del channel["bundledPath"]
+                channel["url"] = (
+                    "https://raw.githubusercontent.com/roblabla/msvc-manifest-history/"
+                    "77f6f8ee89705a855ff14c6305ca8ebc9a2a861f/raw_channel.json"
+                )
+                restored["build"]["patchSetRevision"] = 3
+                restored["build"]["builderRevision"] = 4
                 toolchain["authority"] = fingerprint.windows_toolchain_authority(toolchain["inputs"])
-                self.assertEqual(restored, previous["inputs"])
+                self.assertEqual(fingerprint.fingerprint_id(restored), old_id)
+        self.assertEqual(
+            linux_before, fingerprint.compute_fingerprint(
+                variant="free", target_platform="linux", **kwargs
+            )
+        )
 
     def test_linux_revision_change_does_not_move_windows_fingerprint(self):
         before = fingerprint.compute_fingerprint(
@@ -369,15 +367,15 @@ class BuildEffectiveLogicGuardTests(unittest.TestCase):
     """
 
     #: SHA-256 over the source of every build-affecting patch function, pinned
-    #: together with PATCH_SET_REVISION = 3 (AP-SRV-070 W4A-C4, Root Finding L/M:
-    #: the Windows Dockerfile patch now pins xwin channel manifest, package
-    #: manifest, SDK version, and CRT version, with size and digest verification).
+    #: together with PATCH_SET_REVISION = 4 (Issue #9 pre-merge bundled channel:
+    #: the Windows Dockerfile patch copies the checked-in byte-identical channel
+    #: manifest and still pins/checks the package manifest, SDK and CRT).
     EXPECTED_PATCH_SOURCE_DIGEST = (
-        "70d8bacbe95c358e532db9ce1b6127d2aa575ff7724b90464a5aec71b7387c80"
+        "b0ca8b0627daadbf34be7e1221861fa18696bda2503ec1f6857b7de361beb94f"
     )
 
     EXPECTED_WINDOWS_BUILDER_SOURCE_DIGEST = (
-        "58736daff6b3eff495240cdf4ec061d90991f1139bf39cdba8593d2296f7553b"
+        "76d3de5d57960c7e836f62cf252d31c42c56a1885d55ca4c320b83bc9562a86e"
     )
     EXPECTED_LINUX_BUILDER_SOURCE_DIGEST = (
         "69bdaea499d9b2a373b39a044eba743a78c4e0b4f64cec3015f8dea08cf5ad76"
@@ -1324,7 +1322,7 @@ class RootFindingLMWindowsToolchainAuthorityTests(RootFindingJWindowsToolchainAu
 
         # Channel Manifest
         channel = xwin_decl["channelManifest"]
-        self.assertEqual(channel["url"], _PINNED_CHANNEL_URL)
+        self.assertEqual(channel["bundledPath"], _PINNED_CHANNEL_PATH)
         self.assertEqual(channel["cacheName"], "manifest_17.json")
         self.assertEqual(channel["bytes"], 91833)
         self.assertEqual(
@@ -1353,13 +1351,34 @@ class RootFindingLMWindowsToolchainAuthorityTests(RootFindingJWindowsToolchainAu
         self.assertEqual(xwin_decl["sdkVersion"], "10.0.26100")
         self.assertEqual(xwin_decl["crtVersion"], "14.44.17.14")
 
+    def test_byte_pinned_channel_is_packaged_and_staged_without_network(self):
+        source = Path(install_kroko.__file__).resolve().parent.parent / _PINNED_CHANNEL_PATH
+        data = source.read_bytes()
+        self.assertEqual(len(data), buildinputs.WINDOWS_XWIN_MANIFEST_BYTES)
+        self.assertEqual(hashlib.sha256(data).hexdigest(), buildinputs.WINDOWS_XWIN_MANIFEST_SHA256)
+        with TemporaryDirectory() as temp:
+            target = install_kroko.stage_windows_channel_manifest(Path(temp))
+            self.assertEqual(target.read_bytes(), data)
+            self.assertTrue(str(target).endswith("manifest_17.json"))
+        with TemporaryDirectory() as temp, mock.patch.object(
+            Path, "read_bytes", return_value=b"X" * buildinputs.WINDOWS_XWIN_MANIFEST_BYTES
+        ):
+            with self.assertRaises(install_kroko.KrokoInstallError):
+                install_kroko.stage_windows_channel_manifest(Path(temp))
+        with TemporaryDirectory() as temp, mock.patch.object(
+            buildinputs, "WINDOWS_XWIN_MANIFEST_BUNDLED_PATH",
+            "VoiceSTT/assets/kroko/missing-channel.json",
+        ):
+            with self.assertRaises(install_kroko.KrokoInstallError):
+                install_kroko.stage_windows_channel_manifest(Path(temp))
+
     def test_changing_any_manifest_or_sdk_crt_input_invalidates_fingerprint(self):
         """10.2: Invalidation proof for each individual xwin manifest, SDK, and CRT input."""
         baseline = self._windows_fingerprint()
 
         mutations = [
             ("WINDOWS_XWIN_MANIFEST_SHA256", "0" * 64),
-            ("WINDOWS_XWIN_MANIFEST_URL", "https://aka.ms/vs/17/preview/channel"),
+            ("WINDOWS_XWIN_MANIFEST_BUNDLED_PATH", "VoiceSTT/assets/kroko/different-channel.json"),
             ("WINDOWS_XWIN_PACKAGE_MANIFEST_SHA256", "f" * 64),
             ("WINDOWS_XWIN_PACKAGE_MANIFEST_URL", "https://example.com/vsman"),
             ("WINDOWS_XWIN_PACKAGE_MANIFEST_CACHE_KEY", "0" * 64),
@@ -1388,7 +1407,9 @@ class RootFindingLMWindowsToolchainAuthorityTests(RootFindingJWindowsToolchainAu
         dockerfile = patched["Dockerfile.windows"]
 
         # Channel Manifest download + checks
-        self.assertIn(f'curl -sLf "{_PINNED_CHANNEL_URL}"', dockerfile)
+        self.assertIn("COPY .voicestt-build-inputs/manifest_17.json /tmp/voicestt-pinned-channel-manifest.json", dockerfile)
+        self.assertIn("cp /tmp/voicestt-pinned-channel-manifest.json /tmp/.xwin-cache/dl/manifest_17.json", dockerfile)
+        self.assertNotIn("roblabla/msvc-manifest-history", dockerfile)
         self.assertNotIn("https://aka.ms/vs/17/release/channel", dockerfile)
         self.assertIn("-o /tmp/.xwin-cache/dl/manifest_17.json", dockerfile)
         self.assertIn(
