@@ -73,6 +73,7 @@ def installed_distribution() -> tuple[str | None, str | None]:
                     and Path(dist.locate_file(entry)).resolve() == root / "VoiceSTT" / "_version.py"
                     for entry in dist.files or ()
                 )
+                owns_editable = False
                 direct_url = dist.read_text("direct_url.json")
                 if direct_url:
                     direct = json.loads(direct_url)
@@ -80,20 +81,32 @@ def installed_distribution() -> tuple[str | None, str | None]:
                     path = unquote(url.path)
                     if os.name == "nt":
                         path = path.lstrip("/")
-                    owns_package |= (
+                    owns_editable = (
                         direct.get("dir_info", {}).get("editable") is True
                         and url.scheme == "file" and Path(path).resolve() == root
                     )
+                    owns_package |= owns_editable
                 if owns_package:
                     actual_name = dist.metadata.get("Name")
                     if not isinstance(actual_name, str) or canonicalize_name(actual_name) != name:
                         raise IdentityError("conflicting product distribution name")
-                    candidates.append((name, dist.version))
+                    source_metadata = (
+                        is_source_checkout(root)
+                        and Path(dist.locate_file("")).resolve() == root
+                        and dist.read_text("PKG-INFO") is not None
+                    )
+                    candidates.append((name, dist.version, owns_editable, source_metadata))
             except (OSError, ValueError, TypeError, AttributeError):
                 raise IdentityError("invalid product distribution metadata") from None
-    if len(candidates) > 1:
+    editable = {(name, version) for name, version, owns_editable, _ in candidates if owns_editable}
+    # PEP 660 leaves source .egg-info beside installed editable .dist-info.
+    owners = [
+        (name, version) for name, version, _, source_metadata in candidates
+        if not (source_metadata and (name, version) in editable)
+    ]
+    if len(owners) > 1:
         raise IdentityError("multiple product distributions own this installation")
-    return candidates[0] if candidates else (None, None)
+    return owners[0] if owners else (None, None)
 
 
 @dataclass(frozen=True)

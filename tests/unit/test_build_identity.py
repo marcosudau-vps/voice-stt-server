@@ -195,6 +195,34 @@ def test_unrelated_installed_metadata_cannot_describe_source(tmp_path):
         assert bi.installed_distribution() == (None, None)
 
 
+@pytest.mark.parametrize("source_version,installed_copies,valid", [
+    ("2.0.0", 1, True), ("3.0.0", 1, False), ("2.0.0", 2, False),
+])
+def test_editable_source_metadata_alias_is_not_a_second_installation(
+    tmp_path, source_version, installed_copies, valid
+):
+    (tmp_path / "setup.py").touch()
+    (tmp_path / ".git").mkdir()
+    source = mock.Mock(files=[metadata.PackagePath("VoiceSTT/_version.py")],
+                       version=source_version, metadata={"Name": "voicestt"})
+    source.locate_file.side_effect = lambda entry: tmp_path / str(entry)
+    source.read_text.side_effect = lambda key: "source metadata" if key == "PKG-INFO" else None
+    installed = mock.Mock(files=[], version="2.0.0", metadata={"Name": "voicestt"})
+    installed.locate_file.return_value = tmp_path / "site-packages"
+    installed.read_text.side_effect = lambda key: json.dumps({
+        "url": tmp_path.as_uri(), "dir_info": {"editable": True},
+    }) if key == "direct_url.json" else None
+    with mock.patch.object(bi, "package_root", return_value=tmp_path), \
+         mock.patch.object(bi.metadata, "distributions", side_effect=lambda **kwargs: (
+             [source, *([installed] * installed_copies)] if kwargs["name"] == "voicestt" else []
+         )):
+        if valid:
+            assert bi.installed_distribution() == ("voicestt", "2.0.0")
+        else:
+            with pytest.raises(bi.IdentityError, match="multiple"):
+                bi.installed_distribution()
+
+
 def test_owning_metadata_name_cannot_disagree_with_distribution_lookup(tmp_path):
     owner = mock.Mock(files=[metadata.PackagePath("VoiceSTT/_version.py")], version="2.0.0")
     owner.locate_file.return_value = tmp_path / "VoiceSTT" / "_version.py"

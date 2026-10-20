@@ -8055,6 +8055,9 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
     from fastapi import Request
     from fastapi.responses import Response, StreamingResponse
     from VoiceSTT.transcription_engines import get_supported_transcription_engines
+    from api_fastapi_server.protocol_v2 import identity as _app_identity
+
+    app_identity = _app_identity.resolve_runtime_identity()
 
     settings = settings or ServerSettings()
     if settings.runtime_config_path:
@@ -8088,12 +8091,6 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         yield
         service.stop()
 
-    # AP-SRV-070: the OpenAPI/docs-facing app version reads the one product
-    # version authority (VoiceSTT._version) - not a third, independently
-    # hardcoded literal next to the v2 handshake's serverVersion.
-    from api_fastapi_server.protocol_v2 import identity as _app_identity
-
-    app_identity = _app_identity.resolve_runtime_identity()
     app = FastAPI(
         title="VoiceSTT FastAPI-Server",
         version=app_identity.version,

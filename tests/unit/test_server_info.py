@@ -26,7 +26,8 @@ def test_optional_commit_and_exact_sha(monkeypatch, commit):
 @pytest.mark.parametrize("commit", ["abc", "A" * 40, "g" * 40, "a" * 41, "secret/key"])
 def test_invalid_commit_is_redacted_start_error(monkeypatch, commit):
     monkeypatch.setenv("VOICESTT_SERVER_COMMIT", commit)
-    with pytest.raises(identity.IdentityError) as error:
+    with mock.patch("api_fastapi_server.server.VoiceSTTService", side_effect=AssertionError), \
+         pytest.raises(identity.IdentityError) as error:
         build_app()
     assert commit not in str(error.value)
 

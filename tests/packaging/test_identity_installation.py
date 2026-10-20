@@ -118,6 +118,16 @@ def consumer(tmp_path):
     return python
 
 
+def test_real_editable_install_accepts_its_own_source_egg_info(source, consumer, tmp_path):
+    run([consumer, "-m", "pip", "install", "--quiet", "--no-deps", "-e", source],
+        tmp_path, env=build_env())
+    result = run([consumer, "-c",
+                  "import json; from VoiceSTT._build_identity import installed_distribution; "
+                  "print(json.dumps(installed_distribution()))"], source, env=build_env())
+    assert json.loads(result.stdout) == ["voicestt", "2.0.0"]
+    assert not (source / "VoiceSTT" / RESOURCE_NAME).exists()
+
+
 def install(python, wheel, cwd):
     run([python, "-m", "pip", "install", "--quiet", "--no-deps", wheel], cwd)
 

@@ -123,6 +123,18 @@ class StoreBaseTest(unittest.TestCase):
 class StoreAndReuseTests(StoreBaseTest):
     """W4A-09.7/09.8/09.9 - build once, then reuse."""
 
+    @unittest.skipIf(os.name == "nt", "POSIX artifact permission bits")
+    def test_private_builder_wheel_is_readable_by_the_consuming_host(self):
+        computed = self.inputs_for("free")
+        wheel = make_wheel(self.build_dir)
+        wheel.chmod(0o600)
+        record = self.store.store(
+            wheel_path=wheel, fingerprint=computed["fingerprint"], inputs=computed["inputs"],
+        )
+        self.assertEqual(record.wheel_path.stat().st_mode & 0o777, 0o644)
+        self.assertEqual(record.wheel_sha256, artifacts.sha256_of(wheel))
+        self.assertEqual(wheel.stat().st_mode & 0o777, 0o600)
+
     def test_storing_a_wheel_produces_a_verified_artifact(self):
         computed = self.inputs_for("free")
         wheel = make_wheel(self.build_dir, variant="free")
