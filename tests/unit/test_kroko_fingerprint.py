@@ -375,7 +375,7 @@ class BuildEffectiveLogicGuardTests(unittest.TestCase):
     )
 
     EXPECTED_WINDOWS_BUILDER_SOURCE_DIGEST = (
-        "76d3de5d57960c7e836f62cf252d31c42c56a1885d55ca4c320b83bc9562a86e"
+        "f97dff803b4482247620151194b9b5a35a3cbf8dba8759d8180d1871d0ebe095"
     )
     EXPECTED_LINUX_BUILDER_SOURCE_DIGEST = (
         "69bdaea499d9b2a373b39a044eba743a78c4e0b4f64cec3015f8dea08cf5ad76"
@@ -421,6 +421,7 @@ class BuildEffectiveLogicGuardTests(unittest.TestCase):
     )
     WINDOWS_BUILDER_FUNCTION_NAMES = COMMON_BUILDER_FUNCTION_NAMES + (
         "prepare_windows_checkout",
+        "stage_windows_channel_manifest",
         "windows_build_env",
         "build_windows_wheel",
         "find_windows_wheel",
