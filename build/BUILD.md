@@ -256,6 +256,10 @@ GitHub-Fassung dieser Dokumentation.
 
 Auf Windows muss `docker version` sowohl Client als auch Server anzeigen.
 `docker --version` beweist nur, dass die CLI vorhanden ist.
+Die Engine muss Linux-/AMD64-Container bauen koennen; eine reine
+Windows-Containerengine auf einem Hosted-Runner reicht fuer den bestehenden
+Kroko-Windows-Crossbuilder nicht aus. Ein passender Runnername allein ist
+kein Nachweis dieser Voraussetzung und kein erfolgreicher Nativegate.
 
 ### Abhaengigkeitsquellen
 

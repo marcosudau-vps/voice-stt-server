@@ -80,7 +80,7 @@ Begründung im Archiv erhalten.
 | V2-Segment-Activation-Korrelation (Nachtrag zu PR #3) | 29.09.2026 | Prüfung offen | [v2_segment_activation_correlation](v2_segment_activation_correlation/) |
 | V2-Realtime-Identitäten und verspätete Interims | 30.09.2026 | In Umsetzung | [v2_realtime_identity](v2_realtime_identity/) |
 | Issue #7: sichere Wake-Wiederfreigabe | 19.10.2026 | Prüfung offen | [issue_7_wake_rearm](issue_7_wake_rearm/) |
-| Issue #9: Build-/Runtimeidentitaet A+B | 20.10.2026 | In Umsetzung | [issue_9_build_runtime_identity](issue_9_build_runtime_identity/) |
+| Issue #9: Build-/Runtimeidentitaet A+B | 20.10.2026 | Prüfung offen | [issue_9_build_runtime_identity](issue_9_build_runtime_identity/) |
 
 Nachtrag zu Issue #7 / PR #8: Die unabhaengige P1-Reviewkorrektur zur
 Clear-/Wake-Admission-Race ist vor Umsetzung in
