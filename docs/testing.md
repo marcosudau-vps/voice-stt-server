@@ -1,5 +1,11 @@
 # Testing
 
+The [AP-KR-010 investigation](.archiv/kroko_unified_runtime_v2/AP-KR-010/2026-10-22_SOLL_IST.md)
+records real isolated Free/Pro native probes on Windows and Linux/WSL CPython
+3.12, local experimental extra installation and existing suite results.
+Community-model success under Pro is explicitly not positive license evidence;
+authorized real license tests remain a separate prerequisite for AP-KR-020.
+
 VoiceSTT has two kinds of tests:
 
 - Fast unit and contract tests that run without downloading speech models.

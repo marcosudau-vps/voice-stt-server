@@ -22,6 +22,14 @@ also ships Kroko's own license text inside its `.dist-info/licenses/`
 directory. Kroko Pro **models** additionally require a commercial license from
 Kroko/Banafo; the runtime key is a runtime credential and is never bundled.
 
+**Artifact finding, 2026-10-22 (AP-KR-010).** The above describes the intended
+redistribution contract. In the actual RC 39405176300, both Linux product wheels
+carry `KROKO-ONNX-LICENSE`; both Windows product wheels only carry the VoiceSTT
+license. Complete upstream and dependency notices must therefore be an explicit
+gate for the planned component packaging. The
+[investigation](.archiv/kroko_unified_runtime_v2/AP-KR-010/2026-10-22_ERGEBNISBERICHT.md)
+records exact artifact hashes and limitations; it grants no new redistribution rights.
+
 Only Faster-Whisper and Kroko-ONNX are supported production engines. The other
 engine families listed below still have adapters in the source tree, but they
 are internal/experimental, are not installed by the public distributions, and

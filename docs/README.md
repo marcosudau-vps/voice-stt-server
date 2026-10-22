@@ -50,6 +50,10 @@ die aktuelle Dokumentation eingeordnet:
 
 ## Produktflächen und Engines
 
+Die geplante gemeinsame Kroko-Distribution wird getrennt im
+[aktuellen Untersuchungsstand](2026-10-22_kroko-unified-runtime-v2.md)
+beschrieben. AP-KR-010 ändert die nachstehende produktive Installation nicht.
+
 VoiceSTT wird als zwei vollständige, alternative Distributionen ausgeliefert:
 `voice-stt-server` (Kroko Free) und `voice-stt-server-pro` (Kroko Pro). Beide
 enthalten die passende native Laufzeit bereits, stellen dasselbe Importpaket

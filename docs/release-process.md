@@ -1,5 +1,10 @@
 # Release process
 
+The planned unified distribution is currently an
+[AP-KR-010 feasibility investigation](2026-10-22_kroko-unified-runtime-v2.md).
+Its component/extra and RC-schema proposals are not implemented release paths;
+the governing release contract below remains the current reference.
+
 How a VoiceSTT release is produced and published, and what an operator has to
 configure once.
 
