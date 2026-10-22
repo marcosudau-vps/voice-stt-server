@@ -656,6 +656,11 @@ Wichtige Paketbesonderheiten:
 
 ## Kroko im Detail
 
+Die Untersuchung einer späteren gemeinsamen Distribution mit optionaler
+Pro-Komponente ist unter
+[Unified Kroko Runtime V2](../docs/2026-10-22_kroko-unified-runtime-v2.md)
+dokumentiert. Sie ist noch kein geänderter Build- oder Installationsvertrag.
+
 ### Community und Pro
 
 | Merkmal | Community (`free`) | Pro/Commercial (`pro`) |

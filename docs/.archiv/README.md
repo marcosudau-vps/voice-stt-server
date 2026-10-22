@@ -72,6 +72,7 @@ Begründung im Archiv erhalten.
 
 | Aktion | Aktionsdatum | Status | Archiv |
 | --- | --- | --- | --- |
+| Unified Kroko Runtime V2 (AP-KR-010 bis 030) | 22.10.2026 | Prüfung offen | [Gesamtplanung](kroko_unified_runtime_v2/2026-10-22_GESAMTPLAN.md), [AP-KR-010](kroko_unified_runtime_v2/AP-KR-010/2026-10-22_SOLL_IST.md) |
 | Sitzungslokale Wake-Word-Konfiguration | 25.07.2026 | Abgeschlossen | [session-wakeword](session-wakeword/) |
 | Neues Logging- und Event-System | 31.07.2026 | Abgeschlossen | [neues_logging_event_system](neues_logging_event_system/) |
 | SQLite-first Eventstream und Admin-Logvertrag | 02.08.2026 | Abgeschlossen | [sqlite_first_admin_eventstream](sqlite_first_admin_eventstream/) |
