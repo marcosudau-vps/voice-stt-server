@@ -1,0 +1,18 @@
+{
+  "schema": "kroko-catalog-probe-v1",
+  "models": [
+    {
+      "model_id": "00000000-0000-4000-8000-000000000001",
+      "name": "Kroko-IW-Pro-16-M-Streaming-001.data",
+      "language": "IW",
+      "edition": "Pro",
+      "chunk": 16,
+      "size": "M",
+      "mode": "Streaming",
+      "revision": "001",
+      "download_url": "https://download.kroko.ai/models/Kroko-IW-Pro-16-M-Streaming-001.data",
+      "source": "offline-file",
+      "parse_ok": true
+    }
+  ]
+}
