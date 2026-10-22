@@ -72,7 +72,7 @@ Begründung im Archiv erhalten.
 
 | Aktion | Aktionsdatum | Status | Archiv |
 | --- | --- | --- | --- |
-| AP-KR-020: Unified Kroko Runtime-/Lizenzintegration | 22.10.2026 | Geplant | [Implementierungsplanung](kroko_unified_runtime_v2/AP-KR-020/2026-10-22_IMPLEMENTIERUNGSPLAN.md) |
+| AP-KR-020: Unified Kroko Runtime-/Lizenzintegration (technisch BLOCKED) | 22.10.2026 | Prüfung offen | [Implementierungsplanung](kroko_unified_runtime_v2/AP-KR-020/2026-10-22_IMPLEMENTIERUNGSPLAN.md), [Lizenz- und Lifecycle-Vertrag](kroko_unified_runtime_v2/AP-KR-020/2026-10-22_SCHNITTSTELLEN_LIFECYCLE.md), [Soll/Ist](kroko_unified_runtime_v2/AP-KR-020/2026-10-22_SOLL_IST.md) |
 | Unified Kroko Runtime V2 (AP-KR-010 bis 030) | 22.10.2026 | Prüfung offen | [Gesamtplanung](kroko_unified_runtime_v2/2026-10-22_GESAMTPLAN.md), [AP-KR-010](kroko_unified_runtime_v2/AP-KR-010/2026-10-22_SOLL_IST.md) |
 | Sitzungslokale Wake-Word-Konfiguration | 25.07.2026 | Abgeschlossen | [session-wakeword](session-wakeword/) |
 | Neues Logging- und Event-System | 31.07.2026 | Abgeschlossen | [neues_logging_event_system](neues_logging_event_system/) |

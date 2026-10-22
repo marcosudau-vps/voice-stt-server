@@ -6,6 +6,12 @@ Docker paths and ports under `deployment`, and desktop-example defaults under
 `example_app`. Credentials are deliberately rejected from YAML and belong only
 in the ignored root `.env`.
 
+AP-KR-020 has not yet added `force_community` or public Kroko license-status
+settings; its [license-validation gate is blocked](.archiv/kroko_unified_runtime_v2/AP-KR-020/2026-10-22_SCHNITTSTELLEN_LIFECYCLE.md).
+The existing settings revisions, requested/effective behavior and protected
+credential path remain the current contract. Admin unlock does not establish
+Kroko model entitlements.
+
 `AudioToTextRecorder` is the main library entry point. This page is a parameter
 reference for its constructor. Examples and recommended starting patterns live
 in [quick-start.md](quick-start.md).

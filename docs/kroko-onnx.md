@@ -10,6 +10,13 @@ Build and licensing procedures are centralized in
 describes runtime configuration and tests; if a command here conflicts with
 the central build guide, the build guide is authoritative.
 
+The unified-runtime work is currently
+[blocked at AP-KR-020 license validation](.archiv/kroko_unified_runtime_v2/AP-KR-020/2026-10-22_SCHNITTSTELLEN_LIFECYCLE.md).
+It has not introduced automatic runtime selection, Community fallback, or a
+public license-status API. The configuration below remains the existing
+variant-specific runtime contract. Importing Pro or loading Community under
+Pro does not prove a valid license or permission to use other Pro models.
+
 ## Engine Names
 
 - `kroko_onnx`
