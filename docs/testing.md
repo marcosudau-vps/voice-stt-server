@@ -6,6 +6,14 @@ records real isolated Free/Pro native probes on Windows and Linux/WSL CPython
 Community-model success under Pro is explicitly not positive license evidence;
 authorized real license tests remain a separate prerequisite for AP-KR-020.
 
+The [AP-KR-020 evidence report](.archiv/kroko_unified_runtime_v2/AP-KR-020/2026-10-22_TEST_EVIDENZ.md)
+records the independent realtime race-test correction. Its blocking model is a
+test double, while the realtime worker and stabilizer are real product code.
+The test now checks that R1 actually returns after R2 starts: a swallowed model
+exception must not make stale-result rejection appear to pass. AP-KR-020
+runtime/license integration remains blocked; no real Pro license case is
+qualified by these tests or by packaging tests using synthetic native fixtures.
+
 VoiceSTT has two kinds of tests:
 
 - Fast unit and contract tests that run without downloading speech models.

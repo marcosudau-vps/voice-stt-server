@@ -6,6 +6,12 @@ Docker paths and ports under `deployment`, and desktop-example defaults under
 `example_app`. Credentials are deliberately rejected from YAML and belong only
 in the ignored root `.env`.
 
+AP-KR-020 has not yet added `force_community` or public Kroko license-status
+settings; its [license-validation gate is blocked](.archiv/kroko_unified_runtime_v2/AP-KR-020/2026-10-22_SCHNITTSTELLEN_LIFECYCLE.md).
+The existing settings revisions, requested/effective behavior and protected
+credential path remain the current contract. Admin unlock does not establish
+Kroko model entitlements.
+
 `AudioToTextRecorder` is the main library entry point. This page is a parameter
 reference for its constructor. Examples and recommended starting patterns live
 in [quick-start.md](quick-start.md).
@@ -50,6 +56,7 @@ cannot be guessed. These are identity inputs, not runtime-settings API fields.
 | `transcription_engine_options` | `None` | Engine-specific dictionary passed only to the main backend. |
 | `download_root` | `None` | Legacy local lookup root. Large STT provisioning is owned by the server model manager. |
 | `stt_auto_download_enabled` | `false` | Global arm of the hierarchical STT provisioning request (`global OR engine OR model`). |
+| `kroko_force_community` | `false` | Server-wide Community enforcement for the unified Kroko runtime (AP-KR-020). `true` disables every Pro attempt even with a key present; live switchable, persisted as operator intent. License status is projected redacted in `model_lifecycle_status().license`. |
 | `stt_engine_settings` | `{}` | Per-engine `enabled`, `auto_download_enabled`, ordered `custom_paths` and optional `provisioning_target`. |
 | `stt_model_settings` | `{}` | Per-model `enabled`, `auto_download_enabled` and optional supported `recovery_priority` override. Static identity/license/runtime facts cannot be set here. |
 | `language` | `""` | Language code. Empty string lets engines auto-detect when they support it. Some engines require a language. |

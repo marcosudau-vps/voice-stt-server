@@ -86,6 +86,9 @@ from VoiceSTT_server.credential_redaction import (
     redact_kroko_credentials,
     redact_secret_text,
 )
+from VoiceSTT.kroko import bootstrap as kroko_bootstrap_module
+from VoiceSTT.kroko import license_runtime as kroko_license_runtime
+from VoiceSTT.kroko import models as kroko_model_authority
 from VoiceSTT_server.stt_model_management import (
     ManagedModelRegistryView,
     OperatorIntent,
@@ -224,6 +227,7 @@ ACTIVE_RUNTIME_SETTINGS = {
     "stt_auto_download_enabled",
     "stt_engine_settings",
     "stt_model_settings",
+    "kroko_force_community",
 }
 
 NEW_SESSION_RUNTIME_SETTINGS = {
@@ -382,6 +386,7 @@ BOOL_SETTINGS = {
     "model_idle_unload_enabled",
     "model_memory_policy_enabled",
     "stt_auto_download_enabled",
+    "kroko_force_community",
 }
 
 OPTIONAL_STRING_SETTINGS = {
@@ -509,6 +514,7 @@ class ServerSettings:
     stt_auto_download_enabled: bool = False
     stt_engine_settings: Dict[str, Any] = field(default_factory=dict)
     stt_model_settings: Dict[str, Any] = field(default_factory=dict)
+    kroko_force_community: bool = False
     openai_api_enabled: bool = True
     openai_api_key: Optional[str] = None
     admin_api_key: Optional[str] = None
@@ -6266,6 +6272,14 @@ class VoiceSTTService:
         )
         self._apply_stt_model_snapshot(self.stt_model_manager.refresh())
         self._stt_model_refresh_required = False
+        # AP-KR-020: volatile unified Kroko license/runtime authority. Derived
+        # state only (never persisted); the operator intent (force_community
+        # plus requested models) lives in the existing settings plane.
+        self.kroko_license = kroko_license_runtime.LicenseRuntimeAuthority()
+        self._kroko_manifest = None
+        self._kroko_startup_notes = []
+        self._refresh_kroko_intent(reason="startup")
+        self._enforce_kroko_startup_models()
         self.scheduler = self._new_scheduler()
         self._model_state = "loaded"
         self._model_state_error = None
@@ -6296,6 +6310,7 @@ class VoiceSTTService:
             on_catalog_changed=self._on_wake_word_catalog_changed,
         )
         self.wakeword_registry = WakeWordRegistry(self.wakeword_catalog)
+        self._emit_kroko_startup_notes()
         self._log_access_tokens = {}
         self._log_access_lock = threading.RLock()
         self.ready_thread = None
@@ -6367,6 +6382,229 @@ class VoiceSTTService:
         for source in settings_objects or (self.settings,):
             values.extend(self._stt_secret_values(source))
         return redact_secret_text(error, values)
+
+    # -- AP-KR-020 unified Kroko license/runtime integration -----------------
+
+    def _kroko_manifest_cached(self):
+        """The manifested Kroko model authority (loaded once, never mutated)."""
+        if self._kroko_manifest is None:
+            self._kroko_manifest = kroko_model_authority.load_manifest()
+        return self._kroko_manifest
+
+    @staticmethod
+    def _kroko_options_key(options):
+        if isinstance(options, dict):
+            value = options.get("key")
+            if isinstance(value, str) and value.strip():
+                return value
+        return ""
+
+    def _kroko_effective_key(self, settings=None):
+        """Collects the effective Kroko key without logging or storing it.
+
+        Mirrors the engine key cascade (lane options, then the documented
+        environment chain). Returns ``(present, revision)`` where revision is
+        the opaque one-way fingerprint from
+        :func:`license_runtime.derive_credential_revision`.
+        """
+        source = settings if settings is not None else self.settings
+        lane_keys = [
+            self._kroko_options_key(source.transcription_engine_options),
+            self._kroko_options_key(
+                source.realtime_transcription_engine_options),
+        ]
+        engine_settings = source.stt_engine_settings
+        if isinstance(engine_settings, dict):
+            for name, entry in engine_settings.items():
+                if not kroko_license_runtime.is_kroko_lane(name):
+                    continue
+                if isinstance(entry, dict):
+                    nested = entry.get("engine_options", entry.get("options", entry))
+                    lane_keys.append(self._kroko_options_key(nested))
+        env_key = ""
+        for env_name in ("KROKO_API_KEY", "KROKO_ONNX_KEY",
+                         "VOICESTT_KROKO_ONNX_KEY", "KROKO_KEY"):
+            candidate = os.getenv(env_name) or ""
+            if candidate.strip():
+                env_key = candidate
+                break
+        joined = "\x00".join(
+            [value for value in lane_keys if value.strip()]
+            + ([env_key] if env_key.strip() else [])
+        )
+        present = bool(joined)
+        return present, kroko_license_runtime.derive_credential_revision(joined)
+
+    def _kroko_runtime_identity(self):
+        """Interim payload identity until the AP-030 component identity lands.
+
+        Uses the cold-selected private payload root when bootstrapped, else
+        the explicit ``unmanaged-global-runtime`` marker. Never derived from
+        key material or license responses.
+        """
+        selection = kroko_bootstrap_module.selection_status()
+        if selection and selection.get("root"):
+            return "payload:" + str(selection["root"])
+        return "unmanaged-global-runtime"
+
+    def _kroko_lane_models(self, settings=None):
+        """Effective ``(lane, engine, model)`` triples for the Kroko lanes."""
+        source = settings if settings is not None else self.settings
+        final_engine = normalize_engine_name(source.transcription_engine)
+        realtime_engine = normalize_engine_name(
+            source.realtime_transcription_engine or source.transcription_engine
+        )
+        if bool(source.use_main_model_for_realtime):
+            realtime_model = source.model
+        else:
+            realtime_model = source.realtime_model or source.model
+        return (
+            ("final", final_engine, source.model),
+            ("realtime", realtime_engine, realtime_model),
+        )
+
+    def _refresh_kroko_intent(self, reason=""):
+        """Rebinds the volatile license authority to the current intent.
+
+        Any key/force/identity change bumps the configuration generation and
+        atomically discards the previous proof, so stale statuses, readiness
+        messages and job results can never authorize the new configuration.
+        """
+        present, revision = self._kroko_effective_key()
+        self.kroko_license.note_intent(
+            key_present=present,
+            force_community=bool(self.settings.kroko_force_community),
+            credential_revision=revision,
+            runtime_identity=self._kroko_runtime_identity(),
+        )
+
+    def _kroko_pro_entries(self, settings=None):
+        """Manifested Pro entries among the requested Kroko-lane models.
+
+        Returns ``(pro_entries, unknown_models)``. Unknown (unmanifested)
+        Kroko-lane models are reported separately: without a manifested
+        identity no license right can be confirmed for them (fail-closed).
+        """
+        manifest = self._kroko_manifest_cached()
+        pro_entries = []
+        unknown_models = []
+        for lane, engine, model in self._kroko_lane_models(settings):
+            if not kroko_license_runtime.is_kroko_lane(engine):
+                continue
+            entry = manifest.get(model)
+            if entry is None:
+                unknown_models.append({"lane": lane, "model": str(model)})
+                continue
+            if str(entry.requires_runtime_variant or "").strip().lower() == "pro":
+                pro_entries.append({"lane": lane, "model": str(model),
+                                    "id": entry.id})
+        return pro_entries, unknown_models
+
+    def _enforce_kroko_license_gate(self, candidate_settings=None):
+        """Fail-closed license gate for Kroko model selection.
+
+        Community models pass untouched. Every requested Pro model needs a
+        current, generation-bound ``VALID`` proof for exactly its manifested
+        id, else ``ValueError`` (redacted). Unmanifested Kroko-lane models
+        carry no confirmable right and can never become ``VALID``, but stay
+        possible as explicitly labelled operator overrides (consistent with
+        the ``unmanaged`` report of the model authority); they are returned
+        for redacted audit instead of being silently blessed.
+        """
+        pro_entries, unknown_models = self._kroko_pro_entries(candidate_settings)
+        for item in pro_entries:
+            if not self.kroko_license.pro_enabled_for(item["id"]):
+                raise ValueError(
+                    "Das Pro-Modell '{model}' der Lane '{lane}' darf ohne "
+                    "aktuelle positive Lizenzberechtigung nicht verwendet "
+                    "werden (Status: {status}). Community-Fallback bleibt "
+                    "verfügbar.".format(
+                        model=item["model"], lane=item["lane"],
+                        status=self.kroko_license.status.value)
+                )
+        return unknown_models
+
+    def _enforce_kroko_startup_models(self):
+        """Startup community fallback: never serve Pro without proof.
+
+        If the configured Kroko lanes request manifested Pro models while no
+        current positive entitlement exists, the in-memory settings are
+        downgraded to the manifested community fallback before any scheduler
+        worker starts. The operator intent on disk is untouched; the
+        downgrade is reported via audit once the audit plane exists.
+        Unmanifested Kroko-lane models stay possible as explicitly labelled
+        operator overrides (consistent with the model authority) and are
+        only reported, never silently blessed.
+        """
+        try:
+            unmanaged = self._enforce_kroko_license_gate()
+        except ValueError:
+            unmanaged = []
+            refused_pro = True
+        else:
+            refused_pro = False
+        notes = [{"kind": "unmanaged", "lane": item["lane"],
+                  "model": item["model"]} for item in unmanaged]
+        if refused_pro:
+            manifest = self._kroko_manifest_cached()
+            for lane, engine, model in self._kroko_lane_models():
+                if not kroko_license_runtime.is_kroko_lane(engine):
+                    continue
+                fallback = kroko_license_runtime.community_fallback_model(
+                    manifest, model)
+                if fallback is None:
+                    continue
+                if lane == "final":
+                    if str(self.settings.model) != fallback.filename:
+                        notes.append({"kind": "downgraded", "lane": lane,
+                                      "from": str(self.settings.model),
+                                      "to": fallback.filename})
+                        self.settings.model = fallback.filename
+                else:
+                    current = (self.settings.realtime_model
+                               or self.settings.model)
+                    if str(current) != fallback.filename:
+                        notes.append({"kind": "downgraded", "lane": lane,
+                                      "from": str(current),
+                                      "to": fallback.filename})
+                        self.settings.realtime_model = fallback.filename
+        if notes:
+            self._kroko_startup_notes = notes
+        downgraded = [note for note in notes
+                      if note.get("kind") == "downgraded"]
+        if downgraded:
+            self.settings.use_main_model_for_realtime = False
+            self.stt_model_manager.intent = OperatorIntent.from_settings(
+                self.settings)
+            self._apply_stt_model_snapshot(self.stt_model_manager.refresh())
+            self._refresh_kroko_intent(reason="startup_community_fallback")
+
+    def _emit_kroko_startup_notes(self):
+        """Reports startup license notes via audit (redacted)."""
+        notes = list(getattr(self, "_kroko_startup_notes", []) or [])
+        self._kroko_startup_notes = []
+        for note in notes:
+            if note.get("kind") == "downgraded":
+                self.audit.event(
+                    "kroko.pro_refused_community_fallback",
+                    lane=note.get("lane"), to=note.get("to"),
+                    license=self.kroko_license.public_snapshot(),
+                )
+            else:
+                self.audit.event(
+                    "kroko.unmanaged_model_selected",
+                    lane=note.get("lane"), model=note.get("model"),
+                    license=self.kroko_license.public_snapshot(),
+                )
+
+    def _audit_kroko_unmanaged(self, unmanaged):
+        """Redacted audit for explicitly labelled unmanaged Kroko models."""
+        for item in unmanaged or []:
+            self.audit.event(
+                "kroko.unmanaged_model_selected",
+                lane=item.get("lane"), model=item.get("model"),
+                license=self.kroko_license.public_snapshot(),
+            )
 
     def refresh_stt_models(self, timeout=180.0):
         """Refresh the transactional authority without invalidating its LKG."""
@@ -6882,6 +7120,10 @@ class VoiceSTTService:
             "allowTwoMediumModels": bool(self.settings.allow_two_medium_models),
             "mediumEquivalentLimit": 2 if self.settings.allow_two_medium_models else 1,
             "active": self.active_models(),
+            # AP-KR-020: redacted unified Kroko license/runtime projection.
+            # No key material, no raw license responses; HTTP admin surface
+            # only, never part of the frozen V2 session wire envelopes.
+            "license": self.kroko_license.public_snapshot(),
         }
 
     def _model_idle_worker(self):
@@ -7227,6 +7469,13 @@ class VoiceSTTService:
                 )
             if "log_level" in applied:
                 apply_process_log_level(self.settings.log_level)
+            if "kroko_force_community" in applied:
+                # AP-KR-020: a force-community change is an intent change: the
+                # configuration generation bumps, the previous proof is
+                # discarded, and affected Pro models must be swapped out via
+                # the transactional model refresh.
+                self._refresh_kroko_intent(reason="force_community_changed")
+                self._stt_model_refresh_required = True
             public_applied = redact_kroko_credentials(applied)
             self.audit.event("config.updated", applied=public_applied)
             self.persist_settings()
@@ -7351,6 +7600,10 @@ class VoiceSTTService:
         ):
             candidate.use_main_model_for_realtime = False
         enforce_cpu_model_policy(candidate)
+        # AP-KR-020: fail-closed license gate before any model state changes.
+        # Community models pass untouched; Pro models need a current proof.
+        # Unmanaged models are reported, never silently blessed.
+        unmanaged_kroko_models = self._enforce_kroko_license_gate(candidate)
         previous_management = self.stt_model_manager.snapshot()
         previous_intent = self.stt_model_manager.intent
         self.stt_model_manager.intent = OperatorIntent.from_settings(candidate)
@@ -7446,6 +7699,8 @@ class VoiceSTTService:
                     reloaded=False, changed=public_changed,
                 )
                 self.persist_settings()
+                self._refresh_kroko_intent(reason="model_switch")
+                self._audit_kroko_unmanaged(unmanaged_kroko_models)
                 return {
                     "changed": public_changed,
                     "active": self.active_models(),
@@ -7506,6 +7761,8 @@ class VoiceSTTService:
             reloaded=True, changed=public_changed,
         )
         self.persist_settings()
+        self._refresh_kroko_intent(reason="model_switch")
+        self._audit_kroko_unmanaged(unmanaged_kroko_models)
         return {
             "changed": public_changed,
             "active": self.active_models(),
@@ -8077,6 +8334,9 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
     # persisted startup/runtime values have been applied.
     settings.__post_init__()
     enforce_cpu_model_policy(settings)
+    # AP-KR-020: cold-select the private native payload root before any engine
+    # import. Verified no-op when VOICESTT_KROKO_PAYLOAD_ROOT is absent.
+    kroko_bootstrap_module.ensure_bootstrap_from_env()
     manager = ConnectionManager()
     service = VoiceSTTService(
         settings,

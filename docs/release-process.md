@@ -1,7 +1,7 @@
 # Release process
 
-The planned unified distribution is currently an
-[AP-KR-010 feasibility investigation](2026-10-22_kroko-unified-runtime-v2.md).
+The [unified-distribution investigation](2026-10-22_kroko-unified-runtime-v2.md)
+is accepted for AP-KR-010; AP-KR-020 is blocked at its license-validation gate.
 Its component/extra and RC-schema proposals are not implemented release paths;
 the governing release contract below remains the current reference.
 
