@@ -278,6 +278,22 @@ Reliable suppression of asynchronous Pro license refresh messages such as
 native patch. Older/unpatched Kroko wheels may still print background license
 messages.
 
+## Unified Runtime License Gate (AP-KR-020)
+
+The unified Community/Pro runtime derives
+`pro_enabled = api_key_present AND NOT force_community AND
+license_validation_successful` and never persists it. Server intent
+(`kroko_force_community`, requested models) lives in the normal settings
+plane; the volatile proof (generation, opaque credential revision, confirmed
+model ids, short TTL) lives only in RAM. Kroko lanes accept manifested
+Community models without proof and manifested Pro models only with a current
+proof for exactly that model id; unmanifested Kroko models are refused
+fail-closed. Without a key or with `kroko_force_community: true`, the server
+starts or falls back to the manifested Community model. The redacted license
+projection is part of `model_lifecycle_status()` (`"license"`); the V2
+session wire is unchanged. A qualified verification backend is follow-up
+work; the product default never grants Pro.
+
 ## FastAPI Example
 
 ```powershell

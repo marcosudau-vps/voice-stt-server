@@ -1,4 +1,4 @@
-# Unified Kroko Runtime V2 – aktueller Untersuchungsstand
+﻿# Unified Kroko Runtime V2 – aktueller Untersuchungsstand
 
 Stand 22.10.2026: AP-KR-010 ist für den vereinbarten Untersuchungsumfang
 [abgenommen](https://github.com/marcosudau-vps/voice-stt-server/pull/11#issuecomment-6346283640).
@@ -40,6 +40,23 @@ Lizenzressourcen sind vor Veröffentlichung vollständig zu prüfen.
 - [AP-KR-020: neue Tests und Nachweisgrenzen](.archiv/kroko_unified_runtime_v2/AP-KR-020/2026-10-22_TEST_EVIDENZ.md)
 - [AP-KR-020: Abweichungen](.archiv/kroko_unified_runtime_v2/AP-KR-020/2026-10-22_ABWEICHUNGEN.md)
 - [AP-KR-020: Übergabegrenze zu AP-030](.archiv/kroko_unified_runtime_v2/AP-KR-020/2026-10-22_UEBERGABE_AP030.md)
+
+## Nachtrag 23.10.2026 (Fortsetzung AP-KR-020, CONDITIONAL)
+
+Lizenzentscheidung für Variante C mit spezifiziertem nativen Folgeauftrag A
+und verworfener Python-Protokollimplementierung, dazu implementiert: flüchtige
+Lizenz-/Runtimeautorität, kalter Bootstrap, Besitzerprozess-Supervisor,
+`kroko_force_community`, modellrechtsscharfes Fail-closed-Gate,
+Startup-Community-Fallback und redaktierte Statusprojektion – synthetisch
+qualifiziert (43 neue Fälle), produktiv ohne qualifizierten Nachweisweg
+fail-closed auf Community.
+
+- [Fortsetzung Lizenzentscheidung](.archiv/kroko_unified_runtime_v2/AP-KR-020/2026-10-23_FORTSETZUNG_LIZENZENTSCHEIDUNG.md)
+- [Fortsetzung Implementierung](.archiv/kroko_unified_runtime_v2/AP-KR-020/2026-10-23_FORTSETZUNG_IMPLEMENTIERUNG.md)
+- [Fortsetzung Soll/Ist (CONDITIONAL)](.archiv/kroko_unified_runtime_v2/AP-KR-020/2026-10-23_FORTSETZUNG_SOLL_IST.md)
+- [Fortsetzung Abweichungen](.archiv/kroko_unified_runtime_v2/AP-KR-020/2026-10-23_FORTSETZUNG_ABWEICHUNGEN.md)
+- [Fortsetzung Übergabe AP-025/AP-030](.archiv/kroko_unified_runtime_v2/AP-KR-020/2026-10-23_FORTSETZUNG_UEBERGABE_AP025_AP030.md)
+- [Fortsetzung Testevidenz](.archiv/kroko_unified_runtime_v2/AP-KR-020/2026-10-23_FORTSETZUNG_TEST_EVIDENZ.md)
 
 VERIFIZIERT, CODEANALYSE, SIMULIERT und OFFEN sind in der Akte ausdrücklich
 getrennt. Es wurden keine produktiven Runtime-/Packagingänderungen vorgenommen.
