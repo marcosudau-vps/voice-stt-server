@@ -22,3 +22,4 @@ VoiceSTT/assets/build_inputs/windows/visual-studio-17.14.39-channel.json -text -
 
 # Archived original assignments stay byte-identical to their source.
 docs/.archiv/einheitliche_triggerarchitektur/AP-SRV-060/runs/**/2026-*_PROMPT.md -text
+docs/.archiv/v2_stt_model_management/runs/**/2026-*_ORIGINALPROMPT.md -text
