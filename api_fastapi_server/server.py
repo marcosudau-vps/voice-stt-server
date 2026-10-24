@@ -6311,6 +6311,7 @@ class VoiceSTTService:
         self._kroko_check_lock = threading.RLock()
         self._refresh_kroko_intent(reason="startup")
         self._enforce_kroko_startup_models()
+        os.environ["VOICESTT_KROKO_PRO_CANDIDATE"] = "1" if self._kroko_native_candidate else "0"
         self._kroko_activation_binding = (self._kroko_effective_key(),
             tuple(self._kroko_lane_models()), os.environ.get("VOICESTT_KROKO_OWNER_GENERATION", ""))
         self.stt_model_manager = STTModelManager(

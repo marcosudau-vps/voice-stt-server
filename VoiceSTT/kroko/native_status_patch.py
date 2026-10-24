@@ -32,6 +32,18 @@ def patch_native_license_status(repo_dir):
         path.write_text(text, encoding="utf-8", newline="\n")
 
     status_members = r'''// VOICESTT_LICENSE_STATUS_V1
+    static bool pro_candidate_allowed() {
+#ifdef _WIN32
+        char value[8];
+        DWORD size = GetEnvironmentVariableA("VOICESTT_KROKO_PRO_CANDIDATE", value, sizeof(value));
+        if (size > 0) return size == 1 && value[0] == '1';
+#endif
+        const char* value_env = std::getenv("VOICESTT_KROKO_PRO_CANDIDATE");
+        // Unmanaged standalone users retain their existing native contract.
+        // The unified server always sets an explicit 0/1 before any load.
+        return value_env == nullptr || std::string(value_env) == "1";
+    }
+
     mutable std::recursive_mutex status_mutex;
     std::string status_model_id;
     std::string status_outcome = "unreachable";
@@ -107,7 +119,7 @@ def patch_native_license_status(repo_dir):
     std::string safe_error() const { return "native_license_failure"; }
 '''
     edit("sherpa-onnx/csrc/license.h", [
-        ("#include <regex>", "#include <regex>\n#include <mutex>\n#include <atomic>\n#include <algorithm>\n#include <cstdlib>"),
+        ("#include <regex>", "#include <regex>\n#include <mutex>\n#include <atomic>\n#include <algorithm>\n#include <cstdlib>\n#ifdef _WIN32\n#include <windows.h>\n#endif"),
         ("    wsclient c;", "    wsclient c;\n" + status_members),
         ("    bool allowed = false;", "    std::atomic<bool> allowed{false};"),
         ("    int remaining_seconds = 0;", "    std::atomic<int> remaining_seconds{0};"),
@@ -150,6 +162,8 @@ std::string KrokoLicenseStatusV1() {
 #endif
 }
 '''),
+        ('    if(model.getHeaderValue("free") == "false") {',
+         '    if(model.getHeaderValue("free") == "false") {\n      if (!LicenseClient::pro_candidate_allowed()) { std::exit(1); }'),
         ('client.report_interval > 0 ? client.report_interval : 60', 'client.report_interval.load() > 0 ? client.report_interval.load() : 60'),
         ('duration = client.remaining_seconds;', 'duration = client.remaining_seconds.load();'),
         ('<< client.error_message', '<< client.safe_error()'),
@@ -157,5 +171,5 @@ std::string KrokoLicenseStatusV1() {
     ])
     edit("sherpa-onnx/python/csrc/sherpa-onnx.cc", [
         ('namespace sherpa_onnx {', 'namespace sherpa_onnx {\n// VOICESTT_LICENSE_STATUS_V1\nstd::string KrokoLicenseStatusV1();'),
-        ('  m.doc() = "pybind11 binding of sherpa-onnx";', '  m.doc() = "pybind11 binding of sherpa-onnx";\n  m.def("voicestt_license_status_v1", &KrokoLicenseStatusV1);'),
+        ('  m.doc() = "pybind11 binding of sherpa-onnx";', '  m.doc() = "pybind11 binding of sherpa-onnx";\n  m.def("voicestt_license_status_v1", &KrokoLicenseStatusV1);\n  m.attr("voicestt_pro_candidate_gate_version") = 1;'),
     ])

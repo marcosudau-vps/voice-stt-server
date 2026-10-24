@@ -541,3 +541,30 @@ def test_native_reload_after_unload_requires_fresh_owner(tmp_path):
             assert service._kroko_transition.is_set()
         finally:
             service.stop()
+
+
+def test_unmanaged_model_cannot_bypass_native_pro_activation_gate(tmp_path):
+    from api_fastapi_server.server import ServerSettings, create_app
+    from tests.unit.test_openai_compatible_endpoint import ImmediateScheduler
+    with isolated_env():
+        settings = ServerSettings(data_root_path=str(tmp_path), transcription_engine="kroko_onnx",
+                                  model="unmanaged.data", realtime_model="unmanaged.data")
+        service = create_app(settings, scheduler_factory=ImmediateScheduler).state.voicestt_service
+        try:
+            assert os.environ["VOICESTT_KROKO_PRO_CANDIDATE"] == "0"
+            assert not service.kroko_license.pro_enabled_global()
+        finally:
+            service.stop()
+
+
+def test_old_native_runtime_cannot_activate_unmanaged_model_in_server():
+    from importlib.machinery import EXTENSION_SUFFIXES
+    from VoiceSTT.transcription_engines.kroko_onnx_engine import _enforce_unmanaged_native_guard
+    from VoiceSTT.transcription_engines.base import TranscriptionEngineError
+    native = SimpleNamespace(__file__="synthetic" + EXTENSION_SUFFIXES[0])
+    with isolated_env({"VOICESTT_KROKO_PRO_CANDIDATE": "0"}), mock.patch.dict(sys.modules, {"_sherpa_onnx": native}):
+        with pytest.raises(TranscriptionEngineError, match="activation guard"):
+            _enforce_unmanaged_native_guard("unmanaged.data")
+        _enforce_unmanaged_native_guard(COMMUNITY_FILE)
+        native.voicestt_pro_candidate_gate_version = 1
+        _enforce_unmanaged_native_guard("unmanaged.data")

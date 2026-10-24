@@ -4,6 +4,13 @@
 #include <thread>
 
 int main() {
+#ifndef _WIN32
+  setenv("VOICESTT_KROKO_PRO_CANDIDATE", "0", 1);
+  assert(!LicenseClient::pro_candidate_allowed());
+  setenv("VOICESTT_KROKO_PRO_CANDIDATE", "1", 1);
+  assert(LicenseClient::pro_candidate_allowed());
+  unsetenv("VOICESTT_KROKO_PRO_CANDIDATE");
+#endif
   LicenseClient client;
   client.status_model_id = "synthetic-model";
   client.remaining_seconds = 100;

@@ -76,7 +76,8 @@ PATCHED_UPSTREAM_SOURCES = (
 #: invokes xwin with explicit --manifest, --sdk-version, and --crt-version
 #: arguments without relying on unpinned upstream latest fallbacks.
 # AP-KR-020: native V1 snapshot, atomic client fields, source-pinned patches.
-PATCH_SET_REVISION = 5
+# Revision 6 also gates native Pro activation on the owner candidate intent.
+PATCH_SET_REVISION = 6
 
 #: Revision of the builder logic itself: which revision gets checked out, which
 #: patches are applied, how the compiler is invoked, and which produced wheel is
