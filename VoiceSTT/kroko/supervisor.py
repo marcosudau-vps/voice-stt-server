@@ -17,6 +17,7 @@ unchanged broken configuration can never spin a crash loop.
 from __future__ import annotations
 
 import os
+import math
 import subprocess
 import threading
 import time
@@ -58,9 +59,9 @@ class OwnerSpec:
     def __post_init__(self):
         if not self.argv:
             raise ValueError("OwnerSpec.argv must not be empty")
-        if self.start_deadline_seconds <= 0:
+        if not math.isfinite(self.start_deadline_seconds) or self.start_deadline_seconds <= 0:
             raise ValueError("start_deadline_seconds must be positive")
-        if self.graceful_shutdown_seconds < 0:
+        if not math.isfinite(self.graceful_shutdown_seconds) or self.graceful_shutdown_seconds < 0:
             raise ValueError("graceful_shutdown_seconds must not be negative")
 
 
@@ -126,8 +127,12 @@ class OwnerSupervisor:
 
     def is_current(self, generation: int) -> bool:
         """Whether a generation is still the active one."""
+        try:
+            generation = int(generation)
+        except (TypeError, ValueError, OverflowError):
+            return False
         with self._lock:
-            return (int(generation) == self._generation and self._current is not None
+            return (generation == self._generation and self._current is not None
                     and self._current.process.poll() is None)
 
     def accept_event(self, generation: int, payload: Any) -> Optional[Any]:

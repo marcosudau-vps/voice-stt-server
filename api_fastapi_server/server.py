@@ -6702,7 +6702,7 @@ class VoiceSTTService:
         while not self.stop_event.wait(0.25):
             if self._kroko_transition.is_set():
                 return
-            if self._kroko_native_candidate and self.ready.is_set():
+            if self._kroko_native_candidate and self.ready.is_set() and self.scheduler is not None:
                 if not self._check_native_license():
                     self._request_kroko_restart(community=True)
                     return
@@ -7077,7 +7077,8 @@ class VoiceSTTService:
 
     def ensure_models_loaded(self, timeout=180.0):
         if (self._kroko_transition.is_set() or (self._kroko_native_candidate
-                and not self.kroko_license.pro_enabled_global())):
+                and not self.kroko_license.pro_enabled_global()
+                and not (self.scheduler is None and self._model_state == "unloaded"))):
             raise RuntimeError("Der native Besitzerprozess wird neu gestartet oder ist noch nicht lizenziert.")
         deadline = time.monotonic() + timeout
         with self._model_condition:
@@ -7096,6 +7097,9 @@ class VoiceSTTService:
                 raise RuntimeError("Der Transkriptionsdienst wird beendet.")
             if self.scheduler is not None:
                 return self.scheduler
+            if self._requires_kroko_process_boundary():
+                self._request_kroko_restart()
+                raise RuntimeError("Das native Modell wird in einer neuen Besitzerprozessgeneration geladen.")
             self._model_state = "loading"
             self._model_state_error = None
 
@@ -7144,12 +7148,13 @@ class VoiceSTTService:
         return replacement
 
     def _submit_scheduler_job(self, job, activity):
-        if self._kroko_native_candidate and not self._check_native_license():
-            self._request_kroko_restart(community=True)
         if self._kroko_transition.is_set():
             return QueueSubmitResult(False, "Der native Besitzerprozess wird neu gestartet.")
         while True:
             scheduler = self.ensure_models_loaded()
+            if self._kroko_native_candidate and not self._check_native_license():
+                self._request_kroko_restart(community=True)
+                return QueueSubmitResult(False, "Die native Lizenz ist nicht mehr aktuell.")
             with self._scheduler_lock:
                 if scheduler is not self.scheduler:
                     continue
@@ -7223,6 +7228,8 @@ class VoiceSTTService:
                 raise
             self._model_state = "unloaded"
             self._model_state_error = None
+            if self._kroko_native_candidate:
+                self.kroko_license.record_failure()
         del scheduler
         gc.collect()
         self.audit.event("models.unloaded", reason=reason, active=self.active_models())

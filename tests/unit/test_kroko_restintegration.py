@@ -505,3 +505,39 @@ def test_shared_recognizer_ignores_unused_realtime_credential():
         before = kroko_effective_credentials(settings)
         settings.realtime_transcription_engine_options = {"key": "another-unused-key"}
         assert kroko_effective_credentials(settings) == before
+
+
+@pytest.mark.parametrize("field,value", [("start_deadline_seconds", float("inf")),
+                                         ("start_deadline_seconds", float("nan")),
+                                         ("graceful_shutdown_seconds", float("inf"))])
+def test_owner_deadlines_cannot_be_unbounded(field, value):
+    with pytest.raises(ValueError):
+        supervision.OwnerSpec(["stub"], **{field: value})
+
+
+def test_malformed_generation_events_are_discarded():
+    guard = supervision.OwnerSupervisor()
+    for generation in (None, "not-a-generation", float("inf")):
+        assert guard.accept_event(generation, "stale") is None
+
+
+def test_native_reload_after_unload_requires_fresh_owner(tmp_path):
+    from api_fastapi_server.server import ServerSettings, create_app
+    from tests.unit.test_openai_compatible_endpoint import ImmediateScheduler
+    with isolated_env():
+        settings = ServerSettings(data_root_path=str(tmp_path), transcription_engine="kroko_onnx",
+                                  model=COMMUNITY_FILE, realtime_model=COMMUNITY_FILE)
+        factory = mock.Mock(side_effect=ImmediateScheduler)
+        service = create_app(settings, scheduler_factory=factory).state.voicestt_service
+        try:
+            service._kroko_native_candidate = True  # Synthetic Pro owner lifecycle only.
+            service.unload_models()
+            count = factory.call_count
+            with mock.patch.dict(os.environ, {owner.CONTROL_ENV: str(tmp_path), supervision.OWNER_GENERATION_ENV: "9"}):
+                with pytest.raises(RuntimeError, match="neuen Besitzerprozessgeneration"):
+                    service.ensure_models_loaded()
+            assert factory.call_count == count
+            assert owner.read_event(tmp_path, "restart", 9)
+            assert service._kroko_transition.is_set()
+        finally:
+            service.stop()

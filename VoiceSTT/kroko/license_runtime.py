@@ -442,9 +442,6 @@ class LicenseRuntimeAuthority:
             verdict = LicenseVerdict(outcome="unreachable")
         with self._lock:
             if request.generation != self._generation:
-                # Compatibility diagnostic only when no newer check has started.
-                if self._status == LicenseStatus.NOT_CHECKED:
-                    self._reason = REASON_STALE_GENERATION
                 return self._status
             if sequence != self._check_sequence or self._status != LicenseStatus.CHECKING:
                 return self._status

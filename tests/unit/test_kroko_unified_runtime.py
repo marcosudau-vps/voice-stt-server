@@ -277,7 +277,7 @@ class LicenseAuthorityTruthTableTests(unittest.TestCase):
                             kroko_license.LicenseStatus.VALID)
         self.assertEqual(
             authority.public_snapshot()["reasonCode"],
-            kroko_license.REASON_STALE_GENERATION)
+            kroko_license.REASON_INTENT_CHANGED)
 
     def test_running_loss_downgrades_valid_to_check_failed(self):
         authority, _ = self.make_authority()
