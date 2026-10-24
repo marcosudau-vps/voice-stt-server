@@ -158,6 +158,11 @@ model's identity, SHA-256, byte size, license class and the Kroko runtime
 variant (`free`/`pro`) it requires. The manifest ships metadata only - **no
 Kroko model file is bundled** in Git, in the wheel/sdist or in an image.
 
+The [offline model catalog](kroko-model-catalog.md) adds typed discovery,
+filtering and download planning for cleaned provider metadata. Catalog
+visibility and a download URL do not grant model rights or verify bytes.
+The existing twelve-model manifest remains the integrity authority.
+
 ### Why models are provisioned rather than shipped
 
 The upstream redistribution grant is not unambiguous: the Hugging Face model

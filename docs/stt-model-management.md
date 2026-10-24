@@ -9,6 +9,14 @@ ist in [AP-KR-020](.archiv/kroko_unified_runtime_v2/AP-KR-020/2026-10-22_SOLL_IS
 noch nicht implementiert; Arbeitsschritt A ist technisch blockiert. Die
 bestehenden Variantenprüfungen und Registryfelder gelten weiter. Lokale
 Installation und `LOAD_VERIFIED` sind keine neue serverweite Lizenzfreigabe.
+## Kroko-Katalogmetadaten
+
+Der [Offline-Modellkatalog](kroko-model-catalog.md) ergänzt die Discovery um
+strukturierte Anbieter-Metadaten, Filter und einen reinen Downloadplan.
+Katalogeinträge werden nicht automatisch zu Produktmodellen im Manager.
+Portal-UUID und bestehende Manifest-ID bleiben getrennt. Das zwölf Modelle
+umfassende Manifest, Produktrechte und die folgenden Provisioningregeln
+bleiben unverändert.
 
 ## Speicher und Suchreihenfolge
 
