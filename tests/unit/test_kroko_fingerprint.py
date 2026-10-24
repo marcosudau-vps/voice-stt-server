@@ -59,7 +59,7 @@ class FingerprintStabilityTests(unittest.TestCase):
         int(value, 16)  # raises if it is not hex
 
     def test_declared_windows_fingerprints_are_stable(self):
-        for variant, expected in (("free", "60eadb3428690d3d"), ("pro", "e4f939933cd9985d")):
+        for variant, expected in (("free", "8bdd0e96b1120043"), ("pro", "6e8d52bd0c1ed183")):
             with self.subTest(variant=variant):
                 computed = fingerprint.compute_fingerprint(
                     variant=variant, target_platform="windows", architecture="amd64",
@@ -371,14 +371,14 @@ class BuildEffectiveLogicGuardTests(unittest.TestCase):
     #: the Windows Dockerfile patch copies the checked-in byte-identical channel
     #: manifest and still pins/checks the package manifest, SDK and CRT).
     EXPECTED_PATCH_SOURCE_DIGEST = (
-        "b0ca8b0627daadbf34be7e1221861fa18696bda2503ec1f6857b7de361beb94f"
+        "a05533cc1a59c01431629c43bbd653046bbb90e8b0381c3c565ec08deb44fc85"
     )
 
     EXPECTED_WINDOWS_BUILDER_SOURCE_DIGEST = (
-        "f97dff803b4482247620151194b9b5a35a3cbf8dba8759d8180d1871d0ebe095"
+        "c856c350b90f68ba2ab0577b649323dcaf1516db829b7a2b2815cb412332f378"
     )
     EXPECTED_LINUX_BUILDER_SOURCE_DIGEST = (
-        "69bdaea499d9b2a373b39a044eba743a78c4e0b4f64cec3015f8dea08cf5ad76"
+        "358cc1edc7897346907f3d02484daeec8e496d5243467cf2948a9b1059d5d940"
     )
 
     #: AP-SRV-070 W4A-C3, Root Finding J added the two functions that *declare*
@@ -393,6 +393,7 @@ class BuildEffectiveLogicGuardTests(unittest.TestCase):
         "_pinned_windows_dockerfile_edits",
         "_pinned_windows_openssl_block",
         "patch_windows_container_script",
+        "patch_native_license_status",
         "patch_license_quiet_env",
         "_wrap_license_output_line",
         "_insert_after_line",
@@ -1530,14 +1531,12 @@ class LinuxBuilderContainerAuthorityTests(unittest.TestCase):
             "EXPECTED_LINUX_CONTAINER_DIGEST here.",
         )
 
-    def test_the_declared_revision_is_the_one_w5_r04_established(self):
-        self.assertEqual(buildinputs.LINUX_BUILDER_REVISION, 2)
+    def test_native_status_integration_advances_linux_builder_revision(self):
+        self.assertEqual(buildinputs.LINUX_BUILDER_REVISION, 3)
 
-    def test_linux_only_revision_unchanged_when_windows_manifest_is_vendored(self):
-        # The Windows revision intentionally advances for the vendored channel
-        # file; the native Linux builder remains on its established revision.
-        self.assertEqual(buildinputs.LINUX_BUILDER_REVISION, 2)
-        self.assertEqual(buildinputs.WINDOWS_BUILDER_REVISION, 5)
+    def test_native_status_integration_advances_both_builder_surfaces(self):
+        self.assertEqual(buildinputs.LINUX_BUILDER_REVISION, 3)
+        self.assertEqual(buildinputs.WINDOWS_BUILDER_REVISION, 6)
 
     def test_the_base_image_is_pinned_by_an_immutable_digest(self):
         declaration = buildinputs.linux_builder_declaration()

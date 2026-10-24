@@ -48,6 +48,8 @@ PATCHED_UPSTREAM_SOURCES = (
     "Dockerfile.windows",
     "in_windows_container.sh",
     "sherpa-onnx/csrc/license.h",
+    "sherpa-onnx/csrc/online-transducer-model.cc",
+    "sherpa-onnx/python/csrc/sherpa-onnx.cc",
 )
 
 #: Revision of VoiceSTT's own patch set applied to the upstream checkout.
@@ -73,7 +75,8 @@ PATCHED_UPSTREAM_SOURCES = (
 #: against declared byte counts and source-controlled SHA-256 digests, and
 #: invokes xwin with explicit --manifest, --sdk-version, and --crt-version
 #: arguments without relying on unpinned upstream latest fallbacks.
-PATCH_SET_REVISION = 4
+# AP-KR-020: native V1 snapshot, atomic client fields, source-pinned patches.
+PATCH_SET_REVISION = 5
 
 #: Revision of the builder logic itself: which revision gets checked out, which
 #: patches are applied, how the compiler is invoked, and which produced wheel is
@@ -125,8 +128,9 @@ PATCH_SET_REVISION = 4
 #: :data:`WINDOWS_PACKAGING_TOOLS` - so a previously stored Linux artifact must
 #: stop matching rather than be silently reused for a build that would now
 #: produce different bytes.
-WINDOWS_BUILDER_REVISION = 5
-LINUX_BUILDER_REVISION = 2
+# Both builders now apply the declared native status patch before quiet output.
+WINDOWS_BUILDER_REVISION = 6
+LINUX_BUILDER_REVISION = 3
 
 #: Backwards-compatible name for callers that described the original,
 #: Windows-qualified builder before platform revisions were split.

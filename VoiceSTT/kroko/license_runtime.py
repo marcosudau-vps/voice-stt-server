@@ -13,14 +13,12 @@ no native imports and no persistence**:
   rights. It expires after a short, conservative bound (fail-closed).
 
 Nothing in this module ever receives Kroko key material: callers pass only an
-opaque, one-way credential fingerprint plus a presence flag. The secret itself
+opaque process-local credential revision plus a presence flag. The secret itself
 stays in the process environment and the engine options, exactly as before.
 
-The product ships with :class:`UnqualifiedLicenseVerifier` only, which never
-grants anything. Any future qualified verification backend (AP-KR-020
-follow-up ``A``: versioned native status дополнение) plugs into
-:meth:`LicenseRuntimeAuthority.run_check` behind the :class:`LicenseVerifier`
-interface. Synthetic scripted verifiers exist exclusively in the test suite and
+The serving owner connects the versioned native status adapter through
+:meth:`LicenseRuntimeAuthority.run_check`. Missing or unsupported native
+status uses :class:`UnqualifiedLicenseVerifier`, which grants nothing. Synthetic scripted verifiers exist exclusively in the test suite and
 must never act as productive proof.
 """
 
@@ -28,6 +26,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
+import secrets
+import hmac
 import threading
 import time
 from abc import ABC, abstractmethod
@@ -67,6 +68,15 @@ REASON_INTENT_CHANGED = "intent_changed"
 REASON_UNQUALIFIED_MODEL = "unqualified_model"
 REASON_STALE_GENERATION = "stale_generation"
 
+def _safe_reason(value, fallback):
+    allowed = {REASON_OK, REASON_NO_KEY, REASON_FORCE_COMMUNITY,
+               REASON_NO_QUALIFIED_VERIFIER, REASON_CHECK_IN_PROGRESS,
+               REASON_LICENSE_REJECTED, REASON_LICENSE_UNREACHABLE,
+               REASON_PROOF_EXPIRED, REASON_INTENT_CHANGED,
+               REASON_UNQUALIFIED_MODEL, REASON_STALE_GENERATION}
+    return value if isinstance(value, str) and value in allowed else fallback
+
+
 #: Conservative upper bound for a positive license proof, in seconds.
 #:
 #: This is an explicit, conservative *interpretation* of the observed native
@@ -91,20 +101,19 @@ def is_kroko_lane(engine: Any) -> bool:
     return normalize_engine_name(engine) in KROKO_ENGINE_NAMES
 
 
-def derive_credential_revision(key_value: Any) -> str:
-    """Derives the opaque credential revision for key material.
+_revision_salt = secrets.token_bytes(32)
+_revision_lock = threading.Lock()
+_revisions = {}
 
-    One-way SHA-256 fingerprint (``k:<hex16>``) or ``"none"`` when no key is
-    configured. The digest changes on every key rotation, reveals nothing
-    reversible, and is the only key-derived value that ever enters the
-    authority, snapshots or logs. Callers must compute it at the secret
-    boundary (settings plane) and never persist the key itself.
-    """
+
+def derive_credential_revision(key_value: Any) -> str:
+    """Process-local opaque revision; no reusable key hash leaves this boundary."""
     text = str(key_value or "")
     if not text.strip():
         return "none"
-    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]
-    return "k:" + digest
+    lookup = hmac.digest(_revision_salt, text.encode("utf-8"), "sha256")
+    with _revision_lock:
+        return _revisions.setdefault(lookup, "k:" + secrets.token_hex(8))
 
 
 def config_fingerprint(config: Mapping[str, Any]) -> str:
@@ -190,7 +199,7 @@ class LicenseProof:
         age = now_monotonic - self.verified_at_monotonic
         if age < 0:
             return False
-        return age <= self.max_age_seconds
+        return math.isfinite(age) and 0 <= age < self.max_age_seconds
 
     def age_seconds(self, now_monotonic: float) -> Optional[float]:
         """Age of the proof in seconds, or ``None`` for clock skew."""
@@ -207,6 +216,7 @@ class LicenseCheckRequest:
     credential_revision: str
     runtime_identity: str
     candidate_model_ids: Tuple[str, ...] = ()
+    owner_generation: str = ""
 
 
 @dataclass(frozen=True)
@@ -264,7 +274,7 @@ class LicenseRuntimeAuthority:
         max_proof_age_seconds: float = DEFAULT_MAX_PROOF_AGE_SECONDS,
         time_fn: Callable[[], float] = time.monotonic,
     ):
-        if not max_proof_age_seconds > 0:
+        if not math.isfinite(max_proof_age_seconds) or not 0 < max_proof_age_seconds <= DEFAULT_MAX_PROOF_AGE_SECONDS:
             raise ValueError("max_proof_age_seconds must be positive")
         self._max_age = float(max_proof_age_seconds)
         self._time_fn = time_fn
@@ -277,12 +287,16 @@ class LicenseRuntimeAuthority:
         self._credential_revision = "none"
         self._runtime_identity = "unmanaged-global-runtime"
         self._proof: Optional[LicenseProof] = None
+        self._model_ids = ()
+        self._owner_generation = ""
+        self._check_sequence = 0
 
     # -- intent -----------------------------------------------------------
 
     def note_intent(self, *, key_present: bool, force_community: bool,
                     credential_revision: str,
-                    runtime_identity: str) -> bool:
+                    runtime_identity: str, requested_model_ids=(),
+                    owner_generation: str = "") -> bool:
         """Records operator intent; bumps the generation on any change.
 
         Any change atomically discards the previous proof: old
@@ -298,13 +312,18 @@ class LicenseRuntimeAuthority:
                 or bool(force_community) != self._force_community
                 or credential_revision != self._credential_revision
                 or runtime_identity != self._runtime_identity
+                or tuple(requested_model_ids) != self._model_ids
+                or str(owner_generation) != self._owner_generation
             )
             self._key_present = bool(key_present)
             self._force_community = bool(force_community)
             self._credential_revision = credential_revision
             self._runtime_identity = runtime_identity
+            self._model_ids = tuple(requested_model_ids)
+            self._owner_generation = str(owner_generation)
             if changed:
                 self._generation += 1
+                self._check_sequence += 1
                 self._proof = None
                 self._status = LicenseStatus.NOT_CHECKED
                 self._reason = REASON_INTENT_CHANGED
@@ -326,8 +345,9 @@ class LicenseRuntimeAuthority:
         ``(accepted, reason_code)``.
         """
         with self._lock:
-            if self._status == LicenseStatus.VALID:
-                return True, REASON_OK
+            self.refresh()
+            if self._status == LicenseStatus.CHECKING:
+                return False, REASON_CHECK_IN_PROGRESS
             if not self._key_present:
                 self._status = LicenseStatus.NOT_CHECKED
                 self._reason = REASON_NO_KEY
@@ -348,9 +368,11 @@ class LicenseRuntimeAuthority:
         ids = tuple(str(item) for item in (validated_model_ids or ()))
         if not ids:
             return False
-        bound = self._max_age if max_age_seconds is None else float(
-            max_age_seconds)
-        if bound <= 0 or bound > self._max_age:
+        try:
+            bound = self._max_age if max_age_seconds is None else float(max_age_seconds)
+        except (TypeError, ValueError):
+            return False
+        if not math.isfinite(bound) or bound <= 0 or bound > self._max_age:
             return False
         with self._lock:
             if self._status != LicenseStatus.CHECKING:
@@ -375,7 +397,7 @@ class LicenseRuntimeAuthority:
                 return False
             self._proof = None
             self._status = LicenseStatus.INVALID
-            self._reason = str(reason_code or REASON_LICENSE_REJECTED)
+            self._reason = _safe_reason(reason_code, REASON_LICENSE_REJECTED)
             return True
 
     def record_failure(self,
@@ -387,7 +409,7 @@ class LicenseRuntimeAuthority:
                 return False
             self._proof = None
             self._status = LicenseStatus.CHECK_FAILED
-            self._reason = str(reason_code or REASON_LICENSE_UNREACHABLE)
+            self._reason = _safe_reason(reason_code, REASON_LICENSE_UNREACHABLE)
             return True
 
     def run_check(self, verifier: LicenseVerifier,
@@ -397,41 +419,59 @@ class LicenseRuntimeAuthority:
         The verifier call happens outside the lock; a verdict for a
         superseded generation is discarded (stale-generation guard).
         """
-        accepted, _ = self.begin_check()
-        if not accepted:
-            return self.status
         with self._lock:
+            accepted, _ = self.begin_check()
+            if not accepted:
+                return self._status
+            self._check_sequence += 1
+            sequence = self._check_sequence
             request = LicenseCheckRequest(
                 generation=self._generation,
                 key_present=self._key_present,
                 credential_revision=self._credential_revision,
                 runtime_identity=self._runtime_identity,
-                candidate_model_ids=tuple(
-                    str(item) for item in (candidate_model_ids or ())),
+                candidate_model_ids=tuple(str(item) for item in candidate_model_ids),
+                owner_generation=self._owner_generation,
             )
-        verdict = verifier.verify(request)
+        started = self._time_fn()
+        try:
+            verdict = verifier.verify(request)
+            if not isinstance(verdict, LicenseVerdict):
+                raise ValueError("invalid verifier result")
+        except Exception:
+            verdict = LicenseVerdict(outcome="unreachable")
         with self._lock:
             if request.generation != self._generation:
-                self._reason = REASON_STALE_GENERATION
+                # Compatibility diagnostic only when no newer check has started.
+                if self._status == LicenseStatus.NOT_CHECKED:
+                    self._reason = REASON_STALE_GENERATION
                 return self._status
-            if self._status != LicenseStatus.CHECKING:
+            if sequence != self._check_sequence or self._status != LicenseStatus.CHECKING:
                 return self._status
-        if verdict.outcome == "granted":
-            self.record_success(verdict.validated_model_ids,
-                                verdict.max_age_seconds)
-        elif verdict.outcome == "rejected":
-            self.record_rejection(verdict.reason_code)
-        else:
-            self.record_failure(verdict.reason_code)
-        return self.status
+            if verdict.outcome == "granted":
+                ids = set(verdict.validated_model_ids)
+                try:
+                    ttl = self._max_age if verdict.max_age_seconds is None else float(verdict.max_age_seconds)
+                    ttl -= max(0.0, self._time_fn() - started)
+                except (TypeError, ValueError):
+                    ttl = 0
+                if (not ids or not ids.issubset(request.candidate_model_ids)
+                        or not self.record_success(verdict.validated_model_ids,
+                                                   ttl)):
+                    self.record_failure(REASON_UNQUALIFIED_MODEL)
+            elif verdict.outcome == "rejected":
+                self.record_rejection(verdict.reason_code)
+            else:
+                self.record_failure(verdict.reason_code)
+            return self._status
 
-    def refresh(self) -> LicenseStatus:
+    def refresh(self, *, now_monotonic=None) -> LicenseStatus:
         """Expires stale proofs (fail-closed). Call before any decision."""
         with self._lock:
             if self._status == LicenseStatus.VALID:
                 proof = self._proof
                 if proof is None or not proof.is_current(
-                        now_monotonic=self._time_fn(),
+                        now_monotonic=(self._time_fn() if now_monotonic is None else now_monotonic),
                         generation=self._generation,
                         credential_revision=self._credential_revision,
                         runtime_identity=self._runtime_identity):
@@ -459,8 +499,8 @@ class LicenseRuntimeAuthority:
         wanted = str(model_id or "").strip()
         if not wanted:
             return False
-        self.refresh()
         with self._lock:
+            self.refresh()
             if (self._status != LicenseStatus.VALID
                     or not self._key_present
                     or self._force_community
@@ -470,8 +510,8 @@ class LicenseRuntimeAuthority:
 
     def pro_enabled_global(self) -> bool:
         """Whether any Pro entitlement is currently active (derived)."""
-        self.refresh()
         with self._lock:
+            self.refresh()
             return (
                 self._status == LicenseStatus.VALID
                 and self._key_present
@@ -484,9 +524,9 @@ class LicenseRuntimeAuthority:
 
     def public_snapshot(self) -> Dict[str, Any]:
         """Redacted status projection: no secrets, no raw license data."""
-        self.refresh()
-        now = self._time_fn()
         with self._lock:
+            now = self._time_fn()
+            self.refresh(now_monotonic=now)
             proof = self._proof
             age = proof.age_seconds(now) if proof is not None else None
             current = (
