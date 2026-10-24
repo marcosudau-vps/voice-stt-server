@@ -795,6 +795,8 @@ class RestSettingsV2Tests(unittest.TestCase):
                  "activation.segmentWatchdogRefreshMs",
                  "activation.segmentWatchdogWarningMs",
                  "activation.closingRecoveryTimeoutMs",
+                 "stt.autoDownload.enabled",
+                 "stt.autoDownload.selectedModelIds",
                  "wakeWord.sensitivity",
                  "wakeWord.selection",
                  "wakeWord.globalDisabledIds",
@@ -810,6 +812,20 @@ class RestSettingsV2Tests(unittest.TestCase):
                  "runtimeSuppression.manual",
                  "runtimeSuppression.wakeWord"},
             )
+            # Beschlossene STT-Auto-Download-Keys: Registry-Metadaten pruefen.
+            by_key = {entry["key"]: entry for entry in settings}
+            enabled = by_key["stt.autoDownload.enabled"]
+            self.assertEqual(enabled["scope"], "server")
+            self.assertEqual(enabled["auth"], "admin")
+            self.assertEqual(enabled["type"], "bool")
+            self.assertEqual(enabled["defaultValue"], False)
+            self.assertEqual(enabled["applyPolicy"], "live")
+            selected = by_key["stt.autoDownload.selectedModelIds"]
+            self.assertEqual(selected["scope"], "server")
+            self.assertEqual(selected["auth"], "admin")
+            self.assertEqual(selected["type"], "string_list")
+            self.assertEqual(selected["defaultValue"], [])
+            self.assertEqual(selected["applyPolicy"], "live")
 
     def test_server_read_exposes_requested_effective_and_revision(self):
         with TestClient(self.app) as client:
@@ -1273,10 +1289,14 @@ class PersistenceFailureRestTests(unittest.TestCase):
     def test_rest_server_patch_persistence_failure_returns_500_internal_error(self):
         service = self.app.state.voicestt_service
 
-        def boom(overlay, revision):
+        # Aktuell verwendeter Persistenz-Einsprung der zentralen
+        # Adaptertransaktion: VoiceSTTService._persist_settings_control ruft
+        # RuntimeConfigStore.save_server_configuration auf (nicht mehr das
+        # alte save_settings_control).
+        def boom(settings, allowed_names, overlay, revision):
             raise OSError("disk full")
 
-        service.config_store.save_settings_control = boom
+        service.config_store.save_server_configuration = boom
         with TestClient(self.app) as client:
             response = client.patch(
                 "/api/v2/settings/server",
@@ -1296,20 +1316,45 @@ class PersistenceFailureRestTests(unittest.TestCase):
 
     def test_rest_persistence_failure_does_not_advance_settings_revision(self):
         service = self.app.state.voicestt_service
+        original = service.config_store.save_server_configuration
 
-        def boom(overlay, revision):
+        # Siehe Kommentar im Schwestertest: Fehlerinjektion am tatsächlich
+        # verwendeten Einsprung save_server_configuration.
+        def boom(settings, allowed_names, overlay, revision):
             raise OSError("disk full")
 
-        service.config_store.save_settings_control = boom
+        service.config_store.save_server_configuration = boom
+        try:
+            with TestClient(self.app) as client:
+                failed = client.patch(
+                    "/api/v2/settings/server",
+                    json={"baseSettingsRevision": 0,
+                          "changes": {sc.ACTIVATION_FOLLOWUP: 8000}},
+                    headers={"x-admin-key": "test-admin-secret"},
+                )
+                self.assertEqual(failed.status_code, 500)
+                server = client.get("/api/v2/settings/server")
+                self.assertEqual(server.json()["settingsRevision"], 0)
+                # Weder angeforderte noch effektive Werte halb aktualisiert.
+                entry = {item["key"]: item
+                         for item in server.json()["settings"]}[
+                    sc.ACTIVATION_FOLLOWUP
+                ]
+                self.assertEqual(entry["requestedValue"], 3000)
+                self.assertEqual(entry["effectiveValue"], 3000)
+        finally:
+            service.config_store.save_server_configuration = original
+        # Nach dem simulierten Fehler fuehrt ein normaler Patch genau eine
+        # Revision weiter (persist-before-commit, kein verlorener Sprung).
         with TestClient(self.app) as client:
-            client.patch(
+            recovered = client.patch(
                 "/api/v2/settings/server",
                 json={"baseSettingsRevision": 0,
                       "changes": {sc.ACTIVATION_FOLLOWUP: 8000}},
                 headers={"x-admin-key": "test-admin-secret"},
             )
-            server = client.get("/api/v2/settings/server")
-            self.assertEqual(server.json()["settingsRevision"], 0)
+            self.assertEqual(recovered.status_code, 200)
+            self.assertEqual(recovered.json()["settingsRevision"], 1)
 
 
 @unittest.skipIf(TestClient is None, "FastAPI test client is not installed")
