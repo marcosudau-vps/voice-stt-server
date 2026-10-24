@@ -103,6 +103,7 @@ class OwnerSupervisor:
         self._sleep_fn = sleep_fn
         self._popen_factory = popen_factory
         self._lock = threading.RLock()
+        self._lifecycle_lock = threading.RLock()
         self._generation = 0
         self._current: Optional[OwnerHandle] = None
         self._last_fingerprint: Optional[str] = None
@@ -126,7 +127,8 @@ class OwnerSupervisor:
     def is_current(self, generation: int) -> bool:
         """Whether a generation is still the active one."""
         with self._lock:
-            return int(generation) == self._generation and self._current is not None
+            return (int(generation) == self._generation and self._current is not None
+                    and self._current.process.poll() is None)
 
     def accept_event(self, generation: int, payload: Any) -> Optional[Any]:
         """Returns readiness/status/job results only for the active generation.
@@ -135,7 +137,7 @@ class OwnerSupervisor:
         old events can never authorize the new generation.
         """
         with self._lock:
-            if int(generation) != self._generation:
+            if not self.is_current(generation):
                 return None
             return payload
 
@@ -145,7 +147,13 @@ class OwnerSupervisor:
         delay = self._backoff_base * (2.0 ** max(0, attempt_index - 1))
         return min(delay, self._backoff_max)
 
-    def start(
+    def start(self, spec: OwnerSpec, *, config: Mapping[str, Any],
+              wait_ready=None) -> OwnerHandle:
+        # Serialize the whole stop/spawn/readiness transaction, not just counters.
+        with self._lifecycle_lock:
+            return self._start(spec, config=config, wait_ready=wait_ready)
+
+    def _start(
         self,
         spec: OwnerSpec,
         *,
@@ -190,7 +198,7 @@ class OwnerSupervisor:
         try:
             process = self._popen_factory(list(spec.argv), env=env)
         except Exception as exc:
-            raise SupervisorError(f"owner process could not be spawned: {exc}") from exc
+            raise SupervisorError("owner process could not be spawned") from None
         handle = OwnerHandle(
             generation=generation,
             process=process,
@@ -205,7 +213,7 @@ class OwnerSupervisor:
                 ready = bool(wait_ready(deadline))
             else:
                 ready = process.poll() is None
-            if not ready:
+            if not ready or self._time_fn() >= deadline:
                 raise StartDeadlineExceeded(
                     f"owner generation {generation} missed its start deadline "
                     f"of {deadline_window:.1f}s"
@@ -225,11 +233,13 @@ class OwnerSupervisor:
         """Terminates the active owner and confirms its exit. Idempotent."""
         with self._lock:
             handle = self._current
-            self._current = None
         if handle is None:
             return None
         process = handle.process
         if process.poll() is not None:
+            with self._lock:
+                if self._current is handle:
+                    self._current = None
             self._record_exit(process.returncode)
             return process.returncode
         try:
@@ -252,6 +262,9 @@ class OwnerSupervisor:
                 raise UnconfirmedExit(
                     "owner process exit could not be confirmed even after kill"
                 ) from exc
+        with self._lock:
+            if self._current is handle:
+                self._current = None
         self._record_exit(exit_code)
         return exit_code
 
@@ -261,7 +274,8 @@ class OwnerSupervisor:
 
     def stop(self, graceful_seconds: float = 10.0) -> Optional[int]:
         """Controlled shutdown with confirmed process end."""
-        return self._terminate_current(graceful_seconds=float(graceful_seconds))
+        with self._lifecycle_lock:
+            return self._terminate_current(graceful_seconds=float(graceful_seconds))
 
     # -- config surface ---------------------------------------------------------
 

@@ -155,6 +155,7 @@ def test_load_probe_uses_options_for_candidate_engine_in_both_directions():
                 pass
 
         service = object.__new__(VoiceSTTService)
+        service._kroko_native_candidate = False
         service.settings = settings
         service.scheduler_factory = ProbeScheduler
         assert service._probe_stt_model(

@@ -37,7 +37,9 @@ gives the Kroko runtime and its models an explicit, verifiable identity:
 Nothing in this package ever handles a Kroko license key. The Pro *build* is a
 capability switch; the Pro *key* is a runtime secret that lives only in the
 process environment and is never written to an artifact, its metadata or a log.
-Callers prove key changes with a one-way credential fingerprint only.
+Callers identify key changes with an opaque, process-local revision.
+The native V1 snapshot adapter exports only model-bound status; owner_process
+connects the existing server entry points to the single-owner supervisor.
 """
 
 from . import (

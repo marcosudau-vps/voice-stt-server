@@ -55,6 +55,7 @@ class BootstrapRecord:
 
 _lock = threading.RLock()
 _selected: Optional[BootstrapRecord] = None
+_dll_handles = []
 
 
 def _check_native_conflicts(
@@ -96,10 +97,10 @@ def cold_select(
     a second in-process ``sys.path`` switch).
     """
     global _selected
-    root = Path(str(payload_root or "").strip()).expanduser()
-    if not str(root):
+    raw_root = str(payload_root or "").strip()
+    if not raw_root:
         raise ValueError("payload_root must not be empty")
-    root = root.resolve()
+    root = Path(raw_root).expanduser().resolve()
     modules = sys.modules if _modules is None else _modules
     path = sys.path if _path is None else _path
     find_spec = importlib.util.find_spec if _find_spec is None else _find_spec
@@ -137,7 +138,7 @@ def cold_select(
             path.insert(0, entry)
         if os.name == "nt" and hasattr(os, "add_dll_directory"):
             try:
-                os.add_dll_directory(entry)
+                _dll_handles.append(os.add_dll_directory(entry))
             except (OSError, ValueError):
                 pass
         _selected = BootstrapRecord(
@@ -150,6 +151,7 @@ def cold_select(
 def ensure_bootstrap_from_env(
     *,
     _environ: Optional[Mapping[str, str]] = None,
+    community_only: bool = False,
     **kwargs,
 ) -> Optional[BootstrapRecord]:
     """Selects the payload root from the environment, if configured.
@@ -162,6 +164,11 @@ def ensure_bootstrap_from_env(
     configured = str(environ.get(PAYLOAD_ROOT_ENV) or "").strip()
     if not configured:
         return None
+    if community_only:
+        free_root = str(environ.get("VOICESTT_KROKO_COMMUNITY_PAYLOAD_ROOT") or "").strip()
+        if not free_root:
+            raise BootstrapConflictError("Community payload identity is required before a keyless/forced private-root start")
+        configured = free_root
     return cold_select(configured, **kwargs)
 
 

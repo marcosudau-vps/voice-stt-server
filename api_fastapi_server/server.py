@@ -9,6 +9,7 @@ import logging
 import math
 import os
 import secrets
+import sys
 import threading
 import time
 import uuid
@@ -89,6 +90,10 @@ from VoiceSTT_server.credential_redaction import (
 from VoiceSTT.kroko import bootstrap as kroko_bootstrap_module
 from VoiceSTT.kroko import license_runtime as kroko_license_runtime
 from VoiceSTT.kroko import models as kroko_model_authority
+from VoiceSTT.kroko import owner_process as kroko_owner
+from VoiceSTT.kroko.native_status import (
+    NativeStatusVerifier, loaded_snapshot_reader, loaded_runtime_identity,
+)
 from VoiceSTT_server.stt_model_management import (
     ManagedModelRegistryView,
     OperatorIntent,
@@ -1315,6 +1320,30 @@ def resolved_engine_options(settings, resolved_engine, lane):
         if isinstance(options, dict):
             return dict(options)
     return {}
+
+
+def kroko_effective_credentials(settings):
+    """Match the engine's actual lane options and environment precedence."""
+    lane_keys = []
+    engines = (("final", settings.transcription_engine),
+               ("realtime", settings.realtime_transcription_engine or settings.transcription_engine))
+    for lane, engine in engines:
+        engine = normalize_engine_name(engine)
+        if not kroko_license_runtime.is_kroko_lane(engine):
+            continue
+        options = resolved_engine_options(settings, engine, lane)
+        key = options.get("key", "")
+        if not isinstance(key, str) or not key.strip():
+            key = ""
+            for env_name in ("KROKO_API_KEY", "KROKO_ONNX_KEY",
+                             "VOICESTT_KROKO_ONNX_KEY", "KROKO_KEY"):
+                key = os.environ.get(env_name, "")
+                if key.strip():
+                    break
+        lane_keys.append(key)
+    present = any(key.strip() for key in lane_keys)
+    joined = "\x00".join(lane_keys) if present else ""
+    return present, kroko_license_runtime.derive_credential_revision(joined)
 
 
 class SegmentState:
@@ -6265,21 +6294,32 @@ class VoiceSTTService:
         self.recorder_factory = recorder_factory
         self.scheduler_factory = scheduler_factory or InferenceScheduler
         self._stt_refresh_lock = threading.Lock()
-        self.stt_model_manager = STTModelManager(
-            runtime_root=(settings.data_root_path or "data"),
-            intent=OperatorIntent.from_settings(settings),
-            load_probe=self._probe_stt_model,
-        )
-        self._apply_stt_model_snapshot(self.stt_model_manager.refresh())
-        self._stt_model_refresh_required = False
         # AP-KR-020: volatile unified Kroko license/runtime authority. Derived
         # state only (never persisted); the operator intent (force_community
         # plus requested models) lives in the existing settings plane.
         self.kroko_license = kroko_license_runtime.LicenseRuntimeAuthority()
         self._kroko_manifest = None
         self._kroko_startup_notes = []
+        self._kroko_transition = threading.Event()
+        self._kroko_operator_models = {}
+        self._kroko_native_candidate = False
+        self._kroko_preloaded_scheduler = None
+        self._kroko_probe_attempted = False
+        self._kroko_verified_runtime_identity = None
+        self._kroko_check_lock = threading.RLock()
         self._refresh_kroko_intent(reason="startup")
         self._enforce_kroko_startup_models()
+        self._kroko_activation_binding = (self._kroko_effective_key(),
+            tuple(self._kroko_lane_models()), os.environ.get("VOICESTT_KROKO_OWNER_GENERATION", ""))
+        self.stt_model_manager = STTModelManager(
+            runtime_root=(settings.data_root_path or "data"),
+            intent=OperatorIntent.from_settings(settings),
+            load_probe=self._probe_stt_model,
+        )
+        self._apply_stt_model_snapshot(self.stt_model_manager.refresh())
+        if self._kroko_native_candidate and self._kroko_preloaded_scheduler is None:
+            raise RuntimeError("Der native Pro-Kandidat wurde nicht qualifiziert geladen.")
+        self._stt_model_refresh_required = False
         self.scheduler = self._new_scheduler()
         self._model_state = "loaded"
         self._model_state_error = None
@@ -6319,6 +6359,31 @@ class VoiceSTTService:
     def _probe_stt_model(self, candidate):
         """Perform the expensive engine load only for a serious candidate."""
 
+        if self._kroko_native_candidate:
+            # The one real load probe becomes the serving owner scheduler.
+            # Never activate a second recognizer or recover another native model
+            # in a singleton whose first initialization has already started.
+            if self._kroko_probe_attempted or candidate.engine != "kroko_onnx":
+                return False
+            entry = self._kroko_manifest_cached().get(Path(candidate.path).name)
+            pro, _ = self._kroko_pro_entries()
+            if not (entry and entry.id in {item["id"] for item in pro}
+                    and Path(candidate.path).is_file()
+                    and kroko_model_authority.sha256_of(Path(candidate.path)) == entry.sha256):
+                return False
+            self._kroko_probe_attempted = True
+            candidate_settings = replace(self.settings)
+            candidate_settings._resolved_stt_models = {
+                lane: {"id": entry.id, "engine": candidate.engine, "path": candidate.path}
+                for lane in ("final", "realtime")}
+            scheduler = self.scheduler_factory(candidate_settings, self._on_inference_result,
+                                               self._on_scheduler_drop, self._on_scheduler_error)
+            scheduler.start()
+            if scheduler.wait_ready(timeout=180) and scheduler.healthy():
+                self._kroko_preloaded_scheduler = scheduler
+                return True
+            scheduler.stop()
+            return False
         probe_settings = replace(self.settings)
         probe_settings.model = candidate.path
         probe_settings.realtime_model = candidate.path
@@ -6404,36 +6469,10 @@ class VoiceSTTService:
 
         Mirrors the engine key cascade (lane options, then the documented
         environment chain). Returns ``(present, revision)`` where revision is
-        the opaque one-way fingerprint from
+        the opaque process-local revision from
         :func:`license_runtime.derive_credential_revision`.
         """
-        source = settings if settings is not None else self.settings
-        lane_keys = [
-            self._kroko_options_key(source.transcription_engine_options),
-            self._kroko_options_key(
-                source.realtime_transcription_engine_options),
-        ]
-        engine_settings = source.stt_engine_settings
-        if isinstance(engine_settings, dict):
-            for name, entry in engine_settings.items():
-                if not kroko_license_runtime.is_kroko_lane(name):
-                    continue
-                if isinstance(entry, dict):
-                    nested = entry.get("engine_options", entry.get("options", entry))
-                    lane_keys.append(self._kroko_options_key(nested))
-        env_key = ""
-        for env_name in ("KROKO_API_KEY", "KROKO_ONNX_KEY",
-                         "VOICESTT_KROKO_ONNX_KEY", "KROKO_KEY"):
-            candidate = os.getenv(env_name) or ""
-            if candidate.strip():
-                env_key = candidate
-                break
-        joined = "\x00".join(
-            [value for value in lane_keys if value.strip()]
-            + ([env_key] if env_key.strip() else [])
-        )
-        present = bool(joined)
-        return present, kroko_license_runtime.derive_credential_revision(joined)
+        return kroko_effective_credentials(settings if settings is not None else self.settings)
 
     def _kroko_runtime_identity(self):
         """Interim payload identity until the AP-030 component identity lands.
@@ -6442,6 +6481,8 @@ class VoiceSTTService:
         the explicit ``unmanaged-global-runtime`` marker. Never derived from
         key material or license responses.
         """
+        if getattr(self, "_kroko_verified_runtime_identity", None):
+            return self._kroko_verified_runtime_identity
         selection = kroko_bootstrap_module.selection_status()
         if selection and selection.get("root"):
             return "payload:" + str(selection["root"])
@@ -6476,6 +6517,8 @@ class VoiceSTTService:
             force_community=bool(self.settings.kroko_force_community),
             credential_revision=revision,
             runtime_identity=self._kroko_runtime_identity(),
+            requested_model_ids=tuple(self._kroko_lane_models()),
+            owner_generation=os.environ.get("VOICESTT_KROKO_OWNER_GENERATION", ""),
         )
 
     def _kroko_pro_entries(self, settings=None):
@@ -6536,7 +6579,12 @@ class VoiceSTTService:
         operator overrides (consistent with the model authority) and are
         only reported, never silently blessed.
         """
+        if self._can_start_native_candidate():
+            self._kroko_native_candidate = True
+            return
         try:
+            if os.environ.get(kroko_owner.FALLBACK_ENV) == "1":
+                raise ValueError("community fallback")
             unmanaged = self._enforce_kroko_license_gate()
         except ValueError:
             unmanaged = []
@@ -6559,6 +6607,7 @@ class VoiceSTTService:
                         notes.append({"kind": "downgraded", "lane": lane,
                                       "from": str(self.settings.model),
                                       "to": fallback.filename})
+                        self._kroko_operator_models.setdefault("model", self.settings.model)
                         self.settings.model = fallback.filename
                 else:
                     current = (self.settings.realtime_model
@@ -6567,17 +6616,94 @@ class VoiceSTTService:
                         notes.append({"kind": "downgraded", "lane": lane,
                                       "from": str(current),
                                       "to": fallback.filename})
+                        self._kroko_operator_models.setdefault("realtime_model", self.settings.realtime_model)
                         self.settings.realtime_model = fallback.filename
         if notes:
             self._kroko_startup_notes = notes
         downgraded = [note for note in notes
                       if note.get("kind") == "downgraded"]
         if downgraded:
+            self._kroko_operator_models.setdefault(
+                "use_main_model_for_realtime", self.settings.use_main_model_for_realtime)
             self.settings.use_main_model_for_realtime = False
-            self.stt_model_manager.intent = OperatorIntent.from_settings(
-                self.settings)
-            self._apply_stt_model_snapshot(self.stt_model_manager.refresh())
+            if hasattr(self, "stt_model_manager"):
+                self.stt_model_manager.intent = OperatorIntent.from_settings(self.settings)
+                self._apply_stt_model_snapshot(self.stt_model_manager.refresh())
             self._refresh_kroko_intent(reason="startup_community_fallback")
+
+    def _can_start_native_candidate(self):
+        # Metadata-only preparation: no hidden Pro probe or Community replacement.
+        pro, unknown = self._kroko_pro_entries()
+        present, _ = self._kroko_effective_key()
+        if (not pro or unknown or not present or self.settings.kroko_force_community
+                or not kroko_owner.managed_owner()
+                or os.environ.get(kroko_owner.FALLBACK_ENV) == "1"
+                or not self.settings.use_main_model_for_realtime
+                or len({item["id"] for item in pro}) != 1
+                or not all(kroko_license_runtime.is_kroko_lane(engine)
+                           for _lane, engine, _model in self._kroko_lane_models())):
+            return False
+        for item in pro:
+            entry = self._kroko_manifest_cached().get(item["id"])
+            try:
+                uuid.UUID(entry.provenance["licenseModelId"])
+            except (KeyError, ValueError, TypeError):
+                return False
+        return True
+
+    def _check_native_license(self):
+        with self._kroko_check_lock:
+            return self._check_native_license_locked()
+
+    def _check_native_license_locked(self):
+        binding = (self._kroko_effective_key(), tuple(self._kroko_lane_models()),
+                   os.environ.get("VOICESTT_KROKO_OWNER_GENERATION", ""))
+        if binding != self._kroko_activation_binding or self.settings.kroko_force_community:
+            self.kroko_license.record_failure()
+            return False
+        pro, _ = self._kroko_pro_entries()
+        if not pro:
+            return True
+        reader = loaded_snapshot_reader()
+        identity = loaded_runtime_identity() if reader else None
+        if not identity or (self._kroko_verified_runtime_identity is not None
+                            and identity != self._kroko_verified_runtime_identity):
+            self.kroko_license.record_failure()
+            return False
+        self._kroko_verified_runtime_identity = identity
+        self._refresh_kroko_intent(reason="native_loaded")
+        mapping = {}
+        for item in pro:
+            entry = self._kroko_manifest_cached().get(item["id"])
+            if entry and entry.provenance.get("licenseModelId"):
+                mapping[entry.provenance["licenseModelId"]] = entry.id
+        verifier = (NativeStatusVerifier(reader, mapping) if reader
+                    else kroko_license_runtime.UnqualifiedLicenseVerifier())
+        self.kroko_license.run_check(verifier, tuple(item["id"] for item in pro))
+        return all(self.kroko_license.pro_enabled_for(item["id"]) for item in pro)
+
+    def _requires_kroko_process_boundary(self, candidate=None):
+        lanes = self._kroko_lane_models() + self._kroko_lane_models(candidate)
+        return (any(kroko_license_runtime.is_kroko_lane(engine) for _, engine, _ in lanes)
+                and (kroko_owner.managed_owner() or loaded_snapshot_reader() is not None
+                     or any(name in sys.modules for name in kroko_bootstrap_module.NATIVE_MODULE_NAMES)))
+
+    def _request_kroko_restart(self, *, community=False):
+        if not kroko_owner.managed_owner():
+            raise RuntimeError("Ein Kroko-Modellwechsel erfordert den verwalteten Serverstart (stt-server).")
+        self._kroko_transition.set()
+        self.ready.clear()
+        self.kroko_license.record_failure()
+        kroko_owner.publish("community" if community else "restart")
+
+    def _native_license_monitor(self):
+        while not self.stop_event.wait(0.25):
+            if self._kroko_transition.is_set():
+                return
+            if self._kroko_native_candidate and self.ready.is_set():
+                if not self._check_native_license():
+                    self._request_kroko_restart(community=True)
+                    return
 
     def _emit_kroko_startup_notes(self):
         """Reports startup license notes via audit (redacted)."""
@@ -6613,6 +6739,10 @@ class VoiceSTTService:
             return self._refresh_stt_models_locked(timeout)
 
     def _refresh_stt_models_locked(self, timeout):
+        if self._requires_kroko_process_boundary():
+            self.persist_settings()
+            self._request_kroko_restart()
+            return self.stt_model_management_status()
         previous_snapshot = self.stt_model_manager.snapshot()
         previous_intent = self.stt_model_manager.intent
         previous = dict(self.settings._resolved_stt_models)
@@ -6648,6 +6778,10 @@ class VoiceSTTService:
             )
         self._apply_stt_model_snapshot(snapshot)
         changed = previous != self.settings._resolved_stt_models
+        if changed and self._requires_kroko_process_boundary():
+            self.persist_settings()
+            self._request_kroko_restart()
+            return self.stt_model_management_status()
         if changed:
             with self._scheduler_lock:
                 if self._models_busy():
@@ -6800,6 +6934,11 @@ class VoiceSTTService:
         )
 
     def _new_scheduler(self):
+        if self._kroko_preloaded_scheduler is not None:
+            scheduler = self._kroko_preloaded_scheduler
+            self._kroko_preloaded_scheduler = None
+            scheduler._kroko_already_started = True
+            return scheduler
         return self.scheduler_factory(
             self.settings,
             self._on_inference_result,
@@ -6821,7 +6960,8 @@ class VoiceSTTService:
         memory_before = process_memory_snapshot()
         with self._scheduler_lock:
             scheduler = self.scheduler
-            scheduler.start()
+            if not getattr(scheduler, "_kroko_already_started", False):
+                scheduler.start()
         self.ready_thread = threading.Thread(
             target=self._ready_worker,
             args=(scheduler, load_started, memory_before),
@@ -6835,9 +6975,13 @@ class VoiceSTTService:
             daemon=True,
         )
         self.idle_thread.start()
+        self._license_thread = threading.Thread(target=self._native_license_monitor,
+                                                name="KrokoLicenseMonitor", daemon=True)
+        self._license_thread.start()
 
     def stop(self):
         self.stop_event.set()
+        self.kroko_license.record_failure()
         for session in self.sessions.remove_all():
             session.close()
         with self._scheduler_lock:
@@ -6848,6 +6992,8 @@ class VoiceSTTService:
             self.ready_thread.join(timeout=5)
         if self.idle_thread is not None:
             self.idle_thread.join(timeout=5)
+        if getattr(self, "_license_thread", None) is not None:
+            self._license_thread.join(timeout=2)
         self.audit.close()
         self.performance.close()
         self.events.emit(
@@ -6865,6 +7011,8 @@ class VoiceSTTService:
         activation_request=None,
         canonical_ids=False,
     ):
+        if self._kroko_transition.is_set():
+            return None
         self.touch_model_activity("websocket_connection")
         wake_word_request = wake_word_request or SessionWakeWordRequest()
         with self._settings_lock:
@@ -6926,6 +7074,9 @@ class VoiceSTTService:
         self._last_model_activity_at = datetime.datetime.now(datetime.timezone.utc)
 
     def ensure_models_loaded(self, timeout=180.0):
+        if (self._kroko_transition.is_set() or (self._kroko_native_candidate
+                and not self.kroko_license.pro_enabled_global())):
+            raise RuntimeError("Der native Besitzerprozess wird neu gestartet oder ist noch nicht lizenziert.")
         deadline = time.monotonic() + timeout
         with self._model_condition:
             waited_for_loader = False
@@ -6991,6 +7142,10 @@ class VoiceSTTService:
         return replacement
 
     def _submit_scheduler_job(self, job, activity):
+        if self._kroko_native_candidate and not self._check_native_license():
+            self._request_kroko_restart(community=True)
+        if self._kroko_transition.is_set():
+            return QueueSubmitResult(False, "Der native Besitzerprozess wird neu gestartet.")
         while True:
             scheduler = self.ensure_models_loaded()
             with self._scheduler_lock:
@@ -7403,6 +7558,15 @@ class VoiceSTTService:
                 }
                 coerced_updates.pop("log_live_enabled", None)
 
+            if ("kroko_force_community" in coerced_updates
+                    and coerced_updates["kroko_force_community"] != self.settings.kroko_force_community
+                    and self._requires_kroko_process_boundary()
+                    and not kroko_owner.managed_owner()):
+                rejected["kroko_force_community"] = {
+                    "reason": "startup_only",
+                    "message": "Der native Moduswechsel erfordert stt-server und eine neue Besitzerprozessgeneration.",
+                }
+                coerced_updates.pop("kroko_force_community")
             for name, coerced in coerced_updates.items():
                 setattr(self.settings, name, coerced)
                 applied[name] = {
@@ -7476,6 +7640,9 @@ class VoiceSTTService:
                 # the transactional model refresh.
                 self._refresh_kroko_intent(reason="force_community_changed")
                 self._stt_model_refresh_required = True
+                if self._requires_kroko_process_boundary():
+                    self.persist_settings()
+                    self._request_kroko_restart()
             public_applied = redact_kroko_credentials(applied)
             self.audit.event("config.updated", applied=public_applied)
             self.persist_settings()
@@ -7500,7 +7667,10 @@ class VoiceSTTService:
             "runtime_config_path",
             "device", "host", "port",
         }
-        return self.config_store.save(self.settings, allowed)
+        intent = replace(self.settings)
+        for name, value in self._kroko_operator_models.items():
+            setattr(intent, name, value)
+        return self.config_store.save(intent, allowed)
 
     def _persist_settings_control(self, overlay, revision):
         """Persists the AP-SRV-050 server-default overlay + its revision."""
@@ -7603,6 +7773,27 @@ class VoiceSTTService:
         # AP-KR-020: fail-closed license gate before any model state changes.
         # Community models pass untouched; Pro models need a current proof.
         # Unmanaged models are reported, never silently blessed.
+        if self._requires_kroko_process_boundary(candidate):
+            changed = {name: {"old": getattr(self.settings, name), "new": getattr(candidate, name)}
+                       for name in allowed if getattr(self.settings, name) != getattr(candidate, name)}
+            if not changed:
+                return {"changed": {}, "active": self.active_models(), "reloaded": False}
+            if not kroko_owner.managed_owner():
+                raise RuntimeError("Ein Kroko-Modellwechsel erfordert stt-server und eine neue Besitzerprozessgeneration.")
+            if self._kroko_effective_key(candidate) != self._kroko_effective_key():
+                raise ValueError("Eine Keyänderung erfordert einen expliziten Serverneustart mit der Secretquelle.")
+            for name in allowed:
+                setattr(self.settings, name, getattr(candidate, name))
+            replaced_intent = set(updates)
+            if replaced_intent & {"model", "realtime_model", "transcription_engine", "realtime_transcription_engine"}:
+                replaced_intent.add("use_main_model_for_realtime")
+            self._kroko_operator_models = {name: value for name, value in self._kroko_operator_models.items()
+                                           if name not in replaced_intent}
+            self._refresh_kroko_intent(reason="model_switch")
+            self.persist_settings()
+            self._request_kroko_restart()
+            return {"changed": redact_kroko_credentials(changed),
+                    "active": self.active_models(), "reloaded": False}
         unmanaged_kroko_models = self._enforce_kroko_license_gate(candidate)
         previous_management = self.stt_model_manager.snapshot()
         previous_intent = self.stt_model_manager.intent
@@ -8041,7 +8232,14 @@ class VoiceSTTService:
 
     def _ready_worker(self, scheduler, load_started=None, memory_before=None):
         scheduler.wait_ready()
+        if (self.stop_event.is_set() or scheduler is not self.scheduler
+                or self._kroko_transition.is_set()):
+            return
+        if self._kroko_native_candidate and (not scheduler.healthy() or not self._check_native_license()):
+            self._request_kroko_restart(community=True)
+            return
         self.ready.set()
+        kroko_owner.publish("ready")
         self.events.emit(
             "system",
             "server.ready",
@@ -8066,6 +8264,11 @@ class VoiceSTTService:
                 self.manager.publish_all(error)
 
     def _on_inference_result(self, result: InferenceResult):
+        if self._kroko_native_candidate and not self._check_native_license():
+            self._request_kroko_restart(community=True)
+        if (self._kroko_transition.is_set() or self.stop_event.is_set()
+                or (self._kroko_native_candidate and not self.kroko_license.pro_enabled_global())):
+            return
         self.touch_model_activity(f"{result.kind}_completed")
         audio_duration = max(0.0, float(result.audio_duration_seconds or 0.0))
         inference_duration = max(0.0, float(result.inference_duration or 0.0))
@@ -8153,6 +8356,10 @@ class VoiceSTTService:
             "message": str(exc),
             "where": f"{lane}_engine",
         }
+        if not hasattr(self, "events"):
+            self.startup_errors.append({"type": "error", "where": f"{lane}_engine",
+                                        "message": "native_candidate_failed"})
+            return
         self.events.emit(
             "system",
             "worker.failed",
@@ -8336,7 +8543,10 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
     enforce_cpu_model_policy(settings)
     # AP-KR-020: cold-select the private native payload root before any engine
     # import. Verified no-op when VOICESTT_KROKO_PAYLOAD_ROOT is absent.
-    kroko_bootstrap_module.ensure_bootstrap_from_env()
+    kroko_bootstrap_module.ensure_bootstrap_from_env(
+        community_only=(settings.kroko_force_community
+                        or not kroko_effective_credentials(settings)[0]
+                        or os.environ.get(kroko_owner.FALLBACK_ENV) == "1"))
     manager = ConnectionManager()
     service = VoiceSTTService(
         settings,
@@ -8347,9 +8557,11 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
 
     @asynccontextmanager
     async def lifespan(app):
-        service.start(asyncio.get_running_loop())
-        yield
-        service.stop()
+        try:
+            service.start(asyncio.get_running_loop())
+            yield
+        finally:
+            service.stop()
 
     app = FastAPI(
         title="VoiceSTT FastAPI-Server",
@@ -10866,6 +11078,8 @@ def settings_from_args(args):
 
 def main(argv=None):
     args = parse_args(argv)
+    if not kroko_owner.managed_owner():
+        return kroko_owner.supervise(list(sys.argv[1:] if argv is None else argv))
     settings = settings_from_args(args)
     logging.basicConfig(
         level=resolve_log_level(settings.log_level),
@@ -10881,13 +11095,31 @@ def main(argv=None):
             "'python -m pip install -r api_fastapi_server/requirements.txt'."
         ) from exc
 
-    uvicorn.run(
-        create_app(settings),
-        host=settings.host,
-        port=settings.port,
-        log_level=settings.log_level.lower(),
-    )
+    runner = uvicorn.Server(uvicorn.Config(
+        create_app(settings), host=settings.host, port=settings.port,
+        log_level=settings.log_level.lower(), timeout_graceful_shutdown=8,
+    ))
+    monitor_stop = threading.Event()
+
+    def watch_owner_transition():
+        while not monitor_stop.wait(0.02):
+            control = os.environ[kroko_owner.CONTROL_ENV]
+            generation = os.environ["VOICESTT_KROKO_OWNER_GENERATION"]
+            if any(kroko_owner.read_event(control, event, generation)
+                   for event in ("restart", "community")):
+                runner.should_exit = True
+                return
+
+    watcher = threading.Thread(target=watch_owner_transition,
+                               name="OwnerShutdown", daemon=True)
+    watcher.start()
+    try:
+        runner.run()
+    finally:
+        monitor_stop.set()
+        watcher.join(timeout=1)
+
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

@@ -575,6 +575,7 @@ class ServerLicenseGateTests(unittest.TestCase):
             settings=settings,
             kroko_license=kroko_license.LicenseRuntimeAuthority(),
             _kroko_manifest=None,
+            _kroko_operator_models={},
         )
         service = self.server_module.VoiceSTTService
         import types as types_module
@@ -583,7 +584,7 @@ class ServerLicenseGateTests(unittest.TestCase):
                      "_kroko_runtime_identity",
                      "_kroko_manifest_cached", "_kroko_lane_models",
                      "_kroko_pro_entries", "_enforce_kroko_license_gate",
-                     "_refresh_kroko_intent"):
+                     "_refresh_kroko_intent", "_can_start_native_candidate"):
             setattr(stub, name, types_module.MethodType(
                 getattr(service, name), stub))
         return stub
