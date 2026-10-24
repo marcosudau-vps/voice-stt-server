@@ -4,6 +4,15 @@ VoiceSTT verwaltet grosse STT-Modelle fuer Faster-Whisper und Kroko ueber eine
 gemeinsame serverautoritative Schicht. Wake-Word-Assets gehoeren nicht zu
 diesem System.
 
+## Kroko-Katalogmetadaten
+
+Der [Offline-Modellkatalog](kroko-model-catalog.md) ergänzt die Discovery um
+strukturierte Anbieter-Metadaten, Filter und einen reinen Downloadplan.
+Katalogeinträge werden nicht automatisch zu Produktmodellen im Manager.
+Portal-UUID und bestehende Manifest-ID bleiben getrennt. Das zwölf Modelle
+umfassende Manifest, Produktrechte und die folgenden Provisioningregeln
+bleiben unverändert.
+
 ## Speicher und Suchreihenfolge
 
 Der vorhandene `data_root_path` ist die einzige persistente Laufzeitwurzel.
