@@ -1327,6 +1327,8 @@ def kroko_effective_credentials(settings):
     lane_keys = []
     engines = (("final", settings.transcription_engine),
                ("realtime", settings.realtime_transcription_engine or settings.transcription_engine))
+    if settings.use_main_model_for_realtime:
+        engines = engines[:1]
     for lane, engine in engines:
         engine = normalize_engine_name(engine)
         if not kroko_license_runtime.is_kroko_lane(engine):

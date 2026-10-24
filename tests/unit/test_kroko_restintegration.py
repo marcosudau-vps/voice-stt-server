@@ -492,3 +492,16 @@ def test_slow_verifier_does_not_extend_original_proof_window():
     assert state.public_snapshot()["maxProofAgeSeconds"] == 1
     clock.advance(1)
     assert not state.pro_enabled_global()
+
+
+def test_shared_recognizer_ignores_unused_realtime_credential():
+    from api_fastapi_server.server import ServerSettings, kroko_effective_credentials
+    settings = ServerSettings(transcription_engine="kroko_onnx", realtime_transcription_engine="kroko_onnx",
+                              use_main_model_for_realtime=True, transcription_engine_options={},
+                              realtime_transcription_engine_options={"key": "unused-synthetic-key"})
+    with isolated_env():
+        assert kroko_effective_credentials(settings) == (False, "none")
+        settings.transcription_engine_options = {"key": "active-synthetic-key"}
+        before = kroko_effective_credentials(settings)
+        settings.realtime_transcription_engine_options = {"key": "another-unused-key"}
+        assert kroko_effective_credentials(settings) == before
