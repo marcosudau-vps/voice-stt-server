@@ -72,6 +72,7 @@ Begründung im Archiv erhalten.
 
 | Aktion | Aktionsdatum | Status | Archiv |
 | --- | --- | --- | --- |
+| Einheitliche V2-STT-Modellverwaltung / Kroko-Restintegration | 24.10.2026 | Geplant | [Gesamtplan](v2_stt_model_management/2026-10-24_GESAMTPLAN.md), [Ist-Inventar](v2_stt_model_management/2026-10-24_IST_ARCHITEKTUR_UND_BRANCHES.md), [Runjournal](v2_stt_model_management/runs/RUN-20261024-STTM-001/2026-10-24_02_VERLAUF.md) |
 | Unified Kroko Runtime V2 (AP-KR-010 bis 030) | 22.10.2026 | Prüfung offen | [Gesamtplanung](kroko_unified_runtime_v2/2026-10-22_GESAMTPLAN.md), [AP-KR-010](kroko_unified_runtime_v2/AP-KR-010/2026-10-22_SOLL_IST.md) |
 | Sitzungslokale Wake-Word-Konfiguration | 25.07.2026 | Abgeschlossen | [session-wakeword](session-wakeword/) |
 | Neues Logging- und Event-System | 31.07.2026 | Abgeschlossen | [neues_logging_event_system](neues_logging_event_system/) |
