@@ -468,6 +468,22 @@ class RuntimeConfigStore:
         }
         return self._write_merged(fields)
 
+    def save_server_configuration(self, settings, allowed_names, overlay, revision):
+        """One atomic document transaction for legacy and control adapters.
+
+        STT scalar aliases are projections only; the control overlay is their
+        single persisted authority. All unrelated top-level sections survive.
+        """
+        values = asdict(settings) if is_dataclass(settings) else dict(settings)
+        values = redact_kroko_credentials(values, drop=True)
+        aliases = {"stt_auto_download_enabled", "stt_auto_download_model_ids"}
+        return self._write_merged({
+            "version": 1, "updatedAt": _utc_now(),
+            "settings": {key: values[key] for key in sorted(set(allowed_names) - aliases)
+                         if key in values},
+            self.OVERLAY_FIELD: dict(overlay), self.REVISION_FIELD: revision,
+        })
+
     def load_control(self):
         """``(overlay, revision)`` of the persisted settings control plane.
 

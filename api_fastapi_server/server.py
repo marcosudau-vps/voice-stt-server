@@ -99,6 +99,12 @@ from VoiceSTT_server.stt_model_management import (
     OperatorIntent,
     STTModelManager,
 )
+from voice_stt_server.models.downloads import ModelManagementError
+from voice_stt_server.models.inventory import installation_id, project_inventory
+from voice_stt_server.models.connection import wait_initialization
+
+MODEL_INITIALIZATION_TIMEOUT_SECONDS = 180.0
+MODEL_INITIALIZATION_STATUS_INTERVAL_SECONDS = 5.0
 
 try:
     import numpy as np
@@ -230,9 +236,11 @@ ACTIVE_RUNTIME_SETTINGS = {
     "transcript_log_mode",
     "realtime_degradation_threshold_ms",
     "stt_auto_download_enabled",
+    "stt_auto_download_model_ids",
     "stt_engine_settings",
     "stt_model_settings",
     "kroko_force_community",
+    "kroko_pro_access_public",
 }
 
 NEW_SESSION_RUNTIME_SETTINGS = {
@@ -300,7 +308,6 @@ STARTUP_ONLY_SETTINGS = {
 }
 
 MODEL_MANAGEMENT_SETTINGS = {
-    "stt_auto_download_enabled",
     "stt_engine_settings",
     "stt_model_settings",
 }
@@ -392,6 +399,7 @@ BOOL_SETTINGS = {
     "model_memory_policy_enabled",
     "stt_auto_download_enabled",
     "kroko_force_community",
+    "kroko_pro_access_public",
 }
 
 OPTIONAL_STRING_SETTINGS = {
@@ -517,9 +525,12 @@ class ServerSettings:
     model_memory_policy_enabled: bool = True
     allow_two_medium_models: bool = True
     stt_auto_download_enabled: bool = False
+    stt_auto_download_model_ids: List[str] = field(default_factory=list)
     stt_engine_settings: Dict[str, Any] = field(default_factory=dict)
     stt_model_settings: Dict[str, Any] = field(default_factory=dict)
     kroko_force_community: bool = False
+    kroko_pro_access_public: bool = False
+    kroko_pro_access_key: Optional[str] = field(default=None, repr=False)
     openai_api_enabled: bool = True
     openai_api_key: Optional[str] = None
     admin_api_key: Optional[str] = None
@@ -534,6 +545,8 @@ class ServerSettings:
     )
 
     def __post_init__(self):
+        self.stt_auto_download_model_ids = coerce_setting_value(
+            "stt_auto_download_model_ids", self.stt_auto_download_model_ids)
         root = Path(self.data_root_path).expanduser() if self.data_root_path else None
         logs_root = root / "logs" if root is not None else Path("logs")
         self.request_log_path = str(logs_root / "audit")
@@ -1234,6 +1247,11 @@ def runtime_settings_contract():
 
 
 def coerce_setting_value(name, value):
+    if name == "stt_auto_download_model_ids":
+        if not isinstance(value, (list, tuple)) or len(value) > 128 or any(
+                not isinstance(item, str) or not item or len(item) > 128 for item in value):
+            raise ValueError("stt_auto_download_model_ids muss höchstens 128 Modell-IDs enthalten")
+        return sorted(set(value))
     if name == "log_level":
         return str(logging.getLevelName(resolve_log_level(value)))
     if name == "realtime_log_detail":
@@ -1244,6 +1262,8 @@ def coerce_setting_value(name, value):
             )
         return normalized
     if name == "transcript_log_mode":
+        if value is None:
+            return None  # derive from request_log_transcripts on legacy restart
         normalized = str(value or "").strip().lower()
         if normalized not in {"none", "final", "full"}:
             raise ValueError(
@@ -1741,8 +1761,9 @@ class ConnectionManager:
     def bind_loop(self, loop):
         self._loop = loop
 
-    async def connect(self, session_id, websocket):
-        await websocket.accept()
+    async def connect(self, session_id, websocket, *, accepted=False):
+        if not accepted:
+            await websocket.accept()
         async with self._lock:
             self._connections[session_id] = websocket
 
@@ -6249,6 +6270,10 @@ class SessionStore:
         with self._lock:
             return len(self._sessions)
 
+    def has_admissions(self):
+        with self._lock:
+            return bool(self._sessions or self._reserved_session_ids)
+
     def active_speaker_count(self):
         with self._lock:
             return len(self._active_speakers)
@@ -6300,6 +6325,10 @@ class VoiceSTTService:
         # state only (never persisted); the operator intent (force_community
         # plus requested models) lives in the existing settings plane.
         self.kroko_license = kroko_license_runtime.LicenseRuntimeAuthority()
+        # No provider contract has qualified a client-owned-key validator yet.
+        # This port grants nothing unless explicitly supplied by a qualified
+        # integration. Keys never enter native options or download credentials.
+        self.kroko_client_key_validator = None
         self._kroko_manifest = None
         self._kroko_startup_notes = []
         self._kroko_transition = threading.Event()
@@ -6336,13 +6365,24 @@ class VoiceSTTService:
         # AP-SRV-050 server-authoritative defaults with their own revision
         # stream, loaded from the single runtime config document.
         persisted_overlay, persisted_revision = self.config_store.load_control()
+        persisted_overlay.setdefault(settings_control_module.STT_AUTO_DOWNLOAD_ENABLED,
+                                     settings.stt_auto_download_enabled)
+        persisted_overlay.setdefault(settings_control_module.STT_AUTO_DOWNLOAD_MODELS,
+                                     list(settings.stt_auto_download_model_ids))
         self.settings_control = settings_control_module.ServerSettingsState(
             settings_control_module.build_default_registry(),
             overlay=persisted_overlay,
             revision=persisted_revision,
             persist=self._persist_settings_control,
+            validate=self._validate_stt_settings,
         )
         self.settings_registry = self.settings_control.registry
+        self._sync_stt_download_settings()
+        self.stt_model_manager.download_policy = lambda: OperatorIntent.from_settings(self.settings)
+        self.stt_model_manager.downloads._emit = lambda event, **data: self.events.emit(
+            "audit", event, **data)
+        self._started_at = datetime.datetime.now(datetime.timezone.utc)
+        self._started_monotonic = time.monotonic()
         # AP-SRV-060: the one server-wide wake-word catalog authority. It holds
         # the last-known-good manifest snapshot, the public projection, the
         # internal artifact projection, the single resolver, availability, the
@@ -6449,7 +6489,32 @@ class VoiceSTTService:
         values = []
         for source in settings_objects or (self.settings,):
             values.extend(self._stt_secret_values(source))
+            values.append(source.kroko_pro_access_key)
         return redact_secret_text(error, values)
+
+    def authorize_pro_client(self, headers, *, admin=False, lane=None):
+        if not self.kroko_license.pro_enabled_global():
+            return not self._kroko_native_candidate
+        lanes = self.active_models()
+        selected = [lanes.get(lane, {})] if lane else list(lanes.values())
+        if not any(normalize_engine_name(item.get("engine")) == "kroko_onnx" for item in selected):
+            return True
+        if self.settings.kroko_pro_access_public or admin:
+            return self.kroko_license.pro_client_access_allowed(
+                public=self.settings.kroko_pro_access_public, admin=admin)
+        configured = self.settings.kroko_pro_access_key or os.getenv("VOICESTT_KROKO_PRO_ACCESS_KEY")
+        supplied = headers.get("x-voicestt-pro-access-key")
+        access_valid = bool(configured and supplied and secrets.compare_digest(
+            str(configured).encode(), str(supplied).encode()))
+        client_key = headers.get("x-kroko-client-key")
+        verified = False
+        if client_key and callable(self.kroko_client_key_validator):
+            try:
+                verified = self.kroko_client_key_validator(client_key) is True
+            except Exception:
+                verified = False
+        return self.kroko_license.pro_client_access_allowed(
+            access_credential_valid=access_valid, client_key_verified=verified)
 
     # -- AP-KR-020 unified Kroko license/runtime integration -----------------
 
@@ -6738,7 +6803,7 @@ class VoiceSTTService:
     def refresh_stt_models(self, timeout=180.0):
         """Refresh the transactional authority without invalidating its LKG."""
 
-        with self._stt_refresh_lock:
+        with self._stt_refresh_lock, self._settings_lock, self.stt_model_manager._operation_lock:
             return self._refresh_stt_models_locked(timeout)
 
     def _refresh_stt_models_locked(self, timeout):
@@ -6952,6 +7017,9 @@ class VoiceSTTService:
     def start(self, loop):
         self.loop = loop
         self.manager.bind_loop(loop)
+        self.stt_model_manager.cleanup_downloads()
+        self.stt_model_manager.reconcile_downloads()
+        self.stt_model_manager.downloads.start()
         self.events.emit(
             "system",
             "server.starting",
@@ -6984,6 +7052,7 @@ class VoiceSTTService:
 
     def stop(self):
         self.stop_event.set()
+        self.stt_model_manager.downloads.stop()
         self.kroko_license.record_failure()
         for session in self.sessions.remove_all():
             session.close()
@@ -7106,26 +7175,29 @@ class VoiceSTTService:
 
         load_started = time.monotonic()
         memory_before = process_memory_snapshot()
-        replacement = self._new_scheduler()
+        replacement = None
         try:
+            replacement = self._new_scheduler()
             replacement.start()
             remaining = max(0.0, deadline - time.monotonic())
             if not replacement.wait_ready(timeout=remaining) or not replacement.healthy():
                 raise RuntimeError("Die Modell-Worker haben keinen fehlerfreien Zustand erreicht.")
         except Exception as exc:
             try:
-                replacement.stop()
+                if replacement is not None:
+                    replacement.stop()
             except Exception:
-                LOGGER.debug("Fehlerhafte Modell-Worker konnten nicht beendet werden", exc_info=True)
+                LOGGER.debug("Fehlerhafte Modell-Worker konnten nicht beendet werden", exc_info=False)
+            message = self._safe_stt_error(exc)
             with self._model_condition:
                 self._model_state = "unloaded"
-                self._model_state_error = str(exc)
+                self._model_state_error = message
                 self._model_condition.notify_all()
             self._log_model_performance(
                 "models.load_failed", load_started, memory_before,
-                reason="lazy_reload", error=str(exc),
+                reason="lazy_reload", error=message,
             )
-            raise RuntimeError(f"Transkriptionsmodelle konnten nicht geladen werden: {exc}") from exc
+            raise RuntimeError(f"Transkriptionsmodelle konnten nicht geladen werden: {message}") from None
 
         discard = False
         with self._model_condition:
@@ -7191,6 +7263,12 @@ class VoiceSTTService:
                 return result
 
     def load_models(self, timeout=180.0):
+        if (not self.stt_model_manager.snapshot().minimum_ready
+                and any(job["state"] == "completed"
+                        for job in self.stt_model_manager.downloads.snapshot())):
+            # An explicit admin load may apply existing recovery rules after
+            # installation. The completion callback itself never does so.
+            self.refresh_stt_models(timeout=timeout)
         with self._scheduler_lock:
             was_loaded = self.scheduler is not None
         self.ensure_models_loaded(timeout=timeout)
@@ -7577,6 +7655,40 @@ class VoiceSTTService:
                     "message": "Der native Moduswechsel erfordert stt-server und eine neue Besitzerprozessgeneration.",
                 }
                 coerced_updates.pop("kroko_force_community")
+            # Prepare all accepted legacy fields before a single persistence
+            # transaction; the STT scalar adapter uses the existing revision.
+            candidate = replace(self.settings, **coerced_updates)
+            if "transcript_log_mode" in coerced_updates:
+                candidate.request_log_transcripts = candidate.transcript_log_mode != "none"
+            elif "request_log_transcripts" in coerced_updates:
+                candidate.transcript_log_mode = "final" if candidate.request_log_transcripts else "none"
+            aliases = {
+                "stt_auto_download_enabled": settings_control_module.STT_AUTO_DOWNLOAD_ENABLED,
+                "stt_auto_download_model_ids": settings_control_module.STT_AUTO_DOWNLOAD_MODELS,
+            }
+            control_changes = {aliases[key]: value for key, value in coerced_updates.items() if key in aliases}
+            if coerced_updates:
+                if control_changes:
+                    self._settings_persist_candidate = candidate
+                    try:
+                        result = self.patch_server_settings(self.settings_control.settings_revision,
+                                                            control_changes, reconcile=False)
+                    finally:
+                        self._settings_persist_candidate = None
+                    if not result.accepted:
+                        if result.result == "internal_error":
+                            raise ModelManagementError("settings_persistence_failed", 500)
+                        for key in coerced_updates:
+                            rejected[key] = {"reason": "settings_rejected", "message": "Ungültige Modell-Auswahl."}
+                        coerced_updates = {}
+                    elif not result.changed_keys:
+                        self.config_store.save_server_configuration(
+                            self._operator_settings(candidate), self._persisted_setting_names(),
+                            self.settings_control.overlay(), self.settings_control.settings_revision)
+                else:
+                    self.config_store.save_server_configuration(
+                        self._operator_settings(candidate), self._persisted_setting_names(),
+                        self.settings_control.overlay(), self.settings_control.settings_revision)
             for name, coerced in coerced_updates.items():
                 setattr(self.settings, name, coerced)
                 applied[name] = {
@@ -7651,11 +7763,12 @@ class VoiceSTTService:
                 self._refresh_kroko_intent(reason="force_community_changed")
                 self._stt_model_refresh_required = True
                 if self._requires_kroko_process_boundary():
-                    self.persist_settings()
                     self._request_kroko_restart()
+            if control_changes:
+                self._sync_stt_download_settings()
+                self.stt_model_manager.reconcile_downloads()
             public_applied = redact_kroko_credentials(applied)
             self.audit.event("config.updated", applied=public_applied)
-            self.persist_settings()
         else:
             public_applied = {}
 
@@ -7668,23 +7781,142 @@ class VoiceSTTService:
         }
 
     def persist_settings(self):
-        allowed = (
-            ACTIVE_RUNTIME_SETTINGS
-            | NEW_SESSION_RUNTIME_SETTINGS
-            | STARTUP_ONLY_SETTINGS
-        ) - {
-            "admin_api_key", "data_root_path", "openai_api_key",
-            "runtime_config_path",
-            "device", "host", "port",
-        }
-        intent = replace(self.settings)
+        return self.config_store.save_server_configuration(
+            self._operator_settings(), self._persisted_setting_names(),
+            self.settings_control.overlay(), self.settings_control.settings_revision)
+
+    def _operator_settings(self, source=None):
+        """Preserve desired Kroko models across a volatile Community fallback."""
+        intent = replace(source or self.settings)
         for name, value in self._kroko_operator_models.items():
             setattr(intent, name, value)
-        return self.config_store.save(intent, allowed)
+        return intent
 
     def _persist_settings_control(self, overlay, revision):
-        """Persists the AP-SRV-050 server-default overlay + its revision."""
-        return self.config_store.save_settings_control(overlay, revision)
+        """Persist both adapters as one transaction before control-plane commit."""
+        candidate = getattr(self, "_settings_persist_candidate", None) or self.settings
+        return self.config_store.save_server_configuration(
+            self._operator_settings(candidate), self._persisted_setting_names(), overlay, revision)
+
+    @staticmethod
+    def _persisted_setting_names():
+        return (ACTIVE_RUNTIME_SETTINGS | NEW_SESSION_RUNTIME_SETTINGS | STARTUP_ONLY_SETTINGS) - {
+            "admin_api_key", "data_root_path", "openai_api_key", "kroko_pro_access_key", "runtime_config_path",
+            "device", "host", "port"}
+
+    def _validate_stt_settings(self, proposal):
+        selected = proposal.get(settings_control_module.STT_AUTO_DOWNLOAD_MODELS, ())
+        known = {item.id for item in self.stt_model_manager.authority}
+        if any(model_id not in known for model_id in selected):
+            return [settings_control_module.FieldError(
+                field=settings_control_module.STT_AUTO_DOWNLOAD_MODELS,
+                code="unknown_model_id", message="Die Auswahl enthält eine unbekannte Modell-ID.")]
+        return []
+
+    def _sync_stt_download_settings(self):
+        effective = self.settings_control.server_effective()
+        self.settings.stt_auto_download_enabled = effective[settings_control_module.STT_AUTO_DOWNLOAD_ENABLED]
+        self.settings.stt_auto_download_model_ids = list(effective[settings_control_module.STT_AUTO_DOWNLOAD_MODELS])
+        with self.stt_model_manager._operation_lock:
+            self.stt_model_manager.intent = replace(
+                self.stt_model_manager.intent,
+                global_auto_download=self.settings.stt_auto_download_enabled,
+                selected_model_ids=tuple(self.settings.stt_auto_download_model_ids))
+
+    def patch_server_settings(self, revision, changes, *, reconcile=True):
+        with self._settings_lock:
+            result = self.settings_control.patch_server(revision, changes)
+            if result.accepted:
+                self._sync_stt_download_settings()
+                if reconcile and set(result.changed_keys or ()) & {
+                        settings_control_module.STT_AUTO_DOWNLOAD_ENABLED,
+                        settings_control_module.STT_AUTO_DOWNLOAD_MODELS}:
+                    self.stt_model_manager.reconcile_downloads()
+            return result
+
+    def refresh_stt_inventory(self):
+        with self._stt_refresh_lock:
+            # New discovery intent is evaluated without replacing the current
+            # recovery selection. Publishing inventory cannot start native work.
+            manager = self.stt_model_manager
+            with manager._operation_lock:
+                previous = manager.intent
+                try:
+                    manager.intent = OperatorIntent.from_settings(self.settings)
+                    manager.refresh_inventory()
+                except Exception:
+                    manager.intent = previous
+                    raise ModelManagementError("inventory_refresh_failed", 422) from None
+            return {"changed": False, "management": self.stt_model_management_status(),
+                    "modelRefreshRequired": self._stt_model_refresh_required}
+
+    def delete_stt_installation(self, requested_id):
+        # Same lock order as explicit model switching; no admission/load may
+        # acquire a reference between the check and storage quarantine.
+        with self._stt_refresh_lock, self._settings_lock, self._scheduler_lock:
+            def guard(candidate):
+                manager = self.stt_model_manager
+                if self._model_state in {"loading", "unloading"} or self.sessions.has_admissions() or self._models_busy():
+                    raise ModelManagementError("installation_in_use", 409)
+                for role, (engine, requested) in OperatorIntent.from_settings(self._operator_settings()).defaults.items():
+                    product = manager._find_product(engine, requested)
+                    if ((product is not None and product.id == candidate.product_id)
+                            or os.path.normcase(str(requested)) == os.path.normcase(candidate.path)
+                            or (engine == candidate.engine and str(requested) == candidate.id)):
+                        raise ModelManagementError("installation_configured", 409)
+                if any(active.product_id == candidate.product_id and active.engine == candidate.engine
+                       for active in manager.snapshot().active.values()):
+                    raise ModelManagementError("installation_effective", 409)
+            result = self.stt_model_manager.delete_installation(requested_id, guard)
+            self.events.emit("audit", "stt.installation.deleted", installationId=requested_id)
+            return result
+
+    def server_status(self, identity, *, admin=False):
+        with (self._settings_lock, self._scheduler_lock,
+              self.stt_model_manager._operation_lock, self.stt_model_manager.downloads._condition,
+              self.stt_model_manager._state_lock):
+            manager = self.stt_model_manager
+            snapshot = manager.snapshot()
+            lifecycle = self.model_lifecycle_status()
+            lanes = {}
+            desired = OperatorIntent.from_settings(self._operator_settings()).defaults
+            for role in ("final", "realtime"):
+                engine, requested = desired[role]
+                product = manager._find_product(engine, requested)
+                effective = snapshot.active.get(role)
+                lanes[role] = {
+                    "requested": {"engine": engine, "modelId": product.id if product else None},
+                    "effective": None if effective is None else {
+                        "engine": effective.engine, "modelId": effective.product_id or effective.id,
+                        "installationId": installation_id(effective)},
+                    "fallback": bool(effective and (product is None or effective.product_id != product.id)),
+                    "fallbackReason": "recovery_selection" if effective and (
+                        product is None or effective.product_id != product.id) else None,
+                }
+            loaded = bool(lifecycle["loaded"])
+            jobs = manager.downloads.snapshot()
+            data = {
+                **identity.public_info(self.events.server_instance_id),
+                "startedAt": self._started_at.isoformat(),
+                "uptimeSeconds": round(time.monotonic() - self._started_monotonic, 3),
+                "ready": self.ready.is_set(),
+                "ok": self.ready.is_set() and (self.scheduler is None or self.scheduler.healthy()),
+                "sttReady": bool(snapshot.minimum_ready and not self._model_state_error
+                                 and (not loaded or self.scheduler.healthy())),
+                "loaded": loaded, "modelState": lifecycle["state"],
+                "loadErrorCode": "models_load_failed" if self._model_state_error else None,
+                "stt": {"lanes": lanes, **project_inventory(manager, admin=admin)},
+                "wakeWords": self.wakeword_catalog.public_payload(protocol_version=2),
+                "downloads": {"active": sum(job["state"] not in {"completed", "failed", "cancelled"}
+                                             for job in jobs), "retained": len(jobs)},
+                "configuration": {"sttAutoDownloadEnabled": self.settings.stt_auto_download_enabled,
+                                  "modelIdleTimeoutSeconds": self.settings.model_idle_timeout_seconds,
+                                  "krokoForceCommunity": self.settings.kroko_force_community},
+            }
+            if admin:
+                data["downloads"]["jobs"] = jobs
+                data["downloads"]["automaticResults"] = dict(manager.automatic_results)
+            return data
 
     def model_catalog(self):
         main_resolution = self.settings._resolved_stt_models.get("final", {})
@@ -7754,7 +7986,7 @@ class VoiceSTTService:
         return active
 
     def switch_models(self, updates, timeout=180.0):
-        with self._stt_refresh_lock:
+        with self._stt_refresh_lock, self._settings_lock:
             return self._switch_models_locked(updates, timeout)
 
     def _switch_models_locked(self, updates, timeout):
@@ -8544,6 +8776,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                     "admin_api_key",
                     "data_root_path",
                     "openai_api_key",
+                    "kroko_pro_access_key",
                 }
             ):
                 setattr(settings, name, coerce_setting_value(name, value))
@@ -8666,6 +8899,8 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         updates = payload.get("settings", payload)
         try:
             result = service.update_settings(updates)
+        except (ModelManagementError, OSError):
+            return JSONResponse({"error": {"code": "settings_persistence_failed"}}, status_code=500)
         except ValueError as exc:
             return JSONResponse(
                 {"error": str(exc)},
@@ -8709,7 +8944,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         if auth_error is not None:
             return auth_error
         try:
-            return JSONResponse(await asyncio.to_thread(service.refresh_stt_models))
+            return JSONResponse(await asyncio.to_thread(service.refresh_stt_inventory))
         except (RuntimeError, ValueError) as exc:
             return JSONResponse(
                 {"error": service._safe_stt_error(exc)},
@@ -8902,7 +9137,10 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                     raise ValueError(f"{name} muss null oder größer sein")
         except (TypeError, ValueError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
-        result = service.update_settings(updates)
+        try:
+            result = service.update_settings(updates)
+        except (ModelManagementError, OSError):
+            return JSONResponse({"error": {"code": "settings_persistence_failed"}}, status_code=500)
         return JSONResponse(result, status_code=400 if result["rejected"] else 200)
 
     # -- AP-SRV-050 settings REST-v2 surface ---------------------------------
@@ -8946,7 +9184,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                     "message": "Der Patch muss ein JSON-Objekt sein.",
                 }],
             }, status_code=400)
-        result = service.settings_control.patch_server(
+        result = service.patch_server_settings(
             payload.get("baseSettingsRevision"),
             payload.get("changes"),
         )
@@ -9112,7 +9350,10 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 raise ValueError("performanceBackupCount muss null oder größer sein")
         except (TypeError, ValueError) as exc:
             return JSONResponse({"error": str(exc)}, status_code=400)
-        result = service.update_settings(updates)
+        try:
+            result = service.update_settings(updates)
+        except (ModelManagementError, OSError):
+            return JSONResponse({"error": {"code": "settings_persistence_failed"}}, status_code=500)
         return JSONResponse(result, status_code=400 if result["rejected"] else 200)
 
     def _split_filter(value):
@@ -9708,6 +9949,10 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 override_source=override_source,
             )
             lane = resolution["lane"]
+            if not service.authorize_pro_client(request.headers,
+                    admin=admin_auth_error(request) is None, lane=lane):
+                raise OpenAIRequestError("Pro-Zugriff erfordert eine separate Berechtigung.",
+                                         "model", "pro_access_required", 403)
             response_headers.update({
                 "X-VoiceSTT-Requested-Model": resolution["requested"],
                 "X-VoiceSTT-Resolved-Model": resolution["resolved"],
@@ -10191,6 +10436,12 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
 
     @app.websocket("/ws/transcribe")
     async def websocket_transcribe(websocket: WebSocket):
+        await websocket.accept()
+        if not service.authorize_pro_client(websocket.headers, admin=admin_auth_error(websocket) is None):
+            await websocket.send_text(json.dumps({"type": "error", "where": "authorization",
+                "code": "pro_access_required", "message": "Pro-Zugriff ist nicht freigegeben."}))
+            await websocket.close(code=1008)
+            return
         client_id = normalized_client_id(
             websocket.query_params.get("clientId")
             or websocket.headers.get("x-voicestt-client-id")
@@ -10203,7 +10454,6 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 websocket.query_params
             )
         except SessionConfigurationError as exc:
-            await websocket.accept()
             await websocket.send_text(json.dumps(exc.payload()))
             await websocket.close(code=1008)
             service.audit.event(
@@ -10216,15 +10466,32 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             return
 
         session_id = uuid.uuid4().hex
+        reload_pending = service.scheduler is None or service._model_state == "loading"
+
+        async def loading_status():
+            await websocket.send_text(json.dumps({
+                "type": "status", "sessionId": session_id,
+                "status": "models_loading", "sttReady": False,
+                "models": {"state": "loading", "loaded": False},
+                "message": "Verbindung angenommen; STT-Modelle werden geladen.",
+            }))
+
         try:
-            session = service.admit_session(
-                session_id,
-                wake_word_request=wake_word_request,
-                client_id=client_id,
-                activation_request=activation_request,
-            )
+            if reload_pending:
+                # This send is fully awaited BEFORE the loader thread exists.
+                await loading_status()
+                await wait_initialization(
+                    lambda: service.ensure_models_loaded(timeout=MODEL_INITIALIZATION_TIMEOUT_SECONDS),
+                    notify=loading_status, timeout=MODEL_INITIALIZATION_TIMEOUT_SECONDS,
+                    interval=MODEL_INITIALIZATION_STATUS_INTERVAL_SECONDS)
+            session = await wait_initialization(
+                lambda: service.admit_session(
+                    session_id, wake_word_request=wake_word_request,
+                    client_id=client_id, activation_request=activation_request),
+                notify=loading_status, timeout=MODEL_INITIALIZATION_TIMEOUT_SECONDS,
+                interval=MODEL_INITIALIZATION_STATUS_INTERVAL_SECONDS,
+                late_result=lambda result: service.remove_session(session_id) if result is not None else None)
         except SessionConfigurationError as exc:
-            await websocket.accept()
             await websocket.send_text(json.dumps(exc.payload()))
             await websocket.close(code=1008)
             service.audit.event(
@@ -10237,18 +10504,16 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             )
             return
         except Exception:
-            LOGGER.exception("WebSocket-Sitzung konnte nicht initialisiert werden")
-            await websocket.accept()
+            LOGGER.warning("WebSocket-Initialisierung fehlgeschlagen", exc_info=False)
             await websocket.send_text(json.dumps({
                 "type": "error",
                 "where": "session_config",
-                "code": "session_initialization_failed",
+                "code": "models_load_failed" if reload_pending else "session_initialization_failed",
                 "message": "Die Sitzung konnte nicht initialisiert werden.",
             }))
             await websocket.close(code=1011)
             return
         if session is None:
-            await websocket.accept()
             service.audit.event(
                 "session.rejected",
                 sessionId=session_id,
@@ -10265,7 +10530,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             await websocket.close(code=1013)
             return
 
-        await manager.connect(session_id, websocket)
+        await manager.connect(session_id, websocket, accepted=True)
         service.audit.event(
             "session.accepted",
             sessionId=session_id,
@@ -10415,6 +10680,9 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         v2 projection, so no legacy payload can reach it.
         """
         await websocket.accept()
+        if not service.authorize_pro_client(websocket.headers, admin=admin_auth_error(websocket) is None):
+            await websocket.close(code=1008)
+            return
         client_id = normalized_client_id(
             websocket.query_params.get("clientId")
             or websocket.headers.get("x-voicestt-client-id")
@@ -10520,9 +10788,11 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 if message.get("type") == "websocket.disconnect":
                     break
                 if message.get("bytes") is not None:
-                    connection.handle_binary(message["bytes"])
+                    await asyncio.to_thread(connection.handle_binary, message["bytes"])
                 elif message.get("text") is not None:
-                    connection.handle_text(message["text"])
+                    await asyncio.wait_for(
+                        asyncio.to_thread(connection.handle_text, message["text"]),
+                        timeout=MODEL_INITIALIZATION_TIMEOUT_SECONDS)
                 if connection.closed:
                     break
         except WebSocketDisconnect:
@@ -10567,6 +10837,8 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                     transport="websocket_v2",
                 )
 
+    from voice_stt_server.models.http import register_model_routes
+    register_model_routes(app, service, admin_auth_error, app_identity)
     app.state.voicestt_service = service
     return app
 
@@ -10578,7 +10850,7 @@ def _env_bool(name, default=False):
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
-YAML_CONFIG_SECRET_KEYS = {"admin_api_key", "openai_api_key"}
+YAML_CONFIG_SECRET_KEYS = {"admin_api_key", "openai_api_key", "kroko_pro_access_key"}
 YAML_CONFIG_DERIVED_KEYS = {"tuning_description"} | DERIVED_DATA_PATH_SETTINGS
 YAML_CONFIG_TO_ARG_DEST = {
     "model_warmup": ("no_model_warmup", lambda value: not value),
@@ -10709,6 +10981,10 @@ def parse_args(argv=None):
     parser.add_argument("--engine-options", dest="transcription_engine_options")
     parser.add_argument("--realtime-engine-options", dest="realtime_transcription_engine_options")
     parser.add_argument("--download-root")
+    parser.add_argument("--kroko-pro-access-public", action=argparse.BooleanOptionalAction,
+                        default=_env_bool("VOICESTT_KROKO_PRO_ACCESS_PUBLIC", False))
+    parser.add_argument("--stt-auto-download-model-ids",
+                        default=os.getenv("VOICESTT_STT_AUTO_DOWNLOAD_MODEL_IDS", "[]"))
     parser.add_argument(
         "--stt-auto-download",
         dest="stt_auto_download_enabled",
@@ -10976,7 +11252,12 @@ def settings_from_args(args):
             "--realtime-engine-options",
         ),
         download_root=args.download_root,
+        kroko_pro_access_public=args.kroko_pro_access_public,
+        kroko_pro_access_key=os.getenv("VOICESTT_KROKO_PRO_ACCESS_KEY"),
         stt_auto_download_enabled=args.stt_auto_download_enabled,
+        stt_auto_download_model_ids=coerce_setting_value("stt_auto_download_model_ids",
+            json.loads(args.stt_auto_download_model_ids) if isinstance(args.stt_auto_download_model_ids, str)
+            else args.stt_auto_download_model_ids),
         stt_engine_settings=parse_json_object(
             args.stt_engine_settings, "--stt-engine-settings"
         ),

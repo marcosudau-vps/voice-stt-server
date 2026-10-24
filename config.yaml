@@ -20,9 +20,11 @@ settings:
   use_main_model_for_realtime: false
   transcription_engine_options: null
   realtime_transcription_engine_options: null
-  # Grosse STT-Modelle werden nur bei expliziter hierarchischer Freigabe
-  # provisioniert. Custom-Pfade stehen je Engine in Suchreihenfolge.
+  # Globale Freigabe UND explizite Modell-IDs, zusätzlich harte Produktgates.
+  # Custom-Pfade dienen ausschließlich der lesenden Discovery.
   stt_auto_download_enabled: false
+  stt_auto_download_model_ids: []
+  kroko_pro_access_public: false
   stt_engine_settings:
     faster_whisper:
       enabled: true

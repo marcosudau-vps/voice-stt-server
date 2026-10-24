@@ -79,6 +79,8 @@ WAKE_WORD_SENSITIVITY = "wakeWord.sensitivity"
 WAKE_WORD_MIN_PREDICTION_FRAMES = "wakeWord.minConsecutivePredictionFrames"
 WAKE_WORD_SELECTION = "wakeWord.selection"
 WAKE_WORD_GLOBAL_DISABLED = "wakeWord.globalDisabledIds"
+STT_AUTO_DOWNLOAD_ENABLED = "stt.autoDownload.enabled"
+STT_AUTO_DOWNLOAD_MODELS = "stt.autoDownload.selectedModelIds"
 WAKE_WORD_COOLDOWN_MS = "wakeWord.cooldownMs"
 WAKE_WORD_PRE_ROLL_MS = "wakeWord.preRollMs"
 WAKE_WORD_DETECTOR_GAIN = "wakeWord.detectorGain"
@@ -277,6 +279,16 @@ def builtin_definitions() -> List[SettingDefinition]:
     exposes an admin-managed server default facet.
     """
     return [
+        SettingDefinition(
+            key=STT_AUTO_DOWNLOAD_ENABLED, scope=SCOPE_SERVER, auth=AUTH_ADMIN,
+            type=TYPE_BOOL, constraints={}, default_value=False,
+            apply_policy=APPLY_LIVE, has_server_default=True,
+            description="Freigabe künftiger Downloads ausdrücklich ausgewählter STT-Modelle."),
+        SettingDefinition(
+            key=STT_AUTO_DOWNLOAD_MODELS, scope=SCOPE_SERVER, auth=AUTH_ADMIN,
+            type=TYPE_STRING_LIST, constraints={"minItems": 0, "maxItems": 128}, default_value=[],
+            apply_policy=APPLY_LIVE, has_server_default=True,
+            description="Kanonische Modell-IDs; Produkt-/Bezugs-/Integritätsrechte bleiben zwingend."),
         SettingDefinition(
             key=ACTIVATION_INITIAL_SPEECH,
             scope=SCOPE_SESSION,
@@ -734,6 +746,8 @@ def _validate_constraints(defn: SettingDefinition, value: Any) -> Optional[Field
     min_items = constraints.get("minItems")
     if min_items is not None and len(value) < min_items:
         return _error(defn, CODE_TOO_FEW_ITEMS, f"{defn.key} muss mindestens {min_items} Einträge besitzen.")
+    if constraints.get("maxItems") is not None and len(value) > constraints["maxItems"]:
+        return _error(defn, CODE_OUT_OF_RANGE, f"{defn.key} enthält zu viele Einträge.")
     return None
 
 
@@ -1154,6 +1168,7 @@ class ServerSettingsState:
         overlay: Optional[Mapping[str, Any]] = None,
         revision: int = 0,
         persist: Optional[Callable[[Mapping[str, Any], int], None]] = None,
+        validate: Optional[Callable[[Mapping[str, Any]], Iterable[FieldError]]] = None,
     ):
         self._registry = registry
         self._lock = threading.RLock()
@@ -1173,6 +1188,7 @@ class ServerSettingsState:
             )
         self._revision = revision
         self._persist = persist
+        self._validate = validate
         if overlay is not None and not isinstance(overlay, dict):
             raise ValueError(
                 "Invalid settingsControlOverlay: muss ein Objekt sein."
@@ -1200,6 +1216,8 @@ class ServerSettingsState:
         candidate = registry.defaults_for_server_defaults()
         candidate.update(loaded)
         persisted_errors = validate_timing_bundle(registry, loaded, candidate)
+        if self._validate is not None:
+            persisted_errors.extend(self._validate(candidate))
         if persisted_errors:
             first = persisted_errors[0]
             raise ValueError(
@@ -1295,12 +1313,14 @@ class ServerSettingsState:
                 if error is not None:
                     errors.append(error)
                     continue
-                coerced[key] = candidate
+                coerced[key] = sorted(set(candidate)) if key == STT_AUTO_DOWNLOAD_MODELS else candidate
 
             if not errors:
                 proposal = dict(self._overlay)
                 proposal.update(coerced)
                 errors.extend(validate_timing_bundle(self._registry, coerced, proposal))
+                if self._validate is not None:
+                    errors.extend(self._validate(proposal))
 
             if errors:
                 ordered = sorted(errors, key=lambda item: (str(item.field), str(item.code)))

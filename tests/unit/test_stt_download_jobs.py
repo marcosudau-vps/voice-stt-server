@@ -183,3 +183,15 @@ def test_terminal_job_does_not_duplicate_an_installed_model():
             "stt.download.queued", "stt.download.started", "stt.download.completed"]
     finally:
         manager.stop()
+
+
+def test_event_sink_failure_does_not_strand_the_worker():
+    manager, calls, _ = queue()
+    manager._emit = lambda *args, **kwargs: (_ for _ in ()).throw(OSError("store unavailable"))
+    job, _ = manager.enqueue("a")
+    manager.start()
+    try:
+        wait_job(manager, job["jobId"], "completed")
+        assert calls == ["a"]
+    finally:
+        manager.stop()

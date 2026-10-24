@@ -137,3 +137,26 @@ def test_restart_cleanup_removes_only_owned_partial_names(tmp_path):
 def test_redirect_is_refused_before_contact(url):
     with pytest.raises(ModelManagementError, match="source_rejected"):
         _Redirects().redirect_request(None, None, 302, "redirect", {}, url)
+
+
+def test_link_introduced_after_delete_check_preserves_external_bytes(tmp_path):
+    external = tmp_path / "external"
+    external.write_bytes(b"external")
+    root = tmp_path / "managed"
+    target = root / "model"
+    target.mkdir(parents=True)
+    (target / "model.bin").write_bytes(b"model")
+    calls = []
+
+    def guard():
+        calls.append(True)
+        if len(calls) == 2:
+            quarantine = next(root.glob(".*.staging"))
+            try:
+                (quarantine / "link").symlink_to(external)
+            except OSError:
+                pytest.skip("host does not permit unprivileged symlinks")
+
+    with pytest.raises(ModelManagementError, match="unsafe_storage_link"):
+        VerifiedModelStorage(threading.RLock()).delete(target, root, guard)
+    assert external.read_bytes() == b"external" and target.exists()

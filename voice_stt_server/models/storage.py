@@ -226,6 +226,11 @@ class VerifiedModelStorage:
                 else:
                     quarantine.unlink()
             except Exception:
-                if not path.exists() and quarantine.exists():
+                try:
+                    check_path(root)
+                    unchanged = _signature(root) == root_identity
+                except (OSError, ModelManagementError):
+                    unchanged = False
+                if unchanged and not path.exists() and quarantine.exists():
                     os.replace(quarantine, path)
                 raise

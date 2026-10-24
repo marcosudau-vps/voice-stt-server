@@ -94,8 +94,13 @@ class DownloadJobManager:
             return self._public(job), True
 
     def _event(self, event, job):
-        self._emit("stt.download." + event, jobId=job["jobId"],
-                   modelId=job["modelId"], engine=job["engine"], errorCode=job["errorCode"])
+        try:
+            self._emit("stt.download." + event, jobId=job["jobId"],
+                       modelId=job["modelId"], engine=job["engine"], errorCode=job["errorCode"])
+        except Exception:
+            # The existing hub owns its degraded-store health. A mirror/store
+            # failure must not strand a job in a nonterminal state.
+            pass
 
     def snapshot(self, job_id=None):
         with self._condition:

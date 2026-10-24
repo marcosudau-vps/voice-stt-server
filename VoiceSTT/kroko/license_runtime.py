@@ -519,6 +519,16 @@ class LicenseRuntimeAuthority:
 
     # -- redacted projection ----------------------------------------------
 
+    def pro_client_access_allowed(self, *, public=False, admin=False,
+                                  access_credential_valid=False, client_key_verified=False):
+        """Access to the already qualified shared runtime; never activation.
+
+        Client-key validation belongs to a separately qualified provider port.
+        A presence flag or the server's native credential is never that proof.
+        """
+        return bool(self.pro_enabled_global() and (
+            public or admin or access_credential_valid or client_key_verified))
+
     def public_snapshot(self) -> Dict[str, Any]:
         """Redacted status projection: no secrets, no raw license data."""
         with self._lock:

@@ -20,6 +20,9 @@ _CREDENTIAL_KEYS = {
     "krokokey",
     "krokoonnxkey",
     "voicestttkrokoonnxkey",
+    "krokoproaccesskey",
+    "krokoclientkey",
+    "proaccesskey",
 }
 _OPTION_CONTEXT_KEYS = {
     "engineoptions",
@@ -126,6 +129,7 @@ def redact_secret_text(value: Any, extra_values: Iterable[Any] = ()) -> str:
     text = str(value)
     known = list(extra_values)
     known.extend(os.getenv(name) for name in KROKO_CREDENTIAL_ENV_NAMES)
+    known.append(os.getenv("VOICESTT_KROKO_PRO_ACCESS_KEY"))
     for secret in sorted(
         {str(item) for item in known if item},
         key=len,

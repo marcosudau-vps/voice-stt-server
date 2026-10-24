@@ -251,7 +251,12 @@ class ProtocolV2Connection:
                 "message": "Der Server hat das konfigurierte Sitzungslimit erreicht.",
             }])
 
-        self._activate_session(session, result)
+        with self._lock:
+            if self._closed:
+                # Admission may complete after the transport's bounded wait.
+                self.service.remove_session(session.session_id)
+                return None
+            self._activate_session(session, result)
         return session
 
     def _admit(self, hello, selection=None):
@@ -290,7 +295,7 @@ class ProtocolV2Connection:
                 "code": exc.code,
                 "message": exc.message,
             }])
-        LOGGER.exception("v2-Sessionadmission ist unerwartet fehlgeschlagen")
+        LOGGER.warning("v2-Sessionadmission ist unerwartet fehlgeschlagen", exc_info=False)
         self.request_close(schema.CLOSE_INTERNAL_ERROR)
         return None
 

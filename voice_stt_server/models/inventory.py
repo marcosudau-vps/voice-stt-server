@@ -23,6 +23,7 @@ def project_inventory(manager, *, admin=False):
         snapshot = manager.snapshot()
         products = manager.authority
         intent = manager.intent
+        download_policy = manager.download_policy()
         installations = []
         for candidate in snapshot.candidates:
             item = {
@@ -43,7 +44,10 @@ def project_inventory(manager, *, admin=False):
                 "modelId": product.id, "catalogId": product.catalog_id,
                 "engine": product.engine, "language": product.language,
                 "licenseClass": product.license_class, "revision": product.revision,
-                "downloadAllowed": bool(product.provisioning_allowed),
+                "downloadAllowed": bool(product.provisioning_allowed
+                                        and download_policy.engine_enabled(product.engine)
+                                        and download_policy.model_enabled(product)
+                                        and manager.download_rights(product)),
                 "rightsStatus": product.rights_status,
                 "operatorEnabled": intent.engine_enabled(product.engine) and intent.model_enabled(product),
                 "autoDownloadSelected": intent.effective_auto_download(product),
