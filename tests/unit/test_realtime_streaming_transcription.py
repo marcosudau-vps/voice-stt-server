@@ -243,6 +243,9 @@ class RealtimeWorkerOverlapRaceTests(unittest.TestCase):
 
         entered = threading.Event()
         release = threading.Event()
+        r1_returned = threading.Event()
+        r2_published = threading.Event()
+        test_case = self
 
         class BlockingModel:
             engine_name = "blocking_race"
@@ -255,16 +258,18 @@ class RealtimeWorkerOverlapRaceTests(unittest.TestCase):
                 self.calls.append(int(getattr(audio, "size", 0)))
                 if len(self.calls) == 1:
                     entered.set()
-                    self.assertTrue(
+                    test_case.assertTrue(
                         release.wait(timeout=15.0),
                         "R1 model was never released",
                     )
-                    return TranscriptionResult(
+                    result = TranscriptionResult(
                         text="R1-LATE-TEXT",
                         info=TranscriptionInfo(
                             language="en", language_probability=1.0
                         ),
                     )
+                    r1_returned.set()
+                    return result
                 return TranscriptionResult(
                     text="R2-LIVE-TEXT",
                     info=TranscriptionInfo(
@@ -319,10 +324,18 @@ class RealtimeWorkerOverlapRaceTests(unittest.TestCase):
         recorder.awaiting_speech_end = False
         simple_texts = []
         structured_events = []
+
+        def on_preview(text):
+            simple_texts.append(text)
+            if text == "R2-LIVE-TEXT":
+                # Stop on the worker thread before another R2 timer pass.
+                recorder.is_running = False
+                r2_published.set()
+
         recorder.on_realtime_text_stabilization_update = (
             structured_events.append
         )
-        recorder.on_realtime_transcription_update = simple_texts.append
+        recorder.on_realtime_transcription_update = on_preview
         recorder.on_realtime_transcription_stabilized = None
         recorder.start_callback_in_new_thread = False
         recorder.ensure_sentence_starting_uppercase = False
@@ -356,9 +369,7 @@ class RealtimeWorkerOverlapRaceTests(unittest.TestCase):
             ]
             release.set()
             self.assertTrue(
-                wait_until(
-                    lambda: "R2-LIVE-TEXT" in simple_texts, timeout=15.0
-                ),
+                r2_published.wait(timeout=15.0),
                 f"R2 preview never arrived: {simple_texts}",
             )
         finally:
@@ -368,6 +379,10 @@ class RealtimeWorkerOverlapRaceTests(unittest.TestCase):
             thread.join(timeout=10.0)
             self.assertFalse(thread.is_alive())
 
+        self.assertTrue(
+            r1_returned.is_set(),
+            "R1 must return after release so stale-result rejection is exercised",
+        )
         self.assertNotIn("R1-LATE-TEXT", simple_texts)
         self.assertTrue(
             all(

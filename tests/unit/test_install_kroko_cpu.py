@@ -70,6 +70,7 @@ def test_linux_kroko_build_forces_cpu_only_cmake_flags(tmp_path):
     with (
         patch.object(install_kroko, "ensure_program"),
         patch.object(install_kroko, "patch_license_quiet_env"),
+        patch.object(install_kroko, "patch_native_license_status"),
         patch.object(install_kroko, "run") as run,
     ):
         install_kroko.install_linux(args, tmp_path)

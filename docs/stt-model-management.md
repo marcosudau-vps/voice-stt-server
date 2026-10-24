@@ -4,6 +4,12 @@ VoiceSTT verwaltet grosse STT-Modelle fuer Faster-Whisper und Kroko ueber eine
 gemeinsame serverautoritative Schicht. Wake-Word-Assets gehoeren nicht zu
 diesem System.
 
+Die geplante gemeinsame Kroko-Runtime mit generationgebundenen Modellrechten
+ist in [AP-KR-020](.archiv/kroko_unified_runtime_v2/AP-KR-020/2026-10-22_SOLL_IST.md)
+noch nicht implementiert; Arbeitsschritt A ist technisch blockiert. Die
+bestehenden Variantenprüfungen und Registryfelder gelten weiter. Lokale
+Installation und `LOAD_VERIFIED` sind keine neue serverweite Lizenzfreigabe.
+
 ## Speicher und Suchreihenfolge
 
 Der vorhandene `data_root_path` ist die einzige persistente Laufzeitwurzel.
