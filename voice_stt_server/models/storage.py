@@ -70,9 +70,11 @@ def tree_signature(path):
     return entries
 
 
-_CDN_HOSTS = frozenset({"huggingface.co", "cdn-lfs.huggingface.co",
-                        "cdn-lfs-us-1.hf.co", "cdn-lfs-eu-1.hf.co",
-                        "cas-bridge.xethub.hf.co"})
+# Exact HTTPS file/CDN hosts from the provider's documented download surface:
+# https://huggingface.co/docs/hub/models-downloading#downloading-behind-a-proxy-or-firewall
+# No suffix wildcard and no dynamic expansion from an untrusted redirect.
+_CDN_HOSTS = frozenset({"huggingface.co", "us.aws.cdn.hf.co", "us.gcp.cdn.hf.co",
+                        "cdn-lfs-us-1.hf.co", "cdn-lfs-eu-1.hf.co"})
 
 
 def _safe_url(url):

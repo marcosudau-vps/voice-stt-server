@@ -64,12 +64,14 @@ def intent(
     custom=(),
     defaults=None,
     global_auto=False,
+    selected=(),
     engine_auto=False,
     model_settings=None,
     runtime_variant=None,
 ):
     return OperatorIntent(
         global_auto_download=global_auto,
+        selected_model_ids=tuple(selected),
         engines={
             "kroko_onnx": {
                 "enabled": True,
@@ -196,53 +198,32 @@ def test_unmanaged_kroko_file_is_visible_but_not_declared_available(tmp_path):
     assert listed[0]["available"] is False
 
 
-def test_read_only_custom_source_is_discovered_but_writable_runtime_is_target(tmp_path):
+def test_even_writable_custom_source_is_read_only_and_refresh_has_no_download(tmp_path):
     local = product("local")
     wanted = product("wanted", provisionable=True)
     custom = tmp_path / "custom"
     write_model(custom, local)
-    runtime = tmp_path / "runtime"
     calls = []
-    provisioner = AtomicModelProvisioner(
-        fetcher=copying_fetcher(b"model", calls),
-        writable_probe=lambda root: root != custom,
-    )
     manager = STTModelManager(
-        runtime_root=runtime,
-        authority=[local, wanted],
-        intent=intent(
-            custom=[custom],
-            defaults={"final": ("kroko_onnx", wanted.id), "realtime": ("kroko_onnx", wanted.id)},
-            global_auto=True,
-        ),
-        provisioner=provisioner,
-    )
-    snapshot = manager.refresh()
-    assert any(item.id == local.id for item in snapshot.candidates)
-    assert (runtime / "models" / "stt" / "kroko_asr" / wanted.filename).is_file()
-    assert not (custom / wanted.filename).exists()
-    assert calls == [wanted.source]
+        runtime_root=tmp_path / "runtime", authority=[local, wanted],
+        intent=intent(custom=[custom], global_auto=True, selected=[wanted.id]),
+        provisioner=AtomicModelProvisioner(fetcher=copying_fetcher(b"model", calls)))
+    manager.refresh()
+    manager.refresh_inventory()
+    assert manager.provisioning_roots("kroko_onnx") == (manager.default_root("kroko_onnx"),)
+    assert not (custom / wanted.filename).exists() and calls == []
+    assert any(item.id == local.id for item in manager.snapshot().candidates)
 
 
-@pytest.mark.parametrize(
-    "global_flag,engine_flag,model_flag,expected",
-    [
-        (False, False, False, False),
-        (True, False, False, True),
-        (False, True, False, True),
-        (False, False, True, True),
-        (True, False, False, True),
-    ],
-)
-def test_auto_download_is_exact_global_or_engine_or_model(
-    global_flag, engine_flag, model_flag, expected
-):
+@pytest.mark.parametrize("global_flag,selected,legacy_flag,expected", [
+    (False, (), False, False), (True, (), True, False),
+    (False, ("requested",), True, False), (True, ("requested",), False, True),
+    (False, (), True, False),
+])
+def test_auto_download_requires_global_and_explicit_id(global_flag, selected, legacy_flag, expected):
     entry = product("requested", provisionable=True)
-    cfg = intent(
-        global_auto=global_flag,
-        engine_auto=engine_flag,
-        model_settings={entry.id: {"auto_download_enabled": model_flag}},
-    )
+    cfg = intent(global_auto=global_flag, selected=selected, engine_auto=legacy_flag,
+                 model_settings={entry.id: {"auto_download_enabled": legacy_flag}})
     assert cfg.effective_auto_download(entry) is expected
 
 
@@ -252,13 +233,14 @@ def test_hard_ineligibility_wins_over_global_request(tmp_path):
     manager = STTModelManager(
         runtime_root=tmp_path,
         authority=[blocked],
-        intent=intent(global_auto=True),
+        intent=intent(global_auto=True, selected=[blocked.id]),
         provisioner=AtomicModelProvisioner(fetcher=copying_fetcher(b"model", calls)),
     )
     snapshot = manager.refresh()
     assert snapshot.readiness == NOT_READY
     assert calls == []
-    assert any(item["result"] == "blocked_ineligible" for item in snapshot.diagnostics)
+    assert manager.reconcile_downloads()[blocked.id]["errorCode"] == "model_download_not_qualified"
+    assert manager.downloads.snapshot() == []
 
 
 def test_defaults_precede_ordered_priority_and_stable_id_ties(tmp_path):
@@ -346,57 +328,33 @@ def test_discovery_does_not_probe_catalog_and_recovery_stops_at_minimum(tmp_path
     assert any(item.id == later.id and item.state != LOAD_VERIFIED for item in snapshot.candidates)
 
 
-def test_optional_request_continues_after_ready_and_failure_keeps_ready(tmp_path):
+def test_optional_download_failure_and_progress_are_separate_from_runtime_readiness(tmp_path):
     ready = product("ready", priority=1)
     optional = product("optional", provisionable=True)
     root = tmp_path / "models"
     write_model(root, ready)
-    provisioner = AtomicModelProvisioner(
-        fetcher=copying_fetcher(b"wrong"),
-        writable_probe=lambda path: True,
-    )
+    entered, release = threading.Event(), threading.Event()
     manager = STTModelManager(
-        runtime_root=tmp_path / "runtime",
-        authority=[ready, optional],
-        intent=intent(
-            custom=[root],
-            model_settings={optional.id: {"auto_download_enabled": True}},
-        ),
-        provisioner=provisioner,
-    )
-    snapshot = manager.refresh()
-    assert snapshot.minimum_ready
-    assert snapshot.optional_state == "errors"
-    assert set(snapshot.active) == {"final", "realtime"}
-
-
-def test_optional_provisioning_in_progress_is_observable(tmp_path):
-    ready = product("ready", priority=1)
-    optional = product("optional", provisionable=True)
-    root = tmp_path / "models"
-    write_model(root, ready)
-    entered = threading.Event()
-    release = threading.Event()
-    manager = STTModelManager(
-        runtime_root=tmp_path / "runtime",
-        authority=[ready, optional],
-        intent=intent(
-            custom=[root],
-            model_settings={optional.id: {"auto_download_enabled": True}},
-        ),
-        provisioner=AtomicModelProvisioner(
-            fetcher=copying_fetcher(b"model", entered=entered, release=release)
-        ),
-    )
-    worker = threading.Thread(target=manager.refresh)
-    worker.start()
-    assert entered.wait(5)
-    status = manager.status()
-    assert status["minimumReady"] is True
-    assert status["state"] == "ready_optional_provisioning"
-    release.set()
-    worker.join(5)
-    assert not worker.is_alive()
+        runtime_root=tmp_path / "runtime", authority=[ready, optional],
+        intent=intent(custom=[root], global_auto=True, selected=[optional.id]),
+        provisioner=AtomicModelProvisioner(fetcher=copying_fetcher(b"wrong", entered=entered, release=release)))
+    first = manager.refresh()
+    assert first.minimum_ready and not entered.is_set()
+    manager.download_rights = lambda product: True  # synthetic source permission only
+    manager.reconcile_downloads()
+    manager.downloads.start()
+    try:
+        assert entered.wait(5)
+        assert manager.snapshot().active == first.active
+        assert manager.downloads.snapshot()[0]["state"] == "downloading"
+        release.set()
+        from tests.unit.test_stt_download_jobs import wait_job
+        wait_job(manager.downloads, manager.downloads.snapshot()[0]["jobId"], "failed")
+        assert manager.snapshot().minimum_ready
+        assert manager.snapshot().active == first.active
+    finally:
+        release.set()
+        manager.downloads.stop()
 
 
 def test_failed_refresh_preserves_last_known_good(tmp_path):
@@ -773,6 +731,8 @@ def _refresh_service(manager):
     }
     service.stt_model_manager = manager
     service._stt_refresh_lock = threading.Lock()
+    service._settings_lock = threading.RLock()
+    manager._operation_lock = threading.RLock()
     service._stt_model_refresh_required = True
     return service
 

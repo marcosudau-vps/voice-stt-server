@@ -479,6 +479,7 @@ setuptools.setup(
             # wakeword_package_resources.py for why a glob is unsafe here.
         ] + wakeword_package_data,
         "api_fastapi_server": ["static/index.html"],
+        "voice_stt_server.models": ["faster_whisper_manifest.json", "kroko_catalog.json"],
     },
     include_package_data=True,
     cmdclass={"build_py": build_py, "sdist": sdist},

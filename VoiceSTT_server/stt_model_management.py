@@ -22,6 +22,9 @@ from VoiceSTT_server.credential_redaction import (
     kroko_credential_values,
     redact_secret_text,
 )
+from voice_stt_server.models.downloads import DownloadJobManager, ModelManagementError
+from voice_stt_server.models.inventory import installation_id, managed, project_inventory
+from voice_stt_server.models.storage import ArtifactFile, VerifiedModelStorage
 
 
 DISCOVERED = "DISCOVERED"
@@ -87,6 +90,8 @@ class ProductModel:
     provisioning_allowed: bool = False
     rights_status: str = "UNKNOWN"
     recovery_priority: Optional[int] = None
+    catalog_id: Optional[str] = None
+    files: Tuple[ArtifactFile, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "engine", normalize_engine(self.engine))
@@ -113,8 +118,13 @@ class ProductModel:
                     f"provisionable model {self.id!r} lacks immutable authority: "
                     + ", ".join(missing)
                 )
-            if self.artifact_kind != "file":
-                raise ValueError("only verified file provisioning is supported")
+            if self.artifact_kind not in {"file", "directory"}:
+                raise ValueError("unsupported installation format")
+            if self.artifact_kind == "directory":
+                names = {item.path for item in self.files}
+                if (not self.revision or not self.files or len(names) != len(self.files)
+                        or self.bytes != sum(item.bytes for item in self.files)):
+                    raise ValueError("directory provisioning requires a complete pinned file manifest")
             if (
                 isinstance(self.bytes, bool)
                 or int(self.bytes or 0) <= 0
@@ -150,6 +160,7 @@ class OperatorIntent:
     """Mutable operator intent, kept separate from :class:`ProductModel`."""
 
     global_auto_download: bool = False
+    selected_model_ids: Tuple[str, ...] = ()
     engines: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     models: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     defaults: Mapping[str, Tuple[str, str]] = field(default_factory=dict)
@@ -237,6 +248,7 @@ class OperatorIntent:
             global_auto_download=_as_bool(
                 getattr(settings, "stt_auto_download_enabled", False)
             ),
+            selected_model_ids=tuple(getattr(settings, "stt_auto_download_model_ids", ()) or ()),
             engines=engines,
             models=models,
             defaults=defaults,
@@ -268,14 +280,10 @@ class OperatorIntent:
         return bool(self.auto_download_scope(model))
 
     def auto_download_scope(self, model: ProductModel) -> Tuple[str, ...]:
-        scopes = []
-        if self.global_auto_download:
-            scopes.append("global")
-        if _as_bool(self.engine_config(model.engine).get("auto_download_enabled", False)):
-            scopes.append("engine")
-        if _as_bool(self.model_config(model).get("auto_download_enabled", False)):
-            scopes.append("model")
-        return tuple(scopes)
+        # Historical per-engine/per-model flags never implicitly select IDs.
+        if self.global_auto_download and model.id in self.selected_model_ids:
+            return ("global", "selected")
+        return ()
 
     def priority(self, model: ProductModel) -> Optional[int]:
         value = self.model_config(model).get("recovery_priority")
@@ -411,6 +419,22 @@ def default_product_authority() -> Tuple[ProductModel, ...]:
             rights_status=entry.redistribution_status,
             recovery_priority=(100 if entry.id == "kroko-de-community-64-l" else None),
         ))
+    from voice_stt_server.models.sources import faster_whisper_sources, kroko_catalog
+    sources = faster_whisper_sources()
+    faster = tuple(replace(item, **sources[item.id]) if item.id in sources else item
+                   for item in faster)
+    by_name = {entry.name: entry for entry in kroko_catalog().entries}
+    known = {item.filename for item in kroko}
+    kroko = [replace(item, catalog_id=by_name[item.filename].model_id)
+             if item.filename in by_name else item for item in kroko]
+    for entry in by_name.values():
+        if entry.name not in known:
+            kroko.append(ProductModel(
+                id=entry.model_id, catalog_id=entry.model_id, engine="kroko_onnx",
+                language=entry.language, filename=entry.name, revision=entry.revision,
+                license_class=entry.edition.lower(),
+                runtime_variant="pro" if entry.edition == "Pro" else "free",
+                rights_status="CATALOG_ONLY_UNQUALIFIED"))
     return faster + tuple(kroko)
 
 
@@ -561,6 +585,7 @@ class AtomicModelProvisioner:
         writable_probe: Optional[Callable[[Path], bool]] = None,
     ) -> None:
         self._fetcher = fetcher or self._download
+        self._custom_fetcher = fetcher is not None
         self._writable_probe = writable_probe or self._is_writable
 
     @staticmethod
@@ -655,11 +680,20 @@ class STTModelManager:
             "faster_whisper": FasterWhisperAdapter(),
             "kroko_onnx": KrokoAdapter(),
         }
-        self._operation_lock = threading.Lock()
+        self._operation_lock = threading.RLock()
         self._state_lock = threading.RLock()
         self._snapshot = ModelSnapshot(0, NOT_READY, (), {})
         self._last_attempt_diagnostics: Tuple[Mapping[str, Any], ...] = ()
         self._refresh_running = False
+        self.storage = VerifiedModelStorage(
+            self._operation_lock,
+            fetcher=self.provisioner._fetcher if self.provisioner._custom_fetcher else None)
+        self.download_rights = lambda product: product.engine != "kroko_onnx"
+        self.download_policy = lambda: self.intent
+        self.downloads = DownloadJobManager(
+            gate=self.download_product, installed=self.is_installed,
+            install=self._install_download, completed=self.refresh_inventory)
+        self.automatic_results = {}
 
     def default_root(self, engine: str) -> Path:
         name = "fasterwhisper" if normalize_engine(engine) == "faster_whisper" else "kroko_asr"
@@ -686,18 +720,90 @@ class STTModelManager:
         return tuple(unique)
 
     def provisioning_roots(self, engine: str) -> Tuple[Path, ...]:
-        config = self.intent.engine_config(engine)
-        intended = config.get("provisioning_target")
-        roots = []
-        if intended:
-            roots.append(Path(str(intended)).expanduser())
-        roots.extend(self.discovery_roots(engine)[:-1])
-        roots.append(self.default_root(engine))
-        unique = []
-        for root in roots:
-            if root not in unique:
-                unique.append(root)
-        return tuple(unique)
+        # Custom/legacy/ENV search paths are strictly read-only, even writable
+        # ones. A historical provisioning_target never widens this boundary.
+        return (self.default_root(engine),)
+
+    def download_product(self, model_id):
+        product = next((item for item in self.authority if item.id == model_id), None)
+        if product is None:
+            raise ModelManagementError("model_not_found", 404)
+        policy = self.download_policy()
+        if not policy.engine_enabled(product.engine) or not policy.model_enabled(product):
+            raise ModelManagementError("model_disabled", 422)
+        if not product.provisioning_allowed:
+            raise ModelManagementError("model_download_not_qualified", 422)
+        if not self.download_rights(product):
+            raise ModelManagementError("model_download_rights_missing", 422)
+        return product
+
+    def is_installed(self, product):
+        return any(item.product_id == product.id and item.state in {VALIDATED, LOAD_VERIFIED}
+                   for item in self.snapshot().candidates)
+
+    def _install_download(self, product, transition, progress):
+        return self.storage.install(product, self.default_root(product.engine),
+                                    transition, progress, self.download_product)
+
+    def reconcile_downloads(self):
+        """Explicit startup/changed-selection trigger, never an inventory hook."""
+        selected = self.intent.selected_model_ids if self.intent.global_auto_download else ()
+        self.downloads.deselect(selected)
+        previous = getattr(self, "_reconciled_selection", None)
+        if previous == frozenset(selected):
+            return dict(self.automatic_results)
+        self._reconciled_selection = frozenset(selected)
+        results = {key: value for key, value in self.automatic_results.items() if key in selected}
+        newly_selected = set(selected) - (previous or set())
+        for model_id in sorted(newly_selected):
+            try:
+                job, _ = self.downloads.enqueue(model_id, "automatic")
+                results[model_id] = {"jobId": job["jobId"], "errorCode": None}
+            except ModelManagementError as exc:
+                results[model_id] = {"jobId": None, "errorCode": exc.code}
+        self.automatic_results = results
+        return dict(results)
+
+    def cleanup_downloads(self):
+        for engine in self._adapters:
+            self.storage.cleanup(self.default_root(engine))
+
+    def delete_installation(self, requested_id, runtime_guard):
+        with self._operation_lock:
+            candidate = next((item for item in self.snapshot().candidates
+                              if installation_id(item) == requested_id), None)
+            if candidate is None:
+                raise ModelManagementError("installation_not_found", 404)
+            if not managed(candidate, self):
+                raise ModelManagementError("installation_not_managed", 409)
+
+            def guard():
+                product_id = candidate.product_id or candidate.id
+                if self.downloads.references(product_id):
+                    raise ModelManagementError("installation_has_download_job", 409)
+                runtime_guard(candidate)
+
+            self.storage.delete(Path(candidate.path), self.default_root(candidate.engine), guard)
+            self.refresh_inventory()
+            return {"installationId": requested_id, "deleted": True}
+
+    def _discover_candidates(self):
+        by_id = {item.id: item for item in self.authority}
+        candidates = []
+        for engine, adapter in self._adapters.items():
+            products = [item for item in self.authority if item.engine == engine]
+            for item in adapter.discover(self.discovery_roots(engine), products):
+                candidates.append(adapter.validate(item, by_id.get(item.product_id or "")))
+        return tuple(candidates)
+
+    def refresh_inventory(self):
+        """Publish discovery only. No download, probe, recovery or role change."""
+        with self._operation_lock:
+            candidates = self._discover_candidates()
+            with self._state_lock:
+                self._snapshot = replace(self._snapshot, revision=self._snapshot.revision + 1,
+                                         candidates=candidates)
+                return self._snapshot
 
     def status(self) -> Dict[str, Any]:
         with self._state_lock:
@@ -793,14 +899,7 @@ class STTModelManager:
                     self._refresh_running = False
 
     def _build_snapshot(self) -> ModelSnapshot:
-        products_by_id = {item.id: item for item in self.authority}
-        candidates = []
-        for engine, adapter in self._adapters.items():
-            engine_products = [item for item in self.authority if item.engine == engine]
-            discovered = adapter.discover(self.discovery_roots(engine), engine_products)
-            for item in discovered:
-                product = products_by_id.get(item.product_id or "")
-                candidates.append(adapter.validate(item, product))
+        candidates = list(self._discover_candidates())
 
         diagnostics = []
         active: Dict[str, ModelCandidate] = {}
@@ -838,13 +937,7 @@ class STTModelManager:
             if not self._eligible(product, engine, diagnostics):
                 continue
             local = self._find_candidate(candidates, engine, requested, product)
-            if local is None and product and self.intent.effective_auto_download(product):
-                local = self._provision(product, diagnostics)
-                if local is not None:
-                    adapter = self._adapters[product.engine]
-                    local = adapter.validate(local, product)
-                    candidates.append(local)
-            elif local is None:
+            if local is None:
                 diagnostics.append({
                     "modelId": product.id if product else str(requested),
                     "engine": normalize_engine(engine),
@@ -877,18 +970,9 @@ class STTModelManager:
                 continue
             local = self._find_candidate(candidates, product.engine, product.id, product)
             if local is None:
-                if not self.intent.effective_auto_download(product):
-                    diagnostics.append({
-                        "modelId": product.id,
-                        "stage": "recovery",
-                        "result": "missing_not_requested",
-                    })
-                    continue
-                local = self._provision(product, diagnostics)
-                if local is not None:
-                    adapter = self._adapters[product.engine]
-                    local = adapter.validate(local, product)
-                    candidates.append(local)
+                diagnostics.append({"modelId": product.id, "stage": "recovery",
+                                    "result": "missing_not_installed"})
+                continue
             verified = probe(local) if local is not None else None
             if verified is not None:
                 for role in sorted(cover):
@@ -897,40 +981,6 @@ class STTModelManager:
 
         ready = not missing
         optional_state = "complete"
-        if ready:
-            requested_optional = [
-                item for item in self.authority
-                if self.intent.engine_enabled(item.engine)
-                and self.intent.model_enabled(item)
-                and self.intent.effective_auto_download(item)
-                and self._find_candidate(candidates, item.engine, item.id, item) is None
-            ]
-            if requested_optional:
-                optional_state = "provisioning"
-                with self._state_lock:
-                    # Transient status is complete and immutable; active LKG is
-                    # not replaced while optional work is in progress.
-                    self._snapshot = ModelSnapshot(
-                        self._snapshot.revision,
-                        MINIMUM_READY,
-                        tuple(candidates),
-                        dict(active),
-                        optional_state="provisioning",
-                        diagnostics=tuple(diagnostics),
-                    )
-                optional_failed = False
-                for product in requested_optional:
-                    if not self._eligible(product, product.engine, diagnostics):
-                        optional_failed = True
-                        continue
-                    local = self._provision(product, diagnostics)
-                    if local is None:
-                        optional_failed = True
-                        continue
-                    adapter = self._adapters[product.engine]
-                    candidates.append(adapter.validate(local, product))
-                optional_state = "errors" if optional_failed else "complete"
-
         # Replace validated entries by their probed representation for public diagnostics.
         candidates = [probed.get(item.path, item) for item in candidates]
         with self._state_lock:
@@ -971,6 +1021,8 @@ class STTModelManager:
         for candidate in candidates:
             if candidate.engine != normalized_engine:
                 continue
+            if product is not None and candidate.product_id == product.id:
+                return candidate
             aliases = {
                 candidate.id.lower(),
                 Path(candidate.path).name.lower(),
@@ -1042,45 +1094,6 @@ class STTModelManager:
                 return False
         return True
 
-    def _provision(
-        self, product: ProductModel, diagnostics: list
-    ) -> Optional[ModelCandidate]:
-        if not product.provisioning_allowed:
-            diagnostics.append({
-                "modelId": product.id,
-                "stage": "provisioning",
-                "result": "blocked_ineligible",
-                "rightsStatus": product.rights_status,
-                "requestedScope": list(self.intent.auto_download_scope(product)),
-            })
-            return None
-        try:
-            path = self.provisioner.provision(
-                product, self.provisioning_roots(product.engine)
-            )
-            diagnostics.append({
-                "modelId": product.id,
-                "stage": "provisioning",
-                "result": "installed",
-                "requestedScope": list(self.intent.auto_download_scope(product)),
-            })
-            return ModelCandidate(
-                id=product.id,
-                engine=product.engine,
-                path=str(path),
-                source_root=str(path.parent),
-                product_id=product.id,
-            )
-        except Exception as exc:  # noqa: BLE001 - result is diagnostic, never partial
-            message = _safe_error(exc, self.intent.redaction_values)
-            diagnostics.append({
-                "modelId": product.id,
-                "stage": "provisioning",
-                "result": "failed",
-                "message": message,
-                "requestedScope": list(self.intent.auto_download_scope(product)),
-            })
-            return None
 
 
 class ManagedModelRegistryView:
