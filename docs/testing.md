@@ -351,3 +351,28 @@ Lizenztests verwenden ausschließlich synthetische WebSocket-Fakes.
 Kein positiver Test ist ein qualifizierter Pro-Lizenz- oder
 Release-/Redistributionsnachweis. Produktiver Lizenz-/Modellwechsel
 und nativer Dual-Payload-Bootstrap gehören weiterhin in getrennte Abnahmen.
+
+
+## OpenAI-Router und zentrale Security (25.10.2026)
+
+Die OpenAI-Routen sind ohne Rückimport in `api_fastapi_server/openai_routes.py`
+ausgelagert. `api_fastapi_server/security/` kapselt die vier unterschiedlichen
+Gateways für Admin, OpenAI-Bearer, sitzungsgebundenen Logzugriff und eine
+**explizit** auszulösende Kroko-On-Premise-Modelllizenzprüfung.
+
+Die alte HTTP-/WS-Autorisierung ist Vertragsgrundlage: Admin-Key oder
+loopback-only ohne Key; OpenAI ohne Key offen; Log-HTTP mit Admin oder
+Sessiontoken, Log-WS nur mit gültigem Token/Admin-Key, ohne impliziten
+Loopback-Bypass. Synthetische Kroko-Checks sind kein echter Pro-Nachweis.
+
+Gezielte Tests und vollständige Unit-Suite:
+
+```bash
+python -m pytest -q tests/unit/test_server_security_modularization.py tests/unit/test_openai_compatible_endpoint.py tests/unit/test_kroko_selective_improvements.py
+python -m pytest -q tests/unit
+```
+
+Die CI auf Linux und Windows führt die komplette Unit-Suite aus; der
+aktuelle HEAD muss für jede Abnahme neu überprüft werden.
+Der weitere [Modularisierungsfahrplan](architecture/server-modularization-roadmap.md)
+beschreibt die nächsten fachlichen Schnitte.
