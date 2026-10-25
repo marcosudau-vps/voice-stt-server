@@ -357,20 +357,37 @@ und nativer Dual-Payload-Bootstrap gehören weiterhin in getrennte Abnahmen.
 
 Die OpenAI-Routen sind ohne Rückimport in `api_fastapi_server/openai_routes.py`
 ausgelagert. `api_fastapi_server/security/` kapselt die vier unterschiedlichen
-Gateways für Admin, OpenAI-Bearer, sitzungsgebundenen Logzugriff und eine
-**explizit** auszulösende Kroko-On-Premise-Modelllizenzprüfung.
+Gateways für Admin, OpenAI-Bearer, sitzungsgebundenen Logzugriff und die
+Kroko-On-Premise-Modelllizenzprüfung mit automatischem Lifecycle
+(Initialisierung, Modell-Refresh/-Switch, Force-Community-Änderung,
+expliziter Admin-Recheck; Details in
+[Server-Authentifizierung](server-authentication.md#4-kroko-on-premise-modelllizenz--produkt-entitlement-kein-api-login)).
 
 Die alte HTTP-/WS-Autorisierung ist Vertragsgrundlage: Admin-Key oder
 loopback-only ohne Key; OpenAI ohne Key offen; Log-HTTP mit Admin oder
 Sessiontoken, Log-WS nur mit gültigem Token/Admin-Key, ohne impliziten
-Loopback-Bypass. Synthetische Kroko-Checks sind kein echter Pro-Nachweis.
+Loopback-Bypass. Lizenzprüfungen sind modellgebunden, TTL-begrenzt und
+secret-redigiert; ein Key allein schaltet nichts frei.
 
 Gezielte Tests und vollständige Unit-Suite:
 
 ```bash
 python -m pytest -q tests/unit/test_server_security_modularization.py tests/unit/test_openai_compatible_endpoint.py tests/unit/test_kroko_selective_improvements.py
+python -m pytest -q tests/unit/test_kroko_license_lifecycle.py
 python -m pytest -q tests/unit
 ```
+
+Echte Lizenzserver-Integrationstests sind Opt-in und laufen nie in der
+gewöhnlichen CI:
+
+```bash
+VOICESTT_KROKO_LIVE_TESTS=1 VOICESTT_KROKO_TEST_ENV_FILE=<lokale-key-datei> VOICESTT_KROKO_LIVE_MODEL=<lokale-pro-data> python -m pytest -q tests/unit/test_kroko_live_license.py
+```
+
+Sie prüfen positiv/negativ/Modellintegration/Berechtigungswechsel mit
+minimaler Verbindungszahl und vollständig redigierter Evidenz (keine Keys,
+keine Key-URLs in Ausgaben oder Berichten). Fehlen Key oder Pro-Modell, melden
+sie `SKIP` mit genauer Ursache statt eines erfundenen Erfolgs.
 
 Die CI auf Linux und Windows führt die komplette Unit-Suite aus; der
 aktuelle HEAD muss für jede Abnahme neu überprüft werden.

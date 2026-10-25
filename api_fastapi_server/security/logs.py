@@ -4,8 +4,13 @@ import threading
 import time
 import uuid
 
-LOCAL_ADMIN_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "testclient"})
+from .admin import LOCAL_ADMIN_HOSTS
+
 TOKEN_LIFETIME_SECONDS = 24 * 60 * 60
+
+#: Opportunistic sweep threshold: validation stays O(1) in the common case
+#: and only scans the whole store once it has grown unexpectedly large.
+TOKEN_SWEEP_THRESHOLD = 1024
 
 
 class LogTokenAuthority:
@@ -38,7 +43,15 @@ class LogTokenAuthority:
         with self._lock:
             value = str(token)
             record = self._tokens.get(value)
-            if record is None or record["expiresAt"] <= self._clock():
+            now = self._clock()
+            if len(self._tokens) > TOKEN_SWEEP_THRESHOLD:
+                self._tokens = {
+                    existing: entry
+                    for existing, entry in self._tokens.items()
+                    if entry["expiresAt"] > now
+                }
+                record = self._tokens.get(value)
+            if record is None or record["expiresAt"] <= now:
                 self._tokens.pop(value, None)
                 return None
             if session_id and record["sessionId"] != session_id:

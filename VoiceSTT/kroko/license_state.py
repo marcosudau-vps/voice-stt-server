@@ -107,13 +107,20 @@ class KrokoLicenseState:
                     and not self._force_community and self._model_uuid == str(model_uuid))
 
     def public_snapshot(self) -> dict[str, Any]:
-        """No key, credential fingerprint, native payload or provider text."""
+        """No key, credential fingerprint, native payload or provider text.
+
+        ``proEnabled`` is strictly model-scoped: it is only meaningful together
+        with ``modelUuid`` and must never be read as a global grant. Enforcement
+        decisions must use :meth:`pro_enabled_for`, never this projection.
+        """
         with self._lock:
             self._expire_locked()
             return {
                 "status": self._status,
                 "generation": self._generation,
-                "proEnabled": self._status == "VALID" and not self._force_community,
+                "scope": "model",
+                "proEnabled": (self._status == "VALID" and not self._force_community
+                               and bool(self._model_uuid)),
                 "modelUuid": self._model_uuid,
                 "keyPresent": self._key_present,
                 "forceCommunity": self._force_community,

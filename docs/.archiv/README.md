@@ -75,6 +75,7 @@ Begründung im Archiv erhalten.
 | OpenAI-Routen, zentrale Authentifizierung und Modularisierungs-Roadmap (PR #15) | 25.10.2026 | Prüfung offen | [Plan](server_modularization_20261025/2026-10-25_PLAN.md) |
 | Selektive Kroko-V2-Verbesserungen ohne Besitzerprozess (Implementierungs-PR: #15; Quell-/Referenz-PR: #14, nicht gemergt) | 25.10.2026 | Prüfung offen | [Plan](kroko_v2_selective_improvements/2026-10-25_PLAN.md) |
 | Finale Abnahmevorbereitung PR #15 (Arbeitsakte, Traceability, Testevidenz) | 25.10.2026 | Prüfung offen | [Arbeitsakte](pr15_final_abnahmevorbereitung/) |
+| Korrekturlauf PR #15 nach Review 6401918956 (Auto-Lizenz-Lifecycle, Modellfreigabe) | 25.10.2026 | In Umsetzung | [Arbeitsakte](pr15_korrekturlauf_20261025/) |
 | Unabhängige Vorarbeit: Kroko-Modellkatalog | 22.10.2026 | Prüfung offen | [Konzept](kroko_unified_runtime_v2/CATALOG/2026-10-22_KONZEPT.md), [Soll/Ist](kroko_unified_runtime_v2/CATALOG/2026-10-22_IMPLEMENTIERUNG.md), [Testevidenz](kroko_unified_runtime_v2/CATALOG/2026-10-22_TEST_EVIDENZ.md) |
 | Unified Kroko Runtime V2 (AP-KR-010 bis 030) | 22.10.2026 | Prüfung offen | [Gesamtplanung](kroko_unified_runtime_v2/2026-10-22_GESAMTPLAN.md), [AP-KR-010](kroko_unified_runtime_v2/AP-KR-010/2026-10-22_SOLL_IST.md) |
 | Sitzungslokale Wake-Word-Konfiguration | 25.07.2026 | Abgeschlossen | [session-wakeword](session-wakeword/) |

@@ -124,6 +124,32 @@ allen diesen Grenzen zentral entfernt bzw. redigiert.
 Native Kroko-Runtimes und ASR-Modelle sind getrennte Artefakte; diese Schicht
 baut keine native Runtime.
 
+## Lizenz-Eligibility und Runtime-Kompatibilitaet
+
+Lizenzberechtigung und technische Lauffaehigkeit sind zwei getrennte Guards,
+die beide bestehen muessen:
+
+1. **Lizenz-Guard** (nur kommerzielle Kroko-Produkte): Der Server injiziert
+   dem Manager eine lesende `license_policy`. Ein Pro-Modell ist in
+   `_eligible`/`candidate_eligible` genau dann zulaessig, wenn fuer die UUID
+   der tatsaechlich vorliegenden `.data`-Datei (gelesen aus dem Dateiheader,
+   `VoiceSTT.kroko.models.license_uuid_for`) ein frischer modellgebundener
+   Nachweis (`VALID`, TTL-begrenzt) besteht. Ohne injizierte Policy gilt das
+   Legacy-Verhalten (Variante + Enabled). Die LKG-Wiederherstellung filtert
+   entfallene Pro-Rollen heraus, sodass kein abgelaufener Nachweis ein
+   Pro-Modell wiederbelebt.
+2. **Runtime-Guard** (unveraendert strikt fuer Pro, geoeffnet fuer Community):
+   Kommerzielle Modelle verlangen exakt die installierte Variante `pro`.
+   Community-Modelle sind auf Free- **und** Pro-Installationen zulaessig –
+   die native Lizenzpruefung wird fuer sie nicht konsultiert. Modelle mit
+   unbekannter Lizenzklasse behalten den bisherigen strikten Vergleich.
+
+Ein gueltiger Nachweis schaltet die Auswahl frei; Verfügbarkeit,
+Provisionierung, Load-Probe und die Last-Known-Good-Mechanik bleiben davon
+unberührt und können einen Start weiterhin verhindern (fehlende/beschaedigte
+Datei, falsche Runtime). `GET /api/models/management` enthaelt den
+redigierten Lizenzstatus als `krokoLicense` (Scope `model`, keine Secrets).
+
 Die Runtimevariante hat genau eine dokumentierte Praezedenz:
 
 1. `stt_engine_settings.kroko_onnx.runtime_variant`

@@ -32,9 +32,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+from uuid import UUID
 
 #: Existing operator override for the model root. Kept for compatibility, but
 #: its contents are now validated against the manifest instead of trusted.
@@ -453,6 +455,67 @@ def provisioning_error(entry: Optional[KrokoModelEntry], requested: str) -> Krok
     )
 
 
+#: How many leading bytes of a ``.data`` file are scanned for the embedded
+#: model header. The native loader reads the same header (``BanafoLoadModel``);
+#: every shipped model carries its JSON header with ``id`` well inside it.
+MODEL_UUID_SCAN_BYTES = 65536
+
+_MODEL_UUID_PATTERN = re.compile(rb'"id"\s*:\s*"([0-9a-fA-F-]{36})"')
+
+
+def read_model_uuid(path: Any) -> Optional[str]:
+    """Return the canonical model UUID embedded in a Kroko ``.data`` header.
+
+    This is the same technical identity the native runtime hands to its own
+    license client (``BanafoLicense::getInstance(key, model-id, ...)``), so a
+    policy check built on it cannot drift from native enforcement. Pure
+    offline parsing: no network, no native import, no model load. Returns
+    ``None`` when no valid UUID is found (unmanaged/custom files stay
+    fail-closed for license purposes).
+    """
+    try:
+        candidate = Path(str(path)).expanduser()
+        with open(candidate, "rb") as handle:
+            head = handle.read(MODEL_UUID_SCAN_BYTES)
+    except (OSError, ValueError, TypeError):
+        return None
+    match = _MODEL_UUID_PATTERN.search(head or b"")
+    if match is None:
+        return None
+    try:
+        return str(UUID(match.group(1).decode("ascii")))
+    except (ValueError, AttributeError, UnicodeError):
+        return None
+
+
+def license_uuid_for(
+    value: Any,
+    *,
+    manifest: Optional[KrokoModelManifest] = None,
+    options: Optional[Mapping[str, Any]] = None,
+    download_root: Optional[Any] = None,
+) -> Optional[str]:
+    """Resolve one model request to its license-relevant technical UUID.
+
+    Manifest entry first (id or file name), then the locally provisioned file,
+    then the UUID embedded in that file's header. ``None`` means the license
+    layer has nothing verifiable to ask about - callers must treat that as
+    "no entitlement", never as a wildcard. No downloads, no network.
+    """
+    manifest = manifest if manifest is not None else load_manifest()
+    entry = manifest.get(value)
+    if entry is None:
+        return None
+    report = locate_model(
+        entry.filename, manifest=manifest, options=options,
+        download_root=download_root,
+    )
+    found = report.get("path")
+    if not found:
+        return None
+    return read_model_uuid(found)
+
+
 def community_fallback_model(
     manifest: KrokoModelManifest, requested: Any
 ) -> Optional[KrokoModelEntry]:
@@ -505,6 +568,8 @@ __all__ = [
     "hash_verification_enabled",
     "load_manifest",
     "locate_model",
+    "license_uuid_for",
+    "read_model_uuid",
     "model_download_allowed",
     "provisioning_error",
     "sha256_of",

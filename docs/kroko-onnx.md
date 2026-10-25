@@ -276,7 +276,7 @@ Reliable suppression of asynchronous Pro license refresh messages such as
 native patch. Older/unpatched Kroko wheels may still print background license
 messages.
 
-## Selektive V2-Verbesserungen (25.10.2026)
+## Selektive V2-Verbesserungen (25.10.2026) und automatischer Lifecycle (Korrekturlauf)
 
 Der V2-Entwicklungszweig verwendet weiterhin die direkte Kroko-Anbindung.
 Der Owner-/Supervisor-Prozess sowie der native Statuspatch aus Draft-PR #14
@@ -285,27 +285,44 @@ sind **nicht** Teil dieser Implementierung.
 Die Key-Auflösung für `OnlineRecognizer.from_transducer` liegt zentral in
 `VoiceSTT.kroko.credentials.effective_recognizer_key`. Sie berücksichtigt
 auch `recognizer.key` als letzten nativen Override und ist damit für eine
-spätere API-Lizenzprüfung dieselbe Quelle wie für den Recognizer.
+API-Lizenzprüfung dieselbe Quelle wie für den Recognizer.
 
 `VoiceSTT.kroko.license_api.check_onprem_license` stellt eine **explizite**
 modellbezogene Prüffunktion für den On-Premise-WebSocket-Lizenzdienst zur
-Verfügung. Sie ist weder die gehostete Transkriptions-API noch ein
-automatischer Teil des Serverstarts. Das Produkt schaltet dadurch momentan
-**keine** Pro-Modelle frei. Der Lizenzdienst verlangt ein Key-/Modell-UUID-Paar;
-ein positives Ergebnis für ein Modell berechtigt nicht zu anderen Modellen.
-Nicht qualifiziert sind vor allem das Verhalten kurzlebiger Verbindungen,
-Nutzungsmeldungen, Verbindungsgrenzen und Widerrufe. Vor der produktiven
-Verknüpfung sind autorisierte echte Lizenztests und ein dokumentierter
-Lifecycle nötig.
+Verfügung. Sie ist weder die gehostete Transkriptions-API noch löst sie von
+sich aus etwas aus: Aufrufer ist der `KrokoLicenseGate` der Security-Komponente.
+Der Lizenzdienst verlangt ein Key-/Modell-UUID-Paar; ein positives Ergebnis
+für ein Modell berechtigt nicht zu anderen Modellen. Die technische UUID
+stammt aus dem Header der lokal vorliegenden `.data`-Datei
+(`VoiceSTT.kroko.models.license_uuid_for`) – derselben Quelle, die die native
+Runtime ihrer eigenen Prüfung übergibt. Fehlt Datei oder UUID, bleibt der
+Pfad fail-closed.
 
-`VoiceSTT.kroko.license_state.KrokoLicenseState` hält optional einen
-flüchtigen, modellgebundenen Prüfstatus ohne Secret oder Persistenz; er ist
-noch nicht an die serverweite Betriebsart angeschlossen.
+Der Server wertet die Richtlinie automatisch aus: bei Initialisierung (vor der
+ersten Modell-Admission), bei `POST /api/models/refresh`, bei
+`PUT /api/models/active` (gegen die Kandidaten-Settings, da Engine-Optionen
+dort zur Laufzeit wechseln können), bei Änderung von `kroko.forceCommunity`
+und explizit über `POST /api/kroko/license/refresh` (Admin). Ohne Key oder mit
+Force Community findet keine Netzwerkanfrage statt; Prüfungen laufen begrenzt
+(Standard 5 s, Admin-Route bis 60 s) und außerhalb des ASGI-Eventloops.
+`VoiceSTT.kroko.license_state.KrokoLicenseState` hält den flüchtigen,
+modellgebundenen Prüfstatus ohne Secret oder Persistenz (Scope `model`,
+TTL ≤ 60 s, Generationenbindung); `pro_enabled` ist daraus abgeleitet.
 `VoiceSTT.kroko.models.community_fallback_model` wählt deterministisch
 einen geeigneten Community-*Kandidaten*, überprüft aber weder dessen lokale
 Verfügbarkeit noch die Ladbarkeit. Diese Verantwortung bleibt beim
-`STTModelManager`. Die derzeitige Laufzeit-/Variantenselektion bleibt
-unverändert.
+`STTModelManager`. Details zum Berechtigungs-Lifecycle:
+[Server-Authentifizierung](server-authentication.md#4-kroko-on-premise-modelllizenz--produkt-entitlement-kein-api-login).
+
+Betreiber setzen `kroko.forceCommunity` (serverweit, Admin, live,
+persistierte Absicht) für reinen Community-Betrieb. Lizenzstatus und
+`pro_enabled` werden nie persistiert; ein Neustart beginnt bei `NOT_CHECKED`.
+Ein Key allein – ohne positive Prüfung – schaltet nichts frei; ein Key ersetzt
+insbesondere keinen Pro-Build (`KROKO_VARIANT=pro`, siehe
+[Buildreferenz](../build/BUILD.md)). Nicht qualifiziert bleiben vor allem
+Anbieter-Connection-Limits, Nutzungsreports und Widerrufssemantik.
+Echte Lizenzserver-Integrationstests sind Opt-in
+(`VOICESTT_KROKO_LIVE_TESTS=1`), siehe [Testing](testing.md).
 
 ## FastAPI Example
 

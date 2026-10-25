@@ -25,7 +25,7 @@ Der Stand bezieht sich auf die Quellstruktur im Arbeitsbranch von PR #15;
 | **OpenAI-HTTP-Routen** | `GET /v1/models`, `POST /v1/audio/transcriptions`, Upload, SSE, Formate und HTTP-Telemetrie lagen zusammen in `server.py` | `api_fastapi_server/openai_routes.py`, `create_openai_router(...)` mit expliziter Service-/Codec-/Auth-Injektion | **JETZT – im PR #15 extrahiert.** Nach Linux-/Windows-CI und unabhängiger Prüfung abschließen |
 | **OpenAI-Format-/Formularlogik** | Bereits in `VoiceSTT_server/openai_compat.py` | Bestehende Modulgrenze unverändert weiterverwenden; später allenfalls mit Routen in Fachpaket umordnen | **BELASSEN.** Kein zweites Parsing-/Response-Modul erfinden |
 | **Security / Gatekeeper** | Admin-, OpenAI- und Log-Zugriff waren über ASGI-Routen und `VoiceSTTService` verteilt | `api_fastapi_server/security/`: `SecurityService` als einheitliche Schnittstelle mit spezialisierten Admin-, OpenAI-, Log- und Kroko-Adaptern | **JETZT – im PR #15 extrahiert.** Unveränderte Zugriffsscope-/401-/403-Verträge ausführlich testen |
-| **Kroko-Lizenz** | Eff. Key, WebSocket-Probe und flüchtiger Modell-Lizenzstatus liegen separat unter `VoiceSTT/kroko/` (aus PR #15) | Security-Adapter delegiert ausschließlich; ASR-Engine darf keine FastAPI-Abhängigkeit erhalten | **JETZT: Adapter ja. SPÄTER:** echte allgemeine Pro-Lizenzsemantik, Runtimevariante, Verlängerung, Widerruf, modellübergreifende Ansprüche separat qualifizieren |
+| **Kroko-Lizenz** | Eff. Key, WebSocket-Probe und flüchtiger Modell-Lizenzstatus liegen separat unter `VoiceSTT/kroko/`; der Security-Adapter wertet die Policy automatisch aus (Init, Refresh/Switch, Force-Änderung, expliziter Recheck) und der `STTModelManager` erzwingt sie als lesende `license_policy` vor jeder Admission | **JETZT – in PR #15 integriert.** UUID aus `.data`-Header, Community auch unter Pro-Runtime, Pro nur mit frischem modellgebundenem Nachweis; echte Pro-Lizenztests Opt-in, Anbieter-Limits/Widerruf weiter offen |
 | **Logtoken-Lebenszyklus** | 24h-Token-Ausgabe und Scopeprüfung waren im Service und den Log-Routen gemischt | `security/logs.py`: Tokens, Sessionbindung, Ablauf und getrennte HTTP-/WS-Policy | **JETZT – im PR #15 extrahiert.** Nie Logtoken mit Admin-Key verwechseln |
 | **Log-HTTP- und -WebSocket-Routen** | Historie, SQLite-Replay, Subscriptions, Filter, Kanalrechte und Streaming bleiben in `server.py` | `api_fastapi_server/log_routes.py`; Event-Hub über Schnittstelle statt Rückimport der Serverdatei | **ALS NÄCHSTES.** Hoher Nutzen, gut abgrenzbar, aber WS-Replay-/Cursor-Contract absichern |
 | **Admin-/Konfigurationsrouten** | REST für Konfiguration, Laufzeitparameter, Settings-Registry, Reload, Logging, Sprache | `routes/admin.py`, `routes/settings.py`, `routes/logging_config.py` mit Service-API | **ALS NÄCHSTES.** In 2–3 thematischen Schnitten; Sicherheit aus PR #15 vorher festigen |
@@ -47,12 +47,12 @@ Der Stand bezieht sich auf die Quellstruktur im Arbeitsbranch von PR #15;
 
 | Phase | Arbeitsergebnis / Test-Fokus | Weiter erst, wenn ... |
 | --- | --- | --- |
-| **A – PR #15** | OpenAI-Router, vier Security-Adapter, gezielte Unit-/HTTP-/WS-Tests, unveränderte bestehende V2-Semantik | Windows-/Linux-CI grün, unabhängiger PR-Review |
+| **A – PR #15** | OpenAI-Router, vier Security-Gates inkl. automatischem Kroko-Lizenz-Lifecycle mit Manager-Integration, gezielte Unit-/HTTP-/WS-/Live-Tests, unveränderte bestehende V2-Semantik | Windows-/Linux-CI grün, unabhängiger PR-Review |
 | **B – kleinere API-Fachmodule** | Log-Router, Admin-/Settings- und Modell-Router, getrennt pro Schnitt | API-Vertrag und Audit-/Cursor-Snapshots stabil |
 | **C – technische Kerne** | Audiocodecs, SessionStore, ConnectionManager, danach Queue/Worker/Scheduler | Last-/Race-/Abbruch-/Parallelitäts-Tests belastbar |
 | **D – komplexe Sitzungslogik** | RecorderBackedRealtimeSession in kleine Verantwortlichkeiten zerlegen | V1-/V2-Client-Paartests, Wake-/Activation-Regressionssuite bestanden |
 | **E – Aufräum-/Release-Schnitt** | `VoiceSTTService` verschlanken, App-Factory finalisieren, Doppelimporte/Altcode entfernen | End-to-End-, Release- und Build-Identitätstests bestanden |
-| **Separat: Kroko Pro** | Betreiberlizenz vs. Modellrechte, echter Dienst, lokale Native-Variante, Widerruf/Monitoring | Anbieter-/Lizenzvertrag und echte autorisierte Positiv-/Negativtests vorliegen |
+| **Separat: Kroko Pro** | Betreiberlizenz vs. Modellrechte, Widerruf/Monitoring, Nutzungsreports | Anbieter-Limits/Reporting/Widerruf und echte autorisierte Positiv-/Negativtests je Release vorliegen |
 
 ## Nicht verhandelbare Architekturregeln
 
@@ -75,6 +75,8 @@ Der Stand bezieht sich auf die Quellstruktur im Arbeitsbranch von PR #15;
 
 Dieser Fahrplan ist ein technisches Arbeitsdokument und keine
 Releasefreigabe. Die Extraktion in PR #15 wird gegen vorhandene Tests
-geprüft, aber echte Kroko-Pro-Lizenztests und produktive Runtimewechsel
-gehören ausdrücklich **nicht** zur vorliegenden Abnahme. Die kommenden
+geprüft; der Korrekturlauf integriert zusätzlich den automatischen
+Kroko-Lizenz-Lifecycle mit Opt-in-Echtlizenztests. Anbieter-Connection-Limits,
+Nutzungsreports, Widerrufssemantik und produktive Runtimewechsel gehören
+ausdrücklich **nicht** zur vorliegenden Abnahme. Die kommenden
 Etappen sind Vorschläge, keine bereits umgesetzten Änderungen.

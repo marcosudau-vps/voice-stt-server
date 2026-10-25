@@ -298,13 +298,43 @@ Kroko-On-Premise-Modelllizenz haben getrennte Zuständigkeiten.
   sitzungsgebunden und nicht mit Adminrechten gleichzusetzen. HTTP- und
   Log-WebSocket-Zugriff besitzen bewusst unterschiedliche lokale
   Autorisierungsregeln.
-- **Kroko:** Der Security-Adapter darf explizit den bereits vorhandenen
-  modellbezogenen On-Premise-Lizenzprüfer ansprechen; dieser aktiviert noch
-  keine produktiven Pro-Rechte und löst beim Serverstart keine Prüfung aus.
-  Keine Schlüssel werden durch diese Refaktorierung im YAML gespeichert.
+- **Kroko:** Der Security-Adapter prüft automatisch den bereits vorhandenen
+  modellbezogenen On-Premise-Lizenzstatus an Initialisierung, Modell-Refresh/-
+  Switch, Force-Community-Änderung und explizitem Recheck; ohne Key oder mit
+  Force Community ohne Netzwerkkontakt. Betreiberabsicht `kroko.forceCommunity`
+  (serverweit, Admin-Key, live, persistiert); Lizenzstatus und abgeleitetes
+  `pro_enabled` sind flüchtig und werden nie persistiert. Der Key bleibt
+  Laufzeit-Secret (Umgebung oder Engine-Optionen, nie YAML) und ersetzt keinen
+  Pro-Build. Keine Schlüssel werden durch diese Refaktorierung im YAML gespeichert.
 
 Die vollständigen Schnittstellen- und Modulgrenzen sind in der
 [OpenAI-HTTP-Modulreferenz](openai-http-api.md) und der
 [SecurityService-/Authentifizierungsreferenz](server-authentication.md)
 dokumentiert. Der [Modularisierungsfahrplan](architecture/server-modularization-roadmap.md)
 beschreibt fachliche Grenzen, Restarbeiten und empfohlene Reihenfolge.
+
+## Kroko-Key bereitstellen, Force Community, Neustartsemantik (Korrekturlauf)
+
+- **Key bereitstellen:** als Umgebungsvariable (`KROKO_API_KEY` bevorzugt;
+  daneben `KROKO_ONNX_KEY`, `VOICESTT_KROKO_ONNX_KEY`, `KROKO_KEY`) oder als
+  Engine-Option `key` bzw. verschachtelt `recognizer.key` (letzteres gewinnt,
+  auch leer suppressiv). Niemals in `config.yaml`, CLI-Historie, Logs oder
+  API-Antworten. Die VPS-Referenz injiziert die Secret-Datei per
+  Compose-`env_file`; die native Runtime liest ihre eigenen Variablen selbst.
+- **Key-Wechsel wirksam:** Engine-Optionen wechseln zur Laufzeit über
+  `PUT /api/models/active` (löst Neubewertung vor der Admission aus);
+  Umgebungsänderungen außerhalb des Prozesses erfordern einen **Neustart**.
+  Rotation/Entfernung invalidieren eine bestehende Freigabe sofort.
+- **Force Community:** `PATCH /api/v2/settings/server` mit
+  `{"baseSettingsRevision": N, "changes": {"kroko.forceCommunity": true}}`
+  (Admin). Wirkt sofort, stoppt weitere Prüfungen und entzieht Pro-Rechte;
+  `false` stellt die automatische Prüfung wieder her. Persistiert als
+  Betreiberabsicht in `runtime.json` (`settingsControlOverlay`).
+- **Zustände:** `NOT_CHECKED` (kein Key/Force/neu gestartet),
+  `CHECKING`, `VALID` (modellgebunden, TTL ≤ 60 s), `INVALID` (abgelehnt),
+  `CHECK_FAILED` (Fehler/Ablauf). Sichtbar redigiert in
+  `GET /api/models/management` (`krokoLicense`) und
+  `POST /api/kroko/license/refresh` (Admin, expliziter Recheck).
+- **Abgrenzung:** `runtime_variant` (installierte native Runtime, Build-Sache)
+  ist nicht die Lizenzfreigabe. Community läuft auf Free- und Pro-Builds;
+  Pro-Modelle brauchen Pro-Build **und** frischen Nachweis **und** lokale Datei.

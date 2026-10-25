@@ -108,6 +108,10 @@ def create_openai_router(
                 severity="warning",
                 reason="authentication_failed",
             )
+            try:
+                auth_error.headers["X-Request-ID"] = request_id
+            except Exception:
+                pass
             return auth_error
         try:
             form = await request.form()

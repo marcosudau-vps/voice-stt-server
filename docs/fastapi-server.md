@@ -240,6 +240,14 @@ worker engines are stopped and their model references are released. A later
 realtime or HTTP transcription loads the configured lanes again. Health checks
 stay successful while this intentional unloaded state is active.
 
+Kroko license operations (all admin-guarded): `POST /api/models/refresh`
+re-evaluates the license policy before the transactional snapshot rebuild;
+`POST /api/kroko/license/refresh` runs an explicit bounded recheck
+(optional JSON body `{"timeout": seconds, 0 < t ≤ 60}`) and, on a fresh Pro
+grant, applies it through the regular model-refresh path. `GET
+/api/models/management` carries the redacted license state as `krokoLicense`
+(`status`, model-scoped `proEnabled`, no secrets).
+
 Both model selectors use the complete mounted local registry. Kroko ONNX and
 Faster-Whisper models can therefore be assigned independently to either the
 final or realtime lane. Server-side CPU memory policy remains the only optional

@@ -35,7 +35,7 @@ Weitere implementierte Formularparameter: `language`, `prompt`, `temperature`, `
 
 Das Modell `whisper-1` dient als kompatibler Alias für das konfigurierte finale Routing. Für diesen Alias kann das Zielmodell über das Formularfeld `voicestt_model` (alternativ `model_override`) oder den Header `X-VoiceSTT-Model` übersteuert werden; der Formular-Override hat Vorrang. Nicht zulässige Overrides werden abgewiesen. Der Server bleibt die Authority für aufgelöste Modelle, Verfügbarkeit und Lanes.
 
-Die Transkriptionsantwort kann die Header `X-Request-ID`, `X-VoiceSTT-Requested-Model`, `X-VoiceSTT-Resolved-Model`, `X-VoiceSTT-Route`, bei Overrides zusätzlich `X-VoiceSTT-Override-Model` und `X-VoiceSTT-Override-Source` enthalten. Die exakte Fehlerpfad-/Headerabdeckung entspricht dem bestehenden Implementierungsvertrag; insbesondere enthält nicht jeder Authentifizierungsfehler `X-Request-ID`.
+Die Transkriptionsantwort kann die Header `X-Request-ID`, `X-VoiceSTT-Requested-Model`, `X-VoiceSTT-Resolved-Model`, `X-VoiceSTT-Route`, bei Overrides zusätzlich `X-VoiceSTT-Override-Model` und `X-VoiceSTT-Override-Source` enthalten. Seit dem PR-#15-Korrekturlauf trägt auch die Authentifizierungs-Fehlerantwort `X-Request-ID`. Die exakte Fehlerpfad-/Headerabdeckung entspricht dem bestehenden Implementierungsvertrag.
 
 ## Antwortformate und Streaming
 

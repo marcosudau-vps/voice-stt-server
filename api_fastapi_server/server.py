@@ -88,6 +88,11 @@ from VoiceSTT_server.credential_redaction import (
     redact_kroko_credentials,
     redact_secret_text,
 )
+from VoiceSTT.kroko.models import (
+    license_uuid_for,
+    load_manifest,
+    read_model_uuid,
+)
 from VoiceSTT_server.stt_model_management import (
     ManagedModelRegistryView,
     OperatorIntent,
@@ -6262,11 +6267,29 @@ class VoiceSTTService:
         self.recorder_factory = recorder_factory
         self.scheduler_factory = scheduler_factory or InferenceScheduler
         self._stt_refresh_lock = threading.Lock()
+        self.config_store = RuntimeConfigStore(settings.runtime_config_path)
+        # AP-SRV-050 server-authoritative defaults with their own revision
+        # stream, loaded from the single runtime config document. This must
+        # exist before the first model refresh: the Kroko license policy
+        # reads the persisted force-community intent up front.
+        persisted_overlay, persisted_revision = self.config_store.load_control()
+        self.settings_control = settings_control_module.ServerSettingsState(
+            settings_control_module.build_default_registry(),
+            overlay=persisted_overlay,
+            revision=persisted_revision,
+            persist=self._persist_settings_control,
+        )
+        self.settings_registry = self.settings_control.registry
         self.stt_model_manager = STTModelManager(
             runtime_root=(settings.data_root_path or "data"),
             intent=OperatorIntent.from_settings(settings),
             load_probe=self._probe_stt_model,
+            license_policy=self._kroko_license_entitlement,
         )
+        # The license decision precedes the first model admission: without a
+        # fresh model-bound VALID proof no Pro model may enter the snapshot,
+        # so the initial refresh can only admit Community models.
+        self.refresh_kroko_license_policy(settings=settings, background=False)
         self._apply_stt_model_snapshot(self.stt_model_manager.refresh())
         self._stt_model_refresh_required = False
         self.scheduler = self._new_scheduler()
@@ -6278,17 +6301,6 @@ class VoiceSTTService:
         self.events = StructuredEventHub(settings)
         self.audit = AuditLogManager(settings, self.events)
         self.performance = PerformanceLogManager(settings, self.events)
-        self.config_store = RuntimeConfigStore(settings.runtime_config_path)
-        # AP-SRV-050 server-authoritative defaults with their own revision
-        # stream, loaded from the single runtime config document.
-        persisted_overlay, persisted_revision = self.config_store.load_control()
-        self.settings_control = settings_control_module.ServerSettingsState(
-            settings_control_module.build_default_registry(),
-            overlay=persisted_overlay,
-            revision=persisted_revision,
-            persist=self._persist_settings_control,
-        )
-        self.settings_registry = self.settings_control.registry
         # AP-SRV-060: the one server-wide wake-word catalog authority. It holds
         # the last-known-good manifest snapshot, the public projection, the
         # internal artifact projection, the single resolver, availability, the
@@ -6343,9 +6355,222 @@ class VoiceSTTService:
         }
         return True
 
+    # -- Kroko license lifecycle (PR #15 Korrekturlauf) ---------------------
+
+    #: Bounded default for one license-server round trip. No endless retry.
+    KROKO_LICENSE_CHECK_TIMEOUT = 5.0
+
+    def _kroko_force_community(self):
+        """Server-wide persisted operator intent; never a session value."""
+        control = getattr(self, "settings_control", None)
+        if control is None:
+            return False
+        try:
+            return bool(control.server_effective().get(
+                settings_control_module.KROKO_FORCE_COMMUNITY, False
+            ))
+        except Exception:
+            return False
+
+    def _kroko_manifest(self):
+        cached = getattr(self, "_kroko_manifest_cache", None)
+        if cached is None:
+            try:
+                cached = load_manifest()
+            except Exception:
+                return None
+            self._kroko_manifest_cache = cached
+        return cached
+
+    def _kroko_lane_targets(self, settings):
+        """Distinct ``(model_uuid, options)`` for intended PRO-tier Kroko lanes.
+
+        The UUID comes from the locally provisioned ``.data`` header - the
+        same technical identity the native runtime enforces - so the policy
+        can never address a model the host does not actually hold.
+        """
+        targets = []
+        seen = set()
+        try:
+            manifest = self._kroko_manifest()
+            if manifest is None:
+                return targets
+            lanes = (
+                (
+                    settings.transcription_engine,
+                    settings.model,
+                    settings.transcription_engine_options,
+                ),
+                (
+                    settings.realtime_transcription_engine
+                    or settings.transcription_engine,
+                    settings.realtime_model or settings.model,
+                    settings.realtime_transcription_engine_options
+                    or settings.transcription_engine_options,
+                ),
+            )
+            for engine, model, options in lanes:
+                try:
+                    if normalize_engine_name(engine or "") != "kroko_onnx":
+                        continue
+                    entry = manifest.get(model)
+                    if entry is None:
+                        continue
+                    if (entry.tier or "").strip().lower() != "pro":
+                        continue
+                    lane_options = dict(options or {})
+                    uuid = license_uuid_for(
+                        entry.filename, manifest=manifest,
+                        options=lane_options or None,
+                    )
+                    if not uuid or uuid in seen:
+                        continue
+                    seen.add(uuid)
+                    targets.append((uuid, lane_options))
+                except Exception:
+                    continue
+        except Exception:
+            return []
+        return targets
+
+    def _kroko_license_entitlement(self, product, candidate_path=None):
+        """Live entitlement hook injected into STTModelManager (B1/B2).
+
+        Commercial Kroko products are entitled only while the gate holds a
+        fresh, model-bound VALID proof for the exact file's UUID. Everything
+        else passes through untouched. Never raises, never logs secrets.
+        """
+        try:
+            if normalize_engine_name(
+                getattr(product, "engine", "") or ""
+            ) != "kroko_onnx":
+                return True, "not_kroko"
+            uuid = None
+            if candidate_path:
+                try:
+                    uuid = read_model_uuid(candidate_path)
+                except Exception:
+                    uuid = None
+            if uuid is None:
+                try:
+                    uuid = license_uuid_for(
+                        getattr(product, "id", "")
+                        or getattr(product, "filename", "")
+                    )
+                except Exception:
+                    uuid = None
+            if not uuid:
+                return False, "no_license_uuid"
+            if self.security.kroko.state.pro_enabled_for(uuid):
+                return True, "license_valid"
+            try:
+                reason = self.security.kroko.state.public_snapshot().get(
+                    "reasonCode", "not_entitled"
+                )
+            except Exception:
+                reason = "not_entitled"
+            return False, str(reason or "not_entitled")
+        except Exception:
+            return False, "policy_error"
+
+    def refresh_kroko_license_policy(self, *, settings=None, background=False,
+                                     connect=None, timeout=None,
+                                     on_result=None):
+        """(Re-)evaluate the Kroko license policy. Never raises.
+
+        A synchronous decision comes first (binds key/mode, invalidating
+        superseded proofs); a bounded network check follows only for intended
+        Pro models with a key and without force. ``background=True`` runs the
+        checks on one daemon thread, never on the ASGI loop. Returns the
+        decision list (empty when delegated to background).
+        """
+        settings = settings if settings is not None else self.settings
+        if timeout is None:
+            timeout = self.KROKO_LICENSE_CHECK_TIMEOUT
+        try:
+            force = self._kroko_force_community()
+            targets = self._kroko_lane_targets(settings)
+        except Exception:
+            LOGGER.warning(
+                "Kroko-Lizenzrichtlinie konnte nicht bewertet werden."
+            )
+            return [{
+                "tier": "community",
+                "model_uuid": "",
+                "reason": "policy_error",
+                "check_required": False,
+            }]
+        if not targets:
+            # No checkable Pro model: still bind key/mode so a removed key or
+            # a new force flag invalidates an older VALID proof immediately.
+            try:
+                lane_options = {}
+                for engine, options in (
+                    (settings.transcription_engine,
+                     settings.transcription_engine_options),
+                    (settings.realtime_transcription_engine,
+                     settings.realtime_transcription_engine_options),
+                ):
+                    try:
+                        if normalize_engine_name(engine or "") == "kroko_onnx":
+                            lane_options = dict(options or {})
+                            break
+                    except Exception:
+                        continue
+                self.security.kroko.decide(
+                    "", options=lane_options, force_community=force
+                )
+            except Exception:
+                pass
+            return [{
+                "tier": "community",
+                "model_uuid": "",
+                "reason": "no_pro_target",
+                "check_required": False,
+            }]
+
+        def run_all():
+            decisions = []
+            for uuid, options in targets:
+                try:
+                    decision, _started = self.security.kroko.refresh(
+                        uuid, options=options, force_community=force,
+                        connect=connect, timeout=timeout, background=False,
+                    )
+                except Exception:
+                    decision = {
+                        "tier": "community",
+                        "model_uuid": uuid,
+                        "reason": "policy_error",
+                        "check_required": False,
+                    }
+                decisions.append(decision)
+            if on_result is not None:
+                try:
+                    on_result(decisions)
+                except Exception:
+                    pass
+            return decisions
+
+        if background:
+            worker = threading.Thread(
+                target=run_all,
+                name="KrokoLicensePolicyRefresh",
+                daemon=True,
+            )
+            worker.start()
+            return []
+        return run_all()
+
     def stt_model_management_status(self):
         data = self.stt_model_manager.status()
         data["refreshRequired"] = bool(self._stt_model_refresh_required)
+        try:
+            data["krokoLicense"] = (
+                self.security.kroko.state.public_snapshot()
+            )
+        except Exception:
+            data["krokoLicense"] = {"status": "UNKNOWN"}
         return data
 
     def stt_model_readiness_summary(self):
@@ -6376,6 +6601,13 @@ class VoiceSTTService:
             return self._refresh_stt_models_locked(timeout)
 
     def _refresh_stt_models_locked(self, timeout):
+        # The license decision precedes the admission: a rotation, removal,
+        # force flag or expiry since the last refresh must not leak into the
+        # new snapshot. Bounded and skipped when fresh, so steady-state cost
+        # is ~zero and no network happens without a key.
+        self.refresh_kroko_license_policy(
+            settings=self.settings, background=False
+        )
         previous_snapshot = self.stt_model_manager.snapshot()
         previous_intent = self.stt_model_manager.intent
         previous = dict(self.settings._resolved_stt_models)
@@ -7334,6 +7566,12 @@ class VoiceSTTService:
         previous_management = self.stt_model_manager.snapshot()
         previous_intent = self.stt_model_manager.intent
         self.stt_model_manager.intent = OperatorIntent.from_settings(candidate)
+        # Engine options (including the Kroko key) may change through a
+        # switch: re-evaluate against the candidate before any admission or
+        # native load probe can see the new intent.
+        self.refresh_kroko_license_policy(
+            settings=candidate, background=False
+        )
         managed = self.stt_model_manager.refresh()
         if not managed.minimum_ready:
             self.stt_model_manager.intent = previous_intent
@@ -8071,7 +8309,15 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             service.start(asyncio.get_running_loop())
             yield
         finally:
-            service.stop()
+            try:
+                service.stop()
+            except Exception:
+                # A failing cleanup must never mask the original startup
+                # error: log it redacted and let the in-flight exception
+                # (if any) propagate untouched.
+                LOGGER.exception(
+                    "Fehler beim Stoppen des VoiceSTT-Dienstes."
+                )
 
     app = FastAPI(
         title="VoiceSTT FastAPI-Server",
@@ -8183,6 +8429,55 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 {"error": service._safe_stt_error(exc)},
                 status_code=409,
             )
+
+    @app.post("/api/kroko/license/refresh")
+    async def refresh_kroko_license(payload: dict, request: Request):
+        # Explicit operator recheck after an error or an expiry, behind the
+        # same existing admin guard as the model routes. The bounded check
+        # runs off the event loop; a fresh Pro grant is applied to the model
+        # registry through the regular transactional refresh path.
+        auth_error = admin_auth_error(request)
+        if auth_error is not None:
+            return auth_error
+        if not isinstance(payload, dict):
+            payload = {}
+        try:
+            timeout = float(payload.get("timeout", 5.0))
+        except (TypeError, ValueError):
+            return JSONResponse(
+                {"error": "timeout muss eine positive Zahl sein."},
+                status_code=400,
+            )
+        if not (timeout > 0 and timeout <= 60):
+            return JSONResponse(
+                {"error": "timeout muss im Bereich (0, 60] liegen."},
+                status_code=400,
+            )
+        decisions = await asyncio.to_thread(
+            service.refresh_kroko_license_policy, timeout=timeout
+        )
+        management = None
+        if any(
+            isinstance(item, dict) and item.get("tier") == "pro"
+            for item in decisions
+        ):
+            try:
+                management = await asyncio.to_thread(
+                    service.refresh_stt_models
+                )
+            except (RuntimeError, ValueError) as exc:
+                return JSONResponse(
+                    {
+                        "decisions": decisions,
+                        "error": service._safe_stt_error(exc),
+                    },
+                    status_code=409,
+                )
+        return JSONResponse({
+            "decisions": decisions,
+            "management": management,
+            "license": service.security.kroko.state.public_snapshot(),
+        })
 
     @app.get("/api/models/lifecycle")
     async def get_model_lifecycle(request: Request):
@@ -8424,6 +8719,12 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             # The catalog owns availability, the settings plane owns the value:
             # re-project the confirmed disable list onto the one catalog.
             service.apply_wake_word_global_disable()
+        if result.accepted and settings_control_module.KROKO_FORCE_COMMUNITY in (
+            result.changed_keys or ()
+        ):
+            # Force Community invalidates a Pro grant immediately; the policy
+            # re-evaluation runs on a daemon thread, never on the event loop.
+            service.refresh_kroko_license_policy(background=True)
         status = 409 if result.result == "settings_revision_conflict" else (
             500 if result.result == "internal_error" else (
                 422 if result.result == "settings_rejected" else 200
