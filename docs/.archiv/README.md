@@ -72,6 +72,7 @@ Begründung im Archiv erhalten.
 
 | Aktion | Aktionsdatum | Status | Archiv |
 | --- | --- | --- | --- |
+| Selektive Kroko-V2-Verbesserungen ohne Besitzerprozess (PR #14) | 25.10.2026 | In Umsetzung | [Plan](kroko_v2_selective_improvements/2026-10-25_PLAN.md) |
 | Unabhängige Vorarbeit: Kroko-Modellkatalog | 22.10.2026 | Prüfung offen | [Konzept](kroko_unified_runtime_v2/CATALOG/2026-10-22_KONZEPT.md), [Soll/Ist](kroko_unified_runtime_v2/CATALOG/2026-10-22_IMPLEMENTIERUNG.md), [Testevidenz](kroko_unified_runtime_v2/CATALOG/2026-10-22_TEST_EVIDENZ.md) |
 | Unified Kroko Runtime V2 (AP-KR-010 bis 030) | 22.10.2026 | Prüfung offen | [Gesamtplanung](kroko_unified_runtime_v2/2026-10-22_GESAMTPLAN.md), [AP-KR-010](kroko_unified_runtime_v2/AP-KR-010/2026-10-22_SOLL_IST.md) |
 | Sitzungslokale Wake-Word-Konfiguration | 25.07.2026 | Abgeschlossen | [session-wakeword](session-wakeword/) |
