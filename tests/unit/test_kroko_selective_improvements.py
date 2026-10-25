@@ -86,6 +86,7 @@ def test_license_probe_validates_specific_model_with_conservative_ttl():
     ({"allowed": True, "remaining_seconds": 0, "offline_timeout": 60}, "CHECK_FAILED"),
     ({"allowed": True, "remaining_seconds": True, "offline_timeout": 60}, "CHECK_FAILED"),
     ({"allowed": True, "remaining_seconds": 60, "offline_timeout": 0}, "CHECK_FAILED"),
+    ({"allowed": True, "remaining_seconds": 60, "offline_timeout": 60, "error": "revoked"}, "CHECK_FAILED"),
     ({"remaining_seconds": 60}, "CHECK_FAILED"),
 ])
 def test_license_probe_fails_closed_for_invalid_reply(reply, status):
