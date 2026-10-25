@@ -149,6 +149,20 @@ def test_kroko_adapter_does_not_auto_check_and_requires_explicit_model(monkeypat
         assert "test-kroko" not in repr(gate.state.public_snapshot())
 
 
+def test_kroko_adapter_rejects_other_model_verdict_even_when_positive():
+    gate = security().kroko
+    other = "123e4567-e89b-12d3-a456-426614174001"
+    with mock.patch(
+        "api_fastapi_server.security.kroko.check_onprem_license",
+        return_value=LicenseCheckResult("VALID", other, 30, "ok"),
+    ):
+        result = gate.check_model(MODEL_UUID, options={"key": "synthetic"})
+    assert result.status == "CHECK_FAILED"
+    assert not result.allowed
+    assert not gate.state.pro_enabled_for(MODEL_UUID)
+    assert not gate.state.pro_enabled_for(other)
+
+
 def test_openai_routes_registered_without_an_import_cycle():
     from api_fastapi_server.openai_routes import create_openai_router
     from tests.unit.test_openai_compatible_endpoint import ImmediateScheduler
