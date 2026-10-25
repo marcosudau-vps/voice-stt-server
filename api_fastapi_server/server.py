@@ -63,6 +63,7 @@ from api_fastapi_server.protocol_v2 import schema as protocol_v2_schema
 from api_fastapi_server.protocol_v2.connection import ProtocolV2Connection
 from api_fastapi_server import settings_control as settings_control_module
 from api_fastapi_server.openai_routes import create_openai_router
+from api_fastapi_server.security import SecurityService
 from api_fastapi_server.wake_admission import (
     WakeActivationOutcome,
     WakeAdmissionCoordinator,
@@ -6244,6 +6245,7 @@ class VoiceSTTService:
         recorder_factory: Optional[Callable[..., Any]] = None,
     ):
         self.settings = settings
+        self.security = SecurityService(settings)
         self.manager = manager
         self.ready = threading.Event()
         self.stop_event = threading.Event()
@@ -6297,8 +6299,6 @@ class VoiceSTTService:
             on_catalog_changed=self._on_wake_word_catalog_changed,
         )
         self.wakeword_registry = WakeWordRegistry(self.wakeword_catalog)
-        self._log_access_tokens = {}
-        self._log_access_lock = threading.RLock()
         self.ready_thread = None
         self.idle_thread = None
 
@@ -7063,19 +7063,7 @@ class VoiceSTTService:
                     "reason": "Der kanonische SQLite-Eventstore ist nicht verfügbar.",
                 })
             return base
-        token = uuid.uuid4().hex + uuid.uuid4().hex
-        expires_at = time.time() + 24 * 60 * 60
-        with self._log_access_lock:
-            now = time.time()
-            self._log_access_tokens = {
-                existing: value
-                for existing, value in self._log_access_tokens.items()
-                if value["expiresAt"] > now
-            }
-            self._log_access_tokens[token] = {
-                "sessionId": session_id,
-                "expiresAt": expires_at,
-            }
+        token, expires_at = self.security.log_tokens.issue(session_id)
         return {
             **base,
             "accessToken": token,
@@ -7083,16 +7071,7 @@ class VoiceSTTService:
         }
 
     def validate_log_access(self, token, session_id=None):
-        if not token:
-            return None
-        with self._log_access_lock:
-            access = self._log_access_tokens.get(str(token))
-            if access is None or access["expiresAt"] <= time.time():
-                self._log_access_tokens.pop(str(token), None)
-                return None
-            if session_id and access["sessionId"] != session_id:
-                return None
-            return dict(access)
+        return self.security.log_tokens.validate(token, session_id)
 
     def ready_payload(self, session):
         model_status = self.model_lifecycle_status()
@@ -8141,43 +8120,11 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "supportedEngines": get_supported_transcription_engines(),
             "runtimeSettings": service.runtime_settings_contract(),
             "sessionCapabilities": service.session_capabilities(),
-            "adminAuthRequired": bool(settings.admin_api_key or os.getenv("VOICESTT_ADMIN_API_KEY")),
+            "adminAuthRequired": bool(service.security.admin.configured_key()),
         })
 
-    def _admin_key_matches(supplied):
-        configured_key = settings.admin_api_key or os.getenv(
-            "VOICESTT_ADMIN_API_KEY"
-        )
-        if not configured_key or supplied is None:
-            return False
-        return secrets.compare_digest(str(supplied), str(configured_key))
-
     def admin_auth_error(request):
-        configured_key = settings.admin_api_key or os.getenv("VOICESTT_ADMIN_API_KEY")
-        supplied = request.headers.get("x-voicestt-admin-key")
-        authorization = request.headers.get("authorization", "")
-        if not supplied and authorization.startswith("Bearer "):
-            supplied = authorization[7:]
-        if not supplied:
-            # AP-SRV-050: ``X-Admin-Key`` is an alias inside the *same* guard,
-            # so the frozen server contract header works without weakening any
-            # existing compatible auth path.
-            supplied = request.headers.get("x-admin-key")
-        if configured_key:
-            if not _admin_key_matches(supplied):
-                return JSONResponse(
-                    {"error": "Admin-Authentifizierung erforderlich."},
-                    status_code=401,
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
-            return None
-        client_host = getattr(getattr(request, "client", None), "host", "")
-        if client_host not in {"127.0.0.1", "::1", "localhost", "testclient"}:
-            return JSONResponse(
-                {"error": "Die Remote-Verwaltung ist deaktiviert, bis VOICESTT_ADMIN_API_KEY gesetzt ist."},
-                status_code=403,
-            )
-        return None
+        return service.security.admin_http_error(request)
 
     @app.patch("/api/config")
     async def update_config(payload: dict, request: Request):
@@ -8644,28 +8591,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         ]
 
     def _log_access_scope(request, requested_session_id=None):
-        configured_key = settings.admin_api_key or os.getenv(
-            "VOICESTT_ADMIN_API_KEY"
-        )
-        authorization = request.headers.get("authorization", "")
-        supplied = request.headers.get("x-voicestt-admin-key")
-        bearer = authorization[7:] if authorization.startswith("Bearer ") else ""
-        supplied = supplied or bearer
-        if configured_key and _admin_key_matches(supplied):
-            return {"admin": True, "sessionId": requested_session_id}
-        client_host = getattr(getattr(request, "client", None), "host", "")
-        if not configured_key and client_host in {
-            "127.0.0.1",
-            "::1",
-            "localhost",
-            "testclient",
-        }:
-            return {"admin": True, "sessionId": requested_session_id}
-        token = request.headers.get("x-voicestt-log-token") or bearer
-        access = service.validate_log_access(token, requested_session_id)
-        if access is None:
-            return None
-        return {"admin": False, "sessionId": access["sessionId"]}
+        return service.security.log_http_scope(request, requested_session_id)
 
     def _log_events_response(
         request,
@@ -8803,16 +8729,10 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 raise ValueError("Erste Nachricht muss ein subscribe-Objekt sein.")
             token = str(request_payload.get("accessToken") or "")
             requested_session_id = request_payload.get("sessionId")
-            configured_key = settings.admin_api_key or os.getenv(
-                "VOICESTT_ADMIN_API_KEY"
+            scope = service.security.log_websocket_scope(
+                token, requested_session_id
             )
-            is_admin = bool(configured_key and _admin_key_matches(token))
-            access = (
-                None
-                if is_admin
-                else service.validate_log_access(token, requested_session_id)
-            )
-            if not is_admin and access is None:
+            if scope is None:
                 await websocket.send_text(json.dumps({
                     "type": "log.error",
                     "code": "not_authorized",
@@ -8820,11 +8740,8 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 }))
                 await websocket.close(code=1008)
                 return
-            session_id = (
-                requested_session_id
-                if is_admin
-                else access["sessionId"]
-            )
+            is_admin = scope["admin"]
+            session_id = scope["sessionId"]
             channels = {
                 str(channel)
                 for channel in request_payload.get("channels", [])
@@ -9115,28 +9032,9 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             return JSONResponse({"error": str(exc)}, status_code=400)
 
     async def authenticate_openai(request):
-        configured_key = settings.openai_api_key or os.getenv("VOICESTT_API_KEY")
-        if not configured_key:
-            return None
-        if request.headers.get("authorization", "") != f"Bearer {configured_key}":
-            supplied_client_id = request.headers.get("x-voicestt-client-id")
-            service.audit.event(
-                "authentication.failed",
-                transport="http",
-                clientId=(
-                    normalized_client_id(supplied_client_id)
-                    if supplied_client_id
-                    else None
-                ),
-                path=request.url.path,
-                reason="invalid_api_key",
-            )
-            return JSONResponse(
-                openai_error("Der angegebene API-Schlüssel ist ungültig.", code="invalid_api_key"),
-                status_code=401,
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return None
+        return service.security.openai_http_error(
+            request, audit=service.audit, normalize_client_id=normalized_client_id
+        )
 
     app.include_router(
         create_openai_router(
