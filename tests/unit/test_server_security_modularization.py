@@ -170,7 +170,7 @@ def test_openai_routes_registered_without_an_import_cycle():
         ServerSettings(model_warmup=False),
         scheduler_factory=ImmediateScheduler,
     )
-    paths = [(route.path, getattr(route, "methods", None)) for route in app.routes]
+    paths = [(getattr(route, "path", None), getattr(route, "methods", None)) for route in app.routes]
     assert any(p == "/v1/models" and "GET" in methods for p, methods in paths if methods)
     assert any(p == "/v1/audio/transcriptions" and "POST" in methods
                for p, methods in paths if methods)
