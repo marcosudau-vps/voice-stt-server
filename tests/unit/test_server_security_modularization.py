@@ -164,15 +164,31 @@ def test_kroko_adapter_rejects_other_model_verdict_even_when_positive():
 
 
 def test_openai_routes_registered_without_an_import_cycle():
+    """Verify public routes over HTTP, not version-specific app.routes internals."""
+    from fastapi.testclient import TestClient
+
     from api_fastapi_server.openai_routes import create_openai_router
-    from tests.unit.test_openai_compatible_endpoint import ImmediateScheduler
+    from tests.unit.test_openai_compatible_endpoint import ImmediateScheduler, wav_bytes
+
     app = create_app(
         ServerSettings(model_warmup=False),
         scheduler_factory=ImmediateScheduler,
     )
-    paths = [(getattr(route, "path", None), getattr(route, "methods", None)) for route in app.routes]
-    assert any(p == "/v1/models" and "GET" in methods for p, methods in paths if methods)
-    assert any(p == "/v1/audio/transcriptions" and "POST" in methods
-               for p, methods in paths if methods)
     assert create_openai_router.__module__ == "api_fastapi_server.openai_routes"
     assert isinstance(app, FastAPI)
+
+    # include_router may retain an internal router node in newer FastAPI
+    # versions rather than flattening everything to objects with .path.
+    # Real HTTP dispatch is the actual OpenAI API contract.
+    with TestClient(app) as client:
+        models = client.get("/v1/models")
+        assert models.status_code == 200, models.text
+        assert models.json()["object"] == "list"
+
+        transcription = client.post(
+            "/v1/audio/transcriptions",
+            data={"model": "whisper-1"},
+            files={"file": ("sample.wav", wav_bytes(), "audio/wav")},
+        )
+        assert transcription.status_code == 200, transcription.text
+        assert "text" in transcription.json()
