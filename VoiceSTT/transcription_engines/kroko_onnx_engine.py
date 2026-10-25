@@ -14,6 +14,7 @@ from pathlib import Path
 from ._model_utils import text_from_output
 from .model_resolver import resolve_kroko_model
 from ..kroko import models as kroko_models
+from ..kroko.credentials import effective_recognizer_key
 from .base import (
     BaseTranscriptionEngine,
     StreamingTranscriptionSession,
@@ -396,14 +397,7 @@ class KrokoOnnxBackend:
         options = self.engine_options
         kwargs = {
             "model_path": str(self.model_path),
-            "key": (
-                options.get("key")
-                or os.getenv("KROKO_API_KEY")
-                or os.getenv("KROKO_ONNX_KEY")
-                or os.getenv("VOICESTT_KROKO_ONNX_KEY")
-                or os.getenv("KROKO_KEY")
-                or ""
-            ),
+            "key": effective_recognizer_key(options),
             "referralcode": options.get("referralcode", ""),
             "num_threads": _int_option(options, "num_threads", 1),
             "provider": _provider_from_config(self.config, options),
