@@ -38,6 +38,8 @@ die aktuelle Dokumentation eingeordnet:
 - [Installation](installation.md)
 - [Konfiguration](configuration.md)
 - [FastAPI-Server](fastapi-server.md)
+- [OpenAI-kompatible HTTP-API: eigenständiges Router-Modul](openai-http-api.md)
+- [Zentrale Server-Authentifizierung: SecurityService und vier Gates](server-authentication.md)
 - [Windows-/CPU-Deployment](windows-cpu-deployment.md)
 - [Transkriptions-Engines](transcription-engines.md)
 - [Faster-Whisper](faster-whisper.md)
