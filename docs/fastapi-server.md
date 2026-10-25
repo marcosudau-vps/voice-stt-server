@@ -11,11 +11,13 @@
 VoiceSTT. It serves a local browser UI and exposes a WebSocket endpoint that
 streams microphone audio into per-session recorder state machines.
 
-This reference server is intended for source checkouts. It is not installed by
-the PyPI wheel; keeping it source-only keeps the wheel lean and avoids adding
-web-server dependencies for users who only need the recorder/API library. For
-pip-only installs, use the Python recorder/API examples instead. If you want
-the FastAPI reference server, clone the repository or install from Git.
+This page primarily shows **source-checkout** commands for the FastAPI
+browser server. The maintained `api_fastapi_server` package is also included
+by the current `setup.py` package selection, and the installed server CLI
+(`voice-stt-server`, compatibility alias `stt-server`) delegates to the
+same application. Dependencies and supported distribution variants depend on
+the selected installation; the canonical build/deployment reference is
+[BUILD.md](../build/BUILD.md).
 
 ## Install
 
@@ -51,6 +53,20 @@ Open:
 ```text
 http://localhost:8010
 ```
+
+## HTTP modules and authentication (PR #15)
+
+The OpenAI-compatible endpoints `GET /v1/models` and
+`POST /v1/audio/transcriptions` are implemented in the standalone
+[`api_fastapi_server/openai_routes.py` module](openai-http-api.md).
+This is a route/SSE extraction, not a second inference engine: model resolution
+and scheduling remain in the shared server service.
+
+Admin, OpenAI-Bearer, session-scoped logtokens and the explicitly invoked
+Kroko model-license adapter are coordinated by the common
+[`SecurityService` module](server-authentication.md), with **separate**
+permissions and scope rules. A Kroko license probe does not automatically
+activate a Pro runtime.
 
 ## Server Overview
 
