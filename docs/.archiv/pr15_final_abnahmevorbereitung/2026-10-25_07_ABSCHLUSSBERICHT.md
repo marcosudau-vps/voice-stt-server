@@ -5,7 +5,7 @@
 | Vorgabe | Ist |
 | --- | --- |
 | Prüfaufträge A–D vollständig | Erfüllt: A (Router/Routing/Upload/SSE/Telemetrie), B (Admin/OpenAI/Logs/Kroko-Adapter), C (Credentials/Probe/Status/Fallback), D (Lifespan/Race) — alle Verträge erhalten, Belege in 03 |
-| 20 Traceability-IDs belegt | Erfüllt: 19× PASS, PR15-CI-01 PENDING bis finale CI (siehe §4) |
+| 20 Traceability-IDs belegt | Erfüllt: 20× PASS; CI-01 auf Agentenfinalstand `66d12de` nachträglich über unabhängige GitHub-CI-Prüfung bestätigt (siehe §3). |
 | Pflicht-/Regressionstests grün | Erfüllt: 7er-Suite 180+3 Skip, Vollsuite 2260+15 Skip, Zusatzregression 125, Race 30/30, compileall + diff-check sauber |
 | Doku konsistent | Erfüllt: genau eine Korrektur (Archiv-README PR-Zuordnung), Historie unverändert, Links geprüft |
 | Scope diszipliniert | Erfüllt: keine Codeänderung (kein Invariantenbruch gefunden); nur Akte + 1 Registerkorrektur |
@@ -23,9 +23,8 @@
 
 - Ausgangs-HEAD: `e65c33ce1bdff16a8327fda86954e81bb1d9a275`,
   CI https://github.com/marcosudau-vps/voice-stt-server/actions/runs/40180053129 (success).
-- Finaler Commit: `3dad5ba4dbe5dc057f720771bcaa121a8e87f09b`; finale CI (Ubuntu + Windows) abwarten.
-  PR15-CI-01 gilt erst mit grüner finaler CI auf finalem HEAD als PASS;
-  Links stehen im PR-Abschlusskommentar und in der PR-Beschreibung.
+- Finaler **Agenten-Commit**: `66d12dea82aeabd063aa0dfc45818349d122a431`; PR-CI [40216493962](https://github.com/marcosudau-vps/voice-stt-server/actions/runs/40216493962) – Ubuntu und Windows erfolgreich.
+  Spätere reine Dokumentationskorrekturen des unabhängigen Reviews benötigen eine zusätzliche CI auf ihrem jeweiligen HEAD. Siehe `2026-10-25_08_UNABHAENGIGE_ABNAHME.md`.
 
 ## 4. Verbleibende Risiken (alle niedrig, bewusst zurückgestellt)
 
@@ -35,8 +34,4 @@ Echte Pro-Lizenz-/Runtime-Qualifikation bleibt NOT_RUN und separater Folgeauftra
 
 ## 5. Status
 
-**REVIEW_READY** — sofern die finale CI auf dem finalen Commit unter Ubuntu und
-Windows erfolgreich ist. Bis dahin formal BLOCKED (ausstehende CI).
-Dieser Bericht bedeutet ausschließlich, dass die unabhängige Abnahme beginnen kann,
-nicht dass sie stattgefunden hat. Die fachliche PR-Abnahme bleibt offen;
-PR #15 bleibt Draft und ungemergt.
+**REVIEW_READY** — die finale CI des Agenten-Commits `66d12de` war unter Ubuntu und Windows erfolgreich. Dieser Bericht ist der **Agentenabschluss**, keine unabhängige Abnahme. Die spätere unabhängige Bewertung und Dokumentationskorrekturen stehen in `2026-10-25_08_UNABHAENGIGE_ABNAHME.md`. PR #15 bleibt Draft und ungemergt.
