@@ -66,6 +66,10 @@ def check_onprem_license(
             return LicenseCheckResult("CHECK_FAILED", model, reason="invalid_reply")
         if reply["allowed"] is False:
             return LicenseCheckResult("INVALID", model, reason="license_rejected")
+        # A superficially positive answer carrying a provider error is not proof.
+        error = reply.get("error", "")
+        if not isinstance(error, str) or error not in ("", "no"):
+            return LicenseCheckResult("CHECK_FAILED", model, reason="invalid_reply")
         seconds = reply.get("remaining_seconds")
         offline = reply.get("offline_timeout")
         if (type(seconds) is not int or seconds <= 0
