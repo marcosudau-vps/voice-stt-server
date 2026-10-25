@@ -26,5 +26,14 @@ class KrokoLicenseGate:
         result = check_onprem_license(
             str(key), str(model_uuid), connect=connect
         )
-        self.state.apply(token, result)
+        if result.model_uuid != str(model_uuid):
+            # Never publish (or return as valid) a check for another model.
+            result = LicenseCheckResult(
+                "CHECK_FAILED", str(model_uuid), reason="model_scope_mismatch"
+            )
+        if not self.state.apply(token, result):
+            # A concurrent key/mode/check invalidated the pending generation.
+            return LicenseCheckResult(
+                "CHECK_FAILED", str(model_uuid), reason="stale_generation"
+            )
         return result
