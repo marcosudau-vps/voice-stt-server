@@ -11,10 +11,10 @@ TOKEN_LIFETIME_SECONDS = 24 * 60 * 60
 class LogTokenAuthority:
     """Volatile, per-server tokens; no filesystem/DB persistence."""
 
-    def __init__(self, *, clock=time.time):
+    def __init__(self, *, clock=None):
         self._lock = threading.RLock()
         self._tokens = {}
-        self._clock = clock
+        self._clock = clock if clock is not None else lambda: time.time()
 
     def issue(self, session_id):
         token = uuid.uuid4().hex + uuid.uuid4().hex
