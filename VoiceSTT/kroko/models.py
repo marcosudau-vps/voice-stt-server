@@ -453,6 +453,39 @@ def provisioning_error(entry: Optional[KrokoModelEntry], requested: str) -> Krok
     )
 
 
+def community_fallback_model(
+    manifest: KrokoModelManifest, requested: Any
+) -> Optional[KrokoModelEntry]:
+    """Choose the closest *metadata* Community fallback without loading it.
+
+    This returns a candidate, not an activation decision: STTModelManager
+    must still verify local availability, suitability and load readiness.
+    The persisted requested model is never modified by this helper.
+    """
+    if manifest is None:
+        return None
+    available = [
+        entry for entry in manifest.entries
+        if entry.requires_runtime_variant == "free"
+        and entry.tier.lower() == "community"
+    ]
+    if not available:
+        return None
+    original = manifest.get(requested)
+    if original in available:
+        return original
+    language = (original.language if original is not None else "")
+    if not language:
+        parts = Path(str(requested or "")).name.split("-")
+        if len(parts) > 1 and parts[0].lower() == "kroko":
+            language = parts[1]
+    if language:
+        for entry in available:
+            if entry.language.lower() == str(language).lower():
+                return entry
+    return available[0]
+
+
 __all__ = [
     "ALLOW_MODEL_DOWNLOAD_ENV",
     "KROKO_MODEL_ROOT_ENV",
@@ -464,6 +497,7 @@ __all__ = [
     "KrokoModelEntry",
     "KrokoModelError",
     "KrokoModelManifest",
+    "community_fallback_model",
     "candidate_roots",
     "check_variant_compatibility",
     "default_manifest_path",
