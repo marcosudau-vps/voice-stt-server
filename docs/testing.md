@@ -333,3 +333,21 @@ For new transcription engines, add fast contract tests first:
 - Conversion from backend segments into `TranscriptionResult`.
 
 Only add a real-model golden test after the fast contract tests are stable, and keep it opt-in with an environment variable.
+
+
+## Selektive Kroko-V2-Regressionen (25.10.2026)
+
+Der aus Draft-PR #14 übernommene Race-Test validiert die reale Rückkehr
+eines verspäteten R1-Inferenzjobs. Separat werden die Shutdown-Garantie
+bei fehlschlagendem ASGI-Start, Key-Precedence, fail-closed On-Premise-
+Lizenzantworten, flüchtige Generationen/TTL und die Community-Kandidatenwahl
+getestet:
+
+```bash
+python -m pytest -q tests/unit/test_realtime_streaming_transcription.py tests/unit/test_kroko_selective_improvements.py
+```
+
+Lizenztests verwenden ausschließlich synthetische WebSocket-Fakes.
+Kein positiver Test ist ein qualifizierter Pro-Lizenz- oder
+Release-/Redistributionsnachweis. Produktiver Lizenz-/Modellwechsel
+und nativer Dual-Payload-Bootstrap gehören weiterhin in getrennte Abnahmen.
