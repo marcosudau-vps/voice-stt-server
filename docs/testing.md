@@ -374,5 +374,8 @@ python -m pytest -q tests/unit
 
 Die CI auf Linux und Windows führt die komplette Unit-Suite aus; der
 aktuelle HEAD muss für jede Abnahme neu überprüft werden.
+Die [OpenAI-HTTP-Modulreferenz](openai-http-api.md) und
+[SecurityService-/Authentifizierungsreferenz](server-authentication.md)
+beschreiben die durch diese Tests geschützten Modul- und Berechtigungsgrenzen.
 Der weitere [Modularisierungsfahrplan](architecture/server-modularization-roadmap.md)
 beschreibt die nächsten fachlichen Schnitte.
