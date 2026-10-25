@@ -303,5 +303,8 @@ Kroko-On-Premise-Modelllizenz haben getrennte Zuständigkeiten.
   keine produktiven Pro-Rechte und löst beim Serverstart keine Prüfung aus.
   Keine Schlüssel werden durch diese Refaktorierung im YAML gespeichert.
 
-Siehe den [Modularisierungsfahrplan](architecture/server-modularization-roadmap.md)
-für fachliche Grenzen, Restarbeiten und empfohlene Reihenfolge.
+Die vollständigen Schnittstellen- und Modulgrenzen sind in der
+[OpenAI-HTTP-Modulreferenz](openai-http-api.md) und der
+[SecurityService-/Authentifizierungsreferenz](server-authentication.md)
+dokumentiert. Der [Modularisierungsfahrplan](architecture/server-modularization-roadmap.md)
+beschreibt fachliche Grenzen, Restarbeiten und empfohlene Reihenfolge.
