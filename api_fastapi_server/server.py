@@ -8087,9 +8087,11 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
 
     @asynccontextmanager
     async def lifespan(app):
-        service.start(asyncio.get_running_loop())
-        yield
-        service.stop()
+        try:
+            service.start(asyncio.get_running_loop())
+            yield
+        finally:
+            service.stop()
 
     app = FastAPI(
         title="VoiceSTT FastAPI-Server",
