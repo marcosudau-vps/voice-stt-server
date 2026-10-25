@@ -278,3 +278,30 @@ Requested/Effective-Unterschiede (`next_activation`/`next_session`) nach einem
 Resync vollständig unterscheidbar sind. Persistierte Control-Daten werden beim
 Startup streng validiert; ein Persistenzfehler eines Serverportches lässt RAM
 und Revision unverändert und wird als `internal_error` (HTTP 500) gemeldet.
+
+
+## Server-API-Sicherheit und Modularisierung (25.10.2026)
+
+Die serverseitigen Zugriffskontrollen werden über
+`api_fastapi_server/security/SecurityService` koordiniert.
+**Wichtig:** Es handelt sich nicht um einen einzigen austauschbaren Token:
+Admin-Key, OpenAI-Bearer-Key, sitzungsbezogene Logtokens und die
+Kroko-On-Premise-Modelllizenz haben getrennte Zuständigkeiten.
+
+- **Admin:** `VOICESTT_ADMIN_API_KEY` oder `admin_api_key`; bei fehlendem
+  Key nur bestehender lokaler Verwaltungszugriff; Remote-Admin gesperrt.
+- **OpenAI-kompatible API:** `VOICESTT_API_KEY` oder `openai_api_key`.
+  Ohne konfigurierten Key bleibt das bisherige optionale Bearer-Verhalten
+  erhalten. `/v1/models` und `/v1/audio/transcriptions` werden im
+  separaten `openai_routes.py` registriert.
+- **Logs:** Vom Server ausgestellte, flüchtige 24h-Tokens sind
+  sitzungsgebunden und nicht mit Adminrechten gleichzusetzen. HTTP- und
+  Log-WebSocket-Zugriff besitzen bewusst unterschiedliche lokale
+  Autorisierungsregeln.
+- **Kroko:** Der Security-Adapter darf explizit den bereits vorhandenen
+  modellbezogenen On-Premise-Lizenzprüfer ansprechen; dieser aktiviert noch
+  keine produktiven Pro-Rechte und löst beim Serverstart keine Prüfung aus.
+  Keine Schlüssel werden durch diese Refaktorierung im YAML gespeichert.
+
+Siehe den [Modularisierungsfahrplan](architecture/server-modularization-roadmap.md)
+für fachliche Grenzen, Restarbeiten und empfohlene Reihenfolge.
