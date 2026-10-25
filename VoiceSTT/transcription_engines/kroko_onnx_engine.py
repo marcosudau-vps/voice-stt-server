@@ -86,6 +86,27 @@ def _load_online_recognizer_class():
         ) from exc
 
 
+def _enforce_unmanaged_native_guard(model_path):
+    """Old global runtimes must not activate an unmanifested Pro override.
+
+    A native import is cold; model construction is the activation boundary.
+    Recognizer doubles have no loaded native extension and perform no activation.
+    """
+    if os.environ.get("VOICESTT_KROKO_PRO_CANDIDATE") != "0":
+        return
+    if kroko_models.load_manifest().get(Path(model_path).name) is not None:
+        return
+    from importlib.machinery import EXTENSION_SUFFIXES
+    native = sys.modules.get("_sherpa_onnx")
+    origin = str(getattr(native, "__file__", ""))
+    if not any(origin.endswith(suffix) for suffix in EXTENSION_SUFFIXES):
+        return
+    if getattr(native, "voicestt_pro_candidate_gate_version", None) != 1:
+        raise TranscriptionEngineError(
+            "Unmanaged Kroko models require the versioned native Pro activation guard; "
+            "use a manifested Community model or a qualified runtime.")
+
+
 def _bool_option(options, name, default=False):
     """
     Reads a boolean option from backend options.
@@ -328,6 +349,7 @@ class KrokoOnnxBackend:
         self.suppress_native_output = _output_suppression_enabled(self.engine_options)
         _enable_kroko_license_quiet(self.suppress_native_output)
         recognizer_cls = recognizer_cls or _load_online_recognizer_class()
+        _enforce_unmanaged_native_guard(self.model_path)
         self.recognizer = self._create_recognizer(recognizer_cls)
 
     def _resolve_model_path(self):

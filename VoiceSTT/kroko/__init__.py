@@ -20,11 +20,44 @@ gives the Kroko runtime and its models an explicit, verifiable identity:
     The model authority: manifested identity, integrity, license class and the
     runtime variant each model requires - with no implicit downloads.
 
+:mod:`~VoiceSTT.kroko.license_runtime`
+    The volatile, server-wide license/runtime authority: generation-bound
+    proofs, fail-closed decisions and a redacted status projection. No key
+    material, no network, no persistence.
+
+:mod:`~VoiceSTT.kroko.bootstrap`
+    The cold pre-import bootstrap: exactly one private native payload root,
+    foreign runtimes treated as conflicts. Native-import-free.
+
+:mod:`~VoiceSTT.kroko.supervisor`
+    Owner-process supervision: one active native generation, start deadline,
+    bounded retries, confirmed exit and stale-generation invalidation.
+    Native-import-free and secret-free.
+
 Nothing in this package ever handles a Kroko license key. The Pro *build* is a
 capability switch; the Pro *key* is a runtime secret that lives only in the
 process environment and is never written to an artifact, its metadata or a log.
+Callers identify key changes with an opaque, process-local revision.
+The native V1 snapshot adapter exports only model-bound status; owner_process
+connects the existing server entry points to the single-owner supervisor.
 """
 
-from . import artifacts, buildinputs, fingerprint, models
+from . import (
+    artifacts,
+    bootstrap,
+    buildinputs,
+    fingerprint,
+    license_runtime,
+    models,
+    supervisor,
+)
 
-__all__ = ["artifacts", "buildinputs", "fingerprint", "models"]
+__all__ = [
+    "artifacts",
+    "bootstrap",
+    "buildinputs",
+    "fingerprint",
+    "license_runtime",
+    "models",
+    "supervisor",
+]

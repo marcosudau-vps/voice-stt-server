@@ -1233,6 +1233,9 @@ def _wrap_license_output_line(text, marker):
     return "".join(lines)
 
 
+from VoiceSTT.kroko.native_status_patch import patch_native_license_status
+
+
 def patch_license_quiet_env(repo_dir):
     """
     Patches Kroko sources to support quiet license output.
@@ -1291,7 +1294,7 @@ def patch_license_quiet_env(repo_dir):
             block_start += 1
         block_end = text.find("struct Feature {", helper_start)
         if block_end != -1:
-            text = text[:block_start] + helper + text[block_end:]
+            text = text[:block_start] + helper + "\n" + text[block_end:]
     elif KROKO_LICENSE_QUIET_ENV not in text:
         text = _insert_after_line(text, "using json = nlohmann::json;", "\n" + helper)
 
@@ -1351,6 +1354,7 @@ def prepare_windows_checkout(repo_dir):
     sanitize_batch_ascii(repo_dir / "build_windows.bat")
     patch_windows_dockerfile(repo_dir)
     stage_windows_channel_manifest(repo_dir)
+    patch_native_license_status(repo_dir)
     patch_license_quiet_env(repo_dir)
 
 
@@ -1716,6 +1720,7 @@ def build_linux_wheel(args, repo_dir):
     """
 
     ensure_program("cmake", "CMake is required to build Kroko-ONNX from source on Linux.")
+    patch_native_license_status(repo_dir)
     patch_license_quiet_env(repo_dir)
     wheel_dir = repo_dir / "release_artifacts" / "linux"
     wheel_dir.mkdir(parents=True, exist_ok=True)
@@ -1775,6 +1780,7 @@ def install_linux(args, repo_dir):
     """
 
     ensure_program("cmake", "CMake is required to build Kroko-ONNX from source on Linux.")
+    patch_native_license_status(repo_dir)
     patch_license_quiet_env(repo_dir)
     env = linux_build_env(args.variant)
 
