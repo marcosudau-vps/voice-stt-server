@@ -340,6 +340,8 @@ Full description and the operator setup checklist:
 **Server**
 
 - [FastAPI server](docs/fastapi-server.md)
+- [OpenAI-compatible HTTP module](docs/openai-http-api.md)
+- [Server authentication and SecurityService](docs/server-authentication.md)
 - [Client development](docs/client-development/README.md)
 - [Trigger architecture](docs/einheitliche-triggerarchitektur.md)
 - [Structured logging](docs/structured-logging.md)
