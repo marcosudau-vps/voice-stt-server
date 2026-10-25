@@ -1,6 +1,6 @@
-# PR #15 – Testevidenz (25.10.2026, Stand: Zwischenbericht)
+# PR #15 – Testevidenz (25.10.2026, finaler Agentenstand)
 
-Commit-SHA (final): `3dad5ba4dbe5dc057f720771bcaa121a8e87f09b` (Ausgangs-HEAD vor Akte: `e65c33ce1bdff16a8327fda86954e81bb1d9a275`).
+Commit-SHA (Agentenfinalstand): `66d12dea82aeabd063aa0dfc45818349d122a431` (Ausgangs-HEAD vor Akte: `e65c33ce1bdff16a8327fda86954e81bb1d9a275`).
 Umgebung: Windows, CPython im Projekt-venv, `pytest`, keine echten Kroko-Netzverbindungen,
 keine Pro-Modellaktivierung. Optionale Golden-/Perf-Tests ohne Env-Opt-in → Skip = NOT_RUN.
 
@@ -42,8 +42,9 @@ erwartbar an fehlendem Plugin und zählt nicht als Testfehlschlag.
 ## 5. CI-Links (unveränderlich)
 
 - Ausgangs-CI auf `e65c33c`: https://github.com/marcosudau-vps/voice-stt-server/actions/runs/40180053129 (success, pull_request).
-- Finale CI auf finalem Commit: nach Push abwarten, Ubuntu+Windows verifizieren, Links nachtragen.
-  Ausstehend/abgebrochen zählt nicht als Erfolg.
+- Agentenfinal-PR-CI auf `66d12dea82aeabd063aa0dfc45818349d122a431`: [Run 40216493962](https://github.com/marcosudau-vps/voice-stt-server/actions/runs/40216493962) – abgeschlossen und erfolgreich auf Ubuntu 24.04 (2261 passed, 14 skipped, 1330 subtests) sowie Windows (2260 passed, 15 skipped, 1330 subtests).
+- Zusätzlicher Push-Run: https://github.com/marcosudau-vps/voice-stt-server/actions/runs/40216490433 – erfolgreich auf beiden Plattformen.
+- Dokumentationskorrekturen aus der unabhängigen Abnahme werden separat im Bericht `2026-10-25_08_UNABHAENGIGE_ABNAHME.md` erfasst; deren finaler CI-HEAD ist zusätzlich zu prüfen.
 
 ## 6. Fehlschläge/Korrekturen
 
