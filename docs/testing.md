@@ -186,6 +186,40 @@ python -m unittest -v tests.unit.test_kroko_onnx_engine.KrokoOnnxGoldenTranscrip
 can be set for licensed Pro models. Do not store keys in command history,
 docs, generated reports, or committed files.
 
+Kroko license lifecycle and native-identity tests (deterministic, no network,
+no native runtime, no secrets; the license server and the native recognizer are
+replaced by fakes that behave like the real process guard):
+
+```powershell
+python -m pytest -q tests/unit/test_kroko_license_lifecycle.py tests/unit/test_kroko_pr15_final_correction.py
+```
+
+`test_kroko_pr15_final_correction.py` covers a late license answer against a
+newer key/force intent, the synchronous Pro lock-out after a force-community
+patch, a Community configuration with a valid key, one shared Kroko instance
+for final and realtime, refusal of two Kroko identities before the native load,
+license check and eligibility on a custom model path, model status after a
+background check and the restart-required cases. `tests/unit/conftest.py`
+resets the process-wide native guard around every test.
+
+Opt-in native integration (real Kroko-ONNX Pro runtime, one fresh child
+process per scenario, German audio, no Pro-A-to-Pro-B scenario):
+
+```powershell
+$env:VOICESTT_KROKO_NATIVE_TESTS = "1"
+$env:VOICESTT_KROKO_TEST_ENV_FILE = "<local file with KROKO_API_KEY=...>"
+$env:VOICESTT_KROKO_TEST_MODEL_DIR = "<dir with the Community DE 64 L and Pro DE 16 L .data files>"
+$env:VOICESTT_KROKO_TEST_AUDIO_DE = "<16 kHz mono German wav>"
+python -m pytest -q tests/unit/test_kroko_native_integration.py
+```
+
+Missing prerequisites skip the tests (`NOT_RUN`); they never pass silently.
+The scenarios are Community without key, Pro with key, one shared Pro instance
+for final and realtime lanes through the real scheduler, and the productive
+Community -> Pro -> Community -> Pro cycle over the regular server paths
+(operator switch, force-community patch, background license check). The
+key is read from the local file at runtime and never printed or logged.
+
 Run the Omnilingual ASR contract tests:
 
 ```powershell
@@ -333,3 +367,66 @@ For new transcription engines, add fast contract tests first:
 - Conversion from backend segments into `TranscriptionResult`.
 
 Only add a real-model golden test after the fast contract tests are stable, and keep it opt-in with an environment variable.
+
+
+## Selektive Kroko-V2-Regressionen (25.10.2026)
+
+Der aus Draft-PR #14 übernommene Race-Test validiert die reale Rückkehr
+eines verspäteten R1-Inferenzjobs. Separat werden die Shutdown-Garantie
+bei fehlschlagendem ASGI-Start, Key-Precedence, fail-closed On-Premise-
+Lizenzantworten, flüchtige Generationen/TTL und die Community-Kandidatenwahl
+getestet:
+
+```bash
+python -m pytest -q tests/unit/test_realtime_streaming_transcription.py tests/unit/test_kroko_selective_improvements.py
+```
+
+Lizenztests verwenden ausschließlich synthetische WebSocket-Fakes.
+Kein positiver Test ist ein qualifizierter Pro-Lizenz- oder
+Release-/Redistributionsnachweis. Produktiver Lizenz-/Modellwechsel
+und nativer Dual-Payload-Bootstrap gehören weiterhin in getrennte Abnahmen.
+
+
+## OpenAI-Router und zentrale Security (25.10.2026)
+
+Die OpenAI-Routen sind ohne Rückimport in `api_fastapi_server/openai_routes.py`
+ausgelagert. `api_fastapi_server/security/` kapselt die vier unterschiedlichen
+Gateways für Admin, OpenAI-Bearer, sitzungsgebundenen Logzugriff und die
+Kroko-On-Premise-Modelllizenzprüfung mit automatischem Lifecycle
+(Initialisierung, Modell-Refresh/-Switch, Force-Community-Änderung,
+expliziter Admin-Recheck; Details in
+[Server-Authentifizierung](server-authentication.md#4-kroko-on-premise-modelllizenz--produkt-entitlement-kein-api-login)).
+
+Die alte HTTP-/WS-Autorisierung ist Vertragsgrundlage: Admin-Key oder
+loopback-only ohne Key; OpenAI ohne Key offen; Log-HTTP mit Admin oder
+Sessiontoken, Log-WS nur mit gültigem Token/Admin-Key, ohne impliziten
+Loopback-Bypass. Lizenzprüfungen sind modellgebunden, TTL-begrenzt und
+secret-redigiert; ein Key allein schaltet nichts frei.
+
+Gezielte Tests und vollständige Unit-Suite:
+
+```bash
+python -m pytest -q tests/unit/test_server_security_modularization.py tests/unit/test_openai_compatible_endpoint.py tests/unit/test_kroko_selective_improvements.py
+python -m pytest -q tests/unit/test_kroko_license_lifecycle.py
+python -m pytest -q tests/unit
+```
+
+Echte Lizenzserver-Integrationstests sind Opt-in und laufen nie in der
+gewöhnlichen CI:
+
+```bash
+VOICESTT_KROKO_LIVE_TESTS=1 VOICESTT_KROKO_TEST_ENV_FILE=<lokale-key-datei> VOICESTT_KROKO_LIVE_MODEL=<lokale-pro-data> python -m pytest -q tests/unit/test_kroko_live_license.py
+```
+
+Sie prüfen positiv/negativ/Modellintegration/Berechtigungswechsel mit
+minimaler Verbindungszahl und vollständig redigierter Evidenz (keine Keys,
+keine Key-URLs in Ausgaben oder Berichten). Fehlen Key oder Pro-Modell, melden
+sie `SKIP` mit genauer Ursache statt eines erfundenen Erfolgs.
+
+Die CI auf Linux und Windows führt die komplette Unit-Suite aus; der
+aktuelle HEAD muss für jede Abnahme neu überprüft werden.
+Die [OpenAI-HTTP-Modulreferenz](openai-http-api.md) und
+[SecurityService-/Authentifizierungsreferenz](server-authentication.md)
+beschreiben die durch diese Tests geschützten Modul- und Berechtigungsgrenzen.
+Der weitere [Modularisierungsfahrplan](architecture/server-modularization-roadmap.md)
+beschreibt die nächsten fachlichen Schnitte.

@@ -32,9 +32,11 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
+from uuid import UUID
 
 #: Existing operator override for the model root. Kept for compatibility, but
 #: its contents are now validated against the manifest instead of trusted.
@@ -453,6 +455,123 @@ def provisioning_error(entry: Optional[KrokoModelEntry], requested: str) -> Krok
     )
 
 
+#: How many leading bytes of a ``.data`` file are scanned for the embedded
+#: model header. The native loader reads the same header (``BanafoLoadModel``);
+#: every shipped model carries its JSON header with ``id`` well inside it.
+MODEL_UUID_SCAN_BYTES = 65536
+
+_MODEL_UUID_PATTERN = re.compile(rb'"id"\s*:\s*"([0-9a-fA-F-]{36})"')
+
+
+def read_model_uuid(path: Any) -> Optional[str]:
+    """Return the canonical model UUID embedded in a Kroko ``.data`` header.
+
+    This is the same technical identity the native runtime hands to its own
+    license client (``BanafoLicense::getInstance(key, model-id, ...)``), so a
+    policy check built on it cannot drift from native enforcement. Pure
+    offline parsing: no network, no native import, no model load. Returns
+    ``None`` when no valid UUID is found (unmanaged/custom files stay
+    fail-closed for license purposes).
+    """
+    try:
+        candidate = Path(str(path)).expanduser()
+        with open(candidate, "rb") as handle:
+            head = handle.read(MODEL_UUID_SCAN_BYTES)
+    except (OSError, ValueError, TypeError):
+        return None
+    match = _MODEL_UUID_PATTERN.search(head or b"")
+    if match is None:
+        return None
+    try:
+        return str(UUID(match.group(1).decode("ascii")))
+    except (ValueError, AttributeError, UnicodeError):
+        return None
+
+
+_MODEL_FREE_PATTERN = re.compile(rb'"free"\s*:\s*(true|false)')
+
+
+def read_model_tier(path: Any) -> Optional[str]:
+    """Return ``"community"`` / ``"pro"`` from the native header ``free`` flag.
+
+    The same header the native loader reads names Community models
+    ``"free": true`` and commercial models ``"free": false``. ``None`` means
+    the flag is absent or the file is unreadable (an unmanaged custom file);
+    callers must not treat that as a proven tier. Pure offline parsing.
+    """
+    try:
+        candidate = Path(str(path)).expanduser()
+        with open(candidate, "rb") as handle:
+            head = handle.read(MODEL_UUID_SCAN_BYTES)
+    except (OSError, ValueError, TypeError):
+        return None
+    match = _MODEL_FREE_PATTERN.search(head or b"")
+    if match is None:
+        return None
+    return "community" if match.group(1) == b"true" else "pro"
+
+
+def license_uuid_for(
+    value: Any,
+    *,
+    manifest: Optional[KrokoModelManifest] = None,
+    options: Optional[Mapping[str, Any]] = None,
+    download_root: Optional[Any] = None,
+) -> Optional[str]:
+    """Resolve one model request to its license-relevant technical UUID.
+
+    Manifest entry first (id or file name), then the locally provisioned file,
+    then the UUID embedded in that file's header. ``None`` means the license
+    layer has nothing verifiable to ask about - callers must treat that as
+    "no entitlement", never as a wildcard. No downloads, no network.
+    """
+    manifest = manifest if manifest is not None else load_manifest()
+    entry = manifest.get(value)
+    if entry is None:
+        return None
+    report = locate_model(
+        entry.filename, manifest=manifest, options=options,
+        download_root=download_root,
+    )
+    found = report.get("path")
+    if not found:
+        return None
+    return read_model_uuid(found)
+
+
+def community_fallback_model(
+    manifest: KrokoModelManifest, requested: Any
+) -> Optional[KrokoModelEntry]:
+    """Choose the closest *metadata* Community fallback without loading it.
+
+    This returns a candidate, not an activation decision: STTModelManager
+    must still verify local availability, suitability and load readiness.
+    The persisted requested model is never modified by this helper.
+    """
+    if manifest is None:
+        return None
+    available = [
+        entry for entry in manifest.entries
+        if entry.requires_runtime_variant == "free"
+        and entry.tier.lower() == "community"
+    ]
+    if not available:
+        return None
+    original = manifest.get(requested)
+    if original in available:
+        return original
+    language = (original.language if original is not None else "")
+    if not language:
+        parts = Path(str(requested or "")).name.split("-")
+        if len(parts) > 1 and parts[0].lower() == "kroko":
+            language = parts[1]
+    if language:
+        for entry in available:
+            if entry.language.lower() == str(language).lower():
+                return entry
+    return available[0]
+
+
 __all__ = [
     "ALLOW_MODEL_DOWNLOAD_ENV",
     "KROKO_MODEL_ROOT_ENV",
@@ -464,6 +583,7 @@ __all__ = [
     "KrokoModelEntry",
     "KrokoModelError",
     "KrokoModelManifest",
+    "community_fallback_model",
     "candidate_roots",
     "check_variant_compatibility",
     "default_manifest_path",
@@ -471,6 +591,9 @@ __all__ = [
     "hash_verification_enabled",
     "load_manifest",
     "locate_model",
+    "license_uuid_for",
+    "read_model_tier",
+    "read_model_uuid",
     "model_download_allowed",
     "provisioning_error",
     "sha256_of",

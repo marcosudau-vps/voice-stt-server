@@ -86,6 +86,12 @@ WAKE_WORD_NOISE_SUPPRESSION = "wakeWord.noiseSuppressionEnabled"
 WAKE_WORD_VAD_THRESHOLD = "wakeWord.vadThreshold"
 WAKE_WORD_INFERENCE_BACKEND = "wakeWord.inferenceBackend"
 
+#: Server-wide operator intent for Kroko models: when true, only Community
+#: models are used and no license check is performed. This is the persisted
+#: operator wish; the derived volatile license status and ``pro_enabled``
+#: are never persisted (see ``VoiceSTT.kroko.license_state``).
+KROKO_FORCE_COMMUNITY = "kroko.forceCommunity"
+
 #: The accepted values of ``wakeWord.inferenceBackend``. ``auto`` prefers the
 #: backend the deployment platform is built around (ONNX on Windows,
 #: TFLite/LiteRT on Linux) and falls back to the other one for the whole
@@ -579,6 +585,24 @@ def builtin_definitions() -> List[SettingDefinition]:
             description=(
                 "Global deaktivierte Wake-Word-Katalog-IDs. Wirkt auf neue "
                 "Sessions; der Katalog selbst gehört AP-SRV-060."
+            ),
+            has_server_default=True,
+        ),
+        SettingDefinition(
+            key=KROKO_FORCE_COMMUNITY,
+            scope=SCOPE_SERVER,
+            auth=AUTH_ADMIN,
+            type=TYPE_BOOL,
+            constraints={},
+            default_value=False,
+            apply_policy=APPLY_LIVE,
+            description=(
+                "Serverweiter Betreiberwunsch: nur Community-Modelle "
+                "verwenden, keine Lizenzprüfung durchführen und keine "
+                "Pro-Freigabe erteilen. Wirkt sofort und invalidiert eine "
+                "bestehende Pro-Freigabe; der flüchtige Lizenzstatus wird "
+                "neu bewertet. Persistiert als Betreiberabsicht; weder Keys "
+                "noch Lizenzstatus werden je persistiert."
             ),
             has_server_default=True,
         ),

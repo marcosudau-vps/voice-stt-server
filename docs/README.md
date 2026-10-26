@@ -38,6 +38,8 @@ die aktuelle Dokumentation eingeordnet:
 - [Installation](installation.md)
 - [Konfiguration](configuration.md)
 - [FastAPI-Server](fastapi-server.md)
+- [OpenAI-kompatible HTTP-API: eigenständiges Router-Modul](openai-http-api.md)
+- [Zentrale Server-Authentifizierung: SecurityService und vier Gates](server-authentication.md)
 - [Windows-/CPU-Deployment](windows-cpu-deployment.md)
 - [Transkriptions-Engines](transcription-engines.md)
 - [Faster-Whisper](faster-whisper.md)
@@ -51,8 +53,9 @@ die aktuelle Dokumentation eingeordnet:
 ## Produktflächen und Engines
 
 Die geplante gemeinsame Kroko-Distribution wird getrennt im
-[aktuellen Untersuchungsstand](2026-10-22_kroko-unified-runtime-v2.md)
-beschrieben. AP-KR-010 ändert die nachstehende produktive Installation nicht.
+[Untersuchungsstand vom 22.10.2026](2026-10-22_kroko-unified-runtime-v2.md)
+beschrieben (historisch; dortige Addon-/Supervisor-Entwürfe sind überholt,
+maßgeblich ist `build/BUILD.md`). AP-KR-010 ändert die nachstehende produktive Installation nicht.
 
 VoiceSTT wird als zwei vollständige, alternative Distributionen ausgeliefert:
 `voice-stt-server` (Kroko Free) und `voice-stt-server-pro` (Kroko Pro). Beide

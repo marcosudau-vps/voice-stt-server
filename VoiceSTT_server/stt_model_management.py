@@ -34,6 +34,11 @@ ROLE_FINAL = "final"
 ROLE_REALTIME = "realtime"
 REQUIRED_ROLES = frozenset({ROLE_FINAL, ROLE_REALTIME})
 
+#: Manifest license classes for Community models. Community Kroko models load
+#: on free and pro installs alike, so the variant guard must not lock them
+#: out of a pro runtime. Anything else keeps the legacy strict comparison.
+_COMMUNITY_LICENSE_CLASSES = frozenset({"community", "community-unresolved"})
+
 _TARGET_LOCKS_GUARD = threading.Lock()
 _TARGET_LOCKS: Dict[str, threading.Lock] = {}
 
@@ -645,12 +650,19 @@ class STTModelManager:
         intent: Optional[OperatorIntent] = None,
         load_probe: Optional[Callable[[ModelCandidate], bool]] = None,
         provisioner: Optional[AtomicModelProvisioner] = None,
+        license_policy: Optional[Callable[..., Any]] = None,
     ) -> None:
         self.runtime_root = Path(runtime_root).expanduser()
         self.authority = tuple(authority or default_product_authority())
         self.intent = intent or OperatorIntent()
         self.load_probe = load_probe or (lambda candidate: True)
         self.provisioner = provisioner or AtomicModelProvisioner()
+        # Optional entitlement hook for commercial Kroko products:
+        # ``license_policy(product, candidate_path) -> (bool, reason)``.
+        # ``None`` keeps the legacy behavior (variant + enabled only), so
+        # existing library use and tests without a license plane are
+        # unchanged. The production service always injects its live gate.
+        self.license_policy = license_policy
         self._adapters = {
             "faster_whisper": FasterWhisperAdapter(),
             "kroko_onnx": KrokoAdapter(),
@@ -665,8 +677,10 @@ class STTModelManager:
         name = "fasterwhisper" if normalize_engine(engine) == "faster_whisper" else "kroko_asr"
         return self.runtime_root / "models" / "stt" / name
 
-    def discovery_roots(self, engine: str) -> Tuple[Path, ...]:
-        config = self.intent.engine_config(engine)
+    def discovery_roots(
+        self, engine: str, intent: Optional[OperatorIntent] = None
+    ) -> Tuple[Path, ...]:
+        config = (intent or self.intent).engine_config(engine)
         values = config.get("custom_paths", config.get("paths", ()))
         if isinstance(values, (str, os.PathLike)):
             values = (values,)
@@ -698,6 +712,84 @@ class STTModelManager:
             if root not in unique:
                 unique.append(root)
         return tuple(unique)
+
+    def find_product(self, engine: str, requested: str) -> Optional[ProductModel]:
+        """Public lookup of an authoritative product by id, file name or path."""
+        return self._find_product(engine, requested)
+
+    def locate_local_path(
+        self,
+        product: Optional[ProductModel],
+        intent: Optional[OperatorIntent] = None,
+    ) -> Optional[str]:
+        """Path of the local file for ``product`` or ``None``.
+
+        The single authoritative resolution for Kroko model files: the same
+        roots (engine ``custom_paths`` including ``model_dir``/``model_path``/
+        ``model_root`` engine options, download root, legacy environment root
+        and the managed default root) the snapshot discovery uses. License
+        pre-checks and eligibility both resolve through here, so they can
+        never address different files.
+        """
+        if product is None or normalize_engine(product.engine) != "kroko_onnx":
+            return None
+        if not product.filename:
+            return None
+        adapter = self._adapters["kroko_onnx"]
+        for item in adapter.discover(
+            self.discovery_roots("kroko_onnx", intent), (product,)
+        ):
+            if Path(item.path).name.lower() != str(product.filename).lower():
+                continue
+            # Presence is enough to *address* the file with a license
+            # question; activation still needs the validated and
+            # load-verified snapshot candidate.
+            return item.path
+        return None
+
+    def resolve_license_uuid(
+        self,
+        product: Optional[ProductModel],
+        candidate_path: Optional[Any] = None,
+        intent: Optional[OperatorIntent] = None,
+    ) -> Optional[str]:
+        """Technical license UUID from the file the loader would really use."""
+        path = candidate_path or self.locate_local_path(product, intent)
+        if not path:
+            return None
+        return kroko_models.read_model_uuid(path)
+
+    def local_license_candidates(
+        self, intent: Optional[OperatorIntent] = None
+    ) -> Tuple[Tuple[ProductModel, str, str], ...]:
+        """Locally present commercial Kroko models as ``(product, path, uuid)``.
+
+        Authority order; no native load, no network. This is what a license
+        pre-check may ask the provider about when no Pro model is configured:
+        entitlement to *select* a Pro model is a different question from
+        activating it natively.
+        """
+        commercial = tuple(
+            product for product in self.authority
+            if normalize_engine(product.engine) == "kroko_onnx"
+            and (product.license_class or "").strip().lower() == "commercial"
+            and product.filename
+        )
+        if not commercial:
+            return ()
+        by_name: Dict[str, str] = {}
+        for item in self._adapters["kroko_onnx"].discover(
+            self.discovery_roots("kroko_onnx", intent), commercial
+        ):
+            # Same precedence as locate_local_path: the first root wins.
+            by_name.setdefault(Path(item.path).name.lower(), item.path)
+        found = []
+        for product in commercial:
+            path = by_name.get(str(product.filename).lower())
+            uuid = kroko_models.read_model_uuid(path) if path else None
+            if uuid:
+                found.append((product, path, uuid))
+        return tuple(found)
 
     def status(self) -> Dict[str, Any]:
         with self._state_lock:
@@ -758,6 +850,54 @@ class STTModelManager:
         with self._state_lock:
             return self._snapshot
 
+    def _filter_snapshot_by_license(
+        self, snapshot: ModelSnapshot
+    ) -> ModelSnapshot:
+        """Drop LKG roles whose commercial license proof has lapsed.
+
+        A restored snapshot must never resurrect a Pro admission the live
+        license policy no longer confirms (key rotation/removal, force
+        community, expiry, negative recheck). Without an injected policy the
+        snapshot passes through untouched. Roles bound to files that cannot
+        be mapped to a license UUID stay fail-closed as well.
+        """
+        if self.license_policy is None:
+            return snapshot
+        active = dict(snapshot.active)
+        dropped = []
+        for role, candidate in list(active.items()):
+            product = next(
+                (item for item in self.authority
+                 if item.id == candidate.product_id),
+                None,
+            )
+            if product is None:
+                continue
+            allowed, _reason = self._kroko_license_allows(
+                product, candidate.path
+            )
+            if not allowed:
+                dropped.append(candidate.id)
+                del active[role]
+        if not dropped:
+            return snapshot
+        readiness = (
+            MINIMUM_READY if REQUIRED_ROLES <= set(active) else NOT_READY
+        )
+        diagnostics = tuple(snapshot.diagnostics) + ({
+            "stage": "eligibility",
+            "result": "kroko_license_lkg_filtered",
+            "dropped": sorted(dropped),
+        },)
+        return ModelSnapshot(
+            snapshot.revision,
+            readiness,
+            snapshot.candidates,
+            active,
+            snapshot.optional_state,
+            diagnostics,
+        )
+
     def restore_last_known_good(
         self, snapshot: ModelSnapshot, message: str
     ) -> ModelSnapshot:
@@ -765,6 +905,7 @@ class STTModelManager:
 
         if not isinstance(snapshot, ModelSnapshot):
             raise TypeError("last-known-good snapshot must be a ModelSnapshot")
+        snapshot = self._filter_snapshot_by_license(snapshot)
         diagnostic = ({
             "stage": "activation",
             "result": "failed_lkg_restored",
@@ -835,9 +976,11 @@ class STTModelManager:
         for role in (ROLE_FINAL, ROLE_REALTIME):
             engine, requested = self.intent.defaults.get(role, ("", ""))
             product = self._find_product(engine, requested)
-            if not self._eligible(product, engine, diagnostics):
-                continue
             local = self._find_candidate(candidates, engine, requested, product)
+            if not self._eligible(
+                product, engine, diagnostics, local.path if local else None
+            ):
+                continue
             if local is None and product and self.intent.effective_auto_download(product):
                 local = self._provision(product, diagnostics)
                 if local is not None:
@@ -873,9 +1016,14 @@ class STTModelManager:
             if not missing:
                 break
             cover = missing & set(product.roles)
-            if not cover or not self._eligible(product, product.engine, diagnostics):
+            if not cover:
                 continue
             local = self._find_candidate(candidates, product.engine, product.id, product)
+            if not self._eligible(
+                product, product.engine, diagnostics,
+                local.path if local else None,
+            ):
+                continue
             if local is None:
                 if not self.intent.effective_auto_download(product):
                     diagnostics.append({
@@ -980,11 +1128,48 @@ class STTModelManager:
                 return candidate
         return None
 
+    def _kroko_license_allows(
+        self,
+        product: Optional[ProductModel],
+        candidate_path: Optional[Any] = None,
+        diagnostics: Optional[list] = None,
+    ):
+        """Whether a commercial Kroko product holds a fresh license entitlement.
+
+        Returns ``(True, reason)`` for everything that is not a commercial
+        Kroko product, when no policy is injected (legacy behavior), or when
+        the injected live policy confirms the entitlement. Fail-closed: policy
+        errors and missing entitlements deny, with a redacted diagnostic.
+        """
+        if product is None or normalize_engine(product.engine) != "kroko_onnx":
+            return True, "not_kroko"
+        if (product.license_class or "").strip().lower() != "commercial":
+            return True, "non_commercial"
+        if self.license_policy is None:
+            return True, "no_policy"
+        if candidate_path is None:
+            # Same authoritative resolution as the snapshot discovery.
+            candidate_path = self.locate_local_path(product)
+        try:
+            entitled, reason = self.license_policy(product, candidate_path)
+        except Exception:
+            entitled, reason = False, "policy_error"
+        if entitled:
+            return True, str(reason or "entitled")
+        if diagnostics is not None:
+            diagnostics.append({
+                "modelId": product.id,
+                "stage": "eligibility",
+                "result": "kroko_license_not_entitled",
+            })
+        return False, str(reason or "kroko_license_not_entitled")
+
     def _eligible(
         self,
         product: Optional[ProductModel],
         engine: str,
         diagnostics: list,
+        candidate_path: Optional[Any] = None,
     ) -> bool:
         if not self.intent.engine_enabled(engine):
             diagnostics.append({
@@ -1010,13 +1195,40 @@ class STTModelManager:
             })
             return False
         if product.engine == "kroko_onnx" and product.runtime_variant:
-            if self.intent.kroko_runtime_variant != product.runtime_variant:
+            license_class = (product.license_class or "").strip().lower()
+            if license_class == "commercial":
+                if self.intent.kroko_runtime_variant != product.runtime_variant:
+                    diagnostics.append({
+                        "modelId": product.id,
+                        "stage": "eligibility",
+                        "result": "runtime_variant_incompatible",
+                    })
+                    return False
+            elif license_class in _COMMUNITY_LICENSE_CLASSES:
+                # Community models load on free and pro installs alike: the
+                # native license path is not consulted for them (verified
+                # product behavior), so the installed variant must not lock
+                # them out. License classes outside the manifest keep the
+                # legacy strict comparison below.
+                if self.intent.kroko_runtime_variant not in ("free", "pro"):
+                    diagnostics.append({
+                        "modelId": product.id,
+                        "stage": "eligibility",
+                        "result": "runtime_variant_incompatible",
+                    })
+                    return False
+            elif self.intent.kroko_runtime_variant != product.runtime_variant:
                 diagnostics.append({
                     "modelId": product.id,
                     "stage": "eligibility",
                     "result": "runtime_variant_incompatible",
                 })
                 return False
+        allowed, _reason = self._kroko_license_allows(
+            product, candidate_path, diagnostics
+        )
+        if not allowed:
+            return False
         return True
 
     def candidate_eligible(
@@ -1038,9 +1250,19 @@ class STTModelManager:
         if not self.intent.model_enabled(product):
             return False
         if product.engine == "kroko_onnx" and product.runtime_variant:
-            if self.intent.kroko_runtime_variant != product.runtime_variant:
+            license_class = (product.license_class or "").strip().lower()
+            if license_class == "commercial":
+                if self.intent.kroko_runtime_variant != product.runtime_variant:
+                    return False
+            elif license_class in _COMMUNITY_LICENSE_CLASSES:
+                if self.intent.kroko_runtime_variant not in ("free", "pro"):
+                    return False
+            elif self.intent.kroko_runtime_variant != product.runtime_variant:
                 return False
-        return True
+        allowed, _reason = self._kroko_license_allows(
+            product, candidate.path
+        )
+        return bool(allowed)
 
     def _provision(
         self, product: ProductModel, diagnostics: list

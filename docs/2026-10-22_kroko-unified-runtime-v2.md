@@ -1,4 +1,15 @@
-# Unified Kroko Runtime V2 – aktueller Untersuchungsstand
+# Unified Kroko Runtime V2 — Untersuchungsstand vom 22.10.2026 (historisch)
+
+> **Einordnung (25.10.2026, PR-#15-Korrekturlauf):** Diese Seite hält den
+> Untersuchungsstand vom 22.10.2026 fest und wird nicht rückwirkend
+> umgeschrieben. Überholt sind insbesondere: das optionale Pro-Addon- und
+> Supervisor-Modell (der geltende Buildvertrag in [build/BUILD.md](../build/BUILD.md)
+> liefert zwei vollständige alternative Distributionen `voice-stt-server` /
+> `voice-stt-server-pro`); der damals offene Lizenz-Lifecycle ist seit dem
+> Korrekturlauf als automatische modellgebundene Policy mit Manager-Integration
+> implementiert ([Server-Authentifizierung](server-authentication.md#4-kroko-on-premise-modelllizenz--produkt-entitlement-kein-api-login),
+> [Kroko-ONNX](kroko-onnx.md)). Maßgeblich für Build/Packaging ist allein
+> `build/BUILD.md`; maßgeblich für die Laufzeit die genannten Fachseiten.
 
 Stand 22.10.2026: AP-KR-010 ist eine Machbarkeitsuntersuchung, zur unabhängigen
 Prüfung vorgelegt. Die produktive Installation bleibt unter

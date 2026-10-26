@@ -62,6 +62,8 @@ from api_fastapi_server.segment_ledger import (
 from api_fastapi_server.protocol_v2 import schema as protocol_v2_schema
 from api_fastapi_server.protocol_v2.connection import ProtocolV2Connection
 from api_fastapi_server import settings_control as settings_control_module
+from api_fastapi_server.openai_routes import create_openai_router
+from api_fastapi_server.security import SecurityService
 from api_fastapi_server.wake_admission import (
     WakeActivationOutcome,
     WakeAdmissionCoordinator,
@@ -85,6 +87,22 @@ from VoiceSTT_server.credential_redaction import (
     kroko_credential_values,
     redact_kroko_credentials,
     redact_secret_text,
+)
+from VoiceSTT.kroko.credentials import effective_recognizer_key
+from VoiceSTT.kroko.models import (
+    load_manifest,
+    read_model_tier,
+    read_model_uuid,
+)
+from VoiceSTT.kroko.native_guard import (
+    CONCURRENT_IDENTITY,
+    KrokoNativeConflict,
+    identity_for_path,
+    process_guard,
+)
+from api_fastapi_server.kroko_runtime import (
+    enforce_kroko_single_identity,
+    kroko_lane_models,
 )
 from VoiceSTT_server.stt_model_management import (
     ManagedModelRegistryView,
@@ -1990,7 +2008,16 @@ class SharedEngineWorker:
         if self.thread is not None:
             self.thread.join(timeout=10)
         if self.thread is None or not self.thread.is_alive():
-            self.engine = None
+            engine, self.engine = self.engine, None
+            close = getattr(engine, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    LOGGER.debug(
+                        "Inferenz-Engine %s konnte nicht sauber geschlossen werden",
+                        self.name, exc_info=True,
+                    )
 
     def snapshot(self):
         elapsed = max(0.001, time.monotonic() - self.started_at)
@@ -6243,6 +6270,7 @@ class VoiceSTTService:
         recorder_factory: Optional[Callable[..., Any]] = None,
     ):
         self.settings = settings
+        self.security = SecurityService(settings)
         self.manager = manager
         self.ready = threading.Event()
         self.stop_event = threading.Event()
@@ -6259,11 +6287,45 @@ class VoiceSTTService:
         self.recorder_factory = recorder_factory
         self.scheduler_factory = scheduler_factory or InferenceScheduler
         self._stt_refresh_lock = threading.Lock()
+        # Kroko: one native model identity per process (PR #15). The policy
+        # lock makes "read operator intent + bind it" atomic, the reconcile
+        # lock serialises automatic model re-derivation after license events.
+        self._kroko_policy_lock = threading.RLock()
+        self._kroko_reconcile_lock = threading.Lock()
+        # Monotonic Pro-admission revision: bumped synchronously on every
+        # license-policy bind (force/key/grant invalidation) under
+        # ``_kroko_policy_lock``. Scheduler submit captures it before any
+        # potentially long load and revalidates it together with the
+        # revocation state inside the same policy lock just before the
+        # actual enqueue, so a confirmed force change is linearised with
+        # the submit (B1). Never reset, only incremented.
+        self._kroko_admission_generation = 0
+        self._kroko_probe_conflicts = []
+        self._kroko_reconcile_state = None
+        self._kroko_tier_cache = {}
+        self.config_store = RuntimeConfigStore(settings.runtime_config_path)
+        # AP-SRV-050 server-authoritative defaults with their own revision
+        # stream, loaded from the single runtime config document. This must
+        # exist before the first model refresh: the Kroko license policy
+        # reads the persisted force-community intent up front.
+        persisted_overlay, persisted_revision = self.config_store.load_control()
+        self.settings_control = settings_control_module.ServerSettingsState(
+            settings_control_module.build_default_registry(),
+            overlay=persisted_overlay,
+            revision=persisted_revision,
+            persist=self._persist_settings_control,
+        )
+        self.settings_registry = self.settings_control.registry
         self.stt_model_manager = STTModelManager(
             runtime_root=(settings.data_root_path or "data"),
             intent=OperatorIntent.from_settings(settings),
             load_probe=self._probe_stt_model,
+            license_policy=self._kroko_license_entitlement,
         )
+        # The license decision precedes the first model admission: without a
+        # fresh model-bound VALID proof no Pro model may enter the snapshot,
+        # so the initial refresh can only admit Community models.
+        self.refresh_kroko_license_policy(settings=settings, background=False)
         self._apply_stt_model_snapshot(self.stt_model_manager.refresh())
         self._stt_model_refresh_required = False
         self.scheduler = self._new_scheduler()
@@ -6275,17 +6337,6 @@ class VoiceSTTService:
         self.events = StructuredEventHub(settings)
         self.audit = AuditLogManager(settings, self.events)
         self.performance = PerformanceLogManager(settings, self.events)
-        self.config_store = RuntimeConfigStore(settings.runtime_config_path)
-        # AP-SRV-050 server-authoritative defaults with their own revision
-        # stream, loaded from the single runtime config document.
-        persisted_overlay, persisted_revision = self.config_store.load_control()
-        self.settings_control = settings_control_module.ServerSettingsState(
-            settings_control_module.build_default_registry(),
-            overlay=persisted_overlay,
-            revision=persisted_revision,
-            persist=self._persist_settings_control,
-        )
-        self.settings_registry = self.settings_control.registry
         # AP-SRV-060: the one server-wide wake-word catalog authority. It holds
         # the last-known-good manifest snapshot, the public projection, the
         # internal artifact projection, the single resolver, availability, the
@@ -6296,14 +6347,18 @@ class VoiceSTTService:
             on_catalog_changed=self._on_wake_word_catalog_changed,
         )
         self.wakeword_registry = WakeWordRegistry(self.wakeword_catalog)
-        self._log_access_tokens = {}
-        self._log_access_lock = threading.RLock()
         self.ready_thread = None
         self.idle_thread = None
 
     def _probe_stt_model(self, candidate):
         """Perform the expensive engine load only for a serious candidate."""
 
+        if normalize_engine_name(candidate.engine) == "kroko_onnx":
+            # Never a second native Kroko instance next to a live one; the
+            # exact model that already runs healthy needs no second load.
+            if self._kroko_probe_reuses_live_instance(candidate):
+                return True
+            self._kroko_probe_preflight(candidate)
         probe_settings = replace(self.settings)
         probe_settings.model = candidate.path
         probe_settings.realtime_model = candidate.path
@@ -6342,9 +6397,672 @@ class VoiceSTTService:
         }
         return True
 
+    # -- Kroko license lifecycle (PR #15 Korrekturlauf) ---------------------
+
+    #: Bounded default for one license-server round trip. No endless retry.
+    KROKO_LICENSE_CHECK_TIMEOUT = 5.0
+
+    @property
+    def kroko_native_guard(self):
+        """The process-wide native Kroko guard (the native singleton is too)."""
+        return process_guard()
+
+    def _kroko_force_community(self):
+        """Server-wide persisted operator intent; never a session value."""
+        control = getattr(self, "settings_control", None)
+        if control is None:
+            return False
+        try:
+            return bool(control.server_effective().get(
+                settings_control_module.KROKO_FORCE_COMMUNITY, False
+            ))
+        except Exception:
+            return False
+
+    def _kroko_manifest(self):
+        cached = getattr(self, "_kroko_manifest_cache", None)
+        if cached is None:
+            try:
+                cached = load_manifest()
+            except Exception:
+                return None
+            self._kroko_manifest_cache = cached
+        return cached
+
+    def _kroko_lane_options(self, settings):
+        """The engine options the Kroko engine really receives (key included)."""
+        try:
+            return dict(resolved_engine_options(settings, "kroko_onnx", "final"))
+        except Exception:
+            return {}
+
+    def _kroko_license_target(self, settings, intent, options, force):
+        """Pick the one model the license pre-check addresses.
+
+        Returns ``((uuid, path), reason)`` or ``(None, reason)``. The path is
+        always resolved by the model manager - the same authority the
+        snapshot discovery and the eligibility hook use, including engine
+        ``model_dir``/``model_path`` options and custom roots - so a check
+        can never address a different file than the one that is admitted.
+
+        Order: a Pro model configured in a lane; otherwise the Pro identity
+        this process already initialised natively; otherwise (valid key, no
+        force) a locally present Pro model, so that the *right to select* Pro
+        can be established while Community is configured. Selecting a model
+        is not activating it: nothing is loaded here.
+        """
+        manager = self.stt_model_manager
+        configured_missing = False
+        lane_models = kroko_lane_models(settings, self._kroko_manifest())
+        for _lane, raw, _key in lane_models:
+            product = manager.find_product("kroko_onnx", raw)
+            if (
+                product is None
+                or (product.license_class or "").strip().lower() != "commercial"
+            ):
+                continue
+            path = manager.locate_local_path(product, intent)
+            uuid = read_model_uuid(path) if path else None
+            if uuid:
+                return (uuid, path), "pro_lane"
+            configured_missing = True
+        if configured_missing:
+            return None, "pro_model_not_local"
+        key_text = str(effective_recognizer_key(options) or "")
+        if not key_text.strip():
+            return None, "no_key"
+        if force:
+            return None, "force_community"
+        candidates = manager.local_license_candidates(intent)
+        bound = self.kroko_native_guard.status().get("nativeProModelUuid")
+        if bound:
+            candidates = tuple(
+                item for item in candidates if item[2].lower() == str(bound).lower()
+            )
+            if not candidates:
+                return None, "pro_model_not_local"
+        if not candidates:
+            return None, "pro_model_not_local"
+        language = ""
+        if lane_models:
+            current = manager.find_product("kroko_onnx", lane_models[0][1])
+            language = (current.language if current is not None else "") or ""
+        for product, path, uuid in candidates:
+            if language and (product.language or "").lower() == language.lower():
+                return (uuid, path), "pro_candidate"
+        product, path, uuid = candidates[0]
+        return (uuid, path), "pro_candidate"
+
+    def _kroko_path_tier(self, path):
+        """Cached native-header tier (``"pro"``/``"community"``/``None``)."""
+        if not path:
+            return None
+        try:
+            stamp = os.stat(path).st_mtime_ns
+        except OSError:
+            return None
+        cache = self._kroko_tier_cache
+        cached = cache.get(str(path))
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+        tier = read_model_tier(path)
+        cache[str(path)] = (stamp, tier)
+        return tier
+
+    def _kroko_active_pro_roles(self):
+        """Roles whose *active* resolved model is a Pro Kroko file."""
+        roles = []
+        for role, item in dict(self.settings._resolved_stt_models or {}).items():
+            try:
+                if normalize_engine_name(item.get("engine")) != "kroko_onnx":
+                    continue
+            except Exception:
+                continue
+            if self._kroko_path_tier(item.get("path")) == "pro":
+                roles.append(role)
+        return roles
+
+    def _kroko_pro_revocation(self):
+        """Why new Pro work must be refused right now, else ``None``.
+
+        Synchronous and independent of any background thread: it reads the
+        live operator intent and the bound key state, so a confirmed
+        force-community change or a key removal blocks the very next Pro
+        job even while the previously loaded native Pro recognizer still
+        exists. The Python grant is not the native license context, see
+        :meth:`kroko_runtime_status`.
+        """
+        if not self._kroko_active_pro_roles():
+            return None
+        if self._kroko_force_community():
+            return (
+                "Kroko Pro ist serverweit gesperrt (Force Community). Die "
+                "laufende Pro-Instanz nimmt keine neuen Auftraege an."
+            )
+        snapshot = self.security.kroko.state.public_snapshot()
+        if snapshot.get("forceCommunity"):
+            return (
+                "Kroko Pro ist serverweit gesperrt (Force Community). Die "
+                "laufende Pro-Instanz nimmt keine neuen Auftraege an."
+            )
+        if not snapshot.get("keyPresent"):
+            return (
+                "Fuer das aktive Kroko-Pro-Modell ist kein Lizenzschluessel "
+                "mehr gesetzt. Die laufende Pro-Instanz nimmt keine neuen "
+                "Auftraege an."
+            )
+        return None
+
+    def _kroko_license_entitlement(self, product, candidate_path=None):
+        """Live entitlement hook injected into STTModelManager (B1/B2).
+
+        Commercial Kroko products are entitled only while the gate holds a
+        fresh, model-bound VALID proof for the exact file's UUID and no
+        restart-only native conflict stands in the way. ``candidate_path`` is
+        the file the model manager resolved (one authority for the pre-check
+        and the admission). Everything that is not Kroko passes through
+        untouched. Never raises, never logs secrets.
+        """
+        try:
+            if normalize_engine_name(
+                getattr(product, "engine", "") or ""
+            ) != "kroko_onnx":
+                return True, "not_kroko"
+            uuid = None
+            if candidate_path:
+                try:
+                    uuid = read_model_uuid(candidate_path)
+                except Exception:
+                    uuid = None
+            if not uuid:
+                return False, "no_license_uuid"
+            if self._kroko_force_community():
+                return False, "force_community"
+            state = self.security.kroko.state
+            identity = identity_for_path(candidate_path)
+            key = effective_recognizer_key(
+                self._kroko_lane_options(self.settings)
+            )
+            proof = state.pro_enabled_for(uuid)
+            native = self.kroko_native_guard.native_license_confirmed(
+                identity.ident, key
+            )
+            if proof or native:
+                conflict = self.kroko_native_guard.restart_conflict(
+                    identity, key
+                )
+                if conflict is not None:
+                    return False, conflict.code
+                return True, "license_valid" if proof else "native_license_context"
+            try:
+                reason = state.public_snapshot().get("reasonCode", "not_entitled")
+            except Exception:
+                reason = "not_entitled"
+            return False, str(reason or "not_entitled")
+        except Exception:
+            return False, "policy_error"
+
+    def refresh_kroko_license_policy(self, *, settings=None, background=False,
+                                     connect=None, timeout=None,
+                                     on_result=None, network=True,
+                                     reconcile=False):
+        """(Re-)evaluate the Kroko license policy. Never raises.
+
+        The current operator intent (force, effective key) is read and bound
+        synchronously under one lock, so no asynchronous worker can ever bind
+        an older value again; a Pro grant is invalidated before this method
+        returns. A bounded network check follows only for the addressed Pro
+        model with a key and without force (``network=False`` skips it).
+        ``background=True`` runs just the round trip on a daemon thread,
+        never on the ASGI loop. ``reconcile=True`` additionally brings the
+        model snapshot and scheduler in line once the policy is settled.
+        Returns the decision list.
+        """
+        settings = settings if settings is not None else self.settings
+        if timeout is None:
+            timeout = self.KROKO_LICENSE_CHECK_TIMEOUT
+        try:
+            gate = self.security.kroko
+            with self._kroko_policy_lock:
+                force = self._kroko_force_community()
+                intent = OperatorIntent.from_settings(settings)
+                options = self._kroko_lane_options(settings)
+                target, why = self._kroko_license_target(
+                    settings, intent, options, force
+                )
+                plan = None
+                if target is None:
+                    # Still bind key/mode so a removed key or a new force
+                    # flag invalidates an older VALID proof immediately.
+                    gate.bind_intent(options=options, force_community=force)
+                    decision = {
+                        "tier": "community",
+                        "model_uuid": "",
+                        "reason": (
+                            why if why in {
+                                "no_key", "force_community",
+                                "pro_model_not_local",
+                            } else "no_pro_target"
+                        ),
+                        "check_required": False,
+                    }
+                else:
+                    uuid, path = target
+                    key = effective_recognizer_key(options)
+                    conflict = self.kroko_native_guard.restart_conflict(
+                        identity_for_path(path), key
+                    )
+                    if conflict is not None:
+                        # No fresh grant for a stale native key/model context.
+                        gate.bind_intent(options=options, force_community=force)
+                        decision = {
+                            "tier": "community",
+                            "model_uuid": uuid,
+                            "reason": conflict.code,
+                            "check_required": False,
+                            "restart_required": True,
+                        }
+                    elif (
+                        not force
+                        and self.kroko_native_guard.native_license_confirmed(
+                            identity_for_path(path).ident, key
+                        )
+                    ):
+                        # This process already runs a licensed Pro context for
+                        # exactly this model and key. The provider rejects a
+                        # further external check for a key whose native
+                        # reporter is alive, so the confirmed native context
+                        # is the evidence - no pointless (and rejected)
+                        # provider connection.
+                        gate.bind_intent(options=options, force_community=force)
+                        decision = {
+                            "tier": "pro",
+                            "model_uuid": uuid,
+                            "reason": "native_license_context",
+                            "check_required": False,
+                        }
+                    elif network:
+                        decision, plan = gate.prepare(
+                            uuid, options=options, force_community=force
+                        )
+                    else:
+                        decision = gate.decide(
+                            uuid, options=options, force_community=force
+                        )
+                # Every path above bound the current intent synchronously:
+                # publish one admission revision with it, so a concurrent
+                # scheduler submit can detect exactly this invalidation
+                # before it enqueues into the previous worker (B1).
+                self._kroko_admission_generation += 1
+        except Exception:
+            LOGGER.warning(
+                "Kroko-Lizenzrichtlinie konnte nicht bewertet werden."
+            )
+            return [{
+                "tier": "community",
+                "model_uuid": "",
+                "reason": "policy_error",
+                "check_required": False,
+            }]
+
+        if plan is None:
+            if reconcile:
+                self._spawn_kroko_reconcile("license_policy")
+            if on_result is not None:
+                try:
+                    on_result([decision])
+                except Exception:
+                    pass
+            return [decision]
+
+        def settled(_current):
+            # Runs with the *current* state, never with the arguments the
+            # check was started with; a superseded check just reports that.
+            if on_result is not None:
+                try:
+                    on_result([_current])
+                except Exception:
+                    pass
+            if reconcile or background:
+                self.reconcile_kroko_models("license_check")
+
+        final, _started = gate.run(
+            decision, plan, connect=connect, timeout=timeout,
+            background=background, on_result=settled,
+        )
+        return [final]
+
+    def apply_kroko_force_change(self):
+        """A confirmed ``kroko.forceCommunity`` patch: lock out, then reconcile.
+
+        The grant is invalidated synchronously before this returns; the
+        model/scheduler reconcile (and, when released, the new check) runs on
+        a daemon thread.
+        """
+        return self.refresh_kroko_license_policy(
+            background=True, reconcile=True
+        )
+
+    def _kroko_involved(self):
+        if self._kroko_active_pro_roles():
+            return True
+        if kroko_lane_models(self.settings, self._kroko_manifest()):
+            return True
+        for item in dict(self.settings._resolved_stt_models or {}).values():
+            try:
+                if normalize_engine_name(item.get("engine")) == "kroko_onnx":
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _spawn_kroko_reconcile(self, trigger):
+        worker = threading.Thread(
+            target=self.reconcile_kroko_models,
+            args=(trigger,),
+            name="KrokoModelReconcile",
+            daemon=True,
+        )
+        worker.start()
+        return worker
+
+    def reconcile_kroko_models(self, trigger):
+        """Re-derive model snapshot, scheduler and public status. Never raises.
+
+        Runs after a license result or a force change. It reuses the
+        transactional refresh (single native Kroko instance, rollback to the
+        last good state); it never hot-swaps natively on its own, and an
+        activation that cannot be done safely right now (active sessions,
+        restart-only conflict) is reported as pending instead of being
+        pretended.
+        """
+        if not self._kroko_involved():
+            return None
+        with self._kroko_reconcile_lock:
+            outcome = {"trigger": trigger}
+            try:
+                result = self.refresh_stt_models(license_check=False)
+                outcome["result"] = (
+                    "changed" if result.get("changed") else "unchanged"
+                )
+            except (RuntimeError, ValueError) as exc:
+                self._stt_model_refresh_required = True
+                outcome["result"] = "deferred"
+                outcome["reason"] = self._safe_stt_error(exc)
+            except Exception as exc:  # pragma: no cover - defensive boundary
+                self._stt_model_refresh_required = True
+                outcome["result"] = "failed"
+                outcome["reason"] = self._safe_stt_error(exc)
+            outcome["at"] = datetime.datetime.now(
+                datetime.timezone.utc
+            ).isoformat()
+            self._kroko_reconcile_state = outcome
+            return outcome
+
+    def kroko_runtime_status(self):
+        """Public, secret-free view of the five distinct Kroko facts.
+
+        Installed variant, license entitlement, desired model, actually
+        active model and whether a restart is needed are separate
+        statements: a successful license check says nothing about an active
+        model instance.
+        """
+        guard_status = self.kroko_native_guard.status()
+        options = self._kroko_lane_options(self.settings)
+        key = effective_recognizer_key(options)
+        restart_code = None
+        try:
+            conflict = None
+            manager = self.stt_model_manager
+            for _lane, raw, _key in kroko_lane_models(
+                self.settings, self._kroko_manifest()
+            ):
+                product = manager.find_product("kroko_onnx", raw)
+                if (
+                    product is None
+                    or (product.license_class or "").strip().lower()
+                    != "commercial"
+                ):
+                    continue
+                path = manager.locate_local_path(product)
+                if path:
+                    conflict = self.kroko_native_guard.restart_conflict(
+                        identity_for_path(path), key
+                    )
+                    break
+            if conflict is None and str(key or "").strip():
+                conflict = self.kroko_native_guard.key_context_conflict(key)
+            restart_code = conflict.code if conflict is not None else None
+        except Exception:
+            restart_code = None
+        active = {
+            role: item.get("id")
+            for role, item in dict(self.settings._resolved_stt_models or {}).items()
+            if normalize_engine_name(item.get("engine")) == "kroko_onnx"
+        }
+        try:
+            license_snapshot = self.security.kroko.state.public_snapshot()
+        except Exception:
+            license_snapshot = {"status": "UNKNOWN"}
+        native_entitled = False
+        try:
+            native_uuid = guard_status.get("nativeProModelUuid")
+            native_entitled = bool(
+                native_uuid
+                and not self._kroko_force_community()
+                and self.kroko_native_guard.native_license_confirmed(
+                    native_uuid, key
+                )
+            )
+        except Exception:
+            native_entitled = False
+        proof_entitled = bool(license_snapshot.get("proEnabled"))
+        return {
+            "installedVariant": self.stt_model_manager.intent.kroko_runtime_variant,
+            "licenseEntitled": proof_entitled or native_entitled,
+            "licenseSource": (
+                "provider_check" if proof_entitled else (
+                    "native_context" if native_entitled else None
+                )
+            ),
+            "licenseModelUuid": license_snapshot.get("modelUuid", ""),
+            "forceCommunity": self._kroko_force_community(),
+            "desiredModels": {
+                lane: model
+                for lane, model, _key in kroko_lane_models(
+                    self.settings, self._kroko_manifest()
+                )
+            },
+            "activeKrokoModels": active,
+            "activeProPresent": bool(self._kroko_active_pro_roles()),
+            "proAdmissionRevoked": self._kroko_pro_revocation() is not None,
+            "nativeProContextActive": guard_status["nativeProContextActive"],
+            "liveNativeInstances": guard_status["liveNativeInstances"],
+            "restartRequired": restart_code is not None,
+            "restartReason": restart_code,
+            "modelRefreshPending": bool(self._stt_model_refresh_required),
+            "lastReconcile": (
+                dict(self._kroko_reconcile_state)
+                if self._kroko_reconcile_state else None
+            ),
+        }
+
+    # -- single native Kroko instance: pre-load protection ------------------
+
+    def _kroko_scheduler_preflight(self):
+        """Refuse an impossible Kroko configuration before any native load."""
+        resolved = dict(self.settings._resolved_stt_models or {})
+        kroko = []
+        for role, item in resolved.items():
+            try:
+                if normalize_engine_name(item.get("engine")) == "kroko_onnx":
+                    kroko.append((role, item.get("path")))
+            except Exception:
+                continue
+        if not kroko:
+            return
+        identities = {
+            identity_for_path(path).ident for _role, path in kroko if path
+        }
+        if len(identities) > 1 or (
+            len(kroko) > 1 and not self.settings.use_main_model_for_realtime
+        ):
+            raise KrokoNativeConflict(CONCURRENT_IDENTITY)
+        _role, path = kroko[0]
+        if not path:
+            return
+        conflict = self.kroko_native_guard.evaluate(
+            identity_for_path(path),
+            effective_recognizer_key(self._kroko_lane_options(self.settings)),
+        )
+        if conflict is not None:
+            raise conflict
+
+    def _kroko_probe_reuses_live_instance(self, candidate):
+        """A healthy live scheduler already runs exactly this Kroko file.
+
+        Only actually active **Kroko** lanes matter (B2): a legitimate
+        mixed configuration such as Final=Faster-Whisper plus
+        Realtime=Kroko must reuse the live Kroko worker instead of
+        mistaking the foreign model path for a second Kroko instance.
+        The comparison uses the native Kroko model identity (header UUID,
+        falling back to the normalised path), so lane order and the
+        foreign engine never influence the verdict.
+        """
+        lock = getattr(self, "_scheduler_lock", None)
+        if lock is None:
+            return False
+        with lock:
+            scheduler = getattr(self, "scheduler", None)
+            if scheduler is None:
+                return False
+            try:
+                if not scheduler.healthy():
+                    return False
+            except Exception:
+                return False
+            resolved = dict(self.settings._resolved_stt_models or {})
+        kroko_idents = set()
+        for item in resolved.values():
+            try:
+                if normalize_engine_name(item.get("engine")) != "kroko_onnx":
+                    continue
+            except Exception:
+                continue
+            path = item.get("path")
+            if not path:
+                continue
+            try:
+                kroko_idents.add(identity_for_path(path).ident)
+            except Exception:
+                kroko_idents.add(
+                    os.path.normcase(os.path.abspath(str(path)))
+                )
+        if not kroko_idents:
+            return False
+        try:
+            candidate_ident = identity_for_path(candidate.path).ident
+        except Exception:
+            candidate_ident = os.path.normcase(
+                os.path.abspath(str(candidate.path))
+            )
+        return kroko_idents == {candidate_ident}
+
+    def _kroko_probe_preflight(self, candidate):
+        conflict = self.kroko_native_guard.evaluate(
+            identity_for_path(candidate.path),
+            effective_recognizer_key(self._kroko_lane_options(self.settings)),
+        )
+        if conflict is None:
+            return
+        if conflict.code == CONCURRENT_IDENTITY:
+            self.__dict__.setdefault("_kroko_probe_conflicts", []).append(
+                candidate.id
+            )
+        raise conflict
+
+    def _kroko_quiesced_manager_refresh(self):
+        """``manager.refresh()`` that may free the single native instance once.
+
+        A Kroko candidate is never probed next to a different live Kroko
+        instance (that would be two native identities in one process). If a
+        candidate was refused for exactly that reason and nothing is active,
+        the live instance is unloaded through the regular unload path and the
+        refresh repeated; activation then loads the new model into the free
+        slot. With active sessions or inference the transition is deferred
+        and reported, never forced.
+        """
+        self._kroko_probe_conflicts = []
+        snapshot = self.stt_model_manager.refresh()
+        if not self._kroko_probe_conflicts:
+            return snapshot
+        if self._models_busy():
+            raise RuntimeError(
+                "Der Wechsel des Kroko-Modells erfordert das Entladen der "
+                "laufenden Kroko-Instanz; aktive Sessions oder "
+                "Transkriptionen verhindern das. Nach deren Ende erneut "
+                "aktualisieren."
+            )
+        self.unload_models(reason="kroko_model_transition")
+        self._kroko_probe_conflicts = []
+        return self.stt_model_manager.refresh()
+
+    def _kroko_assert_switch_possible(self, candidate):
+        """Reject a restart-only Kroko change before anything is touched.
+
+        A different Pro model, or a Pro model under another key, can only be
+        loaded by a new process once the native Pro context exists. Saying so
+        up front keeps the working instance loaded.
+        """
+        manager = self.stt_model_manager
+        try:
+            intent = OperatorIntent.from_settings(candidate)
+            key = effective_recognizer_key(self._kroko_lane_options(candidate))
+            for _lane, raw, _key in kroko_lane_models(
+                candidate, self._kroko_manifest()
+            ):
+                product = manager.find_product("kroko_onnx", raw)
+                if (
+                    product is None
+                    or (product.license_class or "").strip().lower()
+                    != "commercial"
+                ):
+                    continue
+                path = manager.locate_local_path(product, intent)
+                if not path:
+                    continue
+                conflict = self.kroko_native_guard.restart_conflict(
+                    identity_for_path(path), key
+                )
+                if conflict is not None:
+                    raise conflict
+        except KrokoNativeConflict:
+            raise
+        except Exception:
+            return
+
+    def _kroko_rebind_current(self):
+        """Re-bind the committed settings after an abandoned candidate."""
+        try:
+            self.refresh_kroko_license_policy(
+                settings=self.settings, network=False
+            )
+        except Exception:
+            pass
+
     def stt_model_management_status(self):
         data = self.stt_model_manager.status()
         data["refreshRequired"] = bool(self._stt_model_refresh_required)
+        try:
+            data["krokoLicense"] = (
+                self.security.kroko.state.public_snapshot()
+            )
+        except Exception:
+            data["krokoLicense"] = {"status": "UNKNOWN"}
+        try:
+            data["krokoRuntime"] = self.kroko_runtime_status()
+        except Exception:
+            data["krokoRuntime"] = {"restartRequired": False}
         return data
 
     def stt_model_readiness_summary(self):
@@ -6368,20 +7086,28 @@ class VoiceSTTService:
             values.extend(self._stt_secret_values(source))
         return redact_secret_text(error, values)
 
-    def refresh_stt_models(self, timeout=180.0):
+    def refresh_stt_models(self, timeout=180.0, license_check=True):
         """Refresh the transactional authority without invalidating its LKG."""
 
         with self._stt_refresh_lock:
-            return self._refresh_stt_models_locked(timeout)
+            return self._refresh_stt_models_locked(timeout, license_check)
 
-    def _refresh_stt_models_locked(self, timeout):
+    def _refresh_stt_models_locked(self, timeout, license_check=True):
+        # The license decision precedes the admission: a rotation, removal,
+        # force flag or expiry since the last refresh must not leak into the
+        # new snapshot. Bounded and skipped when fresh, so steady-state cost
+        # is ~zero and no network happens without a key. A reconcile after a
+        # finished check binds the intent only (``license_check=False``).
+        self.refresh_kroko_license_policy(
+            settings=self.settings, background=False, network=license_check
+        )
         previous_snapshot = self.stt_model_manager.snapshot()
         previous_intent = self.stt_model_manager.intent
         previous = dict(self.settings._resolved_stt_models)
         candidate_intent = OperatorIntent.from_settings(self.settings)
         self.stt_model_manager.intent = candidate_intent
         try:
-            snapshot = self.stt_model_manager.refresh()
+            snapshot = self._kroko_quiesced_manager_refresh()
         except Exception as exc:
             self.stt_model_manager.intent = previous_intent
             message = self._safe_stt_error(exc)
@@ -6562,6 +7288,7 @@ class VoiceSTTService:
         )
 
     def _new_scheduler(self):
+        self._kroko_scheduler_preflight()
         return self.scheduler_factory(
             self.settings,
             self._on_inference_result,
@@ -6753,41 +7480,74 @@ class VoiceSTTService:
         return replacement
 
     def _submit_scheduler_job(self, job, activity):
+        # Entry fast-fail: capture the admission revision together with the
+        # revocation state, so the final section below can prove that no
+        # confirmed force/key invalidation committed in between (B1).
+        with self._kroko_policy_lock:
+            admission_gen = self._kroko_admission_generation
+            revoked = self._kroko_pro_revocation()
+            if revoked is not None:
+                return QueueSubmitResult(False, reason=revoked)
         while True:
+            # Potentially long load/branch outside every admission lock: a
+            # confirmed force change is never blocked by it.
             scheduler = self.ensure_models_loaded()
-            with self._scheduler_lock:
-                if scheduler is not self.scheduler:
-                    continue
-                self.touch_model_activity(activity)
-                result = scheduler.submit(job)
-                if not result.accepted and "voll" in str(result.reason).lower():
-                    transcription_id = (
-                        f"{job.session_id}:{job.generation}:{job.segment_id}"
-                        if job.session_id
-                        else None
-                    )
-                    self.events.emit(
-                        "system",
-                        "scheduler.overloaded",
-                        severity="warning",
-                        message="Scheduler-Warteschlange ist ausgelastet",
-                        sessionId=job.session_id,
-                        clientId=job.client_id,
-                        requestId=job.request_id,
-                        transcriptionId=transcription_id,
-                        lane=job.kind,
-                        reason=result.reason,
-                    )
-                    self.performance.event(
-                        "queue.limit_reached",
-                        sessionId=job.session_id,
-                        clientId=job.client_id,
-                        requestId=job.request_id,
-                        transcriptionId=transcription_id,
-                        lane=job.kind,
-                        reason=result.reason,
-                    )
-                return result
+            # Authoritative admission + enqueue under one short critical
+            # section. The outer policy lock is the same lock every
+            # synchronous grant invalidation (force/key) holds while it
+            # binds the new intent and bumps the admission revision; the
+            # inner scheduler lock serialises the worker pointer. A
+            # confirmed force change therefore either precedes this section
+            # (refused here, generation moved) or follows it (the job was
+            # enqueued strictly before confirmation). A second check
+            # without this shared lock would still race.
+            with self._kroko_policy_lock:
+                with self._scheduler_lock:
+                    revoked = self._kroko_pro_revocation()
+                    if revoked is not None:
+                        return QueueSubmitResult(False, reason=revoked)
+                    current_gen = self._kroko_admission_generation
+                    if current_gen != admission_gen:
+                        # A policy update committed after the entry check;
+                        # the revocation above is already the current one,
+                        # so just re-baseline before the pointer check.
+                        admission_gen = current_gen
+                    if scheduler is not self.scheduler:
+                        stale = True
+                    else:
+                        stale = False
+                        self.touch_model_activity(activity)
+                        result = scheduler.submit(job)
+            if stale:
+                continue
+            if not result.accepted and "voll" in str(result.reason).lower():
+                transcription_id = (
+                    f"{job.session_id}:{job.generation}:{job.segment_id}"
+                    if job.session_id
+                    else None
+                )
+                self.events.emit(
+                    "system",
+                    "scheduler.overloaded",
+                    severity="warning",
+                    message="Scheduler-Warteschlange ist ausgelastet",
+                    sessionId=job.session_id,
+                    clientId=job.client_id,
+                    requestId=job.request_id,
+                    transcriptionId=transcription_id,
+                    lane=job.kind,
+                    reason=result.reason,
+                )
+                self.performance.event(
+                    "queue.limit_reached",
+                    sessionId=job.session_id,
+                    clientId=job.client_id,
+                    requestId=job.request_id,
+                    transcriptionId=transcription_id,
+                    lane=job.kind,
+                    reason=result.reason,
+                )
+            return result
 
     def load_models(self, timeout=180.0):
         with self._scheduler_lock:
@@ -7062,19 +7822,7 @@ class VoiceSTTService:
                     "reason": "Der kanonische SQLite-Eventstore ist nicht verfügbar.",
                 })
             return base
-        token = uuid.uuid4().hex + uuid.uuid4().hex
-        expires_at = time.time() + 24 * 60 * 60
-        with self._log_access_lock:
-            now = time.time()
-            self._log_access_tokens = {
-                existing: value
-                for existing, value in self._log_access_tokens.items()
-                if value["expiresAt"] > now
-            }
-            self._log_access_tokens[token] = {
-                "sessionId": session_id,
-                "expiresAt": expires_at,
-            }
+        token, expires_at = self.security.log_tokens.issue(session_id)
         return {
             **base,
             "accessToken": token,
@@ -7082,16 +7830,7 @@ class VoiceSTTService:
         }
 
     def validate_log_access(self, token, session_id=None):
-        if not token:
-            return None
-        with self._log_access_lock:
-            access = self._log_access_tokens.get(str(token))
-            if access is None or access["expiresAt"] <= time.time():
-                self._log_access_tokens.pop(str(token), None)
-                return None
-            if session_id and access["sessionId"] != session_id:
-                return None
-            return dict(access)
+        return self.security.log_tokens.validate(token, session_id)
 
     def ready_payload(self, session):
         model_status = self.model_lifecycle_status()
@@ -7326,7 +8065,13 @@ class VoiceSTTService:
 
     def switch_models(self, updates, timeout=180.0):
         with self._stt_refresh_lock:
-            return self._switch_models_locked(updates, timeout)
+            try:
+                return self._switch_models_locked(updates, timeout)
+            except BaseException:
+                # The candidate settings were bound to the license state
+                # before the switch could fail: re-bind the committed ones.
+                self._kroko_rebind_current()
+                raise
 
     def _switch_models_locked(self, updates, timeout):
         allowed = {
@@ -7351,10 +8096,25 @@ class VoiceSTTService:
         ):
             candidate.use_main_model_for_realtime = False
         enforce_cpu_model_policy(candidate)
+        self._kroko_assert_switch_possible(candidate)
         previous_management = self.stt_model_manager.snapshot()
         previous_intent = self.stt_model_manager.intent
         self.stt_model_manager.intent = OperatorIntent.from_settings(candidate)
-        managed = self.stt_model_manager.refresh()
+        # Engine options (including the Kroko key) may change through a
+        # switch: re-evaluate against the candidate before any admission or
+        # native load probe can see the new intent.
+        self.refresh_kroko_license_policy(
+            settings=candidate, background=False
+        )
+        try:
+            managed = self._kroko_quiesced_manager_refresh()
+        except Exception:
+            self.stt_model_manager.intent = previous_intent
+            self.stt_model_manager.restore_last_known_good(
+                previous_management,
+                "requested model switch could not be probed safely",
+            )
+            raise
         if not managed.minimum_ready:
             self.stt_model_manager.intent = previous_intent
             self.stt_model_manager.restore_last_known_good(
@@ -8009,6 +8769,11 @@ def enforce_cpu_model_policy(settings):
     """Enforce the configurable CPU-only two-lane model memory guard."""
 
     settings.device = "cpu"
+    try:
+        kroko_manifest = load_manifest()
+    except Exception:
+        kroko_manifest = None
+    enforce_kroko_single_identity(settings, kroko_manifest)
     realtime_engine = settings.realtime_transcription_engine or settings.transcription_engine
     if (
         normalize_engine_name(realtime_engine) == normalize_engine_name(settings.transcription_engine)
@@ -8087,9 +8852,19 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
 
     @asynccontextmanager
     async def lifespan(app):
-        service.start(asyncio.get_running_loop())
-        yield
-        service.stop()
+        try:
+            service.start(asyncio.get_running_loop())
+            yield
+        finally:
+            try:
+                service.stop()
+            except Exception:
+                # A failing cleanup must never mask the original startup
+                # error: log it redacted and let the in-flight exception
+                # (if any) propagate untouched.
+                LOGGER.exception(
+                    "Fehler beim Stoppen des VoiceSTT-Dienstes."
+                )
 
     app = FastAPI(
         title="VoiceSTT FastAPI-Server",
@@ -8138,43 +8913,11 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "supportedEngines": get_supported_transcription_engines(),
             "runtimeSettings": service.runtime_settings_contract(),
             "sessionCapabilities": service.session_capabilities(),
-            "adminAuthRequired": bool(settings.admin_api_key or os.getenv("VOICESTT_ADMIN_API_KEY")),
+            "adminAuthRequired": bool(service.security.admin.configured_key()),
         })
 
-    def _admin_key_matches(supplied):
-        configured_key = settings.admin_api_key or os.getenv(
-            "VOICESTT_ADMIN_API_KEY"
-        )
-        if not configured_key or supplied is None:
-            return False
-        return secrets.compare_digest(str(supplied), str(configured_key))
-
     def admin_auth_error(request):
-        configured_key = settings.admin_api_key or os.getenv("VOICESTT_ADMIN_API_KEY")
-        supplied = request.headers.get("x-voicestt-admin-key")
-        authorization = request.headers.get("authorization", "")
-        if not supplied and authorization.startswith("Bearer "):
-            supplied = authorization[7:]
-        if not supplied:
-            # AP-SRV-050: ``X-Admin-Key`` is an alias inside the *same* guard,
-            # so the frozen server contract header works without weakening any
-            # existing compatible auth path.
-            supplied = request.headers.get("x-admin-key")
-        if configured_key:
-            if not _admin_key_matches(supplied):
-                return JSONResponse(
-                    {"error": "Admin-Authentifizierung erforderlich."},
-                    status_code=401,
-                    headers={"WWW-Authenticate": "Bearer"},
-                )
-            return None
-        client_host = getattr(getattr(request, "client", None), "host", "")
-        if client_host not in {"127.0.0.1", "::1", "localhost", "testclient"}:
-            return JSONResponse(
-                {"error": "Die Remote-Verwaltung ist deaktiviert, bis VOICESTT_ADMIN_API_KEY gesetzt ist."},
-                status_code=403,
-            )
-        return None
+        return service.security.admin_http_error(request)
 
     @app.patch("/api/config")
     async def update_config(payload: dict, request: Request):
@@ -8233,6 +8976,56 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 {"error": service._safe_stt_error(exc)},
                 status_code=409,
             )
+
+    @app.post("/api/kroko/license/refresh")
+    async def refresh_kroko_license(payload: dict, request: Request):
+        # Explicit operator recheck after an error or an expiry, behind the
+        # same existing admin guard as the model routes. The bounded check
+        # runs off the event loop; a fresh Pro grant is applied to the model
+        # registry through the regular transactional refresh path.
+        auth_error = admin_auth_error(request)
+        if auth_error is not None:
+            return auth_error
+        if not isinstance(payload, dict):
+            payload = {}
+        try:
+            timeout = float(payload.get("timeout", 5.0))
+        except (TypeError, ValueError):
+            return JSONResponse(
+                {"error": "timeout muss eine positive Zahl sein."},
+                status_code=400,
+            )
+        if not (timeout > 0 and timeout <= 60):
+            return JSONResponse(
+                {"error": "timeout muss im Bereich (0, 60] liegen."},
+                status_code=400,
+            )
+        decisions = await asyncio.to_thread(
+            service.refresh_kroko_license_policy, timeout=timeout
+        )
+        management = None
+        if any(
+            isinstance(item, dict) and item.get("tier") == "pro"
+            for item in decisions
+        ):
+            try:
+                management = await asyncio.to_thread(
+                    service.refresh_stt_models
+                )
+            except (RuntimeError, ValueError) as exc:
+                return JSONResponse(
+                    {
+                        "decisions": decisions,
+                        "error": service._safe_stt_error(exc),
+                    },
+                    status_code=409,
+                )
+        return JSONResponse({
+            "decisions": decisions,
+            "management": management,
+            "license": service.security.kroko.state.public_snapshot(),
+            "runtime": service.kroko_runtime_status(),
+        })
 
     @app.get("/api/models/lifecycle")
     async def get_model_lifecycle(request: Request):
@@ -8464,10 +9257,28 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                     "message": "Der Patch muss ein JSON-Objekt sein.",
                 }],
             }, status_code=400)
-        result = service.settings_control.patch_server(
-            payload.get("baseSettingsRevision"),
-            payload.get("changes"),
-        )
+        # The force-commit and its grant invalidation share the admission
+        # lock with scheduler submit (B1): either a concurrent submit is
+        # fully before this patch (allowed) or fully after it (refused).
+        # Short synchronous section, no await inside; the model reconcile
+        # still runs on a daemon thread.
+        with service._kroko_policy_lock:
+            result = service.settings_control.patch_server(
+                payload.get("baseSettingsRevision"),
+                payload.get("changes"),
+            )
+            force_changed = bool(
+                result.accepted
+                and settings_control_module.KROKO_FORCE_COMMUNITY in (
+                    result.changed_keys or ()
+                )
+            )
+            if force_changed:
+                # Force Community invalidates a Pro grant before this
+                # returns and blocks new Pro jobs at once; the
+                # model/scheduler reconcile (and any new check) runs on a
+                # daemon thread, never on the event loop.
+                service.apply_kroko_force_change()
         if result.accepted and settings_control_module.WAKE_WORD_GLOBAL_DISABLED in (
             result.changed_keys or ()
         ):
@@ -8641,28 +9452,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         ]
 
     def _log_access_scope(request, requested_session_id=None):
-        configured_key = settings.admin_api_key or os.getenv(
-            "VOICESTT_ADMIN_API_KEY"
-        )
-        authorization = request.headers.get("authorization", "")
-        supplied = request.headers.get("x-voicestt-admin-key")
-        bearer = authorization[7:] if authorization.startswith("Bearer ") else ""
-        supplied = supplied or bearer
-        if configured_key and _admin_key_matches(supplied):
-            return {"admin": True, "sessionId": requested_session_id}
-        client_host = getattr(getattr(request, "client", None), "host", "")
-        if not configured_key and client_host in {
-            "127.0.0.1",
-            "::1",
-            "localhost",
-            "testclient",
-        }:
-            return {"admin": True, "sessionId": requested_session_id}
-        token = request.headers.get("x-voicestt-log-token") or bearer
-        access = service.validate_log_access(token, requested_session_id)
-        if access is None:
-            return None
-        return {"admin": False, "sessionId": access["sessionId"]}
+        return service.security.log_http_scope(request, requested_session_id)
 
     def _log_events_response(
         request,
@@ -8800,16 +9590,10 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 raise ValueError("Erste Nachricht muss ein subscribe-Objekt sein.")
             token = str(request_payload.get("accessToken") or "")
             requested_session_id = request_payload.get("sessionId")
-            configured_key = settings.admin_api_key or os.getenv(
-                "VOICESTT_ADMIN_API_KEY"
+            scope = service.security.log_websocket_scope(
+                token, requested_session_id
             )
-            is_admin = bool(configured_key and _admin_key_matches(token))
-            access = (
-                None
-                if is_admin
-                else service.validate_log_access(token, requested_session_id)
-            )
-            if not is_admin and access is None:
+            if scope is None:
                 await websocket.send_text(json.dumps({
                     "type": "log.error",
                     "code": "not_authorized",
@@ -8817,11 +9601,8 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                 }))
                 await websocket.close(code=1008)
                 return
-            session_id = (
-                requested_session_id
-                if is_admin
-                else access["sessionId"]
-            )
+            is_admin = scope["admin"]
+            session_id = scope["sessionId"]
             channels = {
                 str(channel)
                 for channel in request_payload.get("channels", [])
@@ -9112,600 +9893,22 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             return JSONResponse({"error": str(exc)}, status_code=400)
 
     async def authenticate_openai(request):
-        configured_key = settings.openai_api_key or os.getenv("VOICESTT_API_KEY")
-        if not configured_key:
-            return None
-        if request.headers.get("authorization", "") != f"Bearer {configured_key}":
-            supplied_client_id = request.headers.get("x-voicestt-client-id")
-            service.audit.event(
-                "authentication.failed",
-                transport="http",
-                clientId=(
-                    normalized_client_id(supplied_client_id)
-                    if supplied_client_id
-                    else None
-                ),
-                path=request.url.path,
-                reason="invalid_api_key",
-            )
-            return JSONResponse(
-                openai_error("Der angegebene API-Schlüssel ist ungültig.", code="invalid_api_key"),
-                status_code=401,
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return None
-
-    @app.get("/v1/models")
-    async def openai_models(request: Request):
-        auth_error = await authenticate_openai(request)
-        if auth_error is not None:
-            return auth_error
-        models = []
-        for entry in service.model_catalog():
-            models.append({
-                "id": entry["id"],
-                "object": "model",
-                "created": 0,
-                "owned_by": "local",
-                "engine": entry["engine"],
-                "loaded": entry["loaded"],
-                "lanes": entry["lanes"],
-            })
-        if not any(item["id"] == "whisper-1" for item in models):
-            models.insert(0, {
-                "id": "whisper-1", "object": "model", "created": 0,
-                "owned_by": "voicestt", "engine": "routing_alias",
-                "loaded": True, "lanes": ["final"],
-            })
-        return JSONResponse({"object": "list", "data": models})
-
-    @app.post("/v1/audio/transcriptions")
-    async def openai_transcriptions(request: Request):
-        request_id = uuid.uuid4().hex
-        supplied_client_id = request.headers.get("x-voicestt-client-id")
-        client_id = (
-            normalized_client_id(supplied_client_id)
-            if supplied_client_id
-            else None
+        return service.security.openai_http_error(
+            request, audit=service.audit, normalize_client_id=normalized_client_id
         )
-        request_started = time.monotonic()
-        response_headers = {"X-Request-ID": request_id}
-        resolution = None
-        archived_audio = None
 
-        def emit_http_transcription(event, severity="info", **fields):
-            return service.events.emit(
-                "transcription",
-                event,
-                severity=severity,
-                transport="http",
-                clientId=client_id,
-                sessionId=request_id,
-                requestId=request_id,
-                transcriptionId=request_id,
-                **fields,
-            )
-        if not settings.openai_api_enabled:
-            emit_http_transcription(
-                "transcription.rejected",
-                severity="warning",
-                reason="api_disabled",
-            )
-            return JSONResponse(
-                openai_error("Die OpenAI-kompatible API ist deaktiviert."),
-                status_code=404,
-                headers=response_headers,
-            )
-        auth_error = await authenticate_openai(request)
-        if auth_error is not None:
-            emit_http_transcription(
-                "transcription.rejected",
-                severity="warning",
-                reason="authentication_failed",
-            )
-            return auth_error
-        try:
-            form = await request.form()
-            upload = form.get("file")
-            if upload is None or not hasattr(upload, "read"):
-                raise OpenAIRequestError("Das Feld 'file' ist erforderlich.", "file")
-            validate_audio_filename(getattr(upload, "filename", ""))
-            parameters = parse_transcription_form(form)
-            form_override = str(
-                form.get("voicestt_model") or form.get("model_override") or ""
-            ).strip()
-            header_override = str(request.headers.get("x-voicestt-model") or "").strip()
-            override = form_override or header_override
-            override_source = (
-                "multipart.voicestt_model" if form_override
-                else ("header.x-voicestt-model" if header_override else None)
-            )
-            resolution = service.resolve_openai_model(
-                parameters.model,
-                override=override,
-                override_source=override_source,
-            )
-            lane = resolution["lane"]
-            response_headers.update({
-                "X-VoiceSTT-Requested-Model": resolution["requested"],
-                "X-VoiceSTT-Resolved-Model": resolution["resolved"],
-                "X-VoiceSTT-Route": resolution["lane"],
-            })
-            if resolution["override"]:
-                response_headers["X-VoiceSTT-Override-Model"] = resolution["override"]
-            if resolution["overrideSource"]:
-                response_headers["X-VoiceSTT-Override-Source"] = resolution["overrideSource"]
-            audio_bytes = await upload.read(settings.openai_max_file_bytes + 1)
-            if len(audio_bytes) > settings.openai_max_file_bytes:
-                raise OpenAIRequestError(
-                    f"Die Audiodatei überschreitet das Serverlimit von {settings.openai_max_file_bytes} Byte.",
-                    "file",
-                    "file_too_large",
-                    413,
-                )
-            archived_audio = service.audit.archive_audio(
-                audio_bytes,
-                getattr(upload, "filename", "audio"),
-                request_id,
-            )
-            samples = await asyncio.to_thread(decode_audio_float32, audio_bytes)
-            duration = len(samples) / float(SERVER_SAMPLE_RATE)
-            selected_language = parameters.language or settings.language
-            emit_http_transcription(
-                "transcription.accepted",
-                filename=getattr(upload, "filename", None),
-                bytes=len(audio_bytes),
-                requestedModel=resolution["requested"],
-                resolvedModel=resolution["resolved"],
-                lane=lane,
-                stream=parameters.stream,
-            )
-            service.audit.event(
-                "transcription.started",
-                transport="http",
-                clientId=client_id,
-                sessionId=request_id,
-                transcriptionId=request_id,
-                requestId=request_id,
-                filename=getattr(upload, "filename", None),
-                bytes=len(audio_bytes),
-                audioDurationSeconds=duration,
-                requestedModel=resolution["requested"],
-                overrideModel=resolution["override"],
-                overrideSource=resolution["overrideSource"],
-                resolvedModel=resolution["resolved"],
-                lane=lane,
-                language=selected_language,
-                stream=parameters.stream,
-                responseFormat=parameters.response_format,
-                archivedAudio=archived_audio,
-            )
-            emit_http_transcription(
-                "transcription.started",
-                filename=getattr(upload, "filename", None),
-                bytes=len(audio_bytes),
-                audioDurationMs=round(duration * 1000.0, 3),
-                requestedModel=resolution["requested"],
-                resolvedModel=resolution["resolved"],
-                lane=lane,
-                language=selected_language,
-                stream=parameters.stream,
-                responseFormat=parameters.response_format,
-            )
-            request_options = {
-                "prompt": parameters.prompt,
-                "temperature": parameters.temperature,
-                "threshold": parameters.threshold,
-                "timestamp_granularities": parameters.timestamp_granularities,
-            }
-
-            if parameters.stream:
-                queue = asyncio.Queue()
-                event_loop = asyncio.get_running_loop()
-                first_delta_lock = threading.Lock()
-                first_delta_seen = False
-                first_delta_at = None
-                last_delta_at = None
-                realtime_intervals_ms = []
-                realtime_event_count = 0
-
-                def record_http_first_text(text):
-                    nonlocal first_delta_seen
-                    if str(text or "").strip():
-                        with first_delta_lock:
-                            if not first_delta_seen:
-                                first_delta_seen = True
-                                service.performance.event(
-                                    "http.first_text",
-                                    transport="http",
-                                    clientId=client_id,
-                                    sessionId=request_id,
-                                    transcriptionId=request_id,
-                                    requestId=request_id,
-                                    lane=lane,
-                                    engine=service.active_models()[lane]["engine"],
-                                    model=resolution["resolved"],
-                                    timeToFirstTextMs=round(
-                                        (time.monotonic() - request_started) * 1000.0,
-                                        3,
-                                    ),
-                                    audioDurationSeconds=round(duration, 6),
-                                    memory=process_memory_snapshot(),
-                                )
-
-                def stream_callback(text, _detail):
-                    nonlocal first_delta_at, last_delta_at, realtime_event_count
-                    record_http_first_text(text)
-                    now = time.monotonic()
-                    with first_delta_lock:
-                        if first_delta_at is None:
-                            first_delta_at = now
-                        interval_ms = (
-                            round((now - last_delta_at) * 1000.0, 3)
-                            if last_delta_at is not None
-                            else None
-                        )
-                        if interval_ms is not None:
-                            realtime_intervals_ms.append(interval_ms)
-                        last_delta_at = now
-                        realtime_event_count += 1
-                        sequence = realtime_event_count
-                    if settings.realtime_log_detail == "events":
-                        service.performance.event(
-                            "transcription.realtime_emitted",
-                            transport="http",
-                            clientId=client_id,
-                            sessionId=request_id,
-                            transcriptionId=request_id,
-                            requestId=request_id,
-                            sequence=sequence,
-                            sincePreviousMs=interval_ms,
-                            sinceRequestStartMs=round(
-                                (now - request_started) * 1000.0,
-                                3,
-                            ),
-                            characterCount=len(str(text or "")),
-                        )
-                    event_loop.call_soon_threadsafe(
-                        queue.put_nowait,
-                        {"type": "transcript.text.delta", "delta": text},
-                    )
-
-                def emit_http_realtime_summary():
-                    if settings.realtime_log_detail == "off":
-                        return
-                    with first_delta_lock:
-                        intervals = sorted(realtime_intervals_ms)
-                        count = realtime_event_count
-                        first_realtime_at = first_delta_at
-
-                    def selected_percentile(fraction):
-                        if not intervals:
-                            return None
-                        index = max(
-                            0,
-                            min(
-                                len(intervals) - 1,
-                                math.ceil(len(intervals) * fraction) - 1,
-                            ),
-                        )
-                        return round(intervals[index], 3)
-
-                    service.performance.event(
-                        "transcription.performance_summary",
-                        transport="http",
-                        clientId=client_id,
-                        sessionId=request_id,
-                        transcriptionId=request_id,
-                        requestId=request_id,
-                        realtimeEventCount=count,
-                        averageRealtimeIntervalMs=(
-                            round(sum(intervals) / len(intervals), 3)
-                            if intervals
-                            else None
-                        ),
-                        minRealtimeIntervalMs=(
-                            min(intervals) if intervals else None
-                        ),
-                        maxRealtimeIntervalMs=(
-                            max(intervals) if intervals else None
-                        ),
-                        p50RealtimeIntervalMs=selected_percentile(0.50),
-                        p95RealtimeIntervalMs=selected_percentile(0.95),
-                        timeToFirstRealtimeMs=(
-                            round(
-                                (first_realtime_at - request_started)
-                                * 1000.0,
-                                3,
-                            )
-                            if first_realtime_at is not None
-                            else None
-                        ),
-                        timeToFinalMs=round(
-                            (time.monotonic() - request_started) * 1000.0,
-                            3,
-                        ),
-                    )
-
-                request_options["stream_callback"] = stream_callback
-
-                async def event_stream():
-                    task = asyncio.create_task(asyncio.to_thread(
-                        service.transcribe_openai,
-                        lane,
-                        samples,
-                        selected_language,
-                        request_options,
-                        correlation_id=request_id,
-                        client_id=client_id,
-                    ))
-                    while not task.done() or not queue.empty():
-                        try:
-                            yield sse_data(await asyncio.wait_for(queue.get(), timeout=0.1))
-                        except asyncio.TimeoutError:
-                            continue
-                    try:
-                        inference = await task
-                    except Exception as exc:
-                        service.audit.event(
-                            "transcription.failed",
-                            transport="http",
-                            clientId=client_id,
-                            sessionId=request_id,
-                            transcriptionId=request_id,
-                            requestId=request_id,
-                            resolvedModel=resolution["resolved"],
-                            lane=lane,
-                            latencyMs=round((time.monotonic() - request_started) * 1000, 3),
-                            error=str(exc),
-                        )
-                        emit_http_transcription(
-                            "transcription.failed",
-                            severity="error",
-                            resolvedModel=resolution["resolved"],
-                            lane=lane,
-                            latencyMs=round(
-                                (time.monotonic() - request_started) * 1000,
-                                3,
-                            ),
-                            error=str(exc),
-                        )
-                        yield sse_data({"type": "error", "error": openai_error(str(exc))["error"]})
-                        return
-                    from VoiceSTT.transcription_engines import TranscriptionInfo, TranscriptionResult
-                    result = TranscriptionResult(
-                        text=inference.text,
-                        info=TranscriptionInfo(language=selected_language),
-                        details=inference.details or {},
-                    )
-                    payload = format_json_response(parameters, result, duration)
-                    if parameters.response_format == "diarized_json":
-                        for segment in payload["segments"]:
-                            yield sse_data(segment)
-                    done = {
-                        "type": "transcript.text.done",
-                        "text": inference.text,
-                        "usage": payload.get("usage"),
-                    }
-                    if "logprobs" in parameters.include:
-                        done["logprobs"] = payload.get("logprobs", [])
-                    record_http_first_text(inference.text)
-                    service.audit.event(
-                        "transcription.completed",
-                        transport="http",
-                        clientId=client_id,
-                        sessionId=request_id,
-                        transcriptionId=request_id,
-                        requestId=request_id,
-                        resolvedModel=resolution["resolved"],
-                        lane=lane,
-                        language=selected_language,
-                        audioDurationSeconds=duration,
-                        queueDelayMs=round(inference.queue_delay * 1000, 3),
-                        inferenceMs=round(inference.inference_duration * 1000, 3),
-                        latencyMs=round((time.monotonic() - request_started) * 1000, 3),
-                        text=inference.text,
-                        archivedAudio=archived_audio,
-                        stream=True,
-                    )
-                    emit_http_transcription(
-                        "transcription.completed",
-                        resolvedModel=resolution["resolved"],
-                        lane=lane,
-                        language=selected_language,
-                        audioDurationMs=round(duration * 1000.0, 3),
-                        queueDelayMs=round(inference.queue_delay * 1000, 3),
-                        inferenceMs=round(
-                            inference.inference_duration * 1000,
-                            3,
-                        ),
-                        totalLatencyMs=round(
-                            (time.monotonic() - request_started) * 1000,
-                            3,
-                        ),
-                        text=inference.text,
-                        stream=True,
-                    )
-                    service.performance.event(
-                        "http.completed",
-                        transport="http",
-                        clientId=client_id,
-                        sessionId=request_id,
-                        transcriptionId=request_id,
-                        requestId=request_id,
-                        lane=lane,
-                        engine=service.active_models()[lane]["engine"],
-                        model=resolution["resolved"],
-                        stream=True,
-                        success=True,
-                        audioDurationSeconds=round(duration, 6),
-                        apiLatencyMs=round(
-                            (time.monotonic() - request_started) * 1000.0, 3
-                        ),
-                        memory=process_memory_snapshot(),
-                    )
-                    emit_http_realtime_summary()
-                    yield sse_data(done)
-
-                return StreamingResponse(
-                    event_stream(),
-                    media_type="text/event-stream",
-                    headers={
-                        **response_headers,
-                        "Cache-Control": "no-cache",
-                        "X-Accel-Buffering": "no",
-                    },
-                )
-
-            inference = await asyncio.to_thread(
-                service.transcribe_openai,
-                lane,
-                samples,
-                selected_language,
-                request_options,
-                correlation_id=request_id,
-                client_id=client_id,
-            )
-            from VoiceSTT.transcription_engines import TranscriptionInfo, TranscriptionResult
-            result = TranscriptionResult(
-                text=inference.text,
-                info=TranscriptionInfo(language=selected_language),
-                details=inference.details or {},
-            )
-            service.audit.event(
-                "transcription.completed",
-                transport="http",
-                clientId=client_id,
-                sessionId=request_id,
-                transcriptionId=request_id,
-                requestId=request_id,
-                resolvedModel=resolution["resolved"],
-                lane=lane,
-                language=selected_language,
-                audioDurationSeconds=duration,
-                queueDelayMs=round(inference.queue_delay * 1000, 3),
-                inferenceMs=round(inference.inference_duration * 1000, 3),
-                latencyMs=round((time.monotonic() - request_started) * 1000, 3),
-                text=inference.text,
-                archivedAudio=archived_audio,
-                stream=False,
-            )
-            emit_http_transcription(
-                "transcription.completed",
-                resolvedModel=resolution["resolved"],
-                lane=lane,
-                language=selected_language,
-                audioDurationMs=round(duration * 1000.0, 3),
-                queueDelayMs=round(inference.queue_delay * 1000, 3),
-                inferenceMs=round(inference.inference_duration * 1000, 3),
-                totalLatencyMs=round(
-                    (time.monotonic() - request_started) * 1000,
-                    3,
-                ),
-                text=inference.text,
-                stream=False,
-            )
-            service.performance.event(
-                "http.completed",
-                transport="http",
-                clientId=client_id,
-                sessionId=request_id,
-                transcriptionId=request_id,
-                requestId=request_id,
-                lane=lane,
-                engine=service.active_models()[lane]["engine"],
-                model=resolution["resolved"],
-                stream=False,
-                success=True,
-                audioDurationSeconds=round(duration, 6),
-                apiLatencyMs=round(
-                    (time.monotonic() - request_started) * 1000.0, 3
-                ),
-                memory=process_memory_snapshot(),
-            )
-            if settings.realtime_log_detail != "off":
-                service.performance.event(
-                    "transcription.performance_summary",
-                    transport="http",
-                    clientId=client_id,
-                    sessionId=request_id,
-                    transcriptionId=request_id,
-                    requestId=request_id,
-                    realtimeEventCount=0,
-                    timeToFinalMs=round(
-                        (time.monotonic() - request_started) * 1000.0,
-                        3,
-                    ),
-                )
-            if parameters.response_format in {"text", "srt", "vtt"}:
-                body = format_caption_response(parameters, result, duration)
-                media_type = "text/vtt" if parameters.response_format == "vtt" else "text/plain"
-                return Response(content=body, media_type=media_type, headers=response_headers)
-            return JSONResponse(
-                format_json_response(parameters, result, duration),
-                headers=response_headers,
-            )
-        except OpenAIRequestError as exc:
-            service.audit.event(
-                "transcription.rejected",
-                transport="http",
-                clientId=client_id,
-                sessionId=request_id,
-                transcriptionId=request_id,
-                requestId=request_id,
-                requestedModel=(resolution or {}).get("requested"),
-                latencyMs=round((time.monotonic() - request_started) * 1000, 3),
-                error=str(exc),
-                param=exc.param,
-                code=exc.code,
-            )
-            emit_http_transcription(
-                "transcription.rejected",
-                severity="warning",
-                requestedModel=(resolution or {}).get("requested"),
-                latencyMs=round(
-                    (time.monotonic() - request_started) * 1000,
-                    3,
-                ),
-                error=str(exc),
-                param=exc.param,
-                code=exc.code,
-            )
-            return JSONResponse(
-                openai_error(exc, exc.param, exc.code),
-                status_code=exc.status_code,
-                headers=response_headers,
-            )
-        except Exception as exc:
-            LOGGER.exception("OpenAI-kompatible Transkription fehlgeschlagen")
-            service.audit.event(
-                "transcription.failed",
-                transport="http",
-                clientId=client_id,
-                sessionId=request_id,
-                transcriptionId=request_id,
-                requestId=request_id,
-                requestedModel=(resolution or {}).get("requested"),
-                resolvedModel=(resolution or {}).get("resolved"),
-                latencyMs=round((time.monotonic() - request_started) * 1000, 3),
-                error=str(exc),
-            )
-            emit_http_transcription(
-                "transcription.failed",
-                severity="error",
-                requestedModel=(resolution or {}).get("requested"),
-                resolvedModel=(resolution or {}).get("resolved"),
-                latencyMs=round(
-                    (time.monotonic() - request_started) * 1000,
-                    3,
-                ),
-                error=str(exc),
-            )
-            return JSONResponse(
-                openai_error(exc, error_type="server_error", code="transcription_failed"),
-                status_code=500,
-                headers=response_headers,
-            )
+    app.include_router(
+        create_openai_router(
+            service=service,
+            settings=settings,
+            authenticate_openai=authenticate_openai,
+            normalized_client_id=normalized_client_id,
+            decode_audio_float32=decode_audio_float32,
+            process_memory_snapshot=process_memory_snapshot,
+            sample_rate=SERVER_SAMPLE_RATE,
+            logger=LOGGER,
+        )
+    )
 
     @app.websocket("/ws/transcribe")
     async def websocket_transcribe(websocket: WebSocket):
