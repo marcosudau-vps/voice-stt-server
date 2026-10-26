@@ -302,9 +302,13 @@ Der Server wertet die Richtlinie automatisch aus: bei Initialisierung (vor der
 ersten Modell-Admission), bei `POST /api/models/refresh`, bei
 `PUT /api/models/active` (gegen die Kandidaten-Settings, da Engine-Optionen
 dort zur Laufzeit wechseln können), bei Änderung von `kroko.forceCommunity`
-und explizit über `POST /api/kroko/license/refresh` (Admin). Ohne Key oder mit
-Force Community findet keine Netzwerkanfrage statt; Prüfungen laufen begrenzt
-(Standard 5 s, Admin-Route bis 60 s) und außerhalb des ASGI-Eventloops.
+und explizit über `POST /api/kroko/license/refresh` (Admin). Die Prüfung ist
+**nicht** davon abhängig, dass bereits ein Pro-Modell als Standard gewählt ist:
+mit gültigem Key und einem lokal vorhandenen Pro-Modell wird die
+Auswahlberechtigung auch aus einer Community-Konfiguration heraus geprüft
+(Aktivierung bleibt davon getrennt). Ohne Key oder mit Force Community findet
+keine Netzwerkanfrage statt; Prüfungen laufen begrenzt (Standard 5 s,
+Admin-Route bis 60 s) und außerhalb des ASGI-Eventloops.
 `VoiceSTT.kroko.license_state.KrokoLicenseState` hält den flüchtigen,
 modellgebundenen Prüfstatus ohne Secret oder Persistenz (Scope `model`,
 TTL ≤ 60 s, Generationenbindung); `pro_enabled` ist daraus abgeleitet.
@@ -321,8 +325,55 @@ Ein Key allein – ohne positive Prüfung – schaltet nichts frei; ein Key erse
 insbesondere keinen Pro-Build (`KROKO_VARIANT=pro`, siehe
 [Buildreferenz](../build/BUILD.md)). Nicht qualifiziert bleiben vor allem
 Anbieter-Connection-Limits, Nutzungsreports und Widerrufssemantik.
-Echte Lizenzserver-Integrationstests sind Opt-in
-(`VOICESTT_KROKO_LIVE_TESTS=1`), siehe [Testing](testing.md).
+Echte Lizenzserver- und Native-Integrationstests sind Opt-in
+(`VOICESTT_KROKO_LIVE_TESTS=1`, `VOICESTT_KROKO_NATIVE_TESTS=1`), siehe
+[Testing](testing.md).
+
+## Modell- und Lizenzwechsel im laufenden Prozess
+
+Die folgenden Aussagen beruhen auf Messungen der Kroko-ONNX-1.12.9-Pro-Runtime
+(isolierte Prozesse) und sind der verbindliche Betriebsvertrag dieses Servers.
+Sie werden vor dem nativen Laden durchgesetzt
+(`VoiceSTT/kroko/native_guard.py`; Load-Probe, Refresh, Recovery,
+Scheduler-Erstellung und Engine-Konstruktor), nicht erst durch den Absturz.
+
+**Betriebsgrenze.** Ein Voice-STT-Prozess betreibt höchstens **eine** native
+Kroko-Modellinstanz zur gleichen Zeit. Final und Realtime verwenden bei Kroko
+dasselbe Modell mit gemeinsamer Instanz (`use_main_model_for_realtime`); zwei
+verschiedene Kroko-Modelle in den Lanes werden bei der Konfiguration abgewiesen
+(`ValueError`), ein Zweitladen vor dem Laden mit `concurrent_native_identity`.
+
+| Vorgang | Verhalten |
+| --- | --- |
+| Community-Modell ohne Key auf der Pro-Runtime | funktioniert (nachgewiesen, auch ohne Netz unter Linux) |
+| Community → Pro (Key gültig, Prüfung `VALID`) | **live möglich im Leerlauf**: der Server gibt die einzige Instanz über den regulären Entlade-Pfad frei, prüft und lädt Pro. Bei aktiven Sessions/Transkriptionen **zurückgestellt** (`modelRefreshPending`) |
+| Pro → Community (Force Community, Key-Entzug, negative Prüfung) | neue Pro-Aufträge sofort gesperrt; der Wechsel auf Community ist im Leerlauf live möglich, sonst zurückgestellt. Der **native Pro-Lizenzkontext bleibt** bis zum Neustart bestehen (`nativeProContextActive`) – es gibt keine Aussage „ohne Netz“ |
+| Dasselbe Pro-Modell erneut laden (Idle-Unload/Reload, Force aus → an) | funktioniert (Windows nachgewiesen; unter Linux wurde ein Shutdown-Timeout beobachtet – kein nativer Reset-Vertrag) |
+| Pro-Modell A → anderes Pro-Modell B | **nur nach Neustart**; `pro_identity_change_requires_restart`, `PUT /api/models/active` bleibt unverändert und lässt die laufende Instanz geladen |
+| Neuer/rotierter Key bei bereits initialisiertem Pro-Kontext | **nur nach Neustart**; keine neue Freigabe, `key_context_change_requires_restart` |
+| Pro-Modell ohne Key | **gesperrt** (`pro_requires_key`; nativ nur eine bis zu 300 s lange Lizenzwarteschleife) |
+| Zwei Kroko-Modelle oder eine zweite Instanz gleichzeitig | **gesperrt** (`concurrent_native_identity`) |
+| Installierte Free-/Pro-*Distribution* wechseln | nur durch Austausch des Pakets/Builds und Neustart (ein Key ersetzt keinen Pro-Build) |
+
+Bestätigter nativer Kontext: Der Lizenzdienst lehnt eine zusätzliche externe
+Prüfung ab, solange der native Pro-Reporter desselben Keys im Prozess lebt
+(isolierter Test, 26.10.2026). Für dasselbe Pro-Modell und denselben Key gilt
+daher die bestätigte native Ladung als Nachweis (`licenseSource:
+"native_context"`); sie ersetzt keine Freigabe für andere Modelle oder Keys und
+wird von Force Community immer überstimmt. Dadurch kann eine abgelehnte
+Zweitprüfung ein laufendes Pro-Modell nicht herabstufen, und ein Wechsel
+Pro → Community → dasselbe Pro funktioniert ohne zweite Provider-Verbindung.
+
+`GET /api/models/management` enthält neben `krokoLicense` das Feld
+`krokoRuntime` (keine Secrets), das fünf getrennte Aussagen trägt:
+installierte Variante (`installedVariant`), Lizenzberechtigung
+(`licenseEntitled`, `licenseSource`, `licenseModelUuid`, `forceCommunity`), gewünschte Modelle
+(`desiredModels`), tatsächlich aktive Kroko-Modelle (`activeKrokoModels`,
+`activeProPresent`) sowie Neustartbedarf (`restartRequired`, `restartReason`)
+zusammen mit `nativeProContextActive`, `liveNativeInstances`,
+`proAdmissionRevoked`, `modelRefreshPending` und `lastReconcile`. Eine
+erfolgreiche Lizenzprüfung ändert nur die Berechtigung; `activeKrokoModels`
+wechselt erst, wenn der Scheduler das Modell wirklich trägt.
 
 ## FastAPI Example
 
@@ -391,8 +442,11 @@ files, shell logs, and generated reports.
   `stt-install-kroko --build --variant pro` or Docker
   `KROKO_VARIANT=pro` as documented in the central build guide.
 - The validated VPS runtime must share one Pro-16 recognizer between final and
-  realtime; see [`build/vps`](../build/vps/README.md). This is a documented
-  server/runtime constraint, not a general limit of the adapter API.
+  realtime; see [`build/vps`](../build/vps/README.md). The server enforces this
+  for every Kroko model: a second native instance, a second Kroko model or a
+  Pro model change inside one process is refused before the native load (see
+  *Modell- und Lizenzwechsel im laufenden Prozess*). The adapter API itself
+  still allows several independent recognizer objects outside the server.
 - CUDA runs require both CUDA-capable hardware and a Kroko-ONNX build with CUDA
   provider support.
 - On Windows, prefer the helper's `cross-platform-builds` wheel workflow over a

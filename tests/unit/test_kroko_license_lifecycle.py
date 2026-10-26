@@ -445,6 +445,8 @@ def test_service_recheck_path_with_fake_transport(tmp_path, monkeypatch):
     settings = ServerSettings(data_root_path=str(tmp_path), model_warmup=False)
     settings.transcription_engine = "kroko_onnx"
     settings.model = "kroko-de-pro-16-l"
+    settings.realtime_model = "kroko-de-pro-16-l"
+    settings.use_main_model_for_realtime = True
     settings.transcription_engine_options = {"key": KEY}
     root = tmp_path / "models"
     write_data_file(root, "Kroko-DE-Pro-16-L-Streaming-001.data", MODEL)

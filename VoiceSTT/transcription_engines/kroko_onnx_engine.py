@@ -6,6 +6,7 @@ import os
 import re
 import sys
 import threading
+import weakref
 from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib import import_module
@@ -15,6 +16,7 @@ from ._model_utils import text_from_output
 from .model_resolver import resolve_kroko_model
 from ..kroko import models as kroko_models
 from ..kroko.credentials import effective_recognizer_key
+from ..kroko.native_guard import identity_for_path, process_guard
 from .base import (
     BaseTranscriptionEngine,
     StreamingTranscriptionSession,
@@ -328,8 +330,44 @@ class KrokoOnnxBackend:
         self.tail_padding_seconds = _tail_padding_option(self.engine_options, self.model_path)
         self.suppress_native_output = _output_suppression_enabled(self.engine_options)
         _enable_kroko_license_quiet(self.suppress_native_output)
+        self._native_lease = None
+        injected = recognizer_cls is not None
         recognizer_cls = recognizer_cls or _load_online_recognizer_class()
-        self.recognizer = self._create_recognizer(recognizer_cls)
+        if not injected:
+            # Last line of defence before the process-wide native singleton is
+            # touched: one instance, no Pro A -> Pro B, no re-keyed Pro
+            # context. Injected recognizers are test doubles, not native.
+            self._admit_native_instance()
+        try:
+            self.recognizer = self._create_recognizer(recognizer_cls)
+        except BaseException:
+            self._release_native_instance()
+            raise
+        if self._native_lease is not None:
+            process_guard().confirm_loaded(self._native_lease)
+
+    def _admit_native_instance(self):
+        """Acquire the process guard lease for this model file and key."""
+
+        guard = process_guard()
+        lease = guard.acquire(
+            identity_for_path(self.model_path),
+            effective_recognizer_key(self.engine_options),
+        )
+        self._native_lease = lease
+        # Safety net for engines dropped without close(): the lease follows
+        # the backend (and with it the recognizer) out of scope.
+        weakref.finalize(self, guard.release, lease)
+
+    def _release_native_instance(self):
+        lease, self._native_lease = self._native_lease, None
+        process_guard().release(lease)
+
+    def close(self):
+        """Drop the native recognizer and give the guard lease back."""
+
+        self.recognizer = None
+        self._release_native_instance()
 
     def _resolve_model_path(self):
         """
@@ -570,6 +608,14 @@ class KrokoOnnxEngine(BaseTranscriptionEngine):
         Creates a Kroko ONNX streaming transcription session.
         """
         return KrokoOnnxStreamingSession(self, language=language, use_prompt=use_prompt)
+
+    def close(self):
+        """
+        Releases the native recognizer owned by this engine.
+        """
+        close = getattr(self.backend, "close", None)
+        if callable(close):
+            close()
 
     def transcribe(self, audio, language=None, use_prompt=True):
         """

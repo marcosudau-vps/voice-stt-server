@@ -488,6 +488,29 @@ def read_model_uuid(path: Any) -> Optional[str]:
         return None
 
 
+_MODEL_FREE_PATTERN = re.compile(rb'"free"\s*:\s*(true|false)')
+
+
+def read_model_tier(path: Any) -> Optional[str]:
+    """Return ``"community"`` / ``"pro"`` from the native header ``free`` flag.
+
+    The same header the native loader reads names Community models
+    ``"free": true`` and commercial models ``"free": false``. ``None`` means
+    the flag is absent or the file is unreadable (an unmanaged custom file);
+    callers must not treat that as a proven tier. Pure offline parsing.
+    """
+    try:
+        candidate = Path(str(path)).expanduser()
+        with open(candidate, "rb") as handle:
+            head = handle.read(MODEL_UUID_SCAN_BYTES)
+    except (OSError, ValueError, TypeError):
+        return None
+    match = _MODEL_FREE_PATTERN.search(head or b"")
+    if match is None:
+        return None
+    return "community" if match.group(1) == b"true" else "pro"
+
+
 def license_uuid_for(
     value: Any,
     *,
@@ -569,6 +592,7 @@ __all__ = [
     "load_manifest",
     "locate_model",
     "license_uuid_for",
+    "read_model_tier",
     "read_model_uuid",
     "model_download_allowed",
     "provisioning_error",

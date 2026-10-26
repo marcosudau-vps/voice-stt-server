@@ -246,7 +246,17 @@ re-evaluates the license policy before the transactional snapshot rebuild;
 (optional JSON body `{"timeout": seconds, 0 < t ≤ 60}`) and, on a fresh Pro
 grant, applies it through the regular model-refresh path. `GET
 /api/models/management` carries the redacted license state as `krokoLicense`
-(`status`, model-scoped `proEnabled`, no secrets).
+(`status`, model-scoped `proEnabled`, no secrets) and `krokoRuntime`, which
+keeps *installed variant*, *license entitlement*, *desired models*, *actually
+active models* and *restart required* apart (`restartRequired` with
+`restartReason`, `nativeProContextActive`, `modelRefreshPending`,
+`proAdmissionRevoked`, `lastReconcile`). A successful license check never
+claims an active Pro instance. A confirmed `kroko.forceCommunity` patch refuses
+new Pro jobs before the response returns; the Community switch follows in the
+background when the server is idle and is reported as pending otherwise. A
+Pro-to-Pro model change or a new key against an initialised native Pro context
+needs a process restart and is refused before the native load; see
+[Kroko-ONNX](kroko-onnx.md#modell--und-lizenzwechsel-im-laufenden-prozess).
 
 Both model selectors use the complete mounted local registry. Kroko ONNX and
 Faster-Whisper models can therefore be assigned independently to either the

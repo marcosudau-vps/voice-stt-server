@@ -301,7 +301,9 @@ Kroko-On-Premise-Modelllizenz haben getrennte Zuständigkeiten.
 - **Kroko:** Der Security-Adapter prüft automatisch den bereits vorhandenen
   modellbezogenen On-Premise-Lizenzstatus an Initialisierung, Modell-Refresh/-
   Switch, Force-Community-Änderung und explizitem Recheck; ohne Key oder mit
-  Force Community ohne Netzwerkkontakt. Betreiberabsicht `kroko.forceCommunity`
+  Force Community ohne Netzwerkkontakt. Die Prüfung ist nicht an ein bereits
+  gewähltes Pro-Standardmodell gebunden (auch aus Community-Konfiguration mit
+  Key und lokalem Pro-Modell); sie aktiviert nie selbst ein Modell nativ. Betreiberabsicht `kroko.forceCommunity`
   (serverweit, Admin-Key, live, persistiert); Lizenzstatus und abgeleitetes
   `pro_enabled` sind flüchtig und werden nie persistiert. Der Key bleibt
   Laufzeit-Secret (Umgebung oder Engine-Optionen, nie YAML) und ersetzt keinen
@@ -324,17 +326,34 @@ beschreibt fachliche Grenzen, Restarbeiten und empfohlene Reihenfolge.
 - **Key-Wechsel wirksam:** Engine-Optionen wechseln zur Laufzeit über
   `PUT /api/models/active` (löst Neubewertung vor der Admission aus);
   Umgebungsänderungen außerhalb des Prozesses erfordern einen **Neustart**.
-  Rotation/Entfernung invalidieren eine bestehende Freigabe sofort.
+  Rotation/Entfernung invalidieren die Python-Freigabe sofort. Ist der native
+  Pro-Lizenzkontext des Prozesses bereits mit dem alten Key initialisiert,
+  gibt der Server den neuen Key **nicht** frei, sondern meldet
+  `krokoRuntime.restartRequired` (`key_context_change_requires_restart`): ein
+  neuer Key wirkt dann erst nach einem Neustart. Ein Key-Entzug sperrt neue
+  Pro-Aufträge sofort.
 - **Force Community:** `PATCH /api/v2/settings/server` mit
   `{"baseSettingsRevision": N, "changes": {"kroko.forceCommunity": true}}`
-  (Admin). Wirkt sofort, stoppt weitere Prüfungen und entzieht Pro-Rechte;
-  `false` stellt die automatische Prüfung wieder her. Persistiert als
-  Betreiberabsicht in `runtime.json` (`settingsControlOverlay`).
+  (Admin). Entzieht die Pro-Freigabe synchron und sperrt neue Pro-Aufträge,
+  bevor die Antwort zurückkehrt, und stoppt weitere Prüfungen; der Wechsel auf
+  ein Community-Modell folgt im Hintergrund, im Leerlauf live, sonst
+  zurückgestellt (`krokoRuntime.modelRefreshPending`). Der native
+  Pro-Lizenzkontext des Prozesses bleibt bis zum Neustart bestehen
+  (`nativeProContextActive`). `false` stellt die automatische Prüfung wieder
+  her. Persistiert als Betreiberabsicht in `runtime.json`
+  (`settingsControlOverlay`).
 - **Zustände:** `NOT_CHECKED` (kein Key/Force/neu gestartet),
   `CHECKING`, `VALID` (modellgebunden, TTL ≤ 60 s), `INVALID` (abgelehnt),
   `CHECK_FAILED` (Fehler/Ablauf). Sichtbar redigiert in
-  `GET /api/models/management` (`krokoLicense`) und
-  `POST /api/kroko/license/refresh` (Admin, expliziter Recheck).
+  `GET /api/models/management` (`krokoLicense`, dazu `krokoRuntime` mit
+  installierter Variante, Berechtigung, gewünschtem und tatsächlich aktivem
+  Modell sowie Neustartbedarf) und `POST /api/kroko/license/refresh` (Admin,
+  expliziter Recheck).
+- **Ein Kroko-Modell pro Prozess:** Final und Realtime müssen bei Kroko dasselbe
+  Modell verwenden (gemeinsame Instanz, `use_main_model_for_realtime`); zwei
+  verschiedene Kroko-Modelle lehnt die Konfiguration ab, ein Wechsel zu einem
+  anderen Pro-Modell ist nur per Neustart möglich. Details:
+  [Kroko-ONNX](kroko-onnx.md#modell--und-lizenzwechsel-im-laufenden-prozess).
 - **Abgrenzung:** `runtime_variant` (installierte native Runtime, Build-Sache)
   ist nicht die Lizenzfreigabe. Community läuft auf Free- und Pro-Builds;
   Pro-Modelle brauchen Pro-Build **und** frischen Nachweis **und** lokale Datei.

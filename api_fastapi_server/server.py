@@ -88,10 +88,21 @@ from VoiceSTT_server.credential_redaction import (
     redact_kroko_credentials,
     redact_secret_text,
 )
+from VoiceSTT.kroko.credentials import effective_recognizer_key
 from VoiceSTT.kroko.models import (
-    license_uuid_for,
     load_manifest,
+    read_model_tier,
     read_model_uuid,
+)
+from VoiceSTT.kroko.native_guard import (
+    CONCURRENT_IDENTITY,
+    KrokoNativeConflict,
+    identity_for_path,
+    process_guard,
+)
+from api_fastapi_server.kroko_runtime import (
+    enforce_kroko_single_identity,
+    kroko_lane_models,
 )
 from VoiceSTT_server.stt_model_management import (
     ManagedModelRegistryView,
@@ -1997,7 +2008,16 @@ class SharedEngineWorker:
         if self.thread is not None:
             self.thread.join(timeout=10)
         if self.thread is None or not self.thread.is_alive():
-            self.engine = None
+            engine, self.engine = self.engine, None
+            close = getattr(engine, "close", None)
+            if callable(close):
+                try:
+                    close()
+                except Exception:
+                    LOGGER.debug(
+                        "Inferenz-Engine %s konnte nicht sauber geschlossen werden",
+                        self.name, exc_info=True,
+                    )
 
     def snapshot(self):
         elapsed = max(0.001, time.monotonic() - self.started_at)
@@ -6267,6 +6287,14 @@ class VoiceSTTService:
         self.recorder_factory = recorder_factory
         self.scheduler_factory = scheduler_factory or InferenceScheduler
         self._stt_refresh_lock = threading.Lock()
+        # Kroko: one native model identity per process (PR #15). The policy
+        # lock makes "read operator intent + bind it" atomic, the reconcile
+        # lock serialises automatic model re-derivation after license events.
+        self._kroko_policy_lock = threading.RLock()
+        self._kroko_reconcile_lock = threading.Lock()
+        self._kroko_probe_conflicts = []
+        self._kroko_reconcile_state = None
+        self._kroko_tier_cache = {}
         self.config_store = RuntimeConfigStore(settings.runtime_config_path)
         # AP-SRV-050 server-authoritative defaults with their own revision
         # stream, loaded from the single runtime config document. This must
@@ -6317,6 +6345,12 @@ class VoiceSTTService:
     def _probe_stt_model(self, candidate):
         """Perform the expensive engine load only for a serious candidate."""
 
+        if normalize_engine_name(candidate.engine) == "kroko_onnx":
+            # Never a second native Kroko instance next to a live one; the
+            # exact model that already runs healthy needs no second load.
+            if self._kroko_probe_reuses_live_instance(candidate):
+                return True
+            self._kroko_probe_preflight(candidate)
         probe_settings = replace(self.settings)
         probe_settings.model = candidate.path
         probe_settings.realtime_model = candidate.path
@@ -6360,6 +6394,11 @@ class VoiceSTTService:
     #: Bounded default for one license-server round trip. No endless retry.
     KROKO_LICENSE_CHECK_TIMEOUT = 5.0
 
+    @property
+    def kroko_native_guard(self):
+        """The process-wide native Kroko guard (the native singleton is too)."""
+        return process_guard()
+
     def _kroko_force_community(self):
         """Server-wide persisted operator intent; never a session value."""
         control = getattr(self, "settings_control", None)
@@ -6382,63 +6421,139 @@ class VoiceSTTService:
             self._kroko_manifest_cache = cached
         return cached
 
-    def _kroko_lane_targets(self, settings):
-        """Distinct ``(model_uuid, options)`` for intended PRO-tier Kroko lanes.
-
-        The UUID comes from the locally provisioned ``.data`` header - the
-        same technical identity the native runtime enforces - so the policy
-        can never address a model the host does not actually hold.
-        """
-        targets = []
-        seen = set()
+    def _kroko_lane_options(self, settings):
+        """The engine options the Kroko engine really receives (key included)."""
         try:
-            manifest = self._kroko_manifest()
-            if manifest is None:
-                return targets
-            lanes = (
-                (
-                    settings.transcription_engine,
-                    settings.model,
-                    settings.transcription_engine_options,
-                ),
-                (
-                    settings.realtime_transcription_engine
-                    or settings.transcription_engine,
-                    settings.realtime_model or settings.model,
-                    settings.realtime_transcription_engine_options
-                    or settings.transcription_engine_options,
-                ),
-            )
-            for engine, model, options in lanes:
-                try:
-                    if normalize_engine_name(engine or "") != "kroko_onnx":
-                        continue
-                    entry = manifest.get(model)
-                    if entry is None:
-                        continue
-                    if (entry.tier or "").strip().lower() != "pro":
-                        continue
-                    lane_options = dict(options or {})
-                    uuid = license_uuid_for(
-                        entry.filename, manifest=manifest,
-                        options=lane_options or None,
-                    )
-                    if not uuid or uuid in seen:
-                        continue
-                    seen.add(uuid)
-                    targets.append((uuid, lane_options))
-                except Exception:
-                    continue
+            return dict(resolved_engine_options(settings, "kroko_onnx", "final"))
         except Exception:
-            return []
-        return targets
+            return {}
+
+    def _kroko_license_target(self, settings, intent, options, force):
+        """Pick the one model the license pre-check addresses.
+
+        Returns ``((uuid, path), reason)`` or ``(None, reason)``. The path is
+        always resolved by the model manager - the same authority the
+        snapshot discovery and the eligibility hook use, including engine
+        ``model_dir``/``model_path`` options and custom roots - so a check
+        can never address a different file than the one that is admitted.
+
+        Order: a Pro model configured in a lane; otherwise the Pro identity
+        this process already initialised natively; otherwise (valid key, no
+        force) a locally present Pro model, so that the *right to select* Pro
+        can be established while Community is configured. Selecting a model
+        is not activating it: nothing is loaded here.
+        """
+        manager = self.stt_model_manager
+        configured_missing = False
+        lane_models = kroko_lane_models(settings, self._kroko_manifest())
+        for _lane, raw, _key in lane_models:
+            product = manager.find_product("kroko_onnx", raw)
+            if (
+                product is None
+                or (product.license_class or "").strip().lower() != "commercial"
+            ):
+                continue
+            path = manager.locate_local_path(product, intent)
+            uuid = read_model_uuid(path) if path else None
+            if uuid:
+                return (uuid, path), "pro_lane"
+            configured_missing = True
+        if configured_missing:
+            return None, "pro_model_not_local"
+        key_text = str(effective_recognizer_key(options) or "")
+        if not key_text.strip():
+            return None, "no_key"
+        if force:
+            return None, "force_community"
+        candidates = manager.local_license_candidates(intent)
+        bound = self.kroko_native_guard.status().get("nativeProModelUuid")
+        if bound:
+            candidates = tuple(
+                item for item in candidates if item[2].lower() == str(bound).lower()
+            )
+            if not candidates:
+                return None, "pro_model_not_local"
+        if not candidates:
+            return None, "pro_model_not_local"
+        language = ""
+        if lane_models:
+            current = manager.find_product("kroko_onnx", lane_models[0][1])
+            language = (current.language if current is not None else "") or ""
+        for product, path, uuid in candidates:
+            if language and (product.language or "").lower() == language.lower():
+                return (uuid, path), "pro_candidate"
+        product, path, uuid = candidates[0]
+        return (uuid, path), "pro_candidate"
+
+    def _kroko_path_tier(self, path):
+        """Cached native-header tier (``"pro"``/``"community"``/``None``)."""
+        if not path:
+            return None
+        try:
+            stamp = os.stat(path).st_mtime_ns
+        except OSError:
+            return None
+        cache = self._kroko_tier_cache
+        cached = cache.get(str(path))
+        if cached is not None and cached[0] == stamp:
+            return cached[1]
+        tier = read_model_tier(path)
+        cache[str(path)] = (stamp, tier)
+        return tier
+
+    def _kroko_active_pro_roles(self):
+        """Roles whose *active* resolved model is a Pro Kroko file."""
+        roles = []
+        for role, item in dict(self.settings._resolved_stt_models or {}).items():
+            try:
+                if normalize_engine_name(item.get("engine")) != "kroko_onnx":
+                    continue
+            except Exception:
+                continue
+            if self._kroko_path_tier(item.get("path")) == "pro":
+                roles.append(role)
+        return roles
+
+    def _kroko_pro_revocation(self):
+        """Why new Pro work must be refused right now, else ``None``.
+
+        Synchronous and independent of any background thread: it reads the
+        live operator intent and the bound key state, so a confirmed
+        force-community change or a key removal blocks the very next Pro
+        job even while the previously loaded native Pro recognizer still
+        exists. The Python grant is not the native license context, see
+        :meth:`kroko_runtime_status`.
+        """
+        if not self._kroko_active_pro_roles():
+            return None
+        if self._kroko_force_community():
+            return (
+                "Kroko Pro ist serverweit gesperrt (Force Community). Die "
+                "laufende Pro-Instanz nimmt keine neuen Auftraege an."
+            )
+        snapshot = self.security.kroko.state.public_snapshot()
+        if snapshot.get("forceCommunity"):
+            return (
+                "Kroko Pro ist serverweit gesperrt (Force Community). Die "
+                "laufende Pro-Instanz nimmt keine neuen Auftraege an."
+            )
+        if not snapshot.get("keyPresent"):
+            return (
+                "Fuer das aktive Kroko-Pro-Modell ist kein Lizenzschluessel "
+                "mehr gesetzt. Die laufende Pro-Instanz nimmt keine neuen "
+                "Auftraege an."
+            )
+        return None
 
     def _kroko_license_entitlement(self, product, candidate_path=None):
         """Live entitlement hook injected into STTModelManager (B1/B2).
 
         Commercial Kroko products are entitled only while the gate holds a
-        fresh, model-bound VALID proof for the exact file's UUID. Everything
-        else passes through untouched. Never raises, never logs secrets.
+        fresh, model-bound VALID proof for the exact file's UUID and no
+        restart-only native conflict stands in the way. ``candidate_path`` is
+        the file the model manager resolved (one authority for the pre-check
+        and the admission). Everything that is not Kroko passes through
+        untouched. Never raises, never logs secrets.
         """
         try:
             if normalize_engine_name(
@@ -6451,22 +6566,28 @@ class VoiceSTTService:
                     uuid = read_model_uuid(candidate_path)
                 except Exception:
                     uuid = None
-            if uuid is None:
-                try:
-                    uuid = license_uuid_for(
-                        getattr(product, "id", "")
-                        or getattr(product, "filename", "")
-                    )
-                except Exception:
-                    uuid = None
             if not uuid:
                 return False, "no_license_uuid"
-            if self.security.kroko.state.pro_enabled_for(uuid):
-                return True, "license_valid"
-            try:
-                reason = self.security.kroko.state.public_snapshot().get(
-                    "reasonCode", "not_entitled"
+            if self._kroko_force_community():
+                return False, "force_community"
+            state = self.security.kroko.state
+            identity = identity_for_path(candidate_path)
+            key = effective_recognizer_key(
+                self._kroko_lane_options(self.settings)
+            )
+            proof = state.pro_enabled_for(uuid)
+            native = self.kroko_native_guard.native_license_confirmed(
+                identity.ident, key
+            )
+            if proof or native:
+                conflict = self.kroko_native_guard.restart_conflict(
+                    identity, key
                 )
+                if conflict is not None:
+                    return False, conflict.code
+                return True, "license_valid" if proof else "native_license_context"
+            try:
+                reason = state.public_snapshot().get("reasonCode", "not_entitled")
             except Exception:
                 reason = "not_entitled"
             return False, str(reason or "not_entitled")
@@ -6475,21 +6596,91 @@ class VoiceSTTService:
 
     def refresh_kroko_license_policy(self, *, settings=None, background=False,
                                      connect=None, timeout=None,
-                                     on_result=None):
+                                     on_result=None, network=True,
+                                     reconcile=False):
         """(Re-)evaluate the Kroko license policy. Never raises.
 
-        A synchronous decision comes first (binds key/mode, invalidating
-        superseded proofs); a bounded network check follows only for intended
-        Pro models with a key and without force. ``background=True`` runs the
-        checks on one daemon thread, never on the ASGI loop. Returns the
-        decision list (empty when delegated to background).
+        The current operator intent (force, effective key) is read and bound
+        synchronously under one lock, so no asynchronous worker can ever bind
+        an older value again; a Pro grant is invalidated before this method
+        returns. A bounded network check follows only for the addressed Pro
+        model with a key and without force (``network=False`` skips it).
+        ``background=True`` runs just the round trip on a daemon thread,
+        never on the ASGI loop. ``reconcile=True`` additionally brings the
+        model snapshot and scheduler in line once the policy is settled.
+        Returns the decision list.
         """
         settings = settings if settings is not None else self.settings
         if timeout is None:
             timeout = self.KROKO_LICENSE_CHECK_TIMEOUT
         try:
-            force = self._kroko_force_community()
-            targets = self._kroko_lane_targets(settings)
+            gate = self.security.kroko
+            with self._kroko_policy_lock:
+                force = self._kroko_force_community()
+                intent = OperatorIntent.from_settings(settings)
+                options = self._kroko_lane_options(settings)
+                target, why = self._kroko_license_target(
+                    settings, intent, options, force
+                )
+                plan = None
+                if target is None:
+                    # Still bind key/mode so a removed key or a new force
+                    # flag invalidates an older VALID proof immediately.
+                    gate.bind_intent(options=options, force_community=force)
+                    decision = {
+                        "tier": "community",
+                        "model_uuid": "",
+                        "reason": (
+                            why if why in {
+                                "no_key", "force_community",
+                                "pro_model_not_local",
+                            } else "no_pro_target"
+                        ),
+                        "check_required": False,
+                    }
+                else:
+                    uuid, path = target
+                    key = effective_recognizer_key(options)
+                    conflict = self.kroko_native_guard.restart_conflict(
+                        identity_for_path(path), key
+                    )
+                    if conflict is not None:
+                        # No fresh grant for a stale native key/model context.
+                        gate.bind_intent(options=options, force_community=force)
+                        decision = {
+                            "tier": "community",
+                            "model_uuid": uuid,
+                            "reason": conflict.code,
+                            "check_required": False,
+                            "restart_required": True,
+                        }
+                    elif (
+                        not force
+                        and self.kroko_native_guard.native_license_confirmed(
+                            identity_for_path(path).ident, key
+                        )
+                    ):
+                        # This process already runs a licensed Pro context for
+                        # exactly this model and key. The provider rejects a
+                        # further external check for a key whose native
+                        # reporter is alive, so the confirmed native context
+                        # is the evidence - no pointless (and rejected)
+                        # provider connection.
+                        gate.bind_intent(options=options, force_community=force)
+                        decision = {
+                            "tier": "pro",
+                            "model_uuid": uuid,
+                            "reason": "native_license_context",
+                            "check_required": False,
+                        }
+                    elif network:
+                        decision, plan = gate.prepare(
+                            uuid, options=options, force_community=force
+                        )
+                    else:
+                        decision = gate.decide(
+                            uuid, options=options, force_community=force
+                        )
         except Exception:
             LOGGER.warning(
                 "Kroko-Lizenzrichtlinie konnte nicht bewertet werden."
@@ -6500,67 +6691,323 @@ class VoiceSTTService:
                 "reason": "policy_error",
                 "check_required": False,
             }]
-        if not targets:
-            # No checkable Pro model: still bind key/mode so a removed key or
-            # a new force flag invalidates an older VALID proof immediately.
-            try:
-                lane_options = {}
-                for engine, options in (
-                    (settings.transcription_engine,
-                     settings.transcription_engine_options),
-                    (settings.realtime_transcription_engine,
-                     settings.realtime_transcription_engine_options),
-                ):
-                    try:
-                        if normalize_engine_name(engine or "") == "kroko_onnx":
-                            lane_options = dict(options or {})
-                            break
-                    except Exception:
-                        continue
-                self.security.kroko.decide(
-                    "", options=lane_options, force_community=force
-                )
-            except Exception:
-                pass
-            return [{
-                "tier": "community",
-                "model_uuid": "",
-                "reason": "no_pro_target",
-                "check_required": False,
-            }]
 
-        def run_all():
-            decisions = []
-            for uuid, options in targets:
-                try:
-                    decision, _started = self.security.kroko.refresh(
-                        uuid, options=options, force_community=force,
-                        connect=connect, timeout=timeout, background=False,
-                    )
-                except Exception:
-                    decision = {
-                        "tier": "community",
-                        "model_uuid": uuid,
-                        "reason": "policy_error",
-                        "check_required": False,
-                    }
-                decisions.append(decision)
+        if plan is None:
+            if reconcile:
+                self._spawn_kroko_reconcile("license_policy")
             if on_result is not None:
                 try:
-                    on_result(decisions)
+                    on_result([decision])
                 except Exception:
                     pass
-            return decisions
+            return [decision]
 
-        if background:
-            worker = threading.Thread(
-                target=run_all,
-                name="KrokoLicensePolicyRefresh",
-                daemon=True,
+        def settled(_current):
+            # Runs with the *current* state, never with the arguments the
+            # check was started with; a superseded check just reports that.
+            if on_result is not None:
+                try:
+                    on_result([_current])
+                except Exception:
+                    pass
+            if reconcile or background:
+                self.reconcile_kroko_models("license_check")
+
+        final, _started = gate.run(
+            decision, plan, connect=connect, timeout=timeout,
+            background=background, on_result=settled,
+        )
+        return [final]
+
+    def apply_kroko_force_change(self):
+        """A confirmed ``kroko.forceCommunity`` patch: lock out, then reconcile.
+
+        The grant is invalidated synchronously before this returns; the
+        model/scheduler reconcile (and, when released, the new check) runs on
+        a daemon thread.
+        """
+        return self.refresh_kroko_license_policy(
+            background=True, reconcile=True
+        )
+
+    def _kroko_involved(self):
+        if self._kroko_active_pro_roles():
+            return True
+        if kroko_lane_models(self.settings, self._kroko_manifest()):
+            return True
+        for item in dict(self.settings._resolved_stt_models or {}).values():
+            try:
+                if normalize_engine_name(item.get("engine")) == "kroko_onnx":
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _spawn_kroko_reconcile(self, trigger):
+        worker = threading.Thread(
+            target=self.reconcile_kroko_models,
+            args=(trigger,),
+            name="KrokoModelReconcile",
+            daemon=True,
+        )
+        worker.start()
+        return worker
+
+    def reconcile_kroko_models(self, trigger):
+        """Re-derive model snapshot, scheduler and public status. Never raises.
+
+        Runs after a license result or a force change. It reuses the
+        transactional refresh (single native Kroko instance, rollback to the
+        last good state); it never hot-swaps natively on its own, and an
+        activation that cannot be done safely right now (active sessions,
+        restart-only conflict) is reported as pending instead of being
+        pretended.
+        """
+        if not self._kroko_involved():
+            return None
+        with self._kroko_reconcile_lock:
+            outcome = {"trigger": trigger}
+            try:
+                result = self.refresh_stt_models(license_check=False)
+                outcome["result"] = (
+                    "changed" if result.get("changed") else "unchanged"
+                )
+            except (RuntimeError, ValueError) as exc:
+                self._stt_model_refresh_required = True
+                outcome["result"] = "deferred"
+                outcome["reason"] = self._safe_stt_error(exc)
+            except Exception as exc:  # pragma: no cover - defensive boundary
+                self._stt_model_refresh_required = True
+                outcome["result"] = "failed"
+                outcome["reason"] = self._safe_stt_error(exc)
+            outcome["at"] = datetime.datetime.now(
+                datetime.timezone.utc
+            ).isoformat()
+            self._kroko_reconcile_state = outcome
+            return outcome
+
+    def kroko_runtime_status(self):
+        """Public, secret-free view of the five distinct Kroko facts.
+
+        Installed variant, license entitlement, desired model, actually
+        active model and whether a restart is needed are separate
+        statements: a successful license check says nothing about an active
+        model instance.
+        """
+        guard_status = self.kroko_native_guard.status()
+        options = self._kroko_lane_options(self.settings)
+        key = effective_recognizer_key(options)
+        restart_code = None
+        try:
+            conflict = None
+            manager = self.stt_model_manager
+            for _lane, raw, _key in kroko_lane_models(
+                self.settings, self._kroko_manifest()
+            ):
+                product = manager.find_product("kroko_onnx", raw)
+                if (
+                    product is None
+                    or (product.license_class or "").strip().lower()
+                    != "commercial"
+                ):
+                    continue
+                path = manager.locate_local_path(product)
+                if path:
+                    conflict = self.kroko_native_guard.restart_conflict(
+                        identity_for_path(path), key
+                    )
+                    break
+            if conflict is None and str(key or "").strip():
+                conflict = self.kroko_native_guard.key_context_conflict(key)
+            restart_code = conflict.code if conflict is not None else None
+        except Exception:
+            restart_code = None
+        active = {
+            role: item.get("id")
+            for role, item in dict(self.settings._resolved_stt_models or {}).items()
+            if normalize_engine_name(item.get("engine")) == "kroko_onnx"
+        }
+        try:
+            license_snapshot = self.security.kroko.state.public_snapshot()
+        except Exception:
+            license_snapshot = {"status": "UNKNOWN"}
+        native_entitled = False
+        try:
+            native_uuid = guard_status.get("nativeProModelUuid")
+            native_entitled = bool(
+                native_uuid
+                and not self._kroko_force_community()
+                and self.kroko_native_guard.native_license_confirmed(
+                    native_uuid, key
+                )
             )
-            worker.start()
-            return []
-        return run_all()
+        except Exception:
+            native_entitled = False
+        proof_entitled = bool(license_snapshot.get("proEnabled"))
+        return {
+            "installedVariant": self.stt_model_manager.intent.kroko_runtime_variant,
+            "licenseEntitled": proof_entitled or native_entitled,
+            "licenseSource": (
+                "provider_check" if proof_entitled else (
+                    "native_context" if native_entitled else None
+                )
+            ),
+            "licenseModelUuid": license_snapshot.get("modelUuid", ""),
+            "forceCommunity": self._kroko_force_community(),
+            "desiredModels": {
+                lane: model
+                for lane, model, _key in kroko_lane_models(
+                    self.settings, self._kroko_manifest()
+                )
+            },
+            "activeKrokoModels": active,
+            "activeProPresent": bool(self._kroko_active_pro_roles()),
+            "proAdmissionRevoked": self._kroko_pro_revocation() is not None,
+            "nativeProContextActive": guard_status["nativeProContextActive"],
+            "liveNativeInstances": guard_status["liveNativeInstances"],
+            "restartRequired": restart_code is not None,
+            "restartReason": restart_code,
+            "modelRefreshPending": bool(self._stt_model_refresh_required),
+            "lastReconcile": (
+                dict(self._kroko_reconcile_state)
+                if self._kroko_reconcile_state else None
+            ),
+        }
+
+    # -- single native Kroko instance: pre-load protection ------------------
+
+    def _kroko_scheduler_preflight(self):
+        """Refuse an impossible Kroko configuration before any native load."""
+        resolved = dict(self.settings._resolved_stt_models or {})
+        kroko = []
+        for role, item in resolved.items():
+            try:
+                if normalize_engine_name(item.get("engine")) == "kroko_onnx":
+                    kroko.append((role, item.get("path")))
+            except Exception:
+                continue
+        if not kroko:
+            return
+        identities = {
+            identity_for_path(path).ident for _role, path in kroko if path
+        }
+        if len(identities) > 1 or (
+            len(kroko) > 1 and not self.settings.use_main_model_for_realtime
+        ):
+            raise KrokoNativeConflict(CONCURRENT_IDENTITY)
+        _role, path = kroko[0]
+        if not path:
+            return
+        conflict = self.kroko_native_guard.evaluate(
+            identity_for_path(path),
+            effective_recognizer_key(self._kroko_lane_options(self.settings)),
+        )
+        if conflict is not None:
+            raise conflict
+
+    def _kroko_probe_reuses_live_instance(self, candidate):
+        """A healthy live scheduler already runs exactly this file."""
+        lock = getattr(self, "_scheduler_lock", None)
+        if lock is None:
+            return False
+        with lock:
+            scheduler = getattr(self, "scheduler", None)
+            if scheduler is None:
+                return False
+            try:
+                if not scheduler.healthy():
+                    return False
+            except Exception:
+                return False
+            resolved = dict(self.settings._resolved_stt_models or {})
+        paths = {
+            os.path.normcase(os.path.abspath(str(item.get("path"))))
+            for item in resolved.values()
+            if item.get("path")
+        }
+        return paths == {os.path.normcase(os.path.abspath(str(candidate.path)))}
+
+    def _kroko_probe_preflight(self, candidate):
+        conflict = self.kroko_native_guard.evaluate(
+            identity_for_path(candidate.path),
+            effective_recognizer_key(self._kroko_lane_options(self.settings)),
+        )
+        if conflict is None:
+            return
+        if conflict.code == CONCURRENT_IDENTITY:
+            self.__dict__.setdefault("_kroko_probe_conflicts", []).append(
+                candidate.id
+            )
+        raise conflict
+
+    def _kroko_quiesced_manager_refresh(self):
+        """``manager.refresh()`` that may free the single native instance once.
+
+        A Kroko candidate is never probed next to a different live Kroko
+        instance (that would be two native identities in one process). If a
+        candidate was refused for exactly that reason and nothing is active,
+        the live instance is unloaded through the regular unload path and the
+        refresh repeated; activation then loads the new model into the free
+        slot. With active sessions or inference the transition is deferred
+        and reported, never forced.
+        """
+        self._kroko_probe_conflicts = []
+        snapshot = self.stt_model_manager.refresh()
+        if not self._kroko_probe_conflicts:
+            return snapshot
+        if self._models_busy():
+            raise RuntimeError(
+                "Der Wechsel des Kroko-Modells erfordert das Entladen der "
+                "laufenden Kroko-Instanz; aktive Sessions oder "
+                "Transkriptionen verhindern das. Nach deren Ende erneut "
+                "aktualisieren."
+            )
+        self.unload_models(reason="kroko_model_transition")
+        self._kroko_probe_conflicts = []
+        return self.stt_model_manager.refresh()
+
+    def _kroko_assert_switch_possible(self, candidate):
+        """Reject a restart-only Kroko change before anything is touched.
+
+        A different Pro model, or a Pro model under another key, can only be
+        loaded by a new process once the native Pro context exists. Saying so
+        up front keeps the working instance loaded.
+        """
+        manager = self.stt_model_manager
+        try:
+            intent = OperatorIntent.from_settings(candidate)
+            key = effective_recognizer_key(self._kroko_lane_options(candidate))
+            for _lane, raw, _key in kroko_lane_models(
+                candidate, self._kroko_manifest()
+            ):
+                product = manager.find_product("kroko_onnx", raw)
+                if (
+                    product is None
+                    or (product.license_class or "").strip().lower()
+                    != "commercial"
+                ):
+                    continue
+                path = manager.locate_local_path(product, intent)
+                if not path:
+                    continue
+                conflict = self.kroko_native_guard.restart_conflict(
+                    identity_for_path(path), key
+                )
+                if conflict is not None:
+                    raise conflict
+        except KrokoNativeConflict:
+            raise
+        except Exception:
+            return
+
+    def _kroko_rebind_current(self):
+        """Re-bind the committed settings after an abandoned candidate."""
+        try:
+            self.refresh_kroko_license_policy(
+                settings=self.settings, network=False
+            )
+        except Exception:
+            pass
 
     def stt_model_management_status(self):
         data = self.stt_model_manager.status()
@@ -6571,6 +7018,10 @@ class VoiceSTTService:
             )
         except Exception:
             data["krokoLicense"] = {"status": "UNKNOWN"}
+        try:
+            data["krokoRuntime"] = self.kroko_runtime_status()
+        except Exception:
+            data["krokoRuntime"] = {"restartRequired": False}
         return data
 
     def stt_model_readiness_summary(self):
@@ -6594,19 +7045,20 @@ class VoiceSTTService:
             values.extend(self._stt_secret_values(source))
         return redact_secret_text(error, values)
 
-    def refresh_stt_models(self, timeout=180.0):
+    def refresh_stt_models(self, timeout=180.0, license_check=True):
         """Refresh the transactional authority without invalidating its LKG."""
 
         with self._stt_refresh_lock:
-            return self._refresh_stt_models_locked(timeout)
+            return self._refresh_stt_models_locked(timeout, license_check)
 
-    def _refresh_stt_models_locked(self, timeout):
+    def _refresh_stt_models_locked(self, timeout, license_check=True):
         # The license decision precedes the admission: a rotation, removal,
         # force flag or expiry since the last refresh must not leak into the
         # new snapshot. Bounded and skipped when fresh, so steady-state cost
-        # is ~zero and no network happens without a key.
+        # is ~zero and no network happens without a key. A reconcile after a
+        # finished check binds the intent only (``license_check=False``).
         self.refresh_kroko_license_policy(
-            settings=self.settings, background=False
+            settings=self.settings, background=False, network=license_check
         )
         previous_snapshot = self.stt_model_manager.snapshot()
         previous_intent = self.stt_model_manager.intent
@@ -6614,7 +7066,7 @@ class VoiceSTTService:
         candidate_intent = OperatorIntent.from_settings(self.settings)
         self.stt_model_manager.intent = candidate_intent
         try:
-            snapshot = self.stt_model_manager.refresh()
+            snapshot = self._kroko_quiesced_manager_refresh()
         except Exception as exc:
             self.stt_model_manager.intent = previous_intent
             message = self._safe_stt_error(exc)
@@ -6795,6 +7247,7 @@ class VoiceSTTService:
         )
 
     def _new_scheduler(self):
+        self._kroko_scheduler_preflight()
         return self.scheduler_factory(
             self.settings,
             self._on_inference_result,
@@ -6986,6 +7439,9 @@ class VoiceSTTService:
         return replacement
 
     def _submit_scheduler_job(self, job, activity):
+        revoked = self._kroko_pro_revocation()
+        if revoked is not None:
+            return QueueSubmitResult(False, reason=revoked)
         while True:
             scheduler = self.ensure_models_loaded()
             with self._scheduler_lock:
@@ -7538,7 +7994,13 @@ class VoiceSTTService:
 
     def switch_models(self, updates, timeout=180.0):
         with self._stt_refresh_lock:
-            return self._switch_models_locked(updates, timeout)
+            try:
+                return self._switch_models_locked(updates, timeout)
+            except BaseException:
+                # The candidate settings were bound to the license state
+                # before the switch could fail: re-bind the committed ones.
+                self._kroko_rebind_current()
+                raise
 
     def _switch_models_locked(self, updates, timeout):
         allowed = {
@@ -7563,6 +8025,7 @@ class VoiceSTTService:
         ):
             candidate.use_main_model_for_realtime = False
         enforce_cpu_model_policy(candidate)
+        self._kroko_assert_switch_possible(candidate)
         previous_management = self.stt_model_manager.snapshot()
         previous_intent = self.stt_model_manager.intent
         self.stt_model_manager.intent = OperatorIntent.from_settings(candidate)
@@ -7572,7 +8035,15 @@ class VoiceSTTService:
         self.refresh_kroko_license_policy(
             settings=candidate, background=False
         )
-        managed = self.stt_model_manager.refresh()
+        try:
+            managed = self._kroko_quiesced_manager_refresh()
+        except Exception:
+            self.stt_model_manager.intent = previous_intent
+            self.stt_model_manager.restore_last_known_good(
+                previous_management,
+                "requested model switch could not be probed safely",
+            )
+            raise
         if not managed.minimum_ready:
             self.stt_model_manager.intent = previous_intent
             self.stt_model_manager.restore_last_known_good(
@@ -8227,6 +8698,11 @@ def enforce_cpu_model_policy(settings):
     """Enforce the configurable CPU-only two-lane model memory guard."""
 
     settings.device = "cpu"
+    try:
+        kroko_manifest = load_manifest()
+    except Exception:
+        kroko_manifest = None
+    enforce_kroko_single_identity(settings, kroko_manifest)
     realtime_engine = settings.realtime_transcription_engine or settings.transcription_engine
     if (
         normalize_engine_name(realtime_engine) == normalize_engine_name(settings.transcription_engine)
@@ -8477,6 +8953,7 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
             "decisions": decisions,
             "management": management,
             "license": service.security.kroko.state.public_snapshot(),
+            "runtime": service.kroko_runtime_status(),
         })
 
     @app.get("/api/models/lifecycle")
@@ -8722,9 +9199,10 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
         if result.accepted and settings_control_module.KROKO_FORCE_COMMUNITY in (
             result.changed_keys or ()
         ):
-            # Force Community invalidates a Pro grant immediately; the policy
-            # re-evaluation runs on a daemon thread, never on the event loop.
-            service.refresh_kroko_license_policy(background=True)
+            # Force Community invalidates a Pro grant before this returns and
+            # blocks new Pro jobs at once; the model/scheduler reconcile (and
+            # any new check) runs on a daemon thread, never on the event loop.
+            service.apply_kroko_force_change()
         status = 409 if result.result == "settings_revision_conflict" else (
             500 if result.result == "internal_error" else (
                 422 if result.result == "settings_rejected" else 200

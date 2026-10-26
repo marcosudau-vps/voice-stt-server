@@ -115,8 +115,10 @@ erhalten.
 
 Kroko-Pro-Modelle muessen zur explizit aufgeloesten Runtimevariante `pro`
 passen. Ein Lizenzschluessel ist ausschliesslich Runtime-Credential: seine
-Anwesenheit waehlt weder Pro noch entscheidet sie Modell-Eligibility. Ob die
-konkrete Pro-Runtime mit dem Credential laden kann, entscheidet nur der echte
+blosse Anwesenheit waehlt weder Pro noch macht sie ein Modell eligible. Die
+Eligibility kommerzieller Kroko-Modelle entscheidet der Lizenz-Guard (naechster
+Abschnitt) anhand einer frischen, modellgebundenen Pruefung; ob die konkrete
+Pro-Runtime mit dem Credential laden kann, entscheidet erst der echte
 Load-Probe. Der Lizenzschluessel wird weder in Modellmetadaten noch Status,
 API-Antworten, Audit-/Performance-Events, Diagnosen oder Runtime-Persistenz
 geschrieben; bekannte Aliase und verschachtelte Kroko-Optionsfelder werden an
@@ -132,9 +134,13 @@ die beide bestehen muessen:
 1. **Lizenz-Guard** (nur kommerzielle Kroko-Produkte): Der Server injiziert
    dem Manager eine lesende `license_policy`. Ein Pro-Modell ist in
    `_eligible`/`candidate_eligible` genau dann zulaessig, wenn fuer die UUID
-   der tatsaechlich vorliegenden `.data`-Datei (gelesen aus dem Dateiheader,
-   `VoiceSTT.kroko.models.license_uuid_for`) ein frischer modellgebundener
-   Nachweis (`VALID`, TTL-begrenzt) besteht. Ohne injizierte Policy gilt das
+   der tatsaechlich vorliegenden `.data`-Datei (gelesen aus dem Dateiheader)
+   ein frischer modellgebundener Nachweis (`VALID`, TTL-begrenzt) besteht und
+   kein nur per Neustart loesbarer nativer Konflikt vorliegt. Den Pfad dieser
+   Datei loest der Manager selbst auf (`locate_local_path`, dieselben Roots wie
+   die Snapshot-Discovery, einschliesslich Engine-`model_dir`/-`model_path`
+   und Custom-Paths); Vorpruefung und Admission koennen dadurch nie
+   verschiedene Dateien adressieren. Ohne injizierte Policy gilt das
    Legacy-Verhalten (Variante + Enabled). Die LKG-Wiederherstellung filtert
    entfallene Pro-Rollen heraus, sodass kein abgelaufener Nachweis ein
    Pro-Modell wiederbelebt.
@@ -144,11 +150,21 @@ die beide bestehen muessen:
    die native Lizenzpruefung wird fuer sie nicht konsultiert. Modelle mit
    unbekannter Lizenzklasse behalten den bisherigen strikten Vergleich.
 
-Ein gueltiger Nachweis schaltet die Auswahl frei; Verfügbarkeit,
-Provisionierung, Load-Probe und die Last-Known-Good-Mechanik bleiben davon
-unberührt und können einen Start weiterhin verhindern (fehlende/beschaedigte
-Datei, falsche Runtime). `GET /api/models/management` enthaelt den
-redigierten Lizenzstatus als `krokoLicense` (Scope `model`, keine Secrets).
+Ein gueltiger Nachweis schaltet die Auswahl frei – auch bei einer
+Community-Konfiguration (Key + lokales Pro-Modell); er aktiviert nichts.
+Verfügbarkeit, Provisionierung, Load-Probe und die Last-Known-Good-Mechanik
+bleiben davon unberührt und können einen Start weiterhin verhindern
+(fehlende/beschaedigte Datei, falsche Runtime). Nach einem Hintergrundergebnis
+oder einer Force-Aenderung gleicht der Service Snapshot, aktive Zuordnung und
+Status ueber den vorhandenen transaktionalen Refresh ab; Kroko-Kandidaten
+werden dabei nie neben einer anderen lebenden Kroko-Instanz geprueft (ein
+Prozess betreibt hoechstens eine native Kroko-Instanz; ein Wechsel erfolgt im
+Leerlauf ueber den regulaeren Entlade-Pfad, bei aktiver Arbeit wird er als
+`modelRefreshPending` zurueckgestellt). `GET /api/models/management` enthaelt
+den redigierten Lizenzstatus als `krokoLicense` (Scope `model`, keine Secrets)
+und `krokoRuntime` (installierte Variante, Berechtigung, gewuenschtes und
+tatsaechlich aktives Modell, Neustartbedarf getrennt ausgewiesen; siehe
+[Kroko-ONNX](kroko-onnx.md#modell--und-lizenzwechsel-im-laufenden-prozess)).
 
 Die Runtimevariante hat genau eine dokumentierte Praezedenz:
 

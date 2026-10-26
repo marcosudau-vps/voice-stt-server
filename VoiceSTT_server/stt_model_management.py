@@ -677,8 +677,10 @@ class STTModelManager:
         name = "fasterwhisper" if normalize_engine(engine) == "faster_whisper" else "kroko_asr"
         return self.runtime_root / "models" / "stt" / name
 
-    def discovery_roots(self, engine: str) -> Tuple[Path, ...]:
-        config = self.intent.engine_config(engine)
+    def discovery_roots(
+        self, engine: str, intent: Optional[OperatorIntent] = None
+    ) -> Tuple[Path, ...]:
+        config = (intent or self.intent).engine_config(engine)
         values = config.get("custom_paths", config.get("paths", ()))
         if isinstance(values, (str, os.PathLike)):
             values = (values,)
@@ -710,6 +712,84 @@ class STTModelManager:
             if root not in unique:
                 unique.append(root)
         return tuple(unique)
+
+    def find_product(self, engine: str, requested: str) -> Optional[ProductModel]:
+        """Public lookup of an authoritative product by id, file name or path."""
+        return self._find_product(engine, requested)
+
+    def locate_local_path(
+        self,
+        product: Optional[ProductModel],
+        intent: Optional[OperatorIntent] = None,
+    ) -> Optional[str]:
+        """Path of the local file for ``product`` or ``None``.
+
+        The single authoritative resolution for Kroko model files: the same
+        roots (engine ``custom_paths`` including ``model_dir``/``model_path``/
+        ``model_root`` engine options, download root, legacy environment root
+        and the managed default root) the snapshot discovery uses. License
+        pre-checks and eligibility both resolve through here, so they can
+        never address different files.
+        """
+        if product is None or normalize_engine(product.engine) != "kroko_onnx":
+            return None
+        if not product.filename:
+            return None
+        adapter = self._adapters["kroko_onnx"]
+        for item in adapter.discover(
+            self.discovery_roots("kroko_onnx", intent), (product,)
+        ):
+            if Path(item.path).name.lower() != str(product.filename).lower():
+                continue
+            # Presence is enough to *address* the file with a license
+            # question; activation still needs the validated and
+            # load-verified snapshot candidate.
+            return item.path
+        return None
+
+    def resolve_license_uuid(
+        self,
+        product: Optional[ProductModel],
+        candidate_path: Optional[Any] = None,
+        intent: Optional[OperatorIntent] = None,
+    ) -> Optional[str]:
+        """Technical license UUID from the file the loader would really use."""
+        path = candidate_path or self.locate_local_path(product, intent)
+        if not path:
+            return None
+        return kroko_models.read_model_uuid(path)
+
+    def local_license_candidates(
+        self, intent: Optional[OperatorIntent] = None
+    ) -> Tuple[Tuple[ProductModel, str, str], ...]:
+        """Locally present commercial Kroko models as ``(product, path, uuid)``.
+
+        Authority order; no native load, no network. This is what a license
+        pre-check may ask the provider about when no Pro model is configured:
+        entitlement to *select* a Pro model is a different question from
+        activating it natively.
+        """
+        commercial = tuple(
+            product for product in self.authority
+            if normalize_engine(product.engine) == "kroko_onnx"
+            and (product.license_class or "").strip().lower() == "commercial"
+            and product.filename
+        )
+        if not commercial:
+            return ()
+        by_name: Dict[str, str] = {}
+        for item in self._adapters["kroko_onnx"].discover(
+            self.discovery_roots("kroko_onnx", intent), commercial
+        ):
+            # Same precedence as locate_local_path: the first root wins.
+            by_name.setdefault(Path(item.path).name.lower(), item.path)
+        found = []
+        for product in commercial:
+            path = by_name.get(str(product.filename).lower())
+            uuid = kroko_models.read_model_uuid(path) if path else None
+            if uuid:
+                found.append((product, path, uuid))
+        return tuple(found)
 
     def status(self) -> Dict[str, Any]:
         with self._state_lock:
@@ -896,9 +976,11 @@ class STTModelManager:
         for role in (ROLE_FINAL, ROLE_REALTIME):
             engine, requested = self.intent.defaults.get(role, ("", ""))
             product = self._find_product(engine, requested)
-            if not self._eligible(product, engine, diagnostics):
-                continue
             local = self._find_candidate(candidates, engine, requested, product)
+            if not self._eligible(
+                product, engine, diagnostics, local.path if local else None
+            ):
+                continue
             if local is None and product and self.intent.effective_auto_download(product):
                 local = self._provision(product, diagnostics)
                 if local is not None:
@@ -934,9 +1016,14 @@ class STTModelManager:
             if not missing:
                 break
             cover = missing & set(product.roles)
-            if not cover or not self._eligible(product, product.engine, diagnostics):
+            if not cover:
                 continue
             local = self._find_candidate(candidates, product.engine, product.id, product)
+            if not self._eligible(
+                product, product.engine, diagnostics,
+                local.path if local else None,
+            ):
+                continue
             if local is None:
                 if not self.intent.effective_auto_download(product):
                     diagnostics.append({
@@ -1060,6 +1147,9 @@ class STTModelManager:
             return True, "non_commercial"
         if self.license_policy is None:
             return True, "no_policy"
+        if candidate_path is None:
+            # Same authoritative resolution as the snapshot discovery.
+            candidate_path = self.locate_local_path(product)
         try:
             entitled, reason = self.license_policy(product, candidate_path)
         except Exception:
@@ -1079,6 +1169,7 @@ class STTModelManager:
         product: Optional[ProductModel],
         engine: str,
         diagnostics: list,
+        candidate_path: Optional[Any] = None,
     ) -> bool:
         if not self.intent.engine_enabled(engine):
             diagnostics.append({
@@ -1134,7 +1225,7 @@ class STTModelManager:
                 })
                 return False
         allowed, _reason = self._kroko_license_allows(
-            product, None, diagnostics
+            product, candidate_path, diagnostics
         )
         if not allowed:
             return False

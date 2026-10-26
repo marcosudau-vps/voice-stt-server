@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+### Changed
+
+- Kroko: a Voice-STT process now operates at most one native Kroko model
+  instance. Final and realtime must name the same Kroko model (shared
+  instance); a configuration with two different Kroko models is rejected at
+  startup and on model switches instead of loading two recognizers. A
+  different Pro model, a new/rotated key against an already initialised Pro
+  context and a Pro model without a key are refused before the native load
+  (restart required where noted); the model status reports `krokoRuntime`.
+
 ## 2.0.0
 
 ### Added
