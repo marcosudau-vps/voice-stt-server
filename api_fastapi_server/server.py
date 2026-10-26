@@ -6292,6 +6292,14 @@ class VoiceSTTService:
         # lock serialises automatic model re-derivation after license events.
         self._kroko_policy_lock = threading.RLock()
         self._kroko_reconcile_lock = threading.Lock()
+        # Monotonic Pro-admission revision: bumped synchronously on every
+        # license-policy bind (force/key/grant invalidation) under
+        # ``_kroko_policy_lock``. Scheduler submit captures it before any
+        # potentially long load and revalidates it together with the
+        # revocation state inside the same policy lock just before the
+        # actual enqueue, so a confirmed force change is linearised with
+        # the submit (B1). Never reset, only incremented.
+        self._kroko_admission_generation = 0
         self._kroko_probe_conflicts = []
         self._kroko_reconcile_state = None
         self._kroko_tier_cache = {}
@@ -6681,6 +6689,11 @@ class VoiceSTTService:
                         decision = gate.decide(
                             uuid, options=options, force_community=force
                         )
+                # Every path above bound the current intent synchronously:
+                # publish one admission revision with it, so a concurrent
+                # scheduler submit can detect exactly this invalidation
+                # before it enqueues into the previous worker (B1).
+                self._kroko_admission_generation += 1
         except Exception:
             LOGGER.warning(
                 "Kroko-Lizenzrichtlinie konnte nicht bewertet werden."
@@ -6906,7 +6919,16 @@ class VoiceSTTService:
             raise conflict
 
     def _kroko_probe_reuses_live_instance(self, candidate):
-        """A healthy live scheduler already runs exactly this file."""
+        """A healthy live scheduler already runs exactly this Kroko file.
+
+        Only actually active **Kroko** lanes matter (B2): a legitimate
+        mixed configuration such as Final=Faster-Whisper plus
+        Realtime=Kroko must reuse the live Kroko worker instead of
+        mistaking the foreign model path for a second Kroko instance.
+        The comparison uses the native Kroko model identity (header UUID,
+        falling back to the normalised path), so lane order and the
+        foreign engine never influence the verdict.
+        """
         lock = getattr(self, "_scheduler_lock", None)
         if lock is None:
             return False
@@ -6920,12 +6942,31 @@ class VoiceSTTService:
             except Exception:
                 return False
             resolved = dict(self.settings._resolved_stt_models or {})
-        paths = {
-            os.path.normcase(os.path.abspath(str(item.get("path"))))
-            for item in resolved.values()
-            if item.get("path")
-        }
-        return paths == {os.path.normcase(os.path.abspath(str(candidate.path)))}
+        kroko_idents = set()
+        for item in resolved.values():
+            try:
+                if normalize_engine_name(item.get("engine")) != "kroko_onnx":
+                    continue
+            except Exception:
+                continue
+            path = item.get("path")
+            if not path:
+                continue
+            try:
+                kroko_idents.add(identity_for_path(path).ident)
+            except Exception:
+                kroko_idents.add(
+                    os.path.normcase(os.path.abspath(str(path)))
+                )
+        if not kroko_idents:
+            return False
+        try:
+            candidate_ident = identity_for_path(candidate.path).ident
+        except Exception:
+            candidate_ident = os.path.normcase(
+                os.path.abspath(str(candidate.path))
+            )
+        return kroko_idents == {candidate_ident}
 
     def _kroko_probe_preflight(self, candidate):
         conflict = self.kroko_native_guard.evaluate(
@@ -7439,44 +7480,74 @@ class VoiceSTTService:
         return replacement
 
     def _submit_scheduler_job(self, job, activity):
-        revoked = self._kroko_pro_revocation()
-        if revoked is not None:
-            return QueueSubmitResult(False, reason=revoked)
+        # Entry fast-fail: capture the admission revision together with the
+        # revocation state, so the final section below can prove that no
+        # confirmed force/key invalidation committed in between (B1).
+        with self._kroko_policy_lock:
+            admission_gen = self._kroko_admission_generation
+            revoked = self._kroko_pro_revocation()
+            if revoked is not None:
+                return QueueSubmitResult(False, reason=revoked)
         while True:
+            # Potentially long load/branch outside every admission lock: a
+            # confirmed force change is never blocked by it.
             scheduler = self.ensure_models_loaded()
-            with self._scheduler_lock:
-                if scheduler is not self.scheduler:
-                    continue
-                self.touch_model_activity(activity)
-                result = scheduler.submit(job)
-                if not result.accepted and "voll" in str(result.reason).lower():
-                    transcription_id = (
-                        f"{job.session_id}:{job.generation}:{job.segment_id}"
-                        if job.session_id
-                        else None
-                    )
-                    self.events.emit(
-                        "system",
-                        "scheduler.overloaded",
-                        severity="warning",
-                        message="Scheduler-Warteschlange ist ausgelastet",
-                        sessionId=job.session_id,
-                        clientId=job.client_id,
-                        requestId=job.request_id,
-                        transcriptionId=transcription_id,
-                        lane=job.kind,
-                        reason=result.reason,
-                    )
-                    self.performance.event(
-                        "queue.limit_reached",
-                        sessionId=job.session_id,
-                        clientId=job.client_id,
-                        requestId=job.request_id,
-                        transcriptionId=transcription_id,
-                        lane=job.kind,
-                        reason=result.reason,
-                    )
-                return result
+            # Authoritative admission + enqueue under one short critical
+            # section. The outer policy lock is the same lock every
+            # synchronous grant invalidation (force/key) holds while it
+            # binds the new intent and bumps the admission revision; the
+            # inner scheduler lock serialises the worker pointer. A
+            # confirmed force change therefore either precedes this section
+            # (refused here, generation moved) or follows it (the job was
+            # enqueued strictly before confirmation). A second check
+            # without this shared lock would still race.
+            with self._kroko_policy_lock:
+                with self._scheduler_lock:
+                    revoked = self._kroko_pro_revocation()
+                    if revoked is not None:
+                        return QueueSubmitResult(False, reason=revoked)
+                    current_gen = self._kroko_admission_generation
+                    if current_gen != admission_gen:
+                        # A policy update committed after the entry check;
+                        # the revocation above is already the current one,
+                        # so just re-baseline before the pointer check.
+                        admission_gen = current_gen
+                    if scheduler is not self.scheduler:
+                        stale = True
+                    else:
+                        stale = False
+                        self.touch_model_activity(activity)
+                        result = scheduler.submit(job)
+            if stale:
+                continue
+            if not result.accepted and "voll" in str(result.reason).lower():
+                transcription_id = (
+                    f"{job.session_id}:{job.generation}:{job.segment_id}"
+                    if job.session_id
+                    else None
+                )
+                self.events.emit(
+                    "system",
+                    "scheduler.overloaded",
+                    severity="warning",
+                    message="Scheduler-Warteschlange ist ausgelastet",
+                    sessionId=job.session_id,
+                    clientId=job.client_id,
+                    requestId=job.request_id,
+                    transcriptionId=transcription_id,
+                    lane=job.kind,
+                    reason=result.reason,
+                )
+                self.performance.event(
+                    "queue.limit_reached",
+                    sessionId=job.session_id,
+                    clientId=job.client_id,
+                    requestId=job.request_id,
+                    transcriptionId=transcription_id,
+                    lane=job.kind,
+                    reason=result.reason,
+                )
+            return result
 
     def load_models(self, timeout=180.0):
         with self._scheduler_lock:
@@ -9186,23 +9257,34 @@ def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None
                     "message": "Der Patch muss ein JSON-Objekt sein.",
                 }],
             }, status_code=400)
-        result = service.settings_control.patch_server(
-            payload.get("baseSettingsRevision"),
-            payload.get("changes"),
-        )
+        # The force-commit and its grant invalidation share the admission
+        # lock with scheduler submit (B1): either a concurrent submit is
+        # fully before this patch (allowed) or fully after it (refused).
+        # Short synchronous section, no await inside; the model reconcile
+        # still runs on a daemon thread.
+        with service._kroko_policy_lock:
+            result = service.settings_control.patch_server(
+                payload.get("baseSettingsRevision"),
+                payload.get("changes"),
+            )
+            force_changed = bool(
+                result.accepted
+                and settings_control_module.KROKO_FORCE_COMMUNITY in (
+                    result.changed_keys or ()
+                )
+            )
+            if force_changed:
+                # Force Community invalidates a Pro grant before this
+                # returns and blocks new Pro jobs at once; the
+                # model/scheduler reconcile (and any new check) runs on a
+                # daemon thread, never on the event loop.
+                service.apply_kroko_force_change()
         if result.accepted and settings_control_module.WAKE_WORD_GLOBAL_DISABLED in (
             result.changed_keys or ()
         ):
             # The catalog owns availability, the settings plane owns the value:
             # re-project the confirmed disable list onto the one catalog.
             service.apply_wake_word_global_disable()
-        if result.accepted and settings_control_module.KROKO_FORCE_COMMUNITY in (
-            result.changed_keys or ()
-        ):
-            # Force Community invalidates a Pro grant before this returns and
-            # blocks new Pro jobs at once; the model/scheduler reconcile (and
-            # any new check) runs on a daemon thread, never on the event loop.
-            service.apply_kroko_force_change()
         status = 409 if result.result == "settings_revision_conflict" else (
             500 if result.result == "internal_error" else (
                 422 if result.result == "settings_rejected" else 200
