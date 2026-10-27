@@ -251,3 +251,6 @@ cython_debug/
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# Reviewed V2 redistribution gate (source, not generated build output).
+!build/kroko-redistribution.json

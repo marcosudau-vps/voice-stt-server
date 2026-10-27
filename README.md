@@ -34,52 +34,33 @@ published; the exact commands are below.
 
 ---
 
-## Two distributions: Free and Pro
+## One V2 distribution
 
-Kroko-ONNX Free and Kroko-ONNX Pro are different native runtimes and cannot be
-swapped at runtime. VoiceSTT therefore ships as **two complete, alternative
-distributions**, each with its matching runtime already inside it:
+`voice-stt-server` is the single public product. Its wheel and container image
+include the qualified Pro-capable Kroko runtime. Community models work without
+a Kroko key. Pro models require a valid entitlement for the actual model UUID;
+a key or `runtime_variant=pro` cannot manufacture native capability. The key is
+a runtime credential for model-specific permission.
 
-| | Free | Pro |
-| --- | --- | --- |
-| PyPI distribution | `voice-stt-server` | `voice-stt-server-pro` |
-| Container image | `voice-stt-server` | `voice-stt-server-pro` |
-| Embedded Kroko runtime | Free | Pro |
-| Kroko Community models | yes | yes |
-| Kroko licensed Pro models | no | yes (runtime key required) |
+The public import is `voice_stt_server` and the CLI is `voice-stt-server`.
+No separate native package or operator native build is needed. The historical
+`voicestt` source/development distribution remains available for contributors.
 
-Both expose the **same import package and the same CLI**, so nothing in your
-application changes when you move between them:
-
-```python
-from voice_stt_server import AudioToTextRecorder
-```
-
-Three consequences worth stating plainly:
-
-- **The installed distribution decides the runtime.** A Pro license key is a
-  runtime credential for a Pro runtime that is already installed; it never
-  turns a Free installation into a Pro one.
-- **They are alternatives, not layers.** Install one or the other into an
-  environment, never both.
-- **No native build.** Neither distribution asks you to compile Kroko or to
-  install a separate wheel afterwards.
+Public V2 release approval is currently **BLOCKED** on verified Kroko runtime
+redistribution rights and final platform/native qualification. See
+[license gates](docs/licenses.md#unified-v2-release-gate).
 
 ---
 
 ## Installation
 
-Supported targets for the two public distributions are **CPython 3.12** on
+Supported targets for the public product are **CPython 3.12** on
 **Linux x86-64** and **Windows x86-64**. That is the matrix the embedded native
 runtime is actually built and qualified for, so it is the only matrix the
 packaging claims.
 
 ```bash
-# Free
 pip install voice-stt-server
-
-# Pro
-pip install voice-stt-server-pro
 ```
 
 That is the whole installation. Faster-Whisper, the packaged Silero ONNX voice
@@ -276,7 +257,6 @@ distributions:
 
 ```text
 marcosudau/voice-stt-server            ghcr.io/marcosudau-vps/voice-stt-server
-marcosudau/voice-stt-server-pro        ghcr.io/marcosudau-vps/voice-stt-server-pro
 ```
 
 Each release publishes an immutable exact tag (`2.0.0`) plus the movable

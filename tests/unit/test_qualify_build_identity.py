@@ -42,7 +42,7 @@ def candidate(tmp_path, monkeypatch, source):
         "sourceCommit": source.sourceCommit, "sourceTree": source.sourceTree,
         "productVersion": source.productVersion, "distributions": {},
     }
-    for variant in ("free", "pro"):
+    for variant in ("pro",):
         name = q.distribution_name_for(variant)
         identity = replace(source, distributionName=name, krokoVariant=variant)
         block = {
@@ -66,6 +66,8 @@ def candidate(tmp_path, monkeypatch, source):
                                  f"Name: {name}\nVersion: 2.0.0\n")
                 archive.writestr("voice_stt_server/_embedded_kroko.json", json.dumps(embedded))
                 archive.writestr("kroko_onnx/__init__.py", "# synthetic fixture\n")
+                for notice in (q.REPO_ROOT / "VoiceSTT/assets/kroko/licenses").iterdir():
+                    archive.writestr(f"{name.replace('-', '_')}-2.0.0.dist-info/licenses/{notice.name}", notice.read_bytes())
             record = {
                 "filename": filename, "sha256": q.sha256(wheel),
                 "platformTag": target, "variant": variant, "embedded": embedded,
@@ -96,7 +98,7 @@ def candidate(tmp_path, monkeypatch, source):
 
 
 def test_both_platform_reports_bind_exact_candidate_and_native_bytes(candidate):
-    assert len(q.qualify_candidate(candidate, check_reports=True)["wheels"]) == 4
+    assert len(q.qualify_candidate(candidate, check_reports=True)["wheels"]) == 2
 
 
 @pytest.mark.parametrize("field,value", [
@@ -118,7 +120,7 @@ def test_installed_report_mismatches_fail(candidate, field, value):
     lambda data: data["wheels"][0]["installed"].update(nativeImport=False),
     lambda data: data["wheels"][0]["installed"]["info"].update(identityStatus="incomplete"),
     lambda data: data["wheels"][0]["installed"]["info"]["build"].update(sourceDirty=True),
-    lambda data: data["wheels"][0]["installed"]["info"]["runtime"].update(krokoVariant="pro"),
+    lambda data: data["wheels"][0]["installed"]["info"]["runtime"].update(krokoVariant="free"),
 ])
 def test_incomplete_or_false_native_report_cannot_qualify(candidate, change):
     modify_json(candidate / "identity-qualification-linux.json", change)
@@ -129,11 +131,11 @@ def test_incomplete_or_false_native_report_cannot_qualify(candidate, change):
 @pytest.mark.parametrize("change", [
     lambda data: data.update(sourceCommit="e" * 40),
     lambda data: data.update(sourceTree="e" * 40),
-    lambda data: data["distributions"]["free"].update(krokoVariant="pro"),
-    lambda data: data["distributions"]["free"]["wheels"][0].update(krokoArtifactSha256="e" * 64),
-    lambda data: data["distributions"]["free"]["wheels"][1].update(krokoFingerprint="wrong"),
-    lambda data: data["distributions"]["free"]["wheels"][0].update(sha256="e" * 64),
-    lambda data: data["distributions"]["free"]["wheels"].pop(),
+    lambda data: data["distributions"]["pro"].update(krokoVariant="free"),
+    lambda data: data["distributions"]["pro"]["wheels"][0].update(krokoArtifactSha256="e" * 64),
+    lambda data: data["distributions"]["pro"]["wheels"][1].update(krokoFingerprint="wrong"),
+    lambda data: data["distributions"]["pro"]["wheels"][0].update(sha256="e" * 64),
+    lambda data: data["distributions"]["pro"]["wheels"].pop(),
 ])
 def test_rc_manifest_cannot_rebind_qualified_source_or_bytes(candidate, change):
     modify_json(candidate / "rc-manifest.json", change)
@@ -148,7 +150,7 @@ def test_rc_manifest_cannot_rebind_qualified_source_or_bytes(candidate, change):
     lambda data: data["embedded"]["kroko"].update(wheelSha256="e" * 64),
 ])
 def test_static_candidate_mismatch_fails_before_install(candidate, change):
-    modify_json(candidate / "distribution-free-linux_x86_64.json", change)
+    modify_json(candidate / "distribution-pro-linux_x86_64.json", change)
     with pytest.raises(IdentityError):
         q.qualify_candidate(candidate)
 
@@ -193,8 +195,8 @@ def test_rc_source_tree_mismatch_fails(source, monkeypatch):
 
 
 @pytest.mark.parametrize("distribution,variant", [
-    ("voicestt", "free"), ("voicestt", "pro"),
-    ("voice-stt-server", "free"), ("voice-stt-server-pro", "pro"),
+    ("voicestt", "pro"), ("voicestt", "pro"),
+    ("voice-stt-server", "pro"), ("voice-stt-server", "pro"),
 ])
 @pytest.mark.parametrize("failure", [None, "http", "websocket"])
 def test_installed_probe_uses_real_loopback_and_cleans_up(

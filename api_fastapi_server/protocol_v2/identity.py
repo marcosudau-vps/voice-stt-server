@@ -63,7 +63,7 @@ def runtime_variant(distribution_name=None, package_version=None, product_versio
     if embedded_variant and separate_variant:
         raise IdentityError("embedded and separately installed Kroko runtimes conflict")
     variant = embedded_variant or separate_variant
-    expected = {"voice-stt-server": "free", "voice-stt-server-pro": "pro"}.get(
+    expected = {"voice-stt-server": "pro"}.get(
         distribution_name
     )
     if expected and variant and expected != variant:

@@ -430,3 +430,23 @@ Die [OpenAI-HTTP-Modulreferenz](openai-http-api.md) und
 beschreiben die durch diese Tests geschützten Modul- und Berechtigungsgrenzen.
 Der weitere [Modularisierungsfahrplan](architecture/server-modularization-roadmap.md)
 beschreibt die nächsten fachlichen Schnitte.
+
+
+## Unified V2 product qualification
+
+Run `python -m pytest -q tests/unit tests/compatibility` and separately
+`python -m pytest -q tests/packaging`. Ubuntu/Windows CI runs both. Packaging
+fixtures contain synthetic native payloads and do not prove native behavior.
+`test_unified_product.py` covers one product, native input, owner/relocation,
+platform notices, old-schema rejection and the independent redistribution gate.
+Release tests cover hash preflight, conflict/UNKNOWN refusal, digest promotion
+without a build and resume after partial platform uploads.
+
+For real models use the opt-in suite in `tests/unit/test_kroko_native_integration.py`
+and the credential handling described in its module header. Each scenario uses
+a fresh child interpreter. `VOICESTT_KROKO_NATIVE_CHILD_TIMEOUT` optionally bounds
+child diagnostics (default 900 seconds); a timeout is FAILED, never PASS.
+Record runtime/artifact hashes and platform, and distinguish PASS, FAILED,
+NOT_RUN and externally blocked proof. Linux Pro reload/shutdown requires real
+native execution. Model-less HTTP identity qualification is insufficient.
+Public redistribution remains gated independently in `docs/licenses.md`.

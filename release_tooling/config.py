@@ -4,11 +4,11 @@ Three identities already have exactly one authority in this repository and
 this module deliberately reuses all of them instead of hardcoding a copy:
 
 * The product version: ``VoiceSTT._version``.
-* The Free/Pro production **image** names: ``tools.build_production``
+* The public production **image** name: ``tools.build_production``
   (AP-SRV-070 W4C). That module has no package ``__init__.py`` - it is
   imported the same way its own unit tests import it, by adding ``tools/`` to
   ``sys.path``.
-* The Free/Pro public **distribution** names: ``tools.build_distribution``
+* The public **distribution** name: ``tools.build_distribution``
   (AP-SRV-070 W5-R04), imported the same way.
 
 AP-SRV-070 W5-R04 changed how the registry roots are resolved. Previously both
@@ -47,7 +47,7 @@ from VoiceSTT._version import DISTRIBUTION_NAME  # noqa: E402
 
 #: The historical single-distribution name (``voicestt``). Kept because the
 #: development/editable install still uses it; it is **not** a public release
-#: surface any more - the two names in :data:`DISTRIBUTION_NAMES` are.
+#: surface any more - the product in :data:`DISTRIBUTION_NAMES` is.
 LEGACY_DISTRIBUTION_NAME = DISTRIBUTION_NAME
 
 #: Explicit registry-root overrides for a fully manual operator run.
@@ -179,3 +179,21 @@ __all__ = [
     "staging_image_name_for",
     "credential_presence",
 ]
+
+
+def redistribution_approval() -> dict:
+    """Read the reviewed release gate; no environment override grants rights."""
+    import json
+    try:
+        return json.loads((REPO_ROOT / "build/kroko-redistribution.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {"status": "BLOCKED", "evidenceRef": "missing redistribution evidence"}
+
+
+def redistribution_verified(approval: dict) -> bool:
+    from VoiceSTT.kroko.buildinputs import KROKO_UPSTREAM_REVISION
+    return bool(isinstance(approval, dict)
+                and approval.get("status") == "VERIFIED"
+                and approval.get("upstreamRevision") == KROKO_UPSTREAM_REVISION
+                and isinstance(approval.get("evidenceRef"), str)
+                and approval["evidenceRef"].strip())

@@ -43,6 +43,14 @@ _TARGET_LOCKS_GUARD = threading.Lock()
 _TARGET_LOCKS: Dict[str, threading.Lock] = {}
 
 
+def installed_kroko_variant() -> str:
+    from VoiceSTT._build_identity import installed_distribution, validated_build_identity
+    from api_fastapi_server.protocol_v2.identity import runtime_variant
+    identity = validated_build_identity()
+    name, version = installed_distribution()
+    return runtime_variant(name, version, identity.productVersion if identity else None) or "unknown"
+
+
 def normalize_engine(value: Any) -> str:
     normalized = str(value or "").strip().lower().replace("-", "_")
     if normalized in {"kroko", "banafo_kroko"}:
@@ -158,7 +166,7 @@ class OperatorIntent:
     engines: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     models: Mapping[str, Mapping[str, Any]] = field(default_factory=dict)
     defaults: Mapping[str, Tuple[str, str]] = field(default_factory=dict)
-    kroko_runtime_variant: str = "free"
+    kroko_runtime_variant: str = "unknown"
     redaction_values: Tuple[str, ...] = field(
         default=(),
         repr=False,
@@ -212,27 +220,8 @@ class OperatorIntent:
         realtime_options = getattr(
             settings, "realtime_transcription_engine_options", None
         )
-        kroko_config = engines.get("kroko_onnx", {})
-        runtime_variant = kroko_config.get("runtime_variant")
-        if (
-            not runtime_variant
-            and final_engine == "kroko_onnx"
-            and isinstance(final_options, Mapping)
-        ):
-            runtime_variant = final_options.get("runtime_variant")
-        if (
-            not runtime_variant
-            and realtime_engine == "kroko_onnx"
-            and isinstance(realtime_options, Mapping)
-        ):
-            runtime_variant = realtime_options.get("runtime_variant")
-        if not runtime_variant:
-            runtime_variant = os.getenv("VOICESTT_KROKO_VARIANT")
-        runtime_variant = str(runtime_variant or "free").strip().lower()
-        if runtime_variant not in {"free", "pro"}:
-            raise ValueError(
-                "Kroko runtime_variant must be explicitly 'free' or 'pro'"
-            )
+        # Capability comes from installed provenance, never operator intent/key.
+        runtime_variant = installed_kroko_variant()
         redaction_values = kroko_credential_values({
             "transcription_engine_options": final_options,
             "realtime_transcription_engine_options": realtime_options,

@@ -50,7 +50,7 @@ def make_base_wheel(directory: Path, distribution: str = "voice-stt-server") -> 
     return path
 
 
-def make_kroko_wheel(directory: Path, variant: str = "free",
+def make_kroko_wheel(directory: Path, variant: str = "pro",
                      platform: str = "linux_x86_64") -> Path:
     """A synthetic Kroko wheel with the real one's payload shape."""
     path = directory / f"kroko_onnx-1.12.9-1{variant}-cp312-cp312-{platform}.whl"
@@ -69,15 +69,15 @@ def make_kroko_wheel(directory: Path, variant: str = "free",
 
 class NamingTests(unittest.TestCase):
     def test_the_two_variants_map_to_the_two_public_distributions(self):
-        self.assertEqual(bd.distribution_name_for("free"), "voice-stt-server")
-        self.assertEqual(bd.distribution_name_for("pro"), "voice-stt-server-pro")
+        self.assertEqual(bd.distribution_name_for("pro"), "voice-stt-server")
+        self.assertEqual(bd.distribution_name_for("pro"), "voice-stt-server")
 
     def test_the_mapping_matches_setup_py(self):
         # One authority, not two: a drifting name would publish the Pro
         # runtime under the Free project.
         source = (REPO_ROOT / "setup.py").read_text(encoding="utf-8")
-        self.assertIn('"free": "voice-stt-server"', source)
-        self.assertIn('"pro": "voice-stt-server-pro"', source)
+        self.assertIn('"pro": "voice-stt-server"', source)
+        self.assertIn('"pro": "voice-stt-server"', source)
 
     def test_an_unknown_variant_is_refused(self):
         for value in ("", "community", "FREE-ish", None):
@@ -86,13 +86,13 @@ class NamingTests(unittest.TestCase):
                     bd.distribution_name_for(value)
 
     def test_variant_names_are_case_insensitive(self):
-        self.assertEqual(bd.distribution_name_for(" PRO "), "voice-stt-server-pro")
+        self.assertEqual(bd.distribution_name_for(" PRO "), "voice-stt-server")
 
     def test_wheel_filenames_are_parsed_into_their_tags(self):
-        parsed = bd.parse_wheel_filename("kroko_onnx-1.12.9-1free-cp312-cp312-linux_x86_64.whl")
+        parsed = bd.parse_wheel_filename("kroko_onnx-1.12.9-1pro-cp312-cp312-linux_x86_64.whl")
         self.assertEqual(parsed["name"], "kroko_onnx")
         self.assertEqual(parsed["version"], "1.12.9")
-        self.assertEqual(parsed["build"], "1free")
+        self.assertEqual(parsed["build"], "1pro")
         self.assertEqual(parsed["python"], "cp312")
         self.assertEqual(parsed["platform"], "linux_x86_64")
 
@@ -109,7 +109,7 @@ class MergeTests(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
-    def _merge(self, variant="free", platform="linux_x86_64"):
+    def _merge(self, variant="pro", platform="linux_x86_64"):
         distribution = bd.distribution_name_for(variant)
         base = make_base_wheel(self.tmp, distribution)
         kroko = make_kroko_wheel(self.tmp, variant, platform)
@@ -177,25 +177,22 @@ class MergeTests(unittest.TestCase):
         with zipfile.ZipFile(result["path"]) as archive:
             embedded = json.loads(archive.read("voice_stt_server/_embedded_kroko.json"))
         self.assertEqual(embedded["variant"], "pro")
-        self.assertEqual(embedded["distribution"], "voice-stt-server-pro")
+        self.assertEqual(embedded["distribution"], "voice-stt-server")
         self.assertEqual(embedded["kroko"]["buildTag"], "1pro")
         self.assertEqual(embedded["kroko"]["fingerprint"], "fp123")
         self.assertRegex(embedded["kroko"]["wheelSha256"], r"^[0-9a-f]{64}$")
         self.assertEqual(embedded["runtimeSelectedBy"], "installed-distribution")
         self.assertTrue(embedded["licenseKeyIsRuntimeCredentialOnly"])
 
-    def test_free_and_pro_never_produce_the_same_wheel(self):
+    def test_legacy_free_product_is_rejected(self):
         # W5R4-G13: the two identities cannot cross.
-        free = self._merge("free")
-        pro = self._merge("pro")
-        self.assertNotEqual(free["filename"], pro["filename"])
-        self.assertNotEqual(free["sha256"], pro["sha256"])
-        self.assertNotEqual(free["distribution"], pro["distribution"])
+        with self.assertRaises(bd.DistributionBuildError):
+            self._merge("free")
 
-    def test_a_free_wheel_never_contains_the_pro_runtime(self):
-        with zipfile.ZipFile(self._merge("free")["path"]) as archive:
-            self.assertIn(b"free", archive.read("kroko_onnx/__init__.py"))
-            self.assertNotIn(b"pro", archive.read("kroko_onnx/__init__.py"))
+    def test_unified_wheel_contains_pro_runtime(self):
+        with zipfile.ZipFile(self._merge("pro")["path"]) as archive:
+            self.assertIn(b"pro", archive.read("kroko_onnx/__init__.py"))
+            self.assertNotIn(b"free", archive.read("kroko_onnx/__init__.py"))
 
     def test_the_merge_is_byte_reproducible(self):
         # A resumed release must re-derive, never re-invent, a candidate.
@@ -203,8 +200,8 @@ class MergeTests(unittest.TestCase):
         base = make_base_wheel(self.tmp / "second", "voice-stt-server") if False else None
         second = bd.merge_kroko_runtime(
             base_wheel=self.tmp / "voice_stt_server-2.0.0-py3-none-any.whl",
-            kroko_wheel=self.tmp / "kroko_onnx-1.12.9-1free-cp312-cp312-linux_x86_64.whl",
-            variant="free", out_dir=self.tmp / "again", fingerprint="fp123",
+            kroko_wheel=self.tmp / "kroko_onnx-1.12.9-1pro-cp312-cp312-linux_x86_64.whl",
+            variant="pro", out_dir=self.tmp / "again", fingerprint="fp123",
         )
         self.assertEqual(first["sha256"], second["sha256"])
 
@@ -224,9 +221,9 @@ class MergeTests(unittest.TestCase):
             archive.writestr("kroko_onnx/__init__.py", "# ours\n")
             archive.writestr("voice_stt_server-2.0.0.dist-info/METADATA", "Name: voice-stt-server\n")
             archive.writestr("voice_stt_server-2.0.0.dist-info/WHEEL", "Tag: py3-none-any\n")
-        kroko = make_kroko_wheel(self.tmp, "free")
+        kroko = make_kroko_wheel(self.tmp, "pro")
         with self.assertRaises(bd.DistributionBuildError) as caught:
-            bd.merge_kroko_runtime(base_wheel=base, kroko_wheel=kroko, variant="free",
+            bd.merge_kroko_runtime(base_wheel=base, kroko_wheel=kroko, variant="pro",
                                    out_dir=self.tmp / "collide")
         self.assertIn("both provide", str(caught.exception))
 
@@ -243,7 +240,7 @@ class NoLocalPathTests(unittest.TestCase):
             result = bd.merge_kroko_runtime(
                 base_wheel=make_base_wheel(tmp_path),
                 kroko_wheel=make_kroko_wheel(tmp_path),
-                variant="free", out_dir=tmp_path / "out",
+                variant="pro", out_dir=tmp_path / "out",
             )
             bound = {k: v for k, v in result.items() if k != "path"}
             # \b keeps the "s:/" of an https:// URL from reading as a drive letter.

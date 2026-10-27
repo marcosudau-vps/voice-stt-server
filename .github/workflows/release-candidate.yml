@@ -113,14 +113,7 @@ jobs:
             --kroko-artifact-store "$KROKO_ARTIFACT_STORE" \
             --kroko-work-dir "$KROKO_WORK_DIR" > "$RUNNER_TEMP/fingerprints.json"
           cat "$RUNNER_TEMP/fingerprints.json"
-          echo "free=$(python -c 'import json,os;print(json.load(open(os.path.join(os.environ["RUNNER_TEMP"],"fingerprints.json")))["free"])')" >> "$GITHUB_OUTPUT"
           echo "pro=$(python -c 'import json,os;print(json.load(open(os.path.join(os.environ["RUNNER_TEMP"],"fingerprints.json")))["pro"])')" >> "$GITHUB_OUTPUT"
-
-      - name: Restore Kroko Free artifact
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ${{ env.KROKO_ARTIFACT_STORE }}/free
-          key: kroko-free-${{ steps.fingerprints.outputs.free }}
 
       - name: Restore Kroko Pro artifact
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
@@ -219,14 +212,7 @@ jobs:
           set -euo pipefail
           python tools/release_candidate.py --platform windows --print-fingerprints > "$RUNNER_TEMP/fingerprints.json"
           cat "$RUNNER_TEMP/fingerprints.json"
-          echo "free=$(python -c 'import json,os;print(json.load(open(os.path.join(os.environ["RUNNER_TEMP"],"fingerprints.json")))["free"])')" >> "$GITHUB_OUTPUT"
           echo "pro=$(python -c 'import json,os;print(json.load(open(os.path.join(os.environ["RUNNER_TEMP"],"fingerprints.json")))["pro"])')" >> "$GITHUB_OUTPUT"
-
-      - name: Restore Windows Kroko Free artifact
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
-        with:
-          path: ${{ env.KROKO_ARTIFACT_STORE }}/free
-          key: kroko-free-${{ steps.fingerprints.outputs.free }}
 
       - name: Restore Windows Kroko Pro artifact
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4

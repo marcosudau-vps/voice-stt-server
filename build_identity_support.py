@@ -19,7 +19,7 @@ from VoiceSTT._build_identity import (
 def capture_identity(root: Path, product_version: str, distribution_name: str,
                      *, runner=None) -> BuildIdentity:
     root = Path(root)
-    variant = {"voice-stt-server": "free", "voice-stt-server-pro": "pro"}.get(distribution_name)
+    variant = {"voice-stt-server": "pro"}.get(distribution_name)
     if not (root / ".git").exists() and (root / "PKG-INFO").is_file():
         inherited = load_build_identity(root / "VoiceSTT" / RESOURCE_NAME)
         if inherited is not None:

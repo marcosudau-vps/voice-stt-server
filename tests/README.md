@@ -43,3 +43,9 @@ For the maintained unit and golden transcription test workflow, see [`../docs/te
    ```
    
    On the very first start some models for openwakeword are downloaded. 
+
+
+Unified V2 qualification: use `python -m pytest -q tests/unit tests/compatibility`
+and `python -m pytest -q tests/packaging`. The packaging suite installs real
+Python packages but uses synthetic native fixtures. Genuine Kroko model/lifecycle
+checks are opt-in and documented in [testing](../docs/testing.md#unified-v2-product-qualification).

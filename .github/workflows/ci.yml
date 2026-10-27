@@ -170,7 +170,10 @@ jobs:
         run: python -m pip check
 
       - name: Run fast unit/guard/packaging/release-tool test suite
-        run: python -m pytest -q tests/unit
+        run: python -m pytest -q tests/unit tests/compatibility
+
+      - name: Qualify real packaging installation paths
+        run: python -m pytest -q tests/packaging
 
       - name: git diff --check (no whitespace errors)
         run: git diff --check

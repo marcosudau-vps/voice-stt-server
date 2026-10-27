@@ -1,0 +1,261 @@
+# Arbeitsauftrag: Unified Kroko V2 – finale Produkt- und Releasekonsolidierung
+
+## 1. Repository und Arbeitsgrenzen
+
+**Repository:** `marcosudau-vps/voice-stt-server`
+
+**Ausgangsbranch:** `feat/v2-unified-kroko`
+
+**Verifizierter Ausgangscommit:** `30fac0d6a83139d67daac9c71da4e9a3260b0b15`
+
+**Neuer Arbeitsbranch:** `work/kroko-v2-finalization-20261027`
+
+**Ziel-PR:** `work/kroko-v2-finalization-20261027` → `feat/v2-unified-kroko`
+
+Arbeite ausschließlich auf dem neuen Arbeitsbranch. Prüfe zunächst, ob der Ausgangsbranch noch auf dem genannten Commit steht. Falls er sich verändert hat, dokumentiere die Abweichung und prüfe den aktuellen Ausgangszustand, bevor du Änderungen beginnst.
+
+Dieser Auftrag ist der letzte gezielte Implementierungs- und Qualifikationslauf innerhalb des Unified-Kroko-Features.
+
+**Keine Übernahme nach `feat/einheitliche-triggerarchitektur` und keine Änderung an `main`.**
+
+## 2. Verbindlicher Ausgangsstand
+
+PR #15 wurde fachlich abgenommen und als Squash-Commit `30fac0d6` integriert:
+
+https://github.com/marcosudau-vps/voice-stt-server/pull/15
+
+Die vorhandenen Implementierungen für Lizenzprüfung, SecurityService, Kroko-Modellberechtigung, Native-Guard, Community-/Pro-Übergänge, Modellverwaltung und Scheduler-Synchronisation sind zu erhalten.
+
+PR #12 und PR #14 sollen nicht übernommen werden:
+
+- PR #12 enthält einen bereits vorhandenen Realtime-Race-Testfix und darüber hinaus einen nicht mehr benötigten alternativen Lizenz-/Runtime-Ansatz.
+- PR #14 enthält die bewusst verworfene größere Native-Supervisor-/Owner-Prozessarchitektur.
+- Keine Übernahme von Supervisor, Native-Status-Patches, IPC, Prozessgenerationen oder sonstigen Architekturänderungen aus diesen alten PRs.
+
+Prüfe die oben genannte Einordnung noch einmal anhand des tatsächlich vorliegenden Codes. Falls ein bislang nicht berücksichtigter funktionaler Restbedarf nachweisbar ist, dokumentiere ihn und bewerte, ob er innerhalb des bestehenden Architekturmodells zu lösen ist. Alte PRs keinesfalls pauschal übernehmen.
+
+## 3. Produktziel
+
+Voice-STT-Server V2 soll nur noch **eine öffentliche Produktdistribution** besitzen.
+
+Die einzige öffentliche Python-Distribution heißt:
+
+`voice-stt-server`
+
+Sie enthält eine bereits gebaute und qualifizierte Kroko-Runtime mit Pro-Fähigkeit.
+
+Der Betreiber benötigt keinen eigenen Native-Build.
+
+Community-Modelle müssen ohne Kroko-Lizenzschlüssel funktionieren. Pro-Modelle dürfen ausschließlich aufgrund gültiger, modellbezogener Berechtigung verwendet werden.
+
+Die bisherige zusätzliche Distribution `voice-stt-server-pro` entfällt aus der zukünftigen V2-Veröffentlichung.
+
+Dasselbe gilt für getrennte Free-/Pro-Produktimages.
+
+Das Ziel ist ausdrücklich **eine gemeinsame installierbare Serveredition**, nicht zwei Editionen mit derselben Versionsnummer.
+
+## 4. Native-Build und Paketierung
+
+Passe die vorhandene Build-Infrastruktur so an, dass pro unterstütztem Plattformziel nur noch die Pro-fähige Kroko-Runtime als offizielles Produktartefakt gebaut beziehungsweise aus einem verifizierten Cache wiederverwendet wird.
+
+Die unterstützte Plattformmatrix bleibt bestehen, insbesondere CPython 3.12 auf Linux x86_64 und Windows AMD64.
+
+Erhalte die bisherigen reproduzierbaren Native-Build-Mechanismen:
+
+- gepinnte Upstream-Revisionen und Builder-Inputs,
+- Build-Fingerprints,
+- verifizierte Artefakt-Caches,
+- Checksummen und Provenienz,
+- unveränderliche Builder-Identitäten.
+
+Verändere Native-Quellen oder Build-Patches nur, wenn es technisch zwingend notwendig ist. Eine bloße Umstellung der Produktdistribution darf keinen unnötigen Native-Rebuild erzwingen.
+
+Prüfe und passe insbesondere `setup.py`, `tools/build_distribution.py`, `tools/build_production.py`, `build_identity_support.py`, `VoiceSTT/_build_identity.py` und die zusammenhängenden Tests an.
+
+Das öffentliche Produktwheel muss die native Runtime vollständig enthalten. Keine zusätzliche lokale Kompilation bei `pip install`.
+
+Vermeide doppelte installierte Kroko-Payloads, kollidierende `.dist-info`-Einträge und uneindeutige Paketbesitzer.
+
+Die historische Entwicklungsdistribution `voicestt` darf erhalten bleiben, soweit sie für bestehende Entwicklerabläufe benötigt wird. Sie darf jedoch keine zweite offizielle V2-Veröffentlichung begründen.
+
+## 5. Runtime und Modellverwaltung
+
+Die Pro-Fähigkeit wird aus der tatsächlich installierten Native-/Produktidentität abgeleitet beziehungsweise gegen diese geprüft.
+
+Eine bloße Konfiguration wie `runtime_variant=pro` oder das Vorhandensein eines Lizenzschlüssels darf keine nicht vorhandene Native-Fähigkeit vortäuschen.
+
+Passe insbesondere die bisherigen Free-/Pro-Annahmen in `VoiceSTT_server/stt_model_management.py` an.
+
+Anforderungen:
+
+- Community-Modelle auch ohne Lizenzschlüssel verfügbar.
+- Gültige Pro-Berechtigung macht geeignete lokale Pro-Modelle auswählbar.
+- Lizenzberechtigung und tatsächlich aktives Modell bleiben getrennte Zustände.
+- Force Community sperrt neue Pro-Aufträge sofort.
+- Keyentzug und Keyrotation bleiben generationensicher.
+- Bestehende native Pro-Kontexte werden nicht durch eine Python-Statusänderung fälschlich als neu autorisiert behandelt.
+- Final und Realtime verwenden bei gemeinsamer Kroko-Nutzung dieselbe geeignete Native-Instanz.
+- Unzulässige unterschiedliche Pro-Modellidentitäten werden vor dem Native-Load abgewiesen.
+- Öffentliche Statusinformationen zeigen tatsächliche Native-Fähigkeit, Lizenzberechtigung, Modellzustand und gegebenenfalls Neustartbedarf konsistent an.
+
+Keine neue Native-/Supervisor-Architektur.
+
+## 6. Release-Candidate-Pipeline
+
+Vereinfache die vorhandene Release-Infrastruktur auf eine Produktdistribution.
+
+Ein vollständiger Release Candidate soll enthalten:
+
+- ein qualifiziertes Linux-Produktwheel,
+- ein qualifiziertes Windows-Produktwheel,
+- ein qualifiziertes Linux-Produktimage für die unterstützte Containerplattform,
+- alle relevanten Hashes, Native-Fingerprints und Produktidentitäten,
+- die erforderlichen Installations-/Test-/Qualifikationsnachweise.
+
+Entferne Free-/Pro-Doppelungen aus der offiziellen Candidate-Pipeline.
+
+Prüfe und passe insbesondere an:
+
+- `.github/workflows/release-candidate.yml`
+- `tools/release_candidate.py`
+- `release_tooling/candidate.py`
+- `release_tooling/rc_manifest.py`
+- `tools/qualify_build_identity.py`
+
+Das Release-Manifest muss genau eine Produktdistribution und die dazugehörigen Plattformartefakte konsistent abbilden.
+
+Wähle bei Bedarf eine neue Manifest-Schemaversion und dokumentiere die Änderung. Alte Free-/Pro-Doppelstrukturen nicht nur mit leeren oder künstlich identischen Einträgen weiterführen.
+
+Die bisherigen Garantien bleiben verbindlich: exakte Source-Commit-/Tree-Bindung, SHA-256-Identität, Native-Provenienz, qualifizierte Plattformmatrix, keine stillschweigende Artefaktsubstitution.
+
+## 7. Veröffentlichungsprozess
+
+Passe die bestehende Veröffentlichungskette auf eine einzige öffentliche Produktlinie an.
+
+Ziel:
+
+- PyPI: `voice-stt-server`
+- Docker Hub: `marcosudau/voice-stt-server`
+- GHCR: `ghcr.io/marcosudau-vps/voice-stt-server`
+
+Bewahre den vorhandenen qualifizierten Veröffentlichungsmechanismus:
+
+1. qualifizierter Release Candidate,
+2. explizite Releasefreigabe,
+3. unveränderlicher Git-Tag,
+4. PyPI-Veröffentlichung der qualifizierten Wheels,
+5. Docker-Hub-Veröffentlichung des qualifizierten Images,
+6. GHCR-Promotion desselben OCI-Manifests ohne neuen Build,
+7. externe Verifikation,
+8. Veröffentlichung der beweglichen Aliase,
+9. GitHub Release als letzter öffentlicher Erfolgsmarker.
+
+Es darf keine zweite Free-/Pro-Publish-Pipeline mehr geben.
+
+Erhalte Idempotenz, sichere Wiederaufnahme nach Teilfehlern und die vorhandene ABSENT/MATCH/CONFLICT/UNKNOWN-Semantik.
+
+Insbesondere niemals existierende unveränderliche Remote-Artefakte stillschweigend überschreiben.
+
+Prüfe und aktualisiere die gesamte betroffene Release-Infrastruktur, einschließlich `release_tooling/adapters.py`, `remote_checks.py`, `preflight.py`, `engine.py`, `config.py`, `.github/workflows/release-publish.yml` und ihrer Tests.
+
+**Keine tatsächliche Veröffentlichung, keine neuen öffentlichen Tags, keine Registry-Pushes außer ausdrücklich autorisierten privaten Test-/Stagingvorgängen.**
+
+## 8. Lizenz- und Redistribution-Prüfung
+
+Prüfe die Lizenztexte, Herkunft und Weiterverteilbarkeit der konkret gebündelten Pro-fähigen Kroko-Runtime und ihrer relevanten Abhängigkeiten.
+
+Eine öffentlich dokumentierte Quellcode-Lizenz allein ist kein vollständiger Nachweis sämtlicher Produkt-/Weiterverteilungsrechte.
+
+Halte verifizierte Rechte, offene Vertragsfragen und erforderliche Lizenz-/NOTICE-Dateien getrennt fest.
+
+Prüfe die tatsächlich erzeugten Linux- und Windows-Wheels auf vollständige Lizenz- und Abhängigkeitshinweise.
+
+Besonderes Augenmerk gilt dem bereits dokumentierten früheren Problem fehlender Kroko-Lizenzdateien in Windows-Wheels.
+
+Falls die Verteilungsrechte für die endgültige Einzeldistribution nicht ausreichend nachgewiesen werden können, markiere die öffentliche Releasefreigabe ausdrücklich als blockiert. Implementierungs- und Testfortschritte dürfen dennoch nachvollziehbar abgeschlossen werden.
+
+Keine behauptete Veröffentlichungserlaubnis aus technischen Tests ableiten.
+
+## 9. Tests und Qualifikation
+
+Ergänze gezielte Regressionstests für die Einzeldistribution und passe die vorhandenen Free-/Pro-Tests an die neue Produktarchitektur an.
+
+Verifiziere insbesondere:
+
+- nur eine offizielle Produktidentität,
+- genau ein offizielles Produktwheel je unterstütztem Plattformziel,
+- Pro-fähige native Runtime im Wheel,
+- frische Installation mit vollständigen Produktabhängigkeiten,
+- Community-Modell ohne Key,
+- Pro-Modell mit gültiger Lizenz,
+- ungültige/fehlende Lizenz und Force Community,
+- Native-Identitäts- und Keywechsel-Guards,
+- vollständige Paket-/Native-Provenienz,
+- Candidate-Manifest mit einem Produkt,
+- PyPI-/Registry-Preflight und Konflikterkennung,
+- Staging-Promotion ohne zweiten Build,
+- Release-Resume nach simulierten Teilfehlern,
+- vollständige Lizenz-/NOTICE-Dateien,
+- weiterhin kompatible öffentliche V2-HTTP-/WebSocket-Schnittstellen.
+
+Führe die vollständige Unit-, Contract-, Packaging- und relevante Integrationstestsuite aus.
+
+Die Ubuntu- und Windows-GitHub-CI muss auf dem finalen PR-HEAD erfolgreich sein.
+
+Führe echte Native-/Produktintegrationstests in isolierten Umgebungen durch, wo die dazu erforderlichen Ressourcen vorhanden sind. Insbesondere den Linux-Pro-Reload-/Shutdown-Pfad nicht allein durch Mocktests als qualifiziert deklarieren.
+
+Unterscheide in den Ergebnissen eindeutig zwischen PASS, FAILED, NOT_RUN und extern blockierten Nachweisen.
+
+## 10. Dokumentation
+
+Aktualisiere die dauerhaft gültige Benutzer-, Installations-, Kroko-, Modellverwaltungs-, Build-, Packaging-, Lizenz- und Release-Dokumentation.
+
+Insbesondere:
+
+- `README.md`
+- `build/BUILD.md`
+- `docs/release-process.md`
+- `docs/kroko-onnx.md`
+- `docs/stt-model-management.md`
+- `docs/licenses.md`
+- `docs/installation.md`, soweit betroffen
+- Release- und Packaging-Tests beziehungsweise ihre Bedienungsdokumentation
+
+Entferne widersprüchliche Aussagen, wonach V2 offiziell zwei getrennte vollständige Servereditionen veröffentlicht.
+
+Historische Audit- und Untersuchungsakten nicht rückwirkend umschreiben. Neue datierte Nachträge nach den geltenden Projektregeln hinzufügen.
+
+Die operative Buildreferenz bleibt `build/BUILD.md`; keine zweite konkurrierende Build-Wahrheitsquelle schaffen.
+
+## 11. Scope-Grenzen
+
+Keine allgemeinen Refactorings an `server.py`, keine neue Modul- oder Ordnerstruktur und kein breit angelegtes Repository-Cleanup.
+
+Diese Aufgaben sind ausdrücklich für das nachfolgende eigenständige Pre-Release-Cleanup-Feature vorgesehen.
+
+Keine neuen HTTP-/WebSocket-Verträge, sofern nicht zwingend für konsistente Bestandsfelder erforderlich.
+
+Keine native Mehrprozess-Supervision, keine Wiederaufnahme des Architekturansatzes aus PR #14.
+
+Keine Änderung an produktiven VPS-Diensten, Deployments oder Secrets.
+
+Keine eigenmächtige Integration in übergeordnete Branches.
+
+## 12. Abschluss und Pull Request
+
+Nach vollständiger Umsetzung:
+
+1. Änderungen auf dem Arbeitsbranch committen und pushen.
+2. Einen Pull Request nach `feat/v2-unified-kroko` erstellen.
+3. PR-Beschreibung mit Ziel, Implementierung, Abweichungen, exakten Commits und Testnachweisen versehen.
+4. Vollständige GitHub-CI am finalen HEAD kontrollieren.
+5. Unveränderten Ausgangspromptund finale Änderungen nachvollziehbar dokumentieren.
+6. Eine kompakte Liste sämtlicher offener Entscheidungen und Release-Gates beifügen.
+
+Der Agent darf den PR weder eigenmächtig mergen noch auf den übergeordneten V2-Release-Branch übertragen.
+
+Melde `REVIEW_READY` nur, wenn die implementierbaren Anforderungen vollständig erfüllt, erforderliche Nachweise erfolgreich und etwaige externe Release-Gates transparent abgegrenzt sind.
+
+Wenn technische Pflichtanforderungen nicht erfüllt sind, melde `BLOCKED` mit konkreten Befunden.
+
+Die unabhängige Endabnahme und die spätere kanonische Übernahme erfolgen gesondert.

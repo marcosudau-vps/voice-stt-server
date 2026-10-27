@@ -1,0 +1,86 @@
+{
+  "schemaVersion": 1,
+  "upstreamRevision": "8657e655192623b98d7708e742a72987f953d3a2",
+  "files": {
+    "KROKO-ONNX-LICENSE": {
+      "url": "https://raw.githubusercontent.com/kroko-ai/kroko-onnx/8657e655192623b98d7708e742a72987f953d3a2/LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "bytes": 11358
+    },
+    "ONNXRUNTIME-LICENSE": {
+      "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.17.1/LICENSE",
+      "sha256": "2f07c72751aed99790b8a4869cf2311df85a860b22ded05fa22803587a48922c",
+      "bytes": 1073
+    },
+    "ONNXRUNTIME-ThirdPartyNotices.txt": {
+      "url": "https://raw.githubusercontent.com/microsoft/onnxruntime/v1.17.1/ThirdPartyNotices.txt",
+      "sha256": "4f9e2bb7b4b407d710a68168615bbc6f70e3d7cc8ba9410fb6c65d92fa71accf",
+      "bytes": 338538
+    },
+    "OPENSSL-LICENSE": {
+      "url": "https://raw.githubusercontent.com/openssl/openssl/openssl-3.0.20/LICENSE.txt",
+      "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+      "bytes": 10175
+    },
+    "WEBSOCKETPP-COPYING": {
+      "url": "https://raw.githubusercontent.com/zaphoyd/websocketpp/b9aeec6eaf3d5610503439b4fae3581d9aff08e8/COPYING",
+      "sha256": "5ba81a1ed402517dce2581fa2d4042baf6a9c8ca0fe94fa6a7043ce6ab23064f",
+      "bytes": 7494
+    },
+    "ASIO-COPYING": {
+      "url": "https://raw.githubusercontent.com/chriskohlhoff/asio/asio-1-24-0/asio/COPYING",
+      "sha256": "2d312781ba7ca3f5b494aec3bcca5cfbb69b7302838b2a7595d1537fc494457f",
+      "bytes": 224
+    },
+    "PYBIND11-LICENSE": {
+      "url": "https://raw.githubusercontent.com/pybind/pybind11/v2.12.0/LICENSE",
+      "sha256": "83965b843b98f670d3a85bd041ed4b372c8ec50d7b4a5995a83ac697ba675dcb",
+      "bytes": 1684
+    },
+    "KALDI-NATIVE-FBANK-LICENSE": {
+      "url": "https://raw.githubusercontent.com/csukuangfj/kaldi-native-fbank/v1.21.3/LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "bytes": 11358
+    },
+    "KALDI-DECODER-LICENSE": {
+      "url": "https://raw.githubusercontent.com/k2-fsa/kaldi-decoder/v0.2.6/LICENSE",
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30",
+      "bytes": 11358
+    },
+    "KALDIFST-LICENSE": {
+      "url": "https://raw.githubusercontent.com/k2-fsa/kaldifst/v1.7.13/LICENSE",
+      "sha256": "a682d6efd1ee5dee08a8e405c233c2c198ea70ae0718129daa83ab58cfe31c5d",
+      "bytes": 11728
+    },
+    "OPENFST-COPYING": {
+      "url": "https://raw.githubusercontent.com/csukuangfj/openfst/sherpa-onnx-2024-06-19/COPYING",
+      "sha256": "9ba732713e5a28a183907aaba134490900bc258310a8fb37a391b47bc1c7f951",
+      "bytes": 560
+    },
+    "NLOHMANN-JSON-LICENSE": {
+      "url": "https://raw.githubusercontent.com/nlohmann/json/v3.12.0/LICENSE.MIT",
+      "sha256": "46a65cffd1ea955132d95a8dd921640714a8d6b537d2e4e482d31145ae95b603",
+      "bytes": 1076
+    },
+    "KISSFFT-COPYING": {
+      "url": "https://raw.githubusercontent.com/mborgerding/kissfft/febd4caeed32e33ad8b2e0bb5ea77542c40f18ec/COPYING",
+      "sha256": "a2840585f8411be8e6826a31ef15ae65c950bd74a2437a73b013398a934ad0c6",
+      "bytes": 246
+    },
+    "OPENSSL-WINDOWS-LICENSE": {
+      "url": "https://raw.githubusercontent.com/openssl/openssl/openssl-3.6.4/LICENSE.txt",
+      "sha256": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a",
+      "bytes": 10175
+    },
+    "EIGEN-COPYING.MPL2": {
+      "url": "https://gitlab.com/libeigen/eigen/-/raw/3.4.0/COPYING.MPL2",
+      "sha256": "fab3dd6bdab226f1c08630b1dd917e11fcb4ec5e1e020e2c16f83a0a13863e85",
+      "bytes": 16726
+    },
+    "NOTICE": {
+      "url": "repository:VoiceSTT/assets/kroko/licenses/NOTICE",
+      "sha256": "075ab089bef74cbb1007c878c5671c8aaeeb0a01206396f3ba40e57fb6fe3cd2",
+      "bytes": 1013
+    }
+  }
+}

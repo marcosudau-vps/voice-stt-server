@@ -12,6 +12,8 @@ from unittest import mock
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("pro_capable_test_runtime")
+
 from VoiceSTT.kroko.license_api import LicenseCheckResult
 from VoiceSTT.kroko.license_state import KrokoLicenseState
 from VoiceSTT.kroko.models import (

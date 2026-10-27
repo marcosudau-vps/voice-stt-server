@@ -1,0 +1,15 @@
+Native runtime notices (2026-10-27)
+Kroko-ONNX / sherpa-onnx: pinned upstream 8657e655192623b98d7708e742a72987f953d3a2.
+Includes ONNX Runtime 1.17.1, Kaldi decoder 0.2.6, kaldi-native-fbank 1.21.3,
+kaldifst 1.7.13, OpenFST sherpa-onnx-2024-06-19, pybind11 2.12.0,
+Asio 1.24.0 and WebSocket++ b9aeec6eaf3d5610503439b4fae3581d9aff08e8.
+OpenSSL Windows build input: 3.6.4; Linux OpenSSL is a system dependency.
+Additional transitive notices are in ONNXRUNTIME-ThirdPartyNotices.txt.
+Source URLs, byte counts and SHA-256 identities are recorded in sources.json.
+
+These source licenses and notices are evidence of their stated source-code
+terms. They do not establish all contractual redistribution rights for the
+Pro-capable Kroko product, models, or Microsoft runtimes. Public release
+approval remains BLOCKED until those rights and the exact linked dependency
+inventory of both built platform artifacts have been independently verified.
+No Kroko model or credential is included in this distribution.

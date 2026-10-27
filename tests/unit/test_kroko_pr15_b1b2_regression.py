@@ -18,6 +18,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("pro_capable_test_runtime")
+
 from VoiceSTT.kroko.native_guard import identity_for_path, process_guard
 from VoiceSTT.kroko.credentials import KROKO_KEY_ENV_NAMES, effective_recognizer_key
 from VoiceSTT.kroko.license_api import LicenseCheckResult

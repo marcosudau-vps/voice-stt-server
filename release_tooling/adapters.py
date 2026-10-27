@@ -108,7 +108,7 @@ class PublicationAdapter(Protocol):
 
 
 # ---------------------------------------------------------------------------
-# PyPI - two complete alternative distributions
+# PyPI - one complete public distribution
 # ---------------------------------------------------------------------------
 
 
@@ -177,18 +177,9 @@ class ExternalUploader:
 class PyPIAdapter:
     """The aggregate PyPI step over **both** public distributions.
 
-    ``voice-stt-server`` and ``voice-stt-server-pro`` are two complete
-    alternative distributions, each embedding a different native Kroko runtime.
-    ``PYPI_PUBLISHED`` therefore means "both are published and both verify",
-    never "one of them worked".
-
-    Resume falls out of that definition: each distribution is checked
-    independently inside ``publish()``, so a run where Free succeeded and Pro
-    failed uploads only Pro on the next attempt - and never republishes or
-    bumps a version to work around the partial failure.
+    The unified product's Linux and Windows wheels are published together.
+    A partial upload resumes only the missing filenames after remote hash checks.
     """
-
-    name = "pypi"
 
     def __init__(self, *, uploader, fetch=default_pypi_fetcher):
         self._uploader = uploader
@@ -314,7 +305,7 @@ def _staging_source_ref(manifest: Dict[str, Any], variant: str) -> str:
 
 
 class DockerHubAdapter(_RegistryPromotionAdapter):
-    """Publishes the exact Free/Pro images to Docker Hub *first*.
+    """Publishes the exact product image to Docker Hub *first*.
 
     Docker Hub is the mandatory first public registry: GHCR is then a
     promotion of exactly what Docker Hub received, which is what makes the two

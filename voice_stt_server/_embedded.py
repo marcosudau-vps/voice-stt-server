@@ -1,29 +1,8 @@
-"""Provenance of the Kroko native runtime embedded in this installation.
+"""Provenance of the Kroko runtime embedded in voice-stt-server.
 
-AP-SRV-070 W5-R04. The two public distributions each embed exactly one
-qualified Kroko native runtime:
-
-.. code-block:: text
-
-    voice-stt-server      -> Kroko Free native runtime
-    voice-stt-server-pro  -> Kroko Pro native runtime
-
-``tools/build_distribution.py`` writes :data:`EMBEDDED_MANIFEST_NAME` next to
-this module when it merges the qualified Kroko wheel into the distribution
-wheel. The file records which variant was embedded, the Kroko version, the
-build fingerprint it was qualified under, and the SHA-256 of the exact Kroko
-wheel whose bytes were merged - so an installed environment can prove its own
-runtime identity offline, without a network call and without depending on a
-separately installed ``kroko-onnx`` distribution.
-
-A development checkout has no such file. That is not an error: it simply means
-"this environment did not come from a published distribution wheel", and every
-function here reports ``None`` rather than guessing.
-
-**The license key never appears here and never selects a variant.** The
-installed distribution decides which runtime exists; the Pro key is only a
-runtime credential for a Pro runtime that is already installed.
-"""
+The single public V2 product embeds the qualified Pro-capable runtime. The
+manifest binds native-wheel hash, fingerprint, upstream and platform identity.
+Development checkouts have no embedded manifest. Keys do not select capability."""
 
 from __future__ import annotations
 

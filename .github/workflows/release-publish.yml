@@ -141,11 +141,6 @@ jobs:
             --manifest "$CANDIDATE_DIR/rc-manifest.json" \
             --dist-dir "$CANDIDATE_DIR/dist" \
             --stage-dir upload
-          if [ -d upload/free ] && [ "$(ls -A upload/free)" ]; then
-            echo "upload_free=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "upload_free=false" >> "$GITHUB_OUTPUT"
-          fi
           if [ -d upload/pro ] && [ "$(ls -A upload/pro)" ]; then
             echo "upload_pro=true" >> "$GITHUB_OUTPUT"
           else
@@ -153,13 +148,6 @@ jobs:
           fi
 
       - name: Publish voice-stt-server to PyPI
-        if: steps.pypi_precheck.outputs.upload_free == 'true'
-        uses: pypa/gh-action-pypi-publish@15c56dba361d8335944d31a2ecd17d700fc7bcbc # v1.12.2
-        with:
-          packages-dir: upload/free
-          skip-existing: true
-
-      - name: Publish voice-stt-server-pro to PyPI
         if: steps.pypi_precheck.outputs.upload_pro == 'true'
         uses: pypa/gh-action-pypi-publish@15c56dba361d8335944d31a2ecd17d700fc7bcbc # v1.12.2
         with:

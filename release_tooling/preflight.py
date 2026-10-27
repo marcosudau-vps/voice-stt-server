@@ -304,6 +304,20 @@ def _check_qualification(
     )
 
 
+def _check_redistribution(manifest_path, require_qualified=False):
+    if manifest_path is None:
+        return CheckResult("redistribution_rights", FAIL if require_qualified else WARN,
+                           "no candidate redistribution evidence")
+    try:
+        approval = rc_manifest.load_rc_manifest(manifest_path).get("redistributionApproval")
+        if config.redistribution_verified(approval):
+            return CheckResult("redistribution_rights", PASS, "verified redistribution evidence")
+    except ManifestError:
+        pass
+    return CheckResult("redistribution_rights", FAIL if require_qualified else WARN,
+                       "BLOCKED: Pro runtime redistribution rights are not verified")
+
+
 def run_preflight(
     *,
     repo_root: Path,
@@ -326,6 +340,7 @@ def run_preflight(
     checks.append(_check_manifest(rc_manifest_path))
     checks.append(_check_manifest_version(rc_manifest_path, expected_version))
     checks.append(_check_qualification(rc_manifest_path, require_qualified=require_qualified))
+    checks.append(_check_redistribution(rc_manifest_path, require_qualified))
     checks.append(_check_no_local_path_dependency(rc_manifest_path))
     checks.extend(_check_tool_availability())
     checks.extend(_check_registry_identifiers())

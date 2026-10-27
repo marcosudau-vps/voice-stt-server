@@ -1,6 +1,6 @@
 # License Notes
 
-Last researched: 2026-08-12.
+Last researched: 2026-10-27 (Kroko V2); other engine notes retain their earlier scope.
 
 VoiceSTT itself is released under the MIT license. Optional transcription,
 VAD, and wake-word engines pull in their own packages, model weights, service
@@ -12,15 +12,36 @@ redistributing model files, bundling wheels, or offering hosted transcription,
 review the upstream license files and terms for the exact package, model,
 revision, API, and distribution path you use.
 
-The technical Community/Pro build separation and secret handling are
-documented centrally in [`build/BUILD.md`](../build/BUILD.md#community-und-pro).
+The unified V2 product `voice-stt-server` embeds the Pro-capable Kroko runtime.
+Technical build procedures are in [build/BUILD.md](../build/BUILD.md#community-und-pro).
+Product wheels retain one package owner and carry Kroko and dependency notices
+in their product `.dist-info/licenses/`, including original nested notices.
+Pinned supplemental notices repair the historical Windows omission without
+changing native compilation inputs. Keys and model files are never bundled.
 
-**Redistribution note (AP-SRV-070 W5-R04).** The two public distributions
-(`voice-stt-server` / `voice-stt-server-pro`) *embed* the Kroko-ONNX native
-runtime rather than depending on a separately installed package, so each wheel
-also ships Kroko's own license text inside its `.dist-info/licenses/`
-directory. Kroko Pro **models** additionally require a commercial license from
-Kroko/Banafo; the runtime key is a runtime credential and is never bundled.
+## Unified V2 release gate
+
+**Public release approval: BLOCKED.** Technical success does not establish
+permission to distribute the complete Pro-capable product. The reviewed gate
+is [build/kroko-redistribution.json](../build/kroko-redistribution.json), copied
+into schema-3 candidates as `redistributionApproval`. Preflight and the real
+release engine reject unverified approval before creating tags or publishing.
+Technical qualification does not change that approval.
+
+| Evidence | Verified scope | Still required |
+| --- | --- | --- |
+| [Pinned Kroko source LICENSE](https://github.com/kroko-ai/kroko-onnx/blob/8657e655192623b98d7708e742a72987f953d3a2/LICENSE) | Apache-2.0 source text at the compiled upstream revision | Explicit rights/contract assessment for redistribution of this Pro-capable binary product and any non-source components |
+| Bundled upstream/dependency notices | Byte counts, source URLs and SHA-256 in [sources.json](../VoiceSTT/assets/kroko/licenses/sources.json); product gate verifies all indexed files on both platforms | Confirm exact linked dependency inventory, transitive obligations and Windows Microsoft runtime redistribution terms against final artifacts |
+| Pro model entitlement | Technical permission for one model UUID and key context | Does not grant model/runtime redistribution rights |
+
+The notice bundle covers Kroko/sherpa-onnx, ONNX Runtime 1.17.1 and its third-party
+notices, OpenSSL, WebSocket++, Asio, pybind11, Kaldi components, OpenFST and
+transitive source notices. Source URLs and license texts are evidence for those
+components, not an assertion that all binary/product redistribution rights are
+settled. Linux system-library notices also belong to the container base; Python
+dependencies keep their own installed metadata/notices. The final Linux/Windows
+wheel inspections and native test results are recorded in the
+[dated qualification record](.archiv/kroko_v2_finalization/2026-10-27_SOLL_IST.md).
 
 **Artifact finding, 2026-10-22 (AP-KR-010).** The above describes the intended
 redistribution contract. In the actual RC 39405176300, both Linux product wheels

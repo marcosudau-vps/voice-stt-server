@@ -3,7 +3,7 @@
 This package backs the single repository-root entry point ``release.py``. It
 has no runtime dependency on the VoiceSTT product itself beyond the one
 existing version authority (``VoiceSTT._version``) and the one existing
-Free/Pro image-name authority (``tools.build_production``) - it does not
+product image-name authority (``tools.build_production``) - it does not
 invent a second version or product-identity authority.
 
 Scope (AP-SRV-070 W5, corrected in W5-R01-C1): preflight, resumable release

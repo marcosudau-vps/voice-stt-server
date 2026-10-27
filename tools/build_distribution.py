@@ -1,40 +1,10 @@
-"""Builds one complete public VoiceSTT distribution wheel (AP-SRV-070 W5-R04).
+"""Build the single public V2 distribution voice-stt-server.
 
-Free and Pro Kroko are technically different, mutually non-interchangeable
-native runtimes, so VoiceSTT ships two complete alternative distributions
-rather than one distribution plus an end-user native build:
-
-.. code-block:: text
-
-    Kroko Free native wheel  +  VoiceSTT source  ->  voice-stt-server
-    Kroko Pro  native wheel  +  VoiceSTT source  ->  voice-stt-server-pro
-
-Both expose the same import package (``voice_stt_server``) and the same CLI
-(``voice-stt-server``), so nothing in a user's application changes when an
-installation moves between Free and Pro. There is deliberately **no** separate
-public ``kroko-onnx-free``/``kroko-onnx-pro`` distribution: the qualified Kroko
-wheel stays an internal, fingerprint- and hash-bound intermediate artifact that
-is merged into the distribution that ships it.
-
-Why a merge rather than a setuptools build that "includes" Kroko
----------------------------------------------------------------
-
-The Kroko wheel's payload is a compiled artifact that was qualified by
-fingerprint and SHA-256 (``VoiceSTT.kroko.*``). Release authority requires that
-the exact qualified bytes are what reaches the user, so this module copies them
-verbatim out of the qualified wheel instead of asking setuptools to rebuild or
-re-vendor them. The merged wheel records the fingerprint and the source
-artifact's SHA-256, so the identity chain
-``Kroko artifact -> distribution wheel -> PyPI`` is unbroken and checkable.
-
-Determinism
------------
-
-Every entry in the produced wheel is written with a fixed, source-derived
-timestamp and fixed permissions, and the entry order is sorted, so building the
-same inputs twice produces byte-identical output. That is what lets a resumed
-release re-derive rather than re-invent a candidate.
-"""
+The qualified Pro native wheel is merged byte for byte, without compilation.
+Its interpreter/platform tags, fingerprint, hash and notices are retained.
+Only the product owns installed metadata; native .data install schemes are
+relocated into the merged payload. Developer native Free builds remain an
+internal builder feature, never a second public product."""
 
 from __future__ import annotations
 
@@ -68,8 +38,7 @@ from build_identity_support import capture_identity, match_identity, wheel_ident
 #: Must stay identical to ``setup.py``'s mapping - a guard test enforces it.
 DISTRIBUTION_VARIANT_ENV = "VOICESTT_DISTRIBUTION_VARIANT"
 DISTRIBUTION_NAMES = {
-    "free": "voice-stt-server",
-    "pro": "voice-stt-server-pro",
+    "pro": "voice-stt-server",
 }
 
 #: Where the embedded-runtime provenance lands inside the merged wheel.
@@ -269,6 +238,23 @@ def build_embedded_manifest(
     }
 
 
+def verify_bundled_notices(archive: zipfile.ZipFile) -> dict:
+    info = _dist_info_dir(archive.namelist(), what="product")
+    prefix = f"{info}/licenses/"
+    try:
+        expected = (REPO_ROOT / "VoiceSTT/assets/kroko/licenses/sources.json").read_bytes()
+        if archive.read(prefix + "sources.json") != expected:
+            raise DistributionBuildError("native notice provenance differs from qualified sources")
+        index = json.loads(expected)
+        for leaf, record in index["files"].items():
+            payload = archive.read(prefix + leaf)
+            if len(payload) != record["bytes"] or hashlib.sha256(payload).hexdigest() != record["sha256"]:
+                raise DistributionBuildError("bundled native notice checksum mismatch")
+        return {"files": sorted(index["files"]), "sourcesSha256": hashlib.sha256(expected).hexdigest()}
+    except (KeyError, ValueError):
+        raise DistributionBuildError("product wheel lacks required native license/NOTICE files") from None
+
+
 def merge_kroko_runtime(
     *,
     base_wheel: Path,
@@ -353,16 +339,38 @@ def merge_kroko_runtime(
 
         # 2. The qualified Kroko runtime payload, byte for byte.
         for name in payload_names:
-            entries.append((name, kroko_zip.read(name)))
+            parts = name.split("/", 2)
+            target = name
+            if len(parts) == 3 and parts[0].endswith(".data"):
+                if parts[1] not in ("platlib", "purelib"):
+                    raise DistributionBuildError("unsupported Kroko wheel data install scheme")
+                target = parts[2]
+            entries.append((target, kroko_zip.read(name)))
 
-        # 3. Kroko's licence text, so redistribution stays correct.
+        # 3. Preserve every original notice, including nested paths and legacy
+        # dist-info/LICENSE layouts. Supplemental pinned notices also cover
+        # the Windows native wheel whose metadata omitted Kroko's license.
         for name in kroko_names:
-            if name.startswith(f"{kroko_dist_info}/{KROKO_LICENSE_DIRNAME}/"):
-                leaf = name.rsplit("/", 1)[-1]
+            relative = name.removeprefix(kroko_dist_info + "/")
+            if name.endswith("/") or not name.startswith(kroko_dist_info + "/"):
+                continue
+            if relative.startswith("licenses/") or relative.upper().startswith(("LICENSE", "NOTICE", "COPYING")):
                 entries.append((
-                    f"{base_dist_info}/{KROKO_LICENSE_DIRNAME}/KROKO-ONNX-{leaf}",
+                    f"{base_dist_info}/licenses/KROKO-ORIGINAL/{relative}",
                     kroko_zip.read(name),
                 ))
+        notice_root = REPO_ROOT / "VoiceSTT/assets/kroko/licenses"
+        notice_index = json.loads((notice_root / "sources.json").read_text(encoding="utf-8"))
+        if notice_index["upstreamRevision"] != kroko_buildinputs.KROKO_UPSTREAM_REVISION:
+            raise DistributionBuildError("native notice revision conflicts with pinned runtime")
+        for leaf, record in notice_index["files"].items():
+            if Path(leaf).name != leaf:
+                raise DistributionBuildError("invalid native notice filename")
+            data = (notice_root / leaf).read_bytes()
+            if len(data) != record["bytes"] or hashlib.sha256(data).hexdigest() != record["sha256"]:
+                raise DistributionBuildError("native notice source checksum mismatch")
+            entries.append((f"{base_dist_info}/licenses/{leaf}", data))
+        entries.append((f"{base_dist_info}/licenses/sources.json", (notice_root / "sources.json").read_bytes()))
 
         # 4. The embedded-runtime provenance.
         embedded = build_embedded_manifest(
@@ -384,6 +392,8 @@ def merge_kroko_runtime(
         )
         entries.append((f"{base_dist_info}/WHEEL", wheel_metadata.encode("utf-8")))
 
+    if len({name for name, _ in entries}) != len(entries):
+        raise DistributionBuildError("duplicate merged wheel payload or notice path")
     entries.sort(key=lambda item: item[0])
 
     record_rows = [

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from . import rc_manifest
 from .errors import ManifestError
@@ -93,11 +93,9 @@ def _wheel_record_from_dict(d: Dict[str, Any], variant: str) -> Dict[str, Any]:
         "platformTag": _require(d.get("platformTag"), f"{variant} platform tag"),
     }
     fp = d.get("krokoFingerprint") or kroko.get("fingerprint")
-    if fp:
-        record["krokoFingerprint"] = fp
+    record["krokoFingerprint"] = _require(fp, f"{variant} platform native fingerprint")
     sha = d.get("krokoArtifactSha256") or kroko.get("wheelSha256")
-    if sha:
-        record["krokoArtifactSha256"] = sha
+    record["krokoArtifactSha256"] = _require(sha, f"{variant} platform native SHA-256")
     return record
 
 
@@ -139,7 +137,7 @@ def distribution_block(
         else None
     )
     if not dist_name:
-        dist_name = "voice-stt-server-pro" if variant == "pro" else "voice-stt-server"
+        dist_name = "voice-stt-server"
 
     return {
         "name": _require(dist_name, f"{variant} distribution name"),
@@ -208,7 +206,11 @@ def assemble_rc_manifest(
         for path in sorted(candidate_dir.glob(f"distribution-{variant}-*.json")):
             plat_data = _read_json(path, f"{variant} platform distribution manifest")
             ptag = plat_data.get("platformTag")
-            if ptag and ptag not in seen_platforms:
+            if ptag in seen_platforms:
+                raise ManifestError("candidate has duplicate platform distribution manifests")
+            if plat_data.get("distribution") != "voice-stt-server":
+                raise ManifestError("platform manifest distribution identity conflicts with product")
+            if ptag:
                 wheels.append(_wheel_record_from_dict(plat_data, variant))
                 seen_platforms.add(ptag)
 
@@ -229,20 +231,20 @@ def assemble_rc_manifest(
     commits = {variant: builds[variant].get("gitCommit") for variant in rc_manifest.VARIANTS}
     if len(set(commits.values())) != 1 or not all(commits.values()):
         raise ManifestError(
-            f"the Free and Pro halves of this candidate were built from different "
+            f"candidate build outputs declare different "
             f"commits: {commits}"
         )
-    source_commit = commits["free"]
+    source_commit = commits["pro"]
 
     versions = {
         variant: builds[variant].get("voicesttVersion") for variant in rc_manifest.VARIANTS
     }
     if len(set(versions.values())) != 1 or not all(versions.values()):
         raise ManifestError(
-            f"the Free and Pro halves of this candidate declare different product "
+            f"candidate build outputs declare different product "
             f"versions: {versions}"
         )
-    product_version = versions["free"]
+    product_version = versions["pro"]
 
     dirty = [v for v in rc_manifest.VARIANTS if builds[v].get("gitDirty")]
     if dirty:
