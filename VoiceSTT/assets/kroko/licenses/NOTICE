@@ -12,4 +12,7 @@ terms. They do not establish all contractual redistribution rights for the
 Pro-capable Kroko product, models, or Microsoft runtimes. Public release
 approval remains BLOCKED until those rights and the exact linked dependency
 inventory of both built platform artifacts have been independently verified.
+Local modifications: pinned cross-build inputs, quiet native license logging,
+and stopping the existing license reporter before joining it at shutdown
+(VoiceSTT native patch-set revision 5).
 No Kroko model or credential is included in this distribution.

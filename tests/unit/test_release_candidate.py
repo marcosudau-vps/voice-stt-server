@@ -419,12 +419,12 @@ class WindowsCrossBuildTests(unittest.TestCase):
                     release_candidate.windows_kroko_fingerprint(variant),
                     installer.fingerprint_for(args),
                 )
-        self.assertEqual(release_candidate.windows_kroko_fingerprint("pro")["fingerprint"], "e4f939933cd9985d")
+        self.assertEqual(release_candidate.windows_kroko_fingerprint("pro")["fingerprint"], "54b5f488d34ff173")
 
     def test_cross_build_uses_current_patches_container_retag_and_real_store(self):
         with mock.patch.dict(release_candidate.os.environ, {"KROKO_API_KEY": "test-secret"}):
             record = self.resolve()
-        self.assertEqual(record.fingerprint, "e4f939933cd9985d")
+        self.assertEqual(record.fingerprint, "54b5f488d34ff173")
         self.assertEqual(record.metadata["targetPlatform"], "windows")
         self.assertEqual(record.metadata["wheelSha256"], release_candidate.sha256_of(record.wheel_path))
         release_candidate.install_kroko.prepare_windows_checkout.assert_called_once_with(self.repo)

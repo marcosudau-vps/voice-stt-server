@@ -59,7 +59,7 @@ class FingerprintStabilityTests(unittest.TestCase):
         int(value, 16)  # raises if it is not hex
 
     def test_declared_windows_fingerprints_are_stable(self):
-        for variant, expected in (("free", "60eadb3428690d3d"), ("pro", "e4f939933cd9985d")):
+        for variant, expected in (("free", "8b6d2dd497968066"), ("pro", "54b5f488d34ff173")):
             with self.subTest(variant=variant):
                 computed = fingerprint.compute_fingerprint(
                     variant=variant, target_platform="windows", architecture="amd64",
@@ -367,11 +367,11 @@ class BuildEffectiveLogicGuardTests(unittest.TestCase):
     """
 
     #: SHA-256 over the source of every build-affecting patch function, pinned
-    #: together with PATCH_SET_REVISION = 4 (Issue #9 pre-merge bundled channel:
+    #: together with PATCH_SET_REVISION = 5 (Issue #9 pre-merge bundled channel:
     #: the Windows Dockerfile patch copies the checked-in byte-identical channel
     #: manifest and still pins/checks the package manifest, SDK and CRT).
     EXPECTED_PATCH_SOURCE_DIGEST = (
-        "b0ca8b0627daadbf34be7e1221861fa18696bda2503ec1f6857b7de361beb94f"
+        "cef39c7ddc37045cb7438baa1a126fcce4dc5d64f03209b4abc2a7cfd6187a7e"
     )
 
     EXPECTED_WINDOWS_BUILDER_SOURCE_DIGEST = (

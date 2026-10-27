@@ -11,6 +11,18 @@ allgemeingueltiger Teil des Projekts.
 
 ## Schnellstart
 
+### Technisch notwendiger Native-Shutdown-Fix (27.10.2026)
+
+Ein realer Linux-Pro-Lauf aktivierte und transkribierte korrekt, hing danach
+aber beim Prozessende. Der gepinnte Native-Destruktor jointe einen Reporter
+mit Endlosschleife ohne Stop. Patch-Set 5 beendet den bestehenden Asio-Loop
+ueber ein atomares Stopflag vor join. Keine neue Status-/Supervisorarchitektur.
+Nur dieser reproduzierte Nativefehler rechtfertigt neue Nativebytes und damit
+neue Fingerprints; reine Produkt-/Pythonaenderungen bleiben cacheunabhaengig.
+Alte Artefakte werden nicht umetikettiert. Upstream-/Builder-/Toolchainpins
+bleiben unveraendert. Neubuild und reale Plattformqualifikation sind Pflicht;
+offene Nachweise bedeuten BLOCKED, nicht eine behauptete Fehlerbehebung.
+
 ### Offizielles V2-Produkt
 
 Eine oeffentliche Distribution: `voice-stt-server`, mit eingebetteter

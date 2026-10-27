@@ -64,6 +64,8 @@ def _run(scenario, *, key=False, timeout=1200):
         environ["KROKO_NATIVE_KEY_FILE"] = key_file
         with open(key_file, "r", encoding="utf-8") as handle:
             secret = handle.read()
+    # Optional bounded diagnostic run; an exceeded deadline is FAILED.
+    timeout = float(os.getenv("VOICESTT_KROKO_NATIVE_PROCESS_TIMEOUT", str(timeout)))
     completed = subprocess.run(
         [sys.executable, str(CHILD), scenario], capture_output=True, text=True,
         encoding="utf-8", errors="replace",
