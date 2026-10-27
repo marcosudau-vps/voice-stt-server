@@ -445,7 +445,8 @@ without a build and resume after partial platform uploads.
 For real models use the opt-in suite in `tests/unit/test_kroko_native_integration.py`
 and the credential handling described in its module header. Each scenario uses
 a fresh child interpreter. `VOICESTT_KROKO_NATIVE_CHILD_TIMEOUT` optionally bounds
-child diagnostics (default 900 seconds); a timeout is FAILED, never PASS.
+child diagnostics (default 900 seconds); `VOICESTT_KROKO_NATIVE_PROCESS_TIMEOUT`
+optionally bounds the parent subprocess wait. A timeout is FAILED, never PASS.
 Record runtime/artifact hashes and platform, and distinguish PASS, FAILED,
 NOT_RUN and externally blocked proof. Linux Pro reload/shutdown requires real
 native execution. Model-less HTTP identity qualification is insufficient.

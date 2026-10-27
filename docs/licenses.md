@@ -44,7 +44,7 @@ components, not an assertion that all binary/product redistribution rights are
 settled. Linux system-library notices also belong to the container base; Python
 dependencies keep their own installed metadata/notices. The final Linux/Windows
 wheel inspections and native test results are recorded in the
-[dated qualification record](.archiv/kroko_v2_finalization/2026-10-27_SOLL_IST.md).
+[dated qualification record](.archiv/kroko_v2_finalization/2026-10-27_ABSCHLUSS_SOLL_IST.md).
 
 **Artifact finding, 2026-10-22 (AP-KR-010).** The above describes the intended
 redistribution contract. In the actual RC 39405176300, both Linux product wheels
