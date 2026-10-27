@@ -267,8 +267,8 @@ aliases `2.0`, `2` and `latest` for stable releases. The image contains the
 Pro-capable runtime; model entitlement is checked separately at runtime.
 
 The image is CPU-only, runs as a non-root user, and exposes port `8010`. It
-install pre-built wheels and never compile anything at image-build time. Build
-it locally with:
+installs the complete pre-built product wheel and never compiles Kroko during
+the image build. Build it locally with:
 
 ```bash
 python tools/build_production.py all
