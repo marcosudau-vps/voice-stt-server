@@ -183,15 +183,12 @@ und `krokoRuntime` (installierte Variante, Berechtigung, gewuenschtes und
 tatsaechlich aktives Modell, Neustartbedarf getrennt ausgewiesen; siehe
 [Kroko-ONNX](kroko-onnx.md#modell--und-lizenzwechsel-im-laufenden-prozess)).
 
-Die Runtimevariante hat genau eine dokumentierte Praezedenz:
-
-1. `stt_engine_settings.kroko_onnx.runtime_variant`
-2. `transcription_engine_options.runtime_variant`, wenn Final Kroko verwendet
-3. `realtime_transcription_engine_options.runtime_variant`, wenn Realtime Kroko verwendet
-4. `VOICESTT_KROKO_VARIANT`
-5. `free`
-
-Nur `free` und `pro` sind gueltig. Engine-Optionen werden bei Probe, Worker-
+Die Runtimevariante des Managers wird aus der validierten installierten
+Produkt-/Nativeidentitaet aufgeloest (`pro`, Entwicklerbuild `free`, sonst
+`unknown`). Die fruehere Konfigurationspraezedenz bis zum Default `free`
+gilt dafuer nicht mehr. Ein `runtime_variant`-Wert oder
+`VOICESTT_KROKO_VARIANT` ersetzt keine installierte Faehigkeit.
+Engine-Optionen werden bei Probe, Worker-
 Start, Recovery und Modellwechsel anhand der tatsaechlich aufgeloesten Engine
 gewaehlt. Dadurch erhaelt ein Kroko-Fallback nie Faster-Whisper-Optionen und
 umgekehrt; bei identischen Engines bleiben die lanespezifischen Optionen

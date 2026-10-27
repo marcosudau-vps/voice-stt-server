@@ -323,7 +323,7 @@ def manifest_sha256(manifest: Dict[str, Any]) -> str:
 
 
 def distribution_names(manifest: Dict[str, Any]) -> Dict[str, str]:
-    """``{variant: pypi distribution name}`` for both public distributions."""
+    """``{native input: pypi distribution name}`` for the single public product."""
     return {
         variant: manifest["distributions"][variant]["name"] for variant in VARIANTS
     }

@@ -67,11 +67,9 @@ class ReleaseState:
     sourceCommit: str
     sourceTree: str
     #: ``{variant: {"name": <pypi distribution>, "wheels": "<file>=<sha256>;..."}}``
-    #: for both public distributions. AP-SRV-070 W5-R04 replaced the old
-    #: single ``wheel``/``sdist`` pair: VoiceSTT now publishes two complete
-    #: alternative distributions, each embedding a different native Kroko
-    #: runtime, and there is no sdist at all (an sdist cannot carry a native
-    #: runtime, so it could not honour the "no local build" guarantee).
+    #: for the single public product (native input ``pro``). Its Linux and
+    #: Windows wheels embed the Pro-capable runtime. No public product sdist
+    #: is published because it cannot honour the "no local build" guarantee.
     distributions: Dict[str, Dict[str, str]]
     #: ``{variant: {"tag": ..., "digest": "sha256:..."}}`` - the OCI manifest
     #: digest, which is the identity a registry can actually be checked
@@ -303,14 +301,14 @@ def assert_aliases_allowed(state: ReleaseState) -> None:
     """Raises :class:`OrderError` unless every exact artifact is verified.
 
     AP-SRV-070 W5-R04, section 21: movable aliases may only be updated after
-    the exact Free *and* Pro artifacts have been verified in *both* registries,
+    the exact product artifacts have been verified in *both* registries,
     which is precisely what ``EXTERNAL_VERIFIED`` records. This is what keeps
     ``latest`` from ever pointing at an incomplete or failed release.
     """
     if STATE_INDEX[state.state] < STATE_INDEX["EXTERNAL_VERIFIED"]:
         raise OrderError(
             f"alias publication is blocked: release state is {state.state!r}, "
-            "but the exact Free and Pro artifacts must be verified in both "
+            "but the exact product artifacts must be verified in both "
             "registries (EXTERNAL_VERIFIED) before any movable alias moves"
         )
 

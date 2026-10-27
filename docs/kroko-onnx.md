@@ -326,12 +326,12 @@ verschiedene Kroko-Modelle in den Lanes werden bei der Konfiguration abgewiesen
 | Community-Modell ohne Key auf der Pro-Runtime | funktioniert (nachgewiesen, auch ohne Netz unter Linux) |
 | Community → Pro (Key gültig, Prüfung `VALID`) | **live möglich im Leerlauf**: der Server gibt die einzige Instanz über den regulären Entlade-Pfad frei, prüft und lädt Pro. Bei aktiven Sessions/Transkriptionen **zurückgestellt** (`modelRefreshPending`) |
 | Pro → Community (Force Community, Key-Entzug, negative Prüfung) | neue Pro-Aufträge sofort gesperrt; der Wechsel auf Community ist im Leerlauf live möglich, sonst zurückgestellt. Der **native Pro-Lizenzkontext bleibt** bis zum Neustart bestehen (`nativeProContextActive`) – es gibt keine Aussage „ohne Netz“ |
-| Dasselbe Pro-Modell erneut laden (Idle-Unload/Reload, Force aus → an) | funktioniert (Windows nachgewiesen; unter Linux wurde ein Shutdown-Timeout beobachtet – kein nativer Reset-Vertrag) |
+| Dasselbe Pro-Modell erneut laden (Idle-Unload/Reload, Force aus → an) | funktioniert mit Patch-Set 5 auf Linux und Windows real nachgewiesen, inklusive regulaerem Prozessende; der fruehere Linux-Shutdownfehler ist korrigiert. Kein nativer Reset-Vertrag |
 | Pro-Modell A → anderes Pro-Modell B | **nur nach Neustart**; `pro_identity_change_requires_restart`, `PUT /api/models/active` bleibt unverändert und lässt die laufende Instanz geladen |
 | Neuer/rotierter Key bei bereits initialisiertem Pro-Kontext | **nur nach Neustart**; keine neue Freigabe, `key_context_change_requires_restart` |
 | Pro-Modell ohne Key | **gesperrt** (`pro_requires_key`; nativ nur eine bis zu 300 s lange Lizenzwarteschleife) |
 | Zwei Kroko-Modelle oder eine zweite Instanz gleichzeitig | **gesperrt** (`concurrent_native_identity`) |
-| Installierte Free-/Pro-*Distribution* wechseln | nur durch Austausch des Pakets/Builds und Neustart (ein Key ersetzt keinen Pro-Build) |
+| Native-Entwicklerbuild wechseln | nur durch Austausch des Builds und Neustart; das oeffentliche Produkt ist immer Pro-faehig (ein Key ersetzt keinen Pro-Build) |
 
 Bestätigter nativer Kontext: Der Lizenzdienst lehnt eine zusätzliche externe
 Prüfung ab, solange der native Pro-Reporter desselben Keys im Prozess lebt

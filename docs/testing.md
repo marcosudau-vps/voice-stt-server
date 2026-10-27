@@ -4,7 +4,10 @@ The [AP-KR-010 investigation](.archiv/kroko_unified_runtime_v2/AP-KR-010/2026-10
 records real isolated Free/Pro native probes on Windows and Linux/WSL CPython
 3.12, local experimental extra installation and existing suite results.
 Community-model success under Pro is explicitly not positive license evidence;
-authorized real license tests remain a separate prerequisite for AP-KR-020.
+authorized real license tests were a separate prerequisite for AP-KR-020.
+The later [Linux/Windows product qualification](.archiv/kroko_v2_finalization/2026-10-27_NACHTRAG_FINALE_QUALIFIKATION.md)
+records successful real Pro, shared-instance, reload and regular shutdown tests
+for Patch-Set 5. Public release approval remains a separate gate.
 
 VoiceSTT has two kinds of tests:
 
@@ -34,7 +37,7 @@ The normal fast suite (`python -m pytest -q tests/unit`) includes identity,
 HTTP/Wire and synthetic release-gate regressions. Real packaging is explicitly
 selected with `python -m pytest -q tests/packaging/test_identity_installation.py`
 in an environment with build, setuptools, wheel, packaging and pytest.
-It creates fresh consumer venvs, builds and installs real Legacy/Free/Pro
+It creates fresh consumer venvs, builds and installs real developer/product
 packages (stable/alpha/beta/RC/build metadata), preserves sdist provenance and
 reproduces the original installed F02/F03 defects. Optional
 `VOICESTT_IDENTITY_EVIDENCE_DIR` writes hash-bound artifact/installation JSON

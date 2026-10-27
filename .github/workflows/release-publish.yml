@@ -97,7 +97,7 @@ jobs:
           if-no-files-found: error
 
   # --------------------------------------------------------------------
-  # 2. PyPI - both complete distributions, via Trusted Publishing (OIDC)
+  # 2. PyPI - both platform wheels of one product, via Trusted Publishing (OIDC)
   # --------------------------------------------------------------------
   pypi:
     name: PyPI (TAGGED -> PYPI_PUBLISHED)

@@ -46,8 +46,12 @@ The public import is `voice_stt_server` and the CLI is `voice-stt-server`.
 No separate native package or operator native build is needed. The historical
 `voicestt` source/development distribution remains available for contributors.
 
-Public V2 release approval is currently **BLOCKED** on verified Kroko runtime
-redistribution rights and final platform/native qualification. See
+Real Linux and Windows native/product qualification has passed; the
+[qualification record](docs/.archiv/kroko_v2_finalization/2026-10-27_NACHTRAG_FINALE_QUALIFIKATION.md)
+binds the tested artifacts to their source commit. Technical feature review is
+separate from public release approval, which remains **BLOCKED**: verified
+redistribution rights, a complete two-platform RC with verified OCI staging
+manifest identity, and independent acceptance remain outstanding. See
 [license gates](docs/licenses.md#unified-v2-release-gate).
 
 ---
@@ -252,20 +256,19 @@ See [docs/stt-model-management.md](docs/stt-model-management.md).
 
 ## Containers
 
-Two production images are published per release, mirroring the two
-distributions:
+One production image is intended for publication in both registries:
 
 ```text
 marcosudau/voice-stt-server            ghcr.io/marcosudau-vps/voice-stt-server
 ```
 
 Each release publishes an immutable exact tag (`2.0.0`) plus the movable
-aliases `2.0`, `2` and `latest`. Free/Pro is a build-time identity: it is fixed
-by which image you run, never inferred from a runtime key.
+aliases `2.0`, `2` and `latest` for stable releases. The image contains the
+Pro-capable runtime; model entitlement is checked separately at runtime.
 
-The images are CPU-only, run as a non-root user, and expose port `8010`. They
+The image is CPU-only, runs as a non-root user, and exposes port `8010`. It
 install pre-built wheels and never compile anything at image-build time. Build
-them locally with:
+it locally with:
 
 ```bash
 python tools/build_production.py all
@@ -286,7 +289,7 @@ is rebuilt after qualification.
 
 ```text
 exact commit -> candidate build + qualification -> approval
-  -> git tag -> PyPI (Free + Pro) -> Docker Hub -> GHCR (manifest promotion)
+  -> git tag -> PyPI (voice-stt-server) -> Docker Hub -> GHCR (manifest promotion)
   -> verification -> movable aliases -> GitHub Release -> final verification
 ```
 

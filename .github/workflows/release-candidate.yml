@@ -5,20 +5,20 @@
 # operator machine, local artifact store, prebuilt wheel or local Docker credential:
 #
 #   exact commit/tree
-#     -> Linux: Kroko Free + Pro native artifacts
-#        -> voice-stt-server / voice-stt-server-pro Linux distribution wheels
-#        -> Free + Pro production images -> private GHCR staging (digest-pinned)
-#     -> Linux cross-build: Kroko Free + Pro Windows native artifacts
-#        -> voice-stt-server / voice-stt-server-pro Windows AMD64 distribution wheels
+#     -> Linux: verified Kroko Pro native artifact
+#        -> one complete voice-stt-server CP312 Linux wheel
+#        -> one production image -> private GHCR staging (digest-pinned)
+#     -> Linux cross-build: verified Kroko Pro Windows native artifact
+#        -> one complete voice-stt-server CP312 Windows AMD64 wheel
 #        -> Windows: fresh native installs and identity qualification
 #     -> Candidate assembly & qualification:
-#        -> combines all 4 wheels
-#        -> canonical RC manifest + SHA-256 inventory
+#        -> combines the two platform wheels for the single public product
+#        -> canonical schema-3 RC manifest + SHA-256 inventory
 #        -> qualifies manifest (releaseReadiness: QUALIFIED)
 #
 # It publishes NOTHING public: no PyPI upload, no Docker Hub push, no public
 # GHCR tag, no Git tag, no GitHub Release. The only remote write is to the
-# PRIVATE staging packages, which exist so publication can later consume the
+# PRIVATE staging package, which exists so publication can later consume the
 # exact qualified bytes instead of rebuilding them. Staging is never presented
 # as a release.
 #

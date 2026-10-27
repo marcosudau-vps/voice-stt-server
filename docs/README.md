@@ -52,17 +52,18 @@ die aktuelle Dokumentation eingeordnet:
 
 ## Produktflächen und Engines
 
-Die geplante gemeinsame Kroko-Distribution wird getrennt im
+Die fruehere Untersuchung der gemeinsamen Kroko-Distribution steht im
 [Untersuchungsstand vom 22.10.2026](2026-10-22_kroko-unified-runtime-v2.md)
 beschrieben (historisch; dortige Addon-/Supervisor-Entwürfe sind überholt,
-maßgeblich ist `build/BUILD.md`). AP-KR-010 ändert die nachstehende produktive Installation nicht.
+maßgeblich ist `build/BUILD.md`).
 
-VoiceSTT wird als zwei vollständige, alternative Distributionen ausgeliefert:
-`voice-stt-server` (Kroko Free) und `voice-stt-server-pro` (Kroko Pro). Beide
-enthalten die passende native Laufzeit bereits, stellen dasselbe Importpaket
-`voice_stt_server` und dieselbe CLI `voice-stt-server` bereit und schließen
-einander aus. Welche Laufzeit installiert ist, entscheidet die Distribution -
-niemals ein Runtime-Key.
+V2 besitzt eine oeffentliche Produktdistribution: `voice-stt-server` mit
+eingebetteter Pro-faehiger Kroko-Runtime, Importpaket `voice_stt_server` und
+CLI `voice-stt-server`. Community-Modelle funktionieren ohne Key; Pro-Modelle
+brauchen eine gueltige modellbezogene Berechtigung. Nativefaehigkeit stammt
+aus installierter Provenienz, niemals aus einem Runtime-Key. Oeffentliche
+Releasefreigabe und unabhaengige Abnahme bleiben getrennte Gates; siehe
+[Releaseprozess](release-process.md) und [Lizenzgate](licenses.md#unified-v2-release-gate).
 
 Als unterstützte Produktions-STT-Engines sind ausschließlich **Faster-Whisper**
 und **Kroko-ONNX** dokumentiert und qualifiziert. Weitere Adapter im Quellbaum

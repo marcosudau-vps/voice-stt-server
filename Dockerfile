@@ -22,8 +22,8 @@ WORKDIR /build
 COPY api_fastapi_server/requirements.txt /build/api_fastapi_server/requirements.txt
 COPY dist/voicestt/*.whl /build/dist/voicestt/
 
-# AP-SRV-070 W4C, requirement 7.1/7.2: a pre-built wheel is installed for
-# both VoiceSTT and Kroko - no editable install, no source checkout as the
+# AP-SRV-070 W4C, requirement 7.1/7.2: one pre-built product wheel supplies
+# VoiceSTT and embedded Kroko - no editable install, no source checkout as the
 # runtime basis, no native Kroko compilation in this build.
 RUN VOICESTT_WHEEL="$(ls /build/dist/voicestt/*.whl)" && \
     python -m pip install --upgrade pip setuptools wheel && \

@@ -175,7 +175,7 @@ class ExternalUploader:
 
 
 class PyPIAdapter:
-    """The aggregate PyPI step over **both** public distributions.
+    """The PyPI step for the single public product.
 
     The unified product's Linux and Windows wheels are published together.
     A partial upload resumes only the missing filenames after remote hash checks.
@@ -222,12 +222,12 @@ SourceRefResolver = Callable[[Dict[str, Any], str], str]
 
 
 class _RegistryPromotionAdapter:
-    """Promotes the qualified OCI manifest of both variants into one registry.
+    """Promotes the qualified product OCI manifest into one registry.
 
-    The state machine has exactly one ``*_PUBLISHED`` slot per registry (not
-    one per variant), so "Free and Pro both verified" is this step's ``MATCH``.
-    Each variant is re-checked independently inside ``publish()``, so a variant
-    that already succeeded in an interrupted run is never re-promoted.
+    The state machine has exactly one ``*_PUBLISHED`` slot per registry;
+    ``MATCH`` means the exact product digest is verified. The product is
+    re-checked inside ``publish()`` so a successful interrupted promotion
+    is never repeated.
 
     Promotion uses ``docker buildx imagetools create``, which copies an
     existing manifest by digest between repositories/registries. It never

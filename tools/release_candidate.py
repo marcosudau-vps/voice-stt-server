@@ -483,7 +483,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         prog="release_candidate.py",
         description=(
             "AP-SRV-070 W5-R04: build a complete VoiceSTT release candidate "
-            "(both distributions, both images, manifests) on a clean runner."
+            "(one product, two platform wheels, one image, manifests) on a clean runner."
         ),
     )
     parser.add_argument("--out-dir", default=None, type=Path)

@@ -19,7 +19,7 @@ point at a release candidate.
 This module is pure computation over a version string. It performs no registry
 call and knows nothing about Docker: the adapters in
 ``release_tooling.adapters`` decide *when* aliases may move (only after every
-exact Free and Pro artifact is verified in both registries) and *how* they are
+exact product artifact is verified in both registries) and *how* they are
 written; this module only decides *which* alias names a version owns.
 """
 
