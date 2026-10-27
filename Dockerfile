@@ -1,25 +1,8 @@
 # Buildvarianten und Kroko-Lizenzgrenzen: build/BUILD.md
 #
-# AP-SRV-070 W4C: public production image. This Dockerfile never compiles
-# Kroko and never installs VoiceSTT in editable/source mode - both wheels are
-# supplied as build context inputs, produced beforehand by
-# tools/build_production.py (VoiceSTT: `python -m build --wheel`; Kroko: the
-# separate build/kroko-builder.Dockerfile driven through the existing W4A
-# fingerprint/artifact-store authority). See build/BUILD.md for the full
-# build matrix and Kroko variant contract.
-#
-# Build inputs expected in the build context:
-#   dist/voicestt/*.whl   - the VoiceSTT wheel for this exact commit/version
-#   dist/kroko/*.whl      - the resolved Linux/AMD64 Kroko wheel (free/pro)
-#
-# Runtime target: Ubuntu 24.04, linux/amd64, CPU-only.
-#
-# AP-SRV-070 W5-R04, section 12: both stages pin the base image by immutable
-# manifest-index digest instead of the floating `ubuntu:24.04` tag, so a
-# rebuild of the same source on a fresh GitHub-hosted runner starts from
-# exactly the same base bytes. The digest is declared once in
-# tools/build_production.py (PRODUCTION_BASE_IMAGE_DIGEST) and a guard test
-# fails if this file and that declaration drift apart.
+# Unified V2 product image. The single complete wheel in dist/voicestt
+# contains the qualified Pro-capable runtime; no separate native installation.
+# Both stages retain the pinned Ubuntu digest from tools/build_production.py.
 
 FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517 AS builder
 
@@ -38,15 +21,13 @@ ENV PATH="/opt/venv/bin:${PATH}"
 WORKDIR /build
 COPY api_fastapi_server/requirements.txt /build/api_fastapi_server/requirements.txt
 COPY dist/voicestt/*.whl /build/dist/voicestt/
-COPY dist/kroko/*.whl /build/dist/kroko/
 
-# AP-SRV-070 W4C, requirement 7.1/7.2: a pre-built wheel is installed for
-# both VoiceSTT and Kroko - no editable install, no source checkout as the
+# AP-SRV-070 W4C, requirement 7.1/7.2: one pre-built product wheel supplies
+# VoiceSTT and embedded Kroko - no editable install, no source checkout as the
 # runtime basis, no native Kroko compilation in this build.
 RUN VOICESTT_WHEEL="$(ls /build/dist/voicestt/*.whl)" && \
     python -m pip install --upgrade pip setuptools wheel && \
     python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu && \
-    python -m pip install /build/dist/kroko/*.whl && \
     python -m pip install "${VOICESTT_WHEEL}[faster-whisper,silero-onnx-cpu,server]" \
       -r /build/api_fastapi_server/requirements.txt scikit-learn requests && \
     python -m pip install --no-deps 'openwakeword==0.6.0' && \
@@ -59,7 +40,7 @@ FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a
 
 ARG VOICESTT_VERSION=unknown
 ARG VOICESTT_GIT_COMMIT=unknown
-ARG VOICESTT_KROKO_VARIANT=free
+ARG VOICESTT_KROKO_VARIANT=pro
 ARG BUILD_DATE=unknown
 
 LABEL org.opencontainers.image.title="voice-stt-server" \

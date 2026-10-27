@@ -26,34 +26,12 @@ from wakeword_package_resources import bundled_package_data_files
 # fallbacks. This is not an independently maintained version constant.
 current_version = resolve_version()
 
-# ---------------------------------------------------------------------------
-# AP-SRV-070 W5-R04: the two public product distributions
-# ---------------------------------------------------------------------------
-#
-# Free and Pro Kroko are technically different, mutually non-interchangeable
-# native runtimes, so they are two complete alternative distributions rather
-# than one distribution plus an after-the-fact native build:
-#
-#     voice-stt-server      -> server code + Kroko Free native runtime
-#     voice-stt-server-pro  -> server code + Kroko Pro native runtime
-#
-# Both expose the same import package (voice_stt_server) and the same CLI
-# (voice-stt-server), so application code is identical on Free and Pro. They
-# are alternatives and must never be installed into the same environment.
-#
-# The native runtime is merged into the wheel afterwards by
-# tools/build_distribution.py, which also retags the wheel for the concrete
-# CPython/platform it is valid for. setup.py itself only decides the
-# distribution *identity* and the dependency/metadata surface.
-#
-# With the variable unset, this file still builds the historical development
-# distribution ("voicestt") unchanged, which is what every existing editable
-# install, test run and CI job uses.
+# One public V2 product embeds the qualified Pro-capable native runtime.
+# Unset selection retains the historical developer distribution voicestt.
 DISTRIBUTION_VARIANT_ENV = "VOICESTT_DISTRIBUTION_VARIANT"
 LEGACY_DISTRIBUTION_NAME = "voicestt"
 PUBLIC_DISTRIBUTION_NAMES = {
-    "free": "voice-stt-server",
-    "pro": "voice-stt-server-pro",
+    "pro": "voice-stt-server",
 }
 
 # The Kroko build authority produces cp312-only native wheels for
@@ -66,7 +44,7 @@ LEGACY_PYTHON_REQUIRES = ">=3.11"
 
 
 def resolve_distribution_variant():
-    """"free"/"pro" for a public distribution build, else None."""
+    """"pro" for the public product build, else None."""
     value = os.environ.get(DISTRIBUTION_VARIANT_ENV, "").strip().lower()
     if not value:
         inherited = load_build_identity()
@@ -393,8 +371,8 @@ extras_require = {
     ),
 }
 
-# AP-SRV-070 W5-R04: what "a complete installation" means for the two public
-# distributions. `pip install voice-stt-server` must produce a working server
+# AP-SRV-070 W5-R04: what "a complete installation" means for the public
+# distribution. `pip install voice-stt-server` must produce a working server
 # with the supported production STT engines already present - the Kroko native
 # runtime because it is embedded in the wheel, Faster-Whisper and the packaged
 # Silero ONNX VAD because they are ordinary dependencies here rather than an
@@ -441,8 +419,8 @@ setuptools.setup(
             "VoiceSTT_server.*",
             "api_fastapi_server",
             "api_fastapi_server.*",
-            # AP-SRV-070 W5-R04: the canonical public import package. Both
-            # public distributions expose it, so `from voice_stt_server import
+            # AP-SRV-070 W5-R04: the canonical public import package. The
+            # public distribution exposes it, so `from voice_stt_server import
             # AudioToTextRecorder` is identical on Free and Pro.
             "voice_stt_server",
             "voice_stt_server.*",
@@ -470,6 +448,7 @@ setuptools.setup(
             # upstream redistribution grant is not unambiguous (see the
             # manifest's licensePolicy block).
             "assets/kroko/models.json",
+            "assets/kroko/licenses/*",
             # Byte-pinned Visual Studio channel manifest for offline Windows cross-build input.
             "assets/build_inputs/windows/visual-studio-17.14.39-channel.json",
             # AP-SRV-060: the wake-word build assets ship with the package, so

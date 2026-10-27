@@ -24,7 +24,7 @@ sys.path.insert(0, REPO)
 
 import numpy as np  # noqa: E402
 
-faulthandler.dump_traceback_later(900, exit=True)
+faulthandler.dump_traceback_later(int(os.getenv("VOICESTT_KROKO_NATIVE_CHILD_TIMEOUT", "900")), exit=True)
 
 COMMUNITY_FILE = "Kroko-DE-Community-64-L-Streaming-001.data"
 PRO_FILE = "Kroko-DE-Pro-16-L-Streaming-001.data"

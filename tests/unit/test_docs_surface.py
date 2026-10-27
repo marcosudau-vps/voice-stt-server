@@ -118,10 +118,10 @@ class ReadmeTests(unittest.TestCase):
         self.assertNotIn("Automatic Recording Loop", self.text)
         self.assertNotIn("This checkout is configured as a CPU-only deployment", self.text)
 
-    def test_it_presents_both_public_distributions(self):
+    def test_it_presents_the_single_public_distribution(self):
         # W5R4-G52 and the new packaging authority.
         self.assertIn("pip install voice-stt-server", self.text)
-        self.assertIn("pip install voice-stt-server-pro", self.text)
+        self.assertNotIn("pip install voice-stt-server-pro", self.text)
 
     def test_it_teaches_the_canonical_import_package(self):
         self.assertIn("from voice_stt_server import AudioToTextRecorder", self.text)
@@ -223,9 +223,9 @@ class ReleaseProcessDocumentationTests(unittest.TestCase):
             with self.subTest(item=expected):
                 self.assertIn(expected, self.text)
 
-    def test_it_documents_two_trusted_publishers(self):
-        self.assertIn("voice-stt-server-pro", self.text)
-        self.assertIn("two Trusted Publishers", self.text)
+    def test_it_documents_one_trusted_publisher(self):
+        self.assertNotIn("voice-stt-server-pro", self.text)
+        self.assertIn("One PyPI Trusted Publisher", self.text)
 
     def test_it_documents_the_canonical_state_order(self):
         for state in ("TAGGED", "PYPI_PUBLISHED", "DOCKERHUB_PUBLISHED",

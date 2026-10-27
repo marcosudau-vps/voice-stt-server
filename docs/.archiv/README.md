@@ -72,6 +72,7 @@ Begründung im Archiv erhalten.
 
 | Aktion | Aktionsdatum | Status | Archiv |
 | --- | --- | --- | --- |
+| Unified Kroko V2: finale Produkt- und Releasekonsolidierung (Produktnachweise PASS, Release/RC BLOCKED) | 27.10.2026 | Prüfung offen | [Plan](kroko_v2_finalization/2026-10-27_PLAN.md), [Originalauftrag](kroko_v2_finalization/2026-10-27_ORIGINALAUFTRAG.txt), [Abschlussvergleich](kroko_v2_finalization/2026-10-27_ABSCHLUSS_SOLL_IST.md), [Abweichungen](kroko_v2_finalization/2026-10-27_ABSCHLUSS_ABWEICHUNGEN.md), [Finale Linux-/Windows-Qualifikation](kroko_v2_finalization/2026-10-27_NACHTRAG_FINALE_QUALIFIKATION.md), [PR16-Korrekturpruefung](kroko_v2_finalization/2026-10-27_PR16_REVIEW_KORREKTUREN.md) |
 | OpenAI-Routen, zentrale Authentifizierung und Modularisierungs-Roadmap (PR #15) | 25.10.2026 | Prüfung offen | [Plan](server_modularization_20261025/2026-10-25_PLAN.md) |
 | Selektive Kroko-V2-Verbesserungen ohne Besitzerprozess (Implementierungs-PR: #15; Quell-/Referenz-PR: #14, nicht gemergt) | 25.10.2026 | Prüfung offen | [Plan](kroko_v2_selective_improvements/2026-10-25_PLAN.md) |
 | Finale Abnahmevorbereitung PR #15 (Arbeitsakte, Traceability, Testevidenz) | 25.10.2026 | Prüfung offen | [Arbeitsakte](pr15_final_abnahmevorbereitung/) |

@@ -119,6 +119,8 @@ def _placeholder_manifest(*, version: str, commit: Optional[str], tree: Optional
                 {
                     "filename": f"{name.replace('-', '_')}-{version}-cp312-cp312-linux_x86_64.whl",
                     "sha256": zero_sha,
+                    "krokoFingerprint": "unresolved-placeholder",
+                    "krokoArtifactSha256": zero_sha,
                     "pythonTag": "cp312",
                     "abiTag": "cp312",
                     "platformTag": "linux_x86_64",
@@ -126,6 +128,8 @@ def _placeholder_manifest(*, version: str, commit: Optional[str], tree: Optional
                 {
                     "filename": f"{name.replace('-', '_')}-{version}-cp312-cp312-win_amd64.whl",
                     "sha256": zero_sha,
+                    "krokoFingerprint": "unresolved-placeholder",
+                    "krokoArtifactSha256": zero_sha,
                     "pythonTag": "cp312",
                     "abiTag": "cp312",
                     "platformTag": "win_amd64",
@@ -152,7 +156,7 @@ def _placeholder_manifest(*, version: str, commit: Optional[str], tree: Optional
             variant: _distribution(variant, config.distribution_name_for(variant))
             for variant in rc_manifest.VARIANTS
         },
-        images={"free": _image("free", "0"), "pro": _image("pro", "1")},
+        images={"pro": _image("pro", "1")},
         oci_version=version,
         oci_revision=commit,
         qualification_timestamp_utc=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -414,7 +418,7 @@ def _cmd_precheck_pypi(args: argparse.Namespace) -> int:
         stage_dir = Path(args.stage_dir)
         dist_dir = Path(args.dist_dir) if args.dist_dir else config.REPO_ROOT / "dist"
 
-        for variant in ("free", "pro"):
+        for variant in ("pro",):
             v_report = report[variant]
             v_stage_dir = stage_dir / variant
             v_stage_dir.mkdir(parents=True, exist_ok=True)

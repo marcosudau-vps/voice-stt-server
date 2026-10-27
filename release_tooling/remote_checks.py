@@ -179,7 +179,7 @@ def precheck_pypi(
     """
     version = manifest["productVersion"]
     report: Dict[str, Dict[str, Any]] = {}
-    for variant in ("free", "pro"):
+    for variant in ("pro",):
         project = manifest["distributions"][variant]["name"]
         expected = {
             wheel["filename"]: wheel["sha256"]

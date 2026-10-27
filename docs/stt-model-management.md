@@ -4,6 +4,23 @@ VoiceSTT verwaltet grosse STT-Modelle fuer Faster-Whisper und Kroko ueber eine
 gemeinsame serverautoritative Schicht. Wake-Word-Assets gehoeren nicht zu
 diesem System.
 
+## Installierte Kroko-Faehigkeit
+
+Die einheitliche V2-Distribution `voice-stt-server` bringt eine Pro-faehige
+Runtime mit. Der Manager liest die tatsaechliche Produkt-/Nativeidentitaet;
+Betreibereinstellungen, `VOICESTT_KROKO_VARIANT` und Keys setzen keine Faehigkeit.
+Ohne bekannte Nativeidentitaet bleibt sie `unknown`. Entwickler koennen weiter
+verifizierte separate Free-/Pro-Nativewheels verwenden.
+
+Community ist ohne Key verfuegbar. Ein lokales Pro-Modell wird erst bei gueltiger
+modellbezogener Berechtigung auswaehlbar; Berechtigung ist keine Aktivierung.
+Force Community sperrt neue Pro-Jobs sofort. Keyentzug/-rotation bleiben
+an Generation und nativen Kontext gebunden; Pythonstatus autorisiert keinen
+bestehenden Pro-Kontext neu. Final/Realtime teilen bei gleicher Krokoidentitaet
+dieselbe Instanz; verschiedene Proidentitaeten scheitern vor dem Native-Load.
+Oeffentliche Statusfelder behalten ihren Vertrag und zeigen echte Faehigkeit,
+Lizenzberechtigung, aktives Modell und gegebenenfalls Neustartbedarf getrennt.
+
 ## Kroko-Katalogmetadaten
 
 Der [Offline-Modellkatalog](kroko-model-catalog.md) ergänzt die Discovery um
@@ -166,15 +183,12 @@ und `krokoRuntime` (installierte Variante, Berechtigung, gewuenschtes und
 tatsaechlich aktives Modell, Neustartbedarf getrennt ausgewiesen; siehe
 [Kroko-ONNX](kroko-onnx.md#modell--und-lizenzwechsel-im-laufenden-prozess)).
 
-Die Runtimevariante hat genau eine dokumentierte Praezedenz:
-
-1. `stt_engine_settings.kroko_onnx.runtime_variant`
-2. `transcription_engine_options.runtime_variant`, wenn Final Kroko verwendet
-3. `realtime_transcription_engine_options.runtime_variant`, wenn Realtime Kroko verwendet
-4. `VOICESTT_KROKO_VARIANT`
-5. `free`
-
-Nur `free` und `pro` sind gueltig. Engine-Optionen werden bei Probe, Worker-
+Die Runtimevariante des Managers wird aus der validierten installierten
+Produkt-/Nativeidentitaet aufgeloest (`pro`, Entwicklerbuild `free`, sonst
+`unknown`). Die fruehere Konfigurationspraezedenz bis zum Default `free`
+gilt dafuer nicht mehr. Ein `runtime_variant`-Wert oder
+`VOICESTT_KROKO_VARIANT` ersetzt keine installierte Faehigkeit.
+Engine-Optionen werden bei Probe, Worker-
 Start, Recovery und Modellwechsel anhand der tatsaechlich aufgeloesten Engine
 gewaehlt. Dadurch erhaelt ein Kroko-Fallback nie Faster-Whisper-Optionen und
 umgekehrt; bei identischen Engines bleiben die lanespezifischen Optionen

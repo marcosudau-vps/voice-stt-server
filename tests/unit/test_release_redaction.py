@@ -41,7 +41,7 @@ class AssertNoSecretsTests(unittest.TestCase):
 
     def test_raises_on_a_nested_secret_field(self):
         with self.assertRaises(SecretDetectedError):
-            assert_no_secrets({"images": {"free": {"registryPassword": "hunter2hunter2"}}})
+            assert_no_secrets({"images": {"pro": {"registryPassword": "hunter2hunter2"}}})
 
     def test_raises_on_a_secret_shaped_value_in_an_unflagged_field(self):
         with self.assertRaises(SecretDetectedError):

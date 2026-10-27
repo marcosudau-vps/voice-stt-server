@@ -14,3 +14,10 @@ def _isolated_kroko_native_guard():
     native_guard.process_guard().reset_for_tests()
     yield
     native_guard.process_guard().reset_for_tests()
+
+
+@pytest.fixture
+def pro_capable_test_runtime(monkeypatch):
+    """Explicit native identity fixture for tests that replace the native worker."""
+    import VoiceSTT_server.stt_model_management as management
+    monkeypatch.setattr(management, "installed_kroko_variant", lambda: "pro")

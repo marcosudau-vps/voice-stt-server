@@ -166,7 +166,7 @@ class VersionAndIdentityTests(unittest.TestCase):
         manifest = make_manifest()
         state = make_state("PYPI_PUBLISHED", manifest)
         drifted = make_manifest()
-        drifted["distributions"]["free"]["wheels"][0]["sha256"] = "0" * 64
+        drifted["distributions"]["pro"]["wheels"][0]["sha256"] = "0" * 64
         identity = rc_manifest.state_identity(drifted)
         with self.assertRaises(StateError) as caught:
             ensure_same_identity(
@@ -265,10 +265,10 @@ class PersistenceTests(unittest.TestCase):
     def test_the_persisted_document_names_both_distributions(self):
         payload = json.loads(json.dumps(make_state("PREPARED").to_json_dict()))
         self.assertEqual(
-            payload["distributions"]["free"]["name"], "voice-stt-server"
+            payload["distributions"]["pro"]["name"], "voice-stt-server"
         )
         self.assertEqual(
-            payload["distributions"]["pro"]["name"], "voice-stt-server-pro"
+            payload["distributions"]["pro"]["name"], "voice-stt-server"
         )
 
     def test_an_older_state_without_a_candidate_block_still_loads(self):

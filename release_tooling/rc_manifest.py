@@ -1,50 +1,10 @@
-"""The canonical release-candidate manifest (AP-SRV-070 W5-R04, schema v2).
+"""Canonical release-candidate manifest, schema 3.
 
-One frozen manifest describes exactly one qualified candidate, and publication
-refuses to touch anything that does not match it. This module only defines the
-format, validates it, and assembles one from identities that already exist
-elsewhere - it never recomputes or second-guesses an identity itself.
-
-What changed in schema v2
--------------------------
-
-Schema v1 described a single ``voicestt`` wheel plus an sdist. That no longer
-describes the product. VoiceSTT now publishes **two complete alternative
-distributions**, each embedding a different, non-interchangeable native Kroko
-runtime:
-
-.. code-block:: text
-
-    voice-stt-server      <- Kroko Free native runtime
-    voice-stt-server-pro  <- Kroko Pro native runtime
-
-So the manifest binds a ``distributions`` block with one entry per public
-distribution, each carrying its own wheel set (filename, SHA-256, interpreter
-and platform tags), the Kroko variant it embeds, and that variant's fingerprint
-and embedded artifact SHA-256. The identity chain
-``Kroko artifact -> distribution wheel -> PyPI`` is therefore checkable end to
-end from this one document.
-
-Two further v2 corrections:
-
-* ``images.<variant>.digest`` records the **OCI manifest digest**. v1 recorded
-  only a local ``docker inspect`` image ``Id``, which is not the identity a
-  registry can be checked against and not the identity
-  ``docker buildx imagetools create`` promotes.
-* ``staging`` records where the qualified image bytes live between
-  qualification and publication, so publication consumes the qualified
-  manifest instead of rebuilding it.
-
-**No sdist.** See ``docs/release-process.md``: an sdist of a distribution whose
-defining property is an embedded native runtime cannot carry that runtime, so
-installing from it would either trigger a ~30-minute local native build or
-silently produce an installation with no Kroko runtime at all. Publishing a
-wheel for every documented platform is what keeps ``pip install
-voice-stt-server`` complete without a local build.
-
-No secret ever belongs in an RC manifest: it is evidence, archived next to the
-qualification gates it backs.
-"""
+Exactly one public product (voice-stt-server), two CPython 3.12 platform wheels
+and one linux/amd64 image. The internal pro key denotes the native build input.
+Schema 2 two-edition candidates are rejected. Source, wheel SHA-256, native
+provenance, OCI manifest digest and private staging reference remain bound.
+Redistribution approval is independent of technical qualification."""
 
 from __future__ import annotations
 
@@ -57,16 +17,15 @@ from typing import Any, Dict, List, Optional
 from .errors import ManifestError
 from .redaction import assert_no_secrets
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 READINESS_NOT_QUALIFIED = "NOT_QUALIFIED"
 READINESS_QUALIFIED = "QUALIFIED"
 READINESS_REJECTED = "REJECTED"
 READINESS_STATES = (READINESS_NOT_QUALIFIED, READINESS_QUALIFIED, READINESS_REJECTED)
 
-#: The two build-time product variants. Free/Pro is decided at build time and
-#: is never influenced by a runtime Kroko license key.
-VARIANTS = ("free", "pro")
+#: The sole official native build input, independent of runtime credentials.
+VARIANTS = ("pro",)
 
 #: The binding packaging authority requires both Linux and Windows wheels for
 #: CPython 3.12 (AP-SRV-070 W5-R04, B2).
@@ -106,6 +65,8 @@ def _require_wheel_block(block: Any, name: str, problems: List[str]) -> None:
             f"{name}.{field} must be a non-empty string",
             problems,
         )
+    _require(block.get("pythonTag") == "cp312" and block.get("abiTag") == "cp312",
+             f"{name} requires CPython 3.12 (cp312-cp312)", problems)
     ptag = block.get("platformTag")
     if ptag is not None:
         _require(
@@ -113,18 +74,16 @@ def _require_wheel_block(block: Any, name: str, problems: List[str]) -> None:
             f"{name}.platformTag must be one of {REQUIRED_PLATFORMS}, got {ptag!r}",
             problems,
         )
-    if "krokoFingerprint" in block:
-        _require(
-            isinstance(block.get("krokoFingerprint"), str) and block.get("krokoFingerprint", "").strip() != "",
-            f"{name}.krokoFingerprint must be a non-empty string",
-            problems,
-        )
-    if "krokoArtifactSha256" in block:
-        _require(
-            bool(_SHA256_RE.match(block.get("krokoArtifactSha256") or "")),
-            f"{name}.krokoArtifactSha256 must be a 64-character lowercase hex sha256",
-            problems,
-        )
+    _require(
+        isinstance(block.get("krokoFingerprint"), str) and block.get("krokoFingerprint", "").strip() != "",
+        f"{name}.krokoFingerprint must be a non-empty string",
+        problems,
+    )
+    _require(
+        bool(_SHA256_RE.match(block.get("krokoArtifactSha256") or "")),
+        f"{name}.krokoArtifactSha256 must be a 64-character lowercase hex sha256",
+        problems,
+    )
 
 
 def _require_distribution_block(block: Any, name: str, variant: str, problems: List[str]) -> None:
@@ -197,6 +156,9 @@ def _require_image_block(block: Any, name: str, problems: List[str]) -> None:
         f"{name}.staging must be a digest-pinned staging reference",
         problems,
     )
+    if isinstance(staging, str) and isinstance(block.get("digest"), str):
+        _require(staging.endswith("@" + block["digest"]),
+                 f"{name}.staging digest conflicts with qualified image", problems)
 
 
 def validate_rc_manifest(data: Dict[str, Any]) -> None:
@@ -226,40 +188,31 @@ def validate_rc_manifest(data: Dict[str, Any]) -> None:
 
     distributions = data.get("distributions")
     if not isinstance(distributions, dict):
-        problems.append("distributions must be an object with 'free' and 'pro' entries")
+        problems.append("distributions must be an object with exactly one 'pro' entry")
     else:
         for variant in VARIANTS:
             _require_distribution_block(
                 distributions.get(variant), f"distributions.{variant}", variant, problems
             )
-        names = [
-            block.get("name")
-            for block in distributions.values()
-            if isinstance(block, dict)
-        ]
-        _require(
-            len(names) == len(set(names)),
-            "the Free and Pro distributions must have different PyPI names",
-            problems,
-        )
+        _require(set(distributions) == {"pro"},
+                 "distributions must contain exactly the unified product entry 'pro'", problems)
+        product = distributions.get("pro")
+        _require(isinstance(product, dict) and product.get("name") == "voice-stt-server",
+                 "the only public distribution is voice-stt-server", problems)
 
     images = data.get("images")
     if not isinstance(images, dict):
-        problems.append("images must be an object with 'free' and 'pro' entries")
+        problems.append("images must be an object with exactly one 'pro' entry")
     else:
         for variant in VARIANTS:
             _require_image_block(images.get(variant), f"images.{variant}", problems)
-        digests = [
-            block.get("digest")
-            for block in images.values()
-            if isinstance(block, dict)
-        ]
-        _require(
-            len(digests) == len(set(digests)),
-            "the Free and Pro images must not share one manifest digest",
-            problems,
-        )
+        _require(set(images) == {"pro"},
+                 "images must contain exactly the unified product entry 'pro'", problems)
 
+    approval = data.get("redistributionApproval")
+    _require(isinstance(approval, dict) and approval.get("status") in ("BLOCKED", "VERIFIED")
+             and isinstance(approval.get("evidenceRef"), str) and bool(approval["evidenceRef"].strip()),
+             "redistributionApproval must explicitly record evidence and BLOCKED or VERIFIED", problems)
     oci = data.get("oci")
     if not isinstance(oci, dict):
         problems.append("oci must be an object with 'version' and 'revision'")
@@ -303,10 +256,15 @@ def build_rc_manifest(
     qualification_evidence_ref: str,
     candidate_run: Optional[Dict[str, Any]] = None,
     release_readiness: str = READINESS_NOT_QUALIFIED,
+    redistribution_approval: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Assembles one canonical RC manifest from already-resolved identities."""
+    from . import config
+    if set(distributions) != {"pro"} or set(images) != {"pro"}:
+        raise ManifestError("candidate must contain exactly one unified product")
     manifest: Dict[str, Any] = {
         "schemaVersion": SCHEMA_VERSION,
+        "redistributionApproval": dict(redistribution_approval if redistribution_approval is not None else config.redistribution_approval()),
         "candidateId": candidate_id,
         "productVersion": product_version,
         "sourceCommit": source_commit,
@@ -365,7 +323,7 @@ def manifest_sha256(manifest: Dict[str, Any]) -> str:
 
 
 def distribution_names(manifest: Dict[str, Any]) -> Dict[str, str]:
-    """``{variant: pypi distribution name}`` for both public distributions."""
+    """``{native input: pypi distribution name}`` for the single public product."""
     return {
         variant: manifest["distributions"][variant]["name"] for variant in VARIANTS
     }

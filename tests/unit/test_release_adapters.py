@@ -18,27 +18,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from release_support import (  # noqa: E402
-    DOCKERHUB_ROOT,
-    FREE_DIGEST,
-    FREE_WHEEL,
-    FREE_WHEEL_SHA,
-    FREE_WHEEL_WIN,
-    FREE_WHEEL_WIN_SHA,
-    GHCR_ROOT,
-    PRO_DIGEST,
-    PRO_WHEEL,
-    PRO_WHEEL_SHA,
-    PRO_WHEEL_WIN,
-    PRO_WHEEL_WIN_SHA,
-    RecordingRunner,
-    digest_response,
-    failed,
-    make_manifest,
-    make_state,
-    ok,
-    pypi_fetcher,
-)
+from release_support import DOCKERHUB_ROOT, PRO_DIGEST, PRO_WHEEL, PRO_WHEEL_SHA, PRO_WHEEL_WIN, PRO_WHEEL_WIN_SHA, GHCR_ROOT, RecordingRunner, digest_response, failed, make_manifest, make_state, ok, pypi_fetcher
 
 from release_tooling.adapters import (  # noqa: E402
     AliasAdapter,
@@ -55,16 +35,7 @@ from release_tooling.errors import ConflictError, OrderError, ReleaseError, Veri
 from release_tooling.remote_checks import ABSENT, MATCH  # noqa: E402
 
 MANIFEST = make_manifest()
-BOTH_PUBLISHED = {
-    "voice-stt-server": {
-        FREE_WHEEL: FREE_WHEEL_SHA,
-        FREE_WHEEL_WIN: FREE_WHEEL_WIN_SHA,
-    },
-    "voice-stt-server-pro": {
-        PRO_WHEEL: PRO_WHEEL_SHA,
-        PRO_WHEEL_WIN: PRO_WHEEL_WIN_SHA,
-    },
-}
+BOTH_PUBLISHED = {'voice-stt-server': {PRO_WHEEL: PRO_WHEEL_SHA, PRO_WHEEL_WIN: PRO_WHEEL_WIN_SHA}}
 
 
 class RecordingUploader:
@@ -76,36 +47,34 @@ class RecordingUploader:
 
 
 class PyPIAdapterTests(unittest.TestCase):
-    def test_both_distributions_must_be_published_for_a_match(self):
+    def test_both_platform_wheels_must_be_published_for_a_match(self):
         adapter = PyPIAdapter(uploader=RecordingUploader(), fetch=pypi_fetcher(BOTH_PUBLISHED))
         self.assertEqual(adapter.verify(MANIFEST, make_state("TAGGED")), MATCH)
 
-    def test_only_free_published_is_not_a_match(self):
+    def test_only_linux_published_is_not_a_match(self):
         # Section 6: PYPI_PUBLISHED means *both*, never "one of them worked".
         partial = {
             "voice-stt-server": {
-                FREE_WHEEL: FREE_WHEEL_SHA,
-                FREE_WHEEL_WIN: FREE_WHEEL_WIN_SHA,
+                PRO_WHEEL: PRO_WHEEL_SHA,
             }
         }
         adapter = PyPIAdapter(uploader=RecordingUploader(), fetch=pypi_fetcher(partial))
         self.assertEqual(adapter.verify(MANIFEST, make_state("TAGGED")), ABSENT)
 
-    def test_resume_uploads_only_the_missing_distribution(self):
+    def test_resume_uploads_only_the_missing_platform_wheel(self):
         # W5R4-G28: Free already live, Pro missing -> publish Pro only.
         partial = {
             "voice-stt-server": {
-                FREE_WHEEL: FREE_WHEEL_SHA,
-                FREE_WHEEL_WIN: FREE_WHEEL_WIN_SHA,
+                PRO_WHEEL: PRO_WHEEL_SHA,
             }
         }
         uploader = RecordingUploader()
         adapter = PyPIAdapter(uploader=uploader, fetch=pypi_fetcher(partial))
         adapter.publish(MANIFEST, make_state("TAGGED"))
-        self.assertEqual([name for name, _ in uploader.uploads], ["voice-stt-server-pro"])
+        self.assertEqual([name for name, _ in uploader.uploads], ["voice-stt-server"])
 
     def test_a_conflicting_distribution_hard_stops(self):
-        conflicting = {"voice-stt-server": {FREE_WHEEL: "0" * 64}}
+        conflicting = {"voice-stt-server": {PRO_WHEEL: "0" * 64}}
         adapter = PyPIAdapter(uploader=RecordingUploader(), fetch=pypi_fetcher(conflicting))
         with self.assertRaises(ConflictError):
             adapter.verify(MANIFEST, make_state("TAGGED"))
@@ -138,7 +107,7 @@ class PyPIAdapterTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             uploader = TwineUploader(dist_dir=Path(tmp), runner=RecordingRunner())
             with self.assertRaises(ReleaseError) as caught:
-                uploader.upload("voice-stt-server", [FREE_WHEEL])
+                uploader.upload("voice-stt-server", [PRO_WHEEL])
             self.assertIn("missing", str(caught.exception))
 
 
@@ -154,8 +123,8 @@ class DockerHubPromotionTests(unittest.TestCase):
 
     def test_both_variants_present_is_a_match(self):
         runner = RecordingRunner([
-            ("marcosudau/voice-stt-server:2.0.0", digest_response(FREE_DIGEST)),
-            ("marcosudau/voice-stt-server-pro:2.0.0", digest_response(PRO_DIGEST)),
+            ("marcosudau/voice-stt-server:2.0.0", digest_response(PRO_DIGEST)),
+            ("marcosudau/voice-stt-server:2.0.0", digest_response(PRO_DIGEST)),
         ])
         self.assertEqual(
             self._adapter(runner).verify(MANIFEST, make_state("PYPI_PUBLISHED")), MATCH
@@ -166,7 +135,7 @@ class DockerHubPromotionTests(unittest.TestCase):
         runner = RecordingRunner()
         self._adapter(runner).publish(MANIFEST, make_state("PYPI_PUBLISHED"))
         creates = [c for c in runner.commands if "imagetools create" in c]
-        self.assertEqual(len(creates), 2)
+        self.assertEqual(len(creates), 1)
         for command in creates:
             self.assertIn("-staging@sha256:", command)
         # "docker buildx imagetools" is a manifest copy, not a build; a real
@@ -179,12 +148,10 @@ class DockerHubPromotionTests(unittest.TestCase):
 
     def test_an_already_promoted_variant_is_not_promoted_again(self):
         runner = RecordingRunner([
-            ("marcosudau/voice-stt-server:2.0.0", digest_response(FREE_DIGEST)),
+            ("marcosudau/voice-stt-server:2.0.0", digest_response(PRO_DIGEST)),
         ])
         self._adapter(runner).publish(MANIFEST, make_state("PYPI_PUBLISHED"))
-        creates = [c for c in runner.commands if "imagetools create" in c]
-        self.assertEqual(len(creates), 1)
-        self.assertIn("voice-stt-server-pro", creates[0])
+        self.assertEqual([c for c in runner.commands if "imagetools create" in c], [])
 
     def test_an_unconfigured_namespace_is_unavailable(self):
         adapter = DockerHubAdapter(repo_root="", runner=RecordingRunner())
@@ -208,7 +175,7 @@ class GHCRPromotionTests(unittest.TestCase):
         runner = RecordingRunner()
         self._adapter(runner).publish(MANIFEST, make_state("DOCKERHUB_PUBLISHED"))
         creates = [c for c in runner.commands if "imagetools create" in c]
-        self.assertEqual(len(creates), 2)
+        self.assertEqual(len(creates), 1)
         for command in creates:
             self.assertIn(f"{DOCKERHUB_ROOT}/voice-stt-server", command)
             self.assertIn("@sha256:", command)
@@ -223,8 +190,8 @@ class GHCRPromotionTests(unittest.TestCase):
 
     def test_the_promoted_digest_is_the_qualified_one(self):
         runner = RecordingRunner([
-            ("ghcr.io/marcosudau-vps/voice-stt-server:2.0.0", digest_response(FREE_DIGEST)),
-            ("ghcr.io/marcosudau-vps/voice-stt-server-pro:2.0.0", digest_response(PRO_DIGEST)),
+            ("ghcr.io/marcosudau-vps/voice-stt-server:2.0.0", digest_response(PRO_DIGEST)),
+            ("ghcr.io/marcosudau-vps/voice-stt-server:2.0.0", digest_response(PRO_DIGEST)),
         ])
         self.assertEqual(
             self._adapter(runner).verify(MANIFEST, make_state("DOCKERHUB_PUBLISHED")), MATCH
@@ -242,12 +209,12 @@ class AliasAdapterTests(unittest.TestCase):
     def _adapter(self, runner):
         return AliasAdapter(registry_roots=self.ROOTS, runner=runner)
 
-    def test_aliases_cover_both_registries_and_both_variants(self):
+    def test_aliases_cover_both_registries_for_one_product(self):
         # 2 registries x 2 variants x 3 aliases (2.0, 2, latest) = 12.
         runner = RecordingRunner()
         self._adapter(runner).publish(MANIFEST, make_state("EXTERNAL_VERIFIED"))
         creates = [c for c in runner.commands if "imagetools create" in c]
-        self.assertEqual(len(creates), 12)
+        self.assertEqual(len(creates), 6)
         for alias in ("2.0", ":2 ", "latest"):
             self.assertTrue(any(alias.strip() in c for c in creates), alias)
 
@@ -257,7 +224,7 @@ class AliasAdapterTests(unittest.TestCase):
         for command in runner.commands:
             if "imagetools create" in command:
                 self.assertTrue(
-                    FREE_DIGEST in command or PRO_DIGEST in command, command
+                    PRO_DIGEST in command or PRO_DIGEST in command, command
                 )
 
     def test_aliases_before_external_verification_are_refused(self):
@@ -266,18 +233,14 @@ class AliasAdapterTests(unittest.TestCase):
             self._adapter(RecordingRunner()).publish(MANIFEST, make_state("GHCR_PUBLISHED"))
 
     def test_an_alias_already_on_the_digest_is_not_rewritten(self):
-        runner = RecordingRunner(default=digest_response(FREE_DIGEST))
+        runner = RecordingRunner(default=digest_response(PRO_DIGEST))
         self._adapter(runner).publish(MANIFEST, make_state("EXTERNAL_VERIFIED"))
-        creates = [c for c in runner.commands if "imagetools create" in c]
-        # Only the Pro aliases still need moving; the Free ones already match.
-        self.assertTrue(all("voice-stt-server-pro" in c for c in creates))
+        self.assertEqual([c for c in runner.commands if "imagetools create" in c], [])
 
     def test_verify_requires_every_alias_to_be_correct(self):
         # W5R4-G39: alias digests are verified, not assumed.
-        runner = RecordingRunner(default=digest_response(FREE_DIGEST))
-        self.assertEqual(
-            self._adapter(runner).verify(MANIFEST, make_state("EXTERNAL_VERIFIED")), ABSENT
-        )
+        runner = RecordingRunner(default=digest_response("sha256:" + "0" * 64))
+        self.assertEqual(self._adapter(runner).verify(MANIFEST, make_state("EXTERNAL_VERIFIED")), ABSENT)
 
     def test_a_prerelease_owns_no_aliases_and_is_trivially_satisfied(self):
         prerelease = make_manifest(productVersion="2.0.0-rc.1")

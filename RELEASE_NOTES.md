@@ -16,20 +16,18 @@
 
 ### Added
 
-- VoiceSTT is now published as two complete, alternative distributions
-  (AP-SRV-070 W5-R04): `voice-stt-server` embeds the Kroko Free native
-  runtime and `voice-stt-server-pro` embeds the Kroko Pro one. Each wheel
+- V2 has one complete public distribution: `voice-stt-server` embeds the
+  Pro-capable Kroko native runtime. Each platform wheel
   contains its runtime, so `pip install voice-stt-server` needs no native
   Kroko build, no `stt-install-kroko`, no Docker and no separate wheel.
-  Both expose the same import package `voice_stt_server` and the same CLI
+  It exposes the import package `voice_stt_server` and the CLI
   `voice-stt-server` (with `stt-server`, `stt-server-legacy` and `stt` kept
-  as compatibility aliases), so application code is identical on Free and
-  Pro. The two distributions are alternatives and must not be installed
-  into the same environment, and the installed distribution - never a
-  runtime licence key - decides which native runtime is present. Supported
+  as compatibility aliases). Community models work without a key; Pro models
+  require model-specific entitlement. Installed provenance - never a
+  runtime licence key - establishes native capability. Supported
   targets are CPython 3.12 on Linux x86-64 and Windows x86-64, which is the
   matrix the embedded runtime is actually built and qualified for. No sdist
-  is published for these distributions, because an sdist cannot carry a
+  is published for this product, because an sdist cannot carry a
   native runtime and would break that guarantee.
 - Added the GitHub-native release infrastructure (AP-SRV-070 W5-R04): a
   dispatch-only candidate workflow that builds and qualifies a complete
@@ -37,12 +35,17 @@
   commit, and a dispatch-only publish workflow gated by a protected
   environment that publishes the already-qualified candidate without
   rebuilding it. The canonical publication order now creates the immutable
-  Git tag *before* the first irreversible public write, publishes both
-  distributions to PyPI via Trusted Publishing (no stored token), publishes
-  the exact Free and Pro images to Docker Hub and then promotes the same OCI
-  manifests to GHCR by digest, moves the `2.0`/`2`/`latest` aliases only
+  Git tag *before* the first irreversible public write, publishes the two
+  platform wheels to one PyPI project via Trusted Publishing (no stored token),
+  promotes the exact product image to Docker Hub and then the same OCI
+  manifest to GHCR by digest, moves the `2.0`/`2`/`latest` aliases only
   after every exact artifact is verified in both registries, and creates the
-  GitHub Release last. See `docs/release-process.md`.
+  GitHub Release last. Schema 3 binds one product, both platform wheels and
+  one staging digest. Public release approval remains BLOCKED on independent
+  redistribution rights, complete real RC qualification and acceptance.
+  Real Patch-Set-5 Linux/Windows product qualification has passed; see
+  `docs/.archiv/kroko_v2_finalization/2026-10-27_NACHTRAG_FINALE_QUALIFIKATION.md`
+  and `docs/release-process.md`.
 
 ### Changed
 
@@ -138,12 +141,11 @@
 - Added a public production Docker/Compose release path
   (`tools/build_production.py`, `build/kroko-builder.Dockerfile`, the
   rewritten `Dockerfile`/`docker-compose.yml`): the production image installs
-  a pre-built VoiceSTT wheel and a pre-resolved, W4A-verified Kroko wheel
+  one pre-built product wheel containing the W4A-verified Pro-native payload
   instead of compiling or editable-installing anything itself, runs Ubuntu
   24.04 as the non-root `voicestt` user with a persistent
-  `/var/lib/voicestt` root, and produces the two public product identities
-  `voice-stt-server` (free) and `voice-stt-server-pro` with the same
-  VoiceSTT build. The public Compose file no longer needs a separate
+  `/var/lib/voicestt` root, and produces the single public product identity
+  `voice-stt-server`. The public Compose file no longer needs a separate
   browserclient/nginx container - the FastAPI server serves the browser
   client from its own installed package - and its Docker health probe now
   only proves the process/control plane is alive, never that an STT model is

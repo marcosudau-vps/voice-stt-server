@@ -1,0 +1,6 @@
+{
+  "status": "BLOCKED",
+  "upstreamRevision": "8657e655192623b98d7708e742a72987f953d3a2",
+  "evidenceRef": "docs/licenses.md#unified-v2-release-gate",
+  "reason": "Pro runtime redistribution contract, platform dependency inventory and Microsoft redistribution terms require explicit verified approval."
+}

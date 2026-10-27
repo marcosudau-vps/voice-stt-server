@@ -4,7 +4,10 @@ The [AP-KR-010 investigation](.archiv/kroko_unified_runtime_v2/AP-KR-010/2026-10
 records real isolated Free/Pro native probes on Windows and Linux/WSL CPython
 3.12, local experimental extra installation and existing suite results.
 Community-model success under Pro is explicitly not positive license evidence;
-authorized real license tests remain a separate prerequisite for AP-KR-020.
+authorized real license tests were a separate prerequisite for AP-KR-020.
+The later [Linux/Windows product qualification](.archiv/kroko_v2_finalization/2026-10-27_NACHTRAG_FINALE_QUALIFIKATION.md)
+records successful real Pro, shared-instance, reload and regular shutdown tests
+for Patch-Set 5. Public release approval remains a separate gate.
 
 VoiceSTT has two kinds of tests:
 
@@ -34,7 +37,7 @@ The normal fast suite (`python -m pytest -q tests/unit`) includes identity,
 HTTP/Wire and synthetic release-gate regressions. Real packaging is explicitly
 selected with `python -m pytest -q tests/packaging/test_identity_installation.py`
 in an environment with build, setuptools, wheel, packaging and pytest.
-It creates fresh consumer venvs, builds and installs real Legacy/Free/Pro
+It creates fresh consumer venvs, builds and installs real developer/product
 packages (stable/alpha/beta/RC/build metadata), preserves sdist provenance and
 reproduces the original installed F02/F03 defects. Optional
 `VOICESTT_IDENTITY_EVIDENCE_DIR` writes hash-bound artifact/installation JSON
@@ -430,3 +433,24 @@ Die [OpenAI-HTTP-Modulreferenz](openai-http-api.md) und
 beschreiben die durch diese Tests geschützten Modul- und Berechtigungsgrenzen.
 Der weitere [Modularisierungsfahrplan](architecture/server-modularization-roadmap.md)
 beschreibt die nächsten fachlichen Schnitte.
+
+
+## Unified V2 product qualification
+
+Run `python -m pytest -q tests/unit tests/compatibility` and separately
+`python -m pytest -q tests/packaging`. Ubuntu/Windows CI runs both. Packaging
+fixtures contain synthetic native payloads and do not prove native behavior.
+`test_unified_product.py` covers one product, native input, owner/relocation,
+platform notices, old-schema rejection and the independent redistribution gate.
+Release tests cover hash preflight, conflict/UNKNOWN refusal, digest promotion
+without a build and resume after partial platform uploads.
+
+For real models use the opt-in suite in `tests/unit/test_kroko_native_integration.py`
+and the credential handling described in its module header. Each scenario uses
+a fresh child interpreter. `VOICESTT_KROKO_NATIVE_CHILD_TIMEOUT` optionally bounds
+child diagnostics (default 900 seconds); `VOICESTT_KROKO_NATIVE_PROCESS_TIMEOUT`
+optionally bounds the parent subprocess wait. A timeout is FAILED, never PASS.
+Record runtime/artifact hashes and platform, and distinguish PASS, FAILED,
+NOT_RUN and externally blocked proof. Linux Pro reload/shutdown requires real
+native execution. Model-less HTTP identity qualification is insufficient.
+Public redistribution remains gated independently in `docs/licenses.md`.

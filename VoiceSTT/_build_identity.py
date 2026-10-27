@@ -17,7 +17,7 @@ from packaging.version import InvalidVersion, Version
 
 RESOURCE_NAME = "_build_identity.json"
 PRODUCT_DISTRIBUTIONS = ("voicestt", "voice-stt-server", "voice-stt-server-pro")
-PRODUCT_VARIANTS = {"voice-stt-server": "free", "voice-stt-server-pro": "pro"}
+PRODUCT_VARIANTS = {"voice-stt-server": "pro"}
 
 
 class IdentityError(ValueError):

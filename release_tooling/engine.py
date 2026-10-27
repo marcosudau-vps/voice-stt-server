@@ -75,8 +75,8 @@ class StepDefinition:
 #:    the last public success marker.
 STEP_DEFINITIONS: tuple = (
     StepDefinition("git_tag", "PREPARED", "TAGGED", "Create and push the immutable Git version tag for the qualified source commit", StepKind.PUBLISH),
-    StepDefinition("pypi", "TAGGED", "PYPI_PUBLISHED", "Publish the qualified voice-stt-server and voice-stt-server-pro wheels to PyPI", StepKind.PUBLISH),
-    StepDefinition("dockerhub", "PYPI_PUBLISHED", "DOCKERHUB_PUBLISHED", "Publish the qualified Free + Pro exact images to Docker Hub", StepKind.PUBLISH),
+    StepDefinition("pypi", "TAGGED", "PYPI_PUBLISHED", "Publish the qualified voice-stt-server platform wheels to PyPI", StepKind.PUBLISH),
+    StepDefinition("dockerhub", "PYPI_PUBLISHED", "DOCKERHUB_PUBLISHED", "Publish the qualified exact product image to Docker Hub", StepKind.PUBLISH),
     StepDefinition("ghcr", "DOCKERHUB_PUBLISHED", "GHCR_PUBLISHED", "Promote the exact Docker Hub manifests by digest to GHCR", StepKind.PUBLISH),
     StepDefinition("external_verification", "GHCR_PUBLISHED", "EXTERNAL_VERIFIED", "Verify every externally retrievable PyPI/Docker Hub/GHCR artifact", StepKind.VERIFY_ONLY),
     StepDefinition("aliases", "EXTERNAL_VERIFIED", "ALIASES_PUBLISHED", "Move the SemVer aliases in both registries onto the verified digests", StepKind.PUBLISH),
@@ -190,6 +190,9 @@ def run_engine(
     consulted when ``mode == REAL``.
     """
     if mode == ExecutionMode.REAL:
+        from .config import redistribution_verified
+        if not redistribution_verified(manifest.get("redistributionApproval")):
+            raise ManifestError("BLOCKED: Pro runtime redistribution rights are not verified")
         readiness = manifest.get("releaseReadiness")
         if readiness != "QUALIFIED":
             raise ManifestError(

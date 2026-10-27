@@ -67,9 +67,9 @@ adressieren. Proxies duerfen die `no-store`-Antwort nicht zwischenspeichern.
 Info ist nach HTTP-Start auch ohne bereite Modelle erreichbar und loest
 keine Modell-, Git-, Docker- oder Netzabfrage aus. Keine neue Startzeitgarantie.
 
-Paketname ist die tatsaechliche Distribution: generische Free/Pro-Images
-installieren `voicestt`, oeffentliche Produktwheels dagegen
-`voice-stt-server` oder `voice-stt-server-pro`. Die davon getrennte
+Paketname ist die tatsaechliche Distribution: das oeffentliche Produktwheel
+und das Produktimage installieren `voice-stt-server` mit Pro-faehiger Runtime;
+`voicestt` bleibt die Entwicklungsdistribution. Die davon getrennte
 Kroko-Variante stammt nur aus Runtimeprovenienz, niemals aus einem Key.
 Die Imagevariante wird extern qualifiziert, nicht im Handler abgefragt.
 Settings-HTTP, OpenAPI sowie bestehende V2-Annahme, Snapshot und Refusals

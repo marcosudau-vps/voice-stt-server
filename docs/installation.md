@@ -2,20 +2,18 @@
 
 ## The supported installation
 
-VoiceSTT is published as two complete, alternative distributions. Each one
-already contains the matching native Kroko runtime, the supported transcription
-engines and the server, so there is nothing to compile and no separate wheel to
-install afterwards:
+The V2 public product is `voice-stt-server`. It embeds a Pro-capable Kroko
+runtime and installs the supported engine, VAD and server dependencies:
 
 ```bash
-pip install voice-stt-server        # Kroko Free runtime
-pip install voice-stt-server-pro    # Kroko Pro runtime
+pip install voice-stt-server
 ```
 
-Supported targets are CPython 3.12 on Linux x86-64 and Windows x86-64 - the
-matrix the embedded native runtime is actually built and qualified for. Install
-one distribution or the other into an environment, never both. Both provide the
-same import package (`voice_stt_server`) and the same CLI (`voice-stt-server`).
+CPython 3.12 on Linux x86-64 and Windows AMD64 are supported. Community
+models need no Kroko key; Pro models need valid model-specific permission.
+The public import is `voice_stt_server`; the CLI is `voice-stt-server`.
+There is no second Pro edition and no additional Kroko installation/build.
+V2 publication remains subject to the [release gates](licenses.md#unified-v2-release-gate).
 
 Optional wake-word backends stay an extra, because `openwakeword` pulls a
 `tflite-runtime` dependency that has no wheel on every supported target:
@@ -24,8 +22,17 @@ Optional wake-word backends stay an extra, because `openwakeword` pulls a
 pip install "voice-stt-server[wake-words]"
 ```
 
-See [release-process.md](release-process.md) for how those distributions are
+See [release-process.md](release-process.md) for how the product is
 built and published.
+
+## Migrating an earlier V2 environment
+
+Use a fresh CPython 3.12 virtual environment for the unified product. Earlier
+`voice-stt-server-pro`, a separately installed `kroko-onnx`, or an editable
+`voicestt` checkout must not share ownership of the new product's files.
+The runtime rejects conflicting installed owners/provenance. Preserve model and
+runtime-data directories separately and select them through the existing settings.
+Installing the unified product does not activate a Pro model or transfer rights.
 
 ## The development distribution
 

@@ -82,18 +82,12 @@ class PyPICheckTests(unittest.TestCase):
         with self.assertRaises(ConflictError):
             check_pypi_release("voice-stt-server", "2.0.0", {"w.whl": "a" * 64}, fetch=fetch)
 
-    def test_the_two_distributions_are_checked_independently(self):
+    def test_missing_platform_wheel_requires_resume(self):
         # Free published, Pro not: exactly the resume case the new authority
         # names (section 6).
-        fetch = pypi_fetcher({"voice-stt-server": {"free.whl": "a" * 64}})
-        self.assertEqual(
-            check_pypi_release("voice-stt-server", "2.0.0", {"free.whl": "a" * 64}, fetch=fetch),
-            MATCH,
-        )
-        self.assertEqual(
-            check_pypi_release("voice-stt-server-pro", "2.0.0", {"pro.whl": "c" * 64}, fetch=fetch),
-            ABSENT,
-        )
+        fetch = pypi_fetcher({"voice-stt-server": {"linux.whl": "a" * 64}})
+        self.assertEqual(check_pypi_release("voice-stt-server", "2.0.0",
+            {"linux.whl": "a" * 64, "windows.whl": "c" * 64}, fetch=fetch), ABSENT)
 
     def test_partial_candidate_files_yields_partial_status(self):
         # B5: When some files match and others are absent, inspect returns PARTIAL

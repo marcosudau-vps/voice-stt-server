@@ -29,19 +29,13 @@ VERSION = "2.0.0"
 COMMIT = "934e3be7c78aa9358f9b42b9fa4dc282bed54d6c"
 TREE = "2936f70ca44b7a902e1e5c7c5ca69eacc3154fdb"
 
-FREE_DIGEST = "sha256:" + "a1" * 32
-PRO_DIGEST = "sha256:" + "b2" * 32
-FREE_WHEEL_SHA = "c3" * 32
-FREE_WHEEL_WIN_SHA = "c5" * 32
-PRO_WHEEL_SHA = "d4" * 32
-PRO_WHEEL_WIN_SHA = "d6" * 32
-KROKO_FREE_SHA = "e5" * 32
-KROKO_PRO_SHA = "f6" * 32
+PRO_DIGEST = "sha256:" + "a1" * 32
+PRO_WHEEL_SHA = "c3" * 32
+PRO_WHEEL_WIN_SHA = "c5" * 32
+KROKO_PRO_SHA = "e5" * 32
 
-FREE_WHEEL = "voice_stt_server-2.0.0-cp312-cp312-linux_x86_64.whl"
-FREE_WHEEL_WIN = "voice_stt_server-2.0.0-cp312-cp312-win_amd64.whl"
-PRO_WHEEL = "voice_stt_server_pro-2.0.0-cp312-cp312-linux_x86_64.whl"
-PRO_WHEEL_WIN = "voice_stt_server_pro-2.0.0-cp312-cp312-win_amd64.whl"
+PRO_WHEEL = "voice_stt_server-2.0.0-cp312-cp312-linux_x86_64.whl"
+PRO_WHEEL_WIN = "voice_stt_server-2.0.0-cp312-cp312-win_amd64.whl"
 
 STAGING_ROOT = "ghcr.io/marcosudau-vps"
 DOCKERHUB_ROOT = "marcosudau"
@@ -51,39 +45,17 @@ GHCR_ROOT = "ghcr.io/marcosudau-vps"
 def make_manifest(**overrides: Any) -> Dict[str, Any]:
     """A complete, valid schema-v2 RC manifest."""
     manifest = rc_manifest.build_rc_manifest(
+        redistribution_approval={
+            "status": "VERIFIED", "evidenceRef": "synthetic test approval (no real grant)",
+            "upstreamRevision": "8657e655192623b98d7708e742a72987f953d3a2",
+        },
         candidate_id="gh-12345-1",
         product_version=VERSION,
         source_commit=COMMIT,
         source_tree=TREE,
         distributions={
-            "free": {
-                "name": "voice-stt-server",
-                "krokoVariant": "free",
-                "krokoFingerprint": "578d6c898adac1b1",
-                "krokoArtifactSha256": KROKO_FREE_SHA,
-                "wheels": [
-                    {
-                        "filename": FREE_WHEEL,
-                        "sha256": FREE_WHEEL_SHA,
-                        "pythonTag": "cp312",
-                        "abiTag": "cp312",
-                        "platformTag": "linux_x86_64",
-                        "krokoFingerprint": "578d6c898adac1b1",
-                        "krokoArtifactSha256": KROKO_FREE_SHA,
-                    },
-                    {
-                        "filename": FREE_WHEEL_WIN,
-                        "sha256": FREE_WHEEL_WIN_SHA,
-                        "pythonTag": "cp312",
-                        "abiTag": "cp312",
-                        "platformTag": "win_amd64",
-                        "krokoFingerprint": "578d6c898adac1b1",
-                        "krokoArtifactSha256": KROKO_FREE_SHA,
-                    },
-                ],
-            },
             "pro": {
-                "name": "voice-stt-server-pro",
+                "name": "voice-stt-server",
                 "krokoVariant": "pro",
                 "krokoFingerprint": "36b440630c0a9475",
                 "krokoArtifactSha256": KROKO_PRO_SHA,
@@ -110,15 +82,10 @@ def make_manifest(**overrides: Any) -> Dict[str, Any]:
             },
         },
         images={
-            "free": {
-                "tag": f"voice-stt-server:{VERSION}",
-                "digest": FREE_DIGEST,
-                "staging": f"{STAGING_ROOT}/voice-stt-server-staging@{FREE_DIGEST}",
-            },
             "pro": {
-                "tag": f"voice-stt-server-pro:{VERSION}",
+                "tag": f"voice-stt-server:{VERSION}",
                 "digest": PRO_DIGEST,
-                "staging": f"{STAGING_ROOT}/voice-stt-server-pro-staging@{PRO_DIGEST}",
+                "staging": f"{STAGING_ROOT}/voice-stt-server-staging@{PRO_DIGEST}",
             },
         },
         oci_version=VERSION,
@@ -262,14 +229,14 @@ __all__ = [
     "VERSION",
     "COMMIT",
     "TREE",
-    "FREE_DIGEST",
     "PRO_DIGEST",
-    "FREE_WHEEL",
-    "FREE_WHEEL_WIN",
+    "PRO_DIGEST",
     "PRO_WHEEL",
     "PRO_WHEEL_WIN",
-    "FREE_WHEEL_SHA",
-    "FREE_WHEEL_WIN_SHA",
+    "PRO_WHEEL",
+    "PRO_WHEEL_WIN",
+    "PRO_WHEEL_SHA",
+    "PRO_WHEEL_WIN_SHA",
     "PRO_WHEEL_SHA",
     "PRO_WHEEL_WIN_SHA",
     "DOCKERHUB_ROOT",

@@ -21,7 +21,7 @@ if str(REPO_ROOT) not in sys.path:
 from VoiceSTT._build_identity import BuildIdentity, IdentityError  # noqa: E402
 from VoiceSTT._version import resolve_version  # noqa: E402
 from build_identity_support import capture_identity, match_identity, wheel_identity  # noqa: E402
-from tools.build_distribution import distribution_name_for  # noqa: E402
+from tools.build_distribution import distribution_name_for, verify_bundled_notices, DistributionBuildError  # noqa: E402
 
 
 def sha256(path: Path) -> str:
@@ -40,6 +40,7 @@ def validate_distribution(path: Path, source: BuildIdentity, variant: str,
         with zipfile.ZipFile(path) as archive:
             embedded = json.loads(archive.read("voice_stt_server/_embedded_kroko.json"))
             names = archive.namelist()
+            verify_bundled_notices(archive)
         if (
             names.count("voice_stt_server/_embedded_kroko.json") != 1
             or type(embedded.get("schemaVersion")) is not int
@@ -52,7 +53,7 @@ def validate_distribution(path: Path, source: BuildIdentity, variant: str,
             or not any(name.startswith("kroko_onnx/") for name in names)
         ):
             raise IdentityError("distribution and qualified Kroko provenance conflict")
-    except (KeyError, ValueError, AttributeError, OSError, zipfile.BadZipFile):
+    except (KeyError, ValueError, AttributeError, OSError, zipfile.BadZipFile, DistributionBuildError):
         raise IdentityError("unreadable or conflicting distribution provenance") from None
     return identity
 
@@ -248,11 +249,11 @@ def qualify_candidate(directory: Path, *, platform: str | None = None,
         if install:
             entry["installed"] = qualify_installed_wheel(wheel, identity)
         entries.append(entry)
-    expected = {("free", "win_amd64"), ("pro", "win_amd64")} if platform == "windows" else {
-        ("free", "linux_x86_64"), ("pro", "linux_x86_64")
+    expected = {("pro", "win_amd64")} if platform == "windows" else {
+        ("pro", "linux_x86_64")
     }
     if platform is None:
-        expected |= {("free", "win_amd64"), ("pro", "win_amd64")}
+        expected |= {("pro", "win_amd64")}
     if seen != expected:
         raise IdentityError("candidate identity gate lacks the required variant/platform wheels")
     if check_reports:
@@ -294,8 +295,8 @@ def qualify_candidate(directory: Path, *, platform: str | None = None,
                 if entry["filename"] in proven:
                     raise IdentityError("duplicate installed qualification report")
                 proven[entry["filename"]] = entry["sha256"]
-            if len(reported) != 2:
-                raise IdentityError("installed qualification report lacks both native variants")
+            if len(reported) != 1:
+                raise IdentityError("installed qualification report lacks the unified product")
         if proven != {entry["filename"]: entry["sha256"] for entry in entries}:
             raise IdentityError("installed qualification reports do not bind all candidate wheel bytes")
         manifest = json.loads((directory / "rc-manifest.json").read_text(encoding="utf-8"))

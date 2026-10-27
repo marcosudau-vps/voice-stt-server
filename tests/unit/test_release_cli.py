@@ -80,7 +80,7 @@ class ManifestCommandTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rc-manifest.json"
             broken = make_manifest()
-            broken["images"]["free"].pop("digest")
+            broken["images"]["pro"].pop("digest")
             path.write_text(json.dumps(broken), encoding="utf-8")
             code, _, err = run_cli(["manifest", "validate", str(path)])
         self.assertEqual(code, cli.EXIT_FAILED)
@@ -106,13 +106,17 @@ class ManifestCommandTests(unittest.TestCase):
         self.assertEqual(manifest["candidateId"], "gh-4242-1")
         self.assertEqual(
             rc_manifest.distribution_names(manifest),
-            {"free": "voice-stt-server", "pro": "voice-stt-server-pro"},
+            {'pro': 'voice-stt-server'},
         )
 
-    def test_manifest_build_refuses_a_candidate_built_from_two_commits(self):
+    def test_manifest_build_refuses_dirty_candidate(self):
         with tempfile.TemporaryDirectory() as tmp:
             candidate = Path(tmp) / "candidate"
-            _write_candidate_dir(candidate, pro_commit="9" * 40)
+            _write_candidate_dir(candidate)
+            build = candidate / "build-manifest-pro.json"
+            payload = json.loads(build.read_text())
+            payload["gitDirty"] = True
+            build.write_text(json.dumps(payload))
             code, _, err = run_cli([
                 "manifest", "build",
                 "--candidate-dir", str(candidate),
@@ -124,7 +128,7 @@ class ManifestCommandTests(unittest.TestCase):
                 "--out", str(Path(tmp) / "out.json"),
             ])
         self.assertEqual(code, cli.EXIT_FAILED)
-        self.assertIn("different", err)
+        self.assertIn("dirty", err)
 
     def test_manifest_qualify_sets_readiness_and_evidence(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -249,7 +253,7 @@ class PrecheckPypiCommandTests(unittest.TestCase):
             manifest = make_manifest()
             dist_dir = tmp_path / "dist"
             dist_dir.mkdir()
-            for variant in ("free", "pro"):
+            for variant in ("pro",):
                 for w in manifest["distributions"][variant]["wheels"]:
                     wheel_file = dist_dir / w["filename"]
                     wheel_file.write_bytes(b"dummy wheel " + w["filename"].encode())
@@ -257,24 +261,7 @@ class PrecheckPypiCommandTests(unittest.TestCase):
             rc_manifest.write_rc_manifest(manifest_path, manifest)
 
             stage_dir = tmp_path / "stage"
-            fake_report = {
-                "free": {
-                    "status": "ABSENT",
-                    "project": "voice-stt-server",
-                    "version": "2.0.0",
-                    "matched": [],
-                    "absent": [w["filename"] for w in manifest["distributions"]["free"]["wheels"]],
-                    "conflicts": [],
-                },
-                "pro": {
-                    "status": "ABSENT",
-                    "project": "voice-stt-server-pro",
-                    "version": "2.0.0",
-                    "matched": [],
-                    "absent": [w["filename"] for w in manifest["distributions"]["pro"]["wheels"]],
-                    "conflicts": [],
-                },
-            }
+            fake_report = {'pro': {'status': 'ABSENT', 'project': 'voice-stt-server', 'version': '2.0.0', 'matched': [], 'absent': [w['filename'] for w in manifest['distributions']['pro']['wheels']], 'conflicts': []}}
             with mock.patch("release_tooling.remote_checks.precheck_pypi", return_value=fake_report):
                 code, out, err = run_cli([
                     "precheck-pypi",
@@ -283,9 +270,9 @@ class PrecheckPypiCommandTests(unittest.TestCase):
                     "--stage-dir", str(stage_dir),
                 ])
             self.assertEqual(code, cli.EXIT_OK, err)
-            self.assertTrue((stage_dir / "free").is_dir())
             self.assertTrue((stage_dir / "pro").is_dir())
-            free_staged = [p.name for p in (stage_dir / "free").iterdir()]
+            self.assertTrue((stage_dir / "pro").is_dir())
+            free_staged = [p.name for p in (stage_dir / "pro").iterdir()]
             self.assertEqual(len(free_staged), 2)
             pro_staged = [p.name for p in (stage_dir / "pro").iterdir()]
             self.assertEqual(len(pro_staged), 2)
@@ -310,8 +297,8 @@ class PrepareNextVersionTests(unittest.TestCase):
 def _write_candidate_dir(candidate: Path, pro_commit: str = "a" * 40) -> None:
     """A minimal but structurally real candidate output directory."""
     candidate.mkdir(parents=True, exist_ok=True)
-    for variant, commit in (("free", "a" * 40), ("pro", pro_commit)):
-        digest = "sha256:" + ("1" if variant == "free" else "2") * 64
+    for variant, commit in (("pro", pro_commit),):
+        digest = "sha256:" + ("1" if variant == "pro" else "2") * 64
         (candidate / f"build-manifest-{variant}.json").write_text(json.dumps({
             "gitCommit": commit,
             "gitDirty": False,
@@ -320,30 +307,30 @@ def _write_candidate_dir(candidate: Path, pro_commit: str = "a" * 40) -> None:
                 variant: {
                     "kroko": {
                         "fingerprint": f"fp-{variant}",
-                        "artifact": {"wheelSha256": ("3" if variant == "free" else "4") * 64},
+                        "artifact": {"wheelSha256": ("3" if variant == "pro" else "4") * 64},
                     },
-                    "image": {"versionTag": f"voice-stt-server{'-pro' if variant == 'pro' else ''}:2.0.0"},
+                    "image": {"versionTag": "voice-stt-server:2.0.0"},
                 }
             },
         }), encoding="utf-8")
-        name = "voice-stt-server-pro" if variant == "pro" else "voice-stt-server"
+        name = "voice-stt-server" if variant == "pro" else "voice-stt-server"
         (candidate / f"distribution-{variant}.json").write_text(json.dumps({
             "distribution": name,
             "filename": f"{name.replace('-', '_')}-2.0.0-cp312-cp312-linux_x86_64.whl",
-            "sha256": ("5" if variant == "free" else "6") * 64,
+            "sha256": ("5" if variant == "pro" else "6") * 64,
             "pythonTag": "cp312",
             "abiTag": "cp312",
             "platformTag": "linux_x86_64",
-            "embedded": {"kroko": {"wheelSha256": ("3" if variant == "free" else "4") * 64}},
+            "embedded": {"kroko": {"wheelSha256": "3" * 64, "fingerprint": f"fp-{variant}"}},
         }), encoding="utf-8")
         (candidate / f"distribution-{variant}-win_amd64.json").write_text(json.dumps({
             "distribution": name,
             "filename": f"{name.replace('-', '_')}-2.0.0-cp312-cp312-win_amd64.whl",
-            "sha256": ("7" if variant == "free" else "8") * 64,
+            "sha256": ("7" if variant == "pro" else "8") * 64,
             "pythonTag": "cp312",
             "abiTag": "cp312",
             "platformTag": "win_amd64",
-            "embedded": {"kroko": {"wheelSha256": ("3" if variant == "free" else "4") * 64}},
+            "embedded": {"kroko": {"wheelSha256": "3" * 64, "fingerprint": f"fp-{variant}"}},
         }), encoding="utf-8")
         (candidate / f"staging-{variant}.json").write_text(json.dumps({
             "pushed": True,
