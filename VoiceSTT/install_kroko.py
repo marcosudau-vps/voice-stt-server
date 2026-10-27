@@ -1245,6 +1245,9 @@ def patch_license_quiet_env(repo_dir):
 
     text = read_text(path)
     original = text
+    # Reused Windows checkouts can acquire CRLF during git reset. The pinned
+    # patch has one deterministic LF source form on both build hosts.
+    text = text.replace("\r\n", "\n")
 
     if "#include <cstdlib>" not in text:
         text = _insert_after_line(text, "#include <chrono>", "#include <cstdlib>\n")

@@ -84,14 +84,16 @@ def test_linux_kroko_build_forces_cpu_only_cmake_flags(tmp_path):
     assert "SHERPA_ONNX_ENABLE_BINARY=OFF" in flags
 
 
-def test_pinned_license_shutdown_patch_stops_before_join_and_is_idempotent(tmp_path):
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"])
+def test_pinned_license_shutdown_patch_stops_before_join_and_is_idempotent(tmp_path, newline):
     from pathlib import Path
     path = tmp_path / "sherpa-onnx/csrc/license.h"
     path.parent.mkdir(parents=True)
     source = Path(__file__).parent / "fixtures/kroko_license_pinned.h"
-    path.write_bytes(source.read_bytes())
+    path.write_bytes(source.read_text(encoding="utf-8").encode().replace(b"\n", newline))
     install_kroko.patch_license_quiet_env(tmp_path)
     first = path.read_text(encoding="utf-8")
+    assert b"\r\n" not in path.read_bytes()
     assert "while (!stop_requested.load())" in first
     assert "if (stop_requested.load()) return;" in first
     stop = first.index("LicenseState::getInstance().KrokoRequestLicenseStop();")

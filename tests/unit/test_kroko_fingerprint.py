@@ -371,7 +371,7 @@ class BuildEffectiveLogicGuardTests(unittest.TestCase):
     #: the Windows Dockerfile patch copies the checked-in byte-identical channel
     #: manifest and still pins/checks the package manifest, SDK and CRT).
     EXPECTED_PATCH_SOURCE_DIGEST = (
-        "cef39c7ddc37045cb7438baa1a126fcce4dc5d64f03209b4abc2a7cfd6187a7e"
+        "f78a7f28533c55b5584a0c1e47d015c5bd4f84cd8780487eefbc2b2d3ffafead"
     )
 
     EXPECTED_WINDOWS_BUILDER_SOURCE_DIGEST = (
