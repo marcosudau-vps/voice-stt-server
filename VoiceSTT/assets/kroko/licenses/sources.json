@@ -79,8 +79,88 @@
     },
     "NOTICE": {
       "url": "repository:VoiceSTT/assets/kroko/licenses/NOTICE",
-      "sha256": "c9a8699629db68dbf5ad91f1ce17b31a1036da8ff32a574a880abd3c3e079f7c",
-      "bytes": 1189
+      "sha256": "ce9a6de0c27378819b047e335b1709d57354053d958edf873da97db5e9a21f76",
+      "bytes": 1503
+    },
+    "ASIO-LICENSE": {
+      "url": "https://github.com/chriskohlhoff/asio/archive/refs/tags/asio-1-24-0.tar.gz#asio/LICENSE_1_0.txt",
+      "sourceArchiveUrl": "https://github.com/chriskohlhoff/asio/archive/refs/tags/asio-1-24-0.tar.gz",
+      "sourceArchiveSha256": "cbcaaba0f66722787b1a7c33afe1befb3a012b5af3ad7da7ff0f6b8c9b7a8a5b",
+      "sourcePath": "asio/LICENSE_1_0.txt",
+      "sha256": "c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566",
+      "bytes": 1338
+    },
+    "CPPJIEBA-LICENSE": {
+      "url": "https://github.com/csukuangfj/cppjieba/archive/refs/tags/sherpa-onnx-2024-04-19.tar.gz#LICENSE",
+      "sourceArchiveUrl": "https://github.com/csukuangfj/cppjieba/archive/refs/tags/sherpa-onnx-2024-04-19.tar.gz",
+      "sourceArchiveSha256": "03e5264687f0efaef05487a07d49c3f4c0f743347bfbf825df4b30cc75ac5288",
+      "sourcePath": "LICENSE",
+      "sha256": "ba898a14f729ba5e9965da34e3eecd5edd3795f2cc5d7c923b815ba79bb851b0",
+      "bytes": 1066
+    },
+    "CPPJIEBA-LIMONP-LICENSE": {
+      "url": "https://github.com/csukuangfj/cppjieba/archive/refs/tags/sherpa-onnx-2024-04-19.tar.gz#deps/limonp/LICENSE",
+      "sourceArchiveUrl": "https://github.com/csukuangfj/cppjieba/archive/refs/tags/sherpa-onnx-2024-04-19.tar.gz",
+      "sourceArchiveSha256": "03e5264687f0efaef05487a07d49c3f4c0f743347bfbf825df4b30cc75ac5288",
+      "sourcePath": "deps/limonp/LICENSE",
+      "sha256": "ba898a14f729ba5e9965da34e3eecd5edd3795f2cc5d7c923b815ba79bb851b0",
+      "bytes": 1066
+    },
+    "SIMPLE-SENTENCEPIECE-LICENSE": {
+      "url": "https://github.com/pkufool/simple-sentencepiece/archive/refs/tags/v0.7.tar.gz#LICENSE",
+      "sourceArchiveUrl": "https://github.com/pkufool/simple-sentencepiece/archive/refs/tags/v0.7.tar.gz",
+      "sourceArchiveSha256": "1748a822060a35baa9f6609f84efc8eb54dc0e74b9ece3d82367b7119fdc75af",
+      "sourcePath": "LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "bytes": 11357
+    },
+    "EIGEN-COPYING.APACHE": {
+      "url": "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz#COPYING.APACHE",
+      "sourceArchiveUrl": "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz",
+      "sourceArchiveSha256": "8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72",
+      "sourcePath": "COPYING.APACHE",
+      "sha256": "03379001a7b12a2ec997a25554247d985270b353c10d5bafee9ac8d6519820b7",
+      "bytes": 11362
+    },
+    "EIGEN-COPYING.BSD": {
+      "url": "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz#COPYING.BSD",
+      "sourceArchiveUrl": "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz",
+      "sourceArchiveSha256": "8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72",
+      "sourcePath": "COPYING.BSD",
+      "sha256": "51928dce36213c5333ba3172e847d735d4c6e9b7ff2722a326c49067155b82eb",
+      "bytes": 1517
+    },
+    "EIGEN-COPYING.GPL": {
+      "url": "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz#COPYING.GPL",
+      "sourceArchiveUrl": "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz",
+      "sourceArchiveSha256": "8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72",
+      "sourcePath": "COPYING.GPL",
+      "sha256": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "bytes": 35147
+    },
+    "EIGEN-COPYING.LGPL": {
+      "url": "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz#COPYING.LGPL",
+      "sourceArchiveUrl": "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz",
+      "sourceArchiveSha256": "8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72",
+      "sourcePath": "COPYING.LGPL",
+      "sha256": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551",
+      "bytes": 26530
+    },
+    "EIGEN-COPYING.MINPACK": {
+      "url": "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz#COPYING.MINPACK",
+      "sourceArchiveUrl": "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz",
+      "sourceArchiveSha256": "8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72",
+      "sourcePath": "COPYING.MINPACK",
+      "sha256": "c87b7f8ee88f6195e91743820c00354833583aef091b72e2d4a49c8e28e798a0",
+      "bytes": 2193
+    },
+    "EIGEN-COPYING.README": {
+      "url": "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz#COPYING.README",
+      "sourceArchiveUrl": "https://gitlab.com/libeigen/eigen/-/archive/3.4.0/eigen-3.4.0.tar.gz",
+      "sourceArchiveSha256": "8586084f71f9bde545ee7fa6d00288b264a2b7ac3607b974e54d13e7162c1c72",
+      "sourcePath": "COPYING.README",
+      "sha256": "c83230b770f17ef1386ea1fd3681271dd98aa93646bdbfb5bff3a1b7050fff9d",
+      "bytes": 779
     }
   }
 }

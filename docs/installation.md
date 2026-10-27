@@ -25,6 +25,15 @@ pip install "voice-stt-server[wake-words]"
 See [release-process.md](release-process.md) for how the product is
 built and published.
 
+## Migrating an earlier V2 environment
+
+Use a fresh CPython 3.12 virtual environment for the unified product. Earlier
+`voice-stt-server-pro`, a separately installed `kroko-onnx`, or an editable
+`voicestt` checkout must not share ownership of the new product's files.
+The runtime rejects conflicting installed owners/provenance. Preserve model and
+runtime-data directories separately and select them through the existing settings.
+Installing the unified product does not activate a Pro model or transfer rights.
+
 ## The development distribution
 
 The rest of this page describes the **development** distribution built from

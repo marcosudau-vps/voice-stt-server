@@ -79,3 +79,10 @@ def test_technical_qualification_never_grants_redistribution(tmp_path):
     # An empty adapter bundle proves refusal occurs before a public operation.
     with pytest.raises(ManifestError, match="redistribution"):
         run_engine(make_state(manifest=manifest), manifest, adapters={}, mode=ExecutionMode.REAL)
+
+
+def test_non_object_unified_product_is_a_manifest_error():
+    manifest = make_manifest()
+    manifest["distributions"]["pro"] = []
+    with pytest.raises(ManifestError, match="distributions.pro"):
+        rc_manifest.validate_rc_manifest(manifest)

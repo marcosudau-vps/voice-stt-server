@@ -36,7 +36,10 @@ Technical qualification does not change that approval.
 
 The notice bundle covers Kroko/sherpa-onnx, ONNX Runtime 1.17.1 and its third-party
 notices, OpenSSL, WebSocket++, Asio, pybind11, Kaldi components, OpenFST and
-transitive source notices. Source URLs and license texts are evidence for those
+transitive source notices, including Asio’s full Boost license, cppjieba/limonp,
+Eigen license/readme texts and simple-sentencepiece. ONNX Runtime LICENSE and
+ThirdPartyNotices were compared byte-for-byte with the actual verified Linux
+dependency payload. Source URLs and license texts are evidence for those
 components, not an assertion that all binary/product redistribution rights are
 settled. Linux system-library notices also belong to the container base; Python
 dependencies keep their own installed metadata/notices. The final Linux/Windows

@@ -124,10 +124,8 @@ def distribution_block(
     enriched_wheels = []
     for w in wheels:
         rec = dict(w)
-        if "krokoFingerprint" not in rec and default_fp:
-            rec["krokoFingerprint"] = default_fp
-        if "krokoArtifactSha256" not in rec and default_sha:
-            rec["krokoArtifactSha256"] = default_sha
+        _require(rec.get("krokoFingerprint"), f"{variant} platform native fingerprint")
+        _require(rec.get("krokoArtifactSha256"), f"{variant} platform native SHA-256")
         enriched_wheels.append(rec)
 
     dist_name = (

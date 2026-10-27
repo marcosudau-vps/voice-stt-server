@@ -196,7 +196,8 @@ def validate_rc_manifest(data: Dict[str, Any]) -> None:
             )
         _require(set(distributions) == {"pro"},
                  "distributions must contain exactly the unified product entry 'pro'", problems)
-        _require(distributions.get("pro", {}).get("name") == "voice-stt-server",
+        product = distributions.get("pro")
+        _require(isinstance(product, dict) and product.get("name") == "voice-stt-server",
                  "the only public distribution is voice-stt-server", problems)
 
     images = data.get("images")
