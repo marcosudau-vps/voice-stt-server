@@ -1245,6 +1245,9 @@ def patch_license_quiet_env(repo_dir):
 
     text = read_text(path)
     original = text
+    # Reused Windows checkouts can acquire CRLF during git reset. The pinned
+    # patch has one deterministic LF source form on both build hosts.
+    text = text.replace("\r\n", "\n")
 
     if "#include <cstdlib>" not in text:
         text = _insert_after_line(text, "#include <chrono>", "#include <cstdlib>\n")
@@ -1295,6 +1298,9 @@ def patch_license_quiet_env(repo_dir):
     elif KROKO_LICENSE_QUIET_ENV not in text:
         text = _insert_after_line(text, "using json = nlohmann::json;", "\n" + helper)
 
+    # Keep first application and reapplication byte-identical.
+    text = text.replace(helper + "\nstruct Feature {", helper + "struct Feature {")
+
     for marker in (
         "License not allowed:",
         "License accepted. Remaining seconds:",
@@ -1312,6 +1318,31 @@ def patch_license_quiet_env(repo_dir):
         "Offline timeout exceeded (",
     ):
         text = _wrap_license_output_line(text, marker)
+
+    # The upstream reporter runs forever. Joining it at process shutdown
+    # hangs Linux after successful Pro inference. Stop its existing event loop
+    # before joining; no native status API or new process owner is introduced.
+    if "class BanafoLicense" in text and "KrokoRequestLicenseStop" not in text:
+        edits = (
+            ("#include <chrono>", "#include <chrono>\n#include <atomic>"),
+            ("    bool is_finish = false;", "    bool is_finish = false;\n"
+             "    std::atomic<bool> stop_requested{false};\n"
+             "    void KrokoRequestLicenseStop() {\n"
+             "        stop_requested.store(true);\n"
+             "        c.stop();\n"
+             "    }"),
+            ("        while (true) {", "        while (!stop_requested.load()) {"),
+            ("            c.run();  // blocking\n            c.reset();",
+             "            c.run();  // blocking\n"
+             "            if (stop_requested.load()) return;\n"
+             "            c.reset();"),
+            ("  ~BanafoLicense() {", "  ~BanafoLicense() {\n"
+             "    LicenseState::getInstance().KrokoRequestLicenseStop();"),
+        )
+        for before, after in edits:
+            if text.count(before) != 1:
+                raise KrokoInstallError("pinned Kroko license shutdown patch context mismatch")
+            text = text.replace(before, after, 1)
 
     if text != original:
         write_text(path, text)

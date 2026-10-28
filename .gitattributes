@@ -22,3 +22,9 @@ VoiceSTT/assets/build_inputs/windows/visual-studio-17.14.39-channel.json -text -
 
 # Archived original assignments stay byte-identical to their source.
 docs/.archiv/einheitliche_triggerarchitektur/AP-SRV-060/runs/**/2026-*_PROMPT.md -text
+
+# Preserve the exact user assignment for the finalization audit.
+docs/.archiv/kroko_v2_finalization/2026-10-27_ORIGINALAUFTRAG.txt -text
+
+# Vendored license bytes and their checksums must survive every checkout OS.
+VoiceSTT/assets/kroko/licenses/** -text

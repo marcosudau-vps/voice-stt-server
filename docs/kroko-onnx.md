@@ -1,9 +1,10 @@
 # Kroko-ONNX
 
-`kroko_onnx` uses the optional
+`kroko_onnx` uses the embedded
 [kroko-ai/kroko-onnx](https://github.com/kroko-ai/kroko-onnx) runtime with
 Kroko/Banafo streaming `.data` models. The adapter is lazy-loaded, so normal
-VoiceSTT installs and tests do not require Kroko-ONNX.
+developer checkouts and mock tests need no native import. The public V2 product
+`voice-stt-server` already includes the Pro-capable runtime.
 
 Build and licensing procedures are centralized in
 [`build/BUILD.md`](../build/BUILD.md#kroko-im-detail). This engine page
@@ -21,39 +22,16 @@ the generic engine-name normalization.
 
 ## Install
 
-Kroko-ONNX is not installed by default. VoiceSTT exposes a small builder
-helper:
+Install `voice-stt-server` on CPython 3.12 Linux x86-64 or Windows AMD64.
+The wheel already contains Kroko; operators need no separate native build.
+Community models work without a license key. Pro models require valid permission
+for the actual model UUID. `runtime_variant=pro` and key presence do not establish
+native capability; installed product/native provenance does.
 
-```bash
-python -m pip install "VoiceSTT[kroko-builder,silero-onnx-cpu]"
-stt-install-kroko --build --variant free
-```
-
-The `kroko-builder` extra builds and installs Kroko-ONNX. The
-`silero-onnx-cpu` extra gives `AudioToTextRecorder` a local VAD backend for the
-standalone recorder smoke test and live microphone use. If you only need to
-build the Kroko-ONNX wheel, `kroko-builder` alone is enough.
-
-On Windows, start Docker Desktop before running the build command. The Docker
-Desktop Linux engine must be available, not just the Docker CLI. You can verify
-the local prerequisites with:
-
-```powershell
-python --version
-git --version
-docker version
-```
-
-`docker version` should print both a `Client` and a `Server` section. If it
-prints only client information and an engine connection error, start Docker
-Desktop, wait until it reports that Docker is running, and retry.
-`docker --version` only checks that the Docker CLI is installed; it does not
-verify that Docker Desktop's engine is running.
-
-The helper uses Kroko's `cross-platform-builds` branch. On Windows it builds a
-CPython 3.12 `win_amd64` wheel with Docker Desktop, then installs that wheel.
-On Linux it patches the checkout and installs from source. Add `--skip-install`
-to build without installing into the active Python environment.
+Contributor-only native build procedures remain in
+[build/BUILD.md](../build/BUILD.md#kroko-im-detail). They are not an additional
+public product. [Redistribution approval](licenses.md#unified-v2-release-gate)
+remains separate from technical license checks.
 
 ### Pinned builder inputs
 
@@ -150,6 +128,11 @@ Kroko models are described by the model authority in
 model's identity, SHA-256, byte size, license class and the Kroko runtime
 variant (`free`/`pro`) it requires. The manifest ships metadata only - **no
 Kroko model file is bundled** in Git, in the wheel/sdist or in an image.
+
+The [offline model catalog](kroko-model-catalog.md) adds typed discovery,
+filtering and download planning for cleaned provider metadata. Catalog
+visibility and a download URL do not grant model rights or verify bytes.
+The existing twelve-model manifest remains the integrity authority.
 
 ### Why models are provisioned rather than shipped
 
@@ -271,6 +254,105 @@ Reliable suppression of asynchronous Pro license refresh messages such as
 native patch. Older/unpatched Kroko wheels may still print background license
 messages.
 
+## Selektive V2-Verbesserungen (25.10.2026) und automatischer Lifecycle (Korrekturlauf)
+
+Der V2-Entwicklungszweig verwendet weiterhin die direkte Kroko-Anbindung.
+Der Owner-/Supervisor-Prozess sowie der native Statuspatch aus Draft-PR #14
+sind **nicht** Teil dieser Implementierung.
+
+Die Key-Auflösung für `OnlineRecognizer.from_transducer` liegt zentral in
+`VoiceSTT.kroko.credentials.effective_recognizer_key`. Sie berücksichtigt
+auch `recognizer.key` als letzten nativen Override und ist damit für eine
+API-Lizenzprüfung dieselbe Quelle wie für den Recognizer.
+
+`VoiceSTT.kroko.license_api.check_onprem_license` stellt eine **explizite**
+modellbezogene Prüffunktion für den On-Premise-WebSocket-Lizenzdienst zur
+Verfügung. Sie ist weder die gehostete Transkriptions-API noch löst sie von
+sich aus etwas aus: Aufrufer ist der `KrokoLicenseGate` der Security-Komponente.
+Der Lizenzdienst verlangt ein Key-/Modell-UUID-Paar; ein positives Ergebnis
+für ein Modell berechtigt nicht zu anderen Modellen. Die technische UUID
+stammt aus dem Header der lokal vorliegenden `.data`-Datei
+(`VoiceSTT.kroko.models.license_uuid_for`) – derselben Quelle, die die native
+Runtime ihrer eigenen Prüfung übergibt. Fehlt Datei oder UUID, bleibt der
+Pfad fail-closed.
+
+Der Server wertet die Richtlinie automatisch aus: bei Initialisierung (vor der
+ersten Modell-Admission), bei `POST /api/models/refresh`, bei
+`PUT /api/models/active` (gegen die Kandidaten-Settings, da Engine-Optionen
+dort zur Laufzeit wechseln können), bei Änderung von `kroko.forceCommunity`
+und explizit über `POST /api/kroko/license/refresh` (Admin). Die Prüfung ist
+**nicht** davon abhängig, dass bereits ein Pro-Modell als Standard gewählt ist:
+mit gültigem Key und einem lokal vorhandenen Pro-Modell wird die
+Auswahlberechtigung auch aus einer Community-Konfiguration heraus geprüft
+(Aktivierung bleibt davon getrennt). Ohne Key oder mit Force Community findet
+keine Netzwerkanfrage statt; Prüfungen laufen begrenzt (Standard 5 s,
+Admin-Route bis 60 s) und außerhalb des ASGI-Eventloops.
+`VoiceSTT.kroko.license_state.KrokoLicenseState` hält den flüchtigen,
+modellgebundenen Prüfstatus ohne Secret oder Persistenz (Scope `model`,
+TTL ≤ 60 s, Generationenbindung); `pro_enabled` ist daraus abgeleitet.
+`VoiceSTT.kroko.models.community_fallback_model` wählt deterministisch
+einen geeigneten Community-*Kandidaten*, überprüft aber weder dessen lokale
+Verfügbarkeit noch die Ladbarkeit. Diese Verantwortung bleibt beim
+`STTModelManager`. Details zum Berechtigungs-Lifecycle:
+[Server-Authentifizierung](server-authentication.md#4-kroko-on-premise-modelllizenz--produkt-entitlement-kein-api-login).
+
+Betreiber setzen `kroko.forceCommunity` (serverweit, Admin, live,
+persistierte Absicht) für reinen Community-Betrieb. Lizenzstatus und
+`pro_enabled` werden nie persistiert; ein Neustart beginnt bei `NOT_CHECKED`.
+Ein Key allein – ohne positive Prüfung – schaltet nichts frei; ein Key ersetzt
+insbesondere keinen Pro-Build (`KROKO_VARIANT=pro`, siehe
+[Buildreferenz](../build/BUILD.md)). Nicht qualifiziert bleiben vor allem
+Anbieter-Connection-Limits, Nutzungsreports und Widerrufssemantik.
+Echte Lizenzserver- und Native-Integrationstests sind Opt-in
+(`VOICESTT_KROKO_LIVE_TESTS=1`, `VOICESTT_KROKO_NATIVE_TESTS=1`), siehe
+[Testing](testing.md).
+
+## Modell- und Lizenzwechsel im laufenden Prozess
+
+Die folgenden Aussagen beruhen auf Messungen der Kroko-ONNX-1.12.9-Pro-Runtime
+(isolierte Prozesse) und sind der verbindliche Betriebsvertrag dieses Servers.
+Sie werden vor dem nativen Laden durchgesetzt
+(`VoiceSTT/kroko/native_guard.py`; Load-Probe, Refresh, Recovery,
+Scheduler-Erstellung und Engine-Konstruktor), nicht erst durch den Absturz.
+
+**Betriebsgrenze.** Ein Voice-STT-Prozess betreibt höchstens **eine** native
+Kroko-Modellinstanz zur gleichen Zeit. Final und Realtime verwenden bei Kroko
+dasselbe Modell mit gemeinsamer Instanz (`use_main_model_for_realtime`); zwei
+verschiedene Kroko-Modelle in den Lanes werden bei der Konfiguration abgewiesen
+(`ValueError`), ein Zweitladen vor dem Laden mit `concurrent_native_identity`.
+
+| Vorgang | Verhalten |
+| --- | --- |
+| Community-Modell ohne Key auf der Pro-Runtime | funktioniert (nachgewiesen, auch ohne Netz unter Linux) |
+| Community → Pro (Key gültig, Prüfung `VALID`) | **live möglich im Leerlauf**: der Server gibt die einzige Instanz über den regulären Entlade-Pfad frei, prüft und lädt Pro. Bei aktiven Sessions/Transkriptionen **zurückgestellt** (`modelRefreshPending`) |
+| Pro → Community (Force Community, Key-Entzug, negative Prüfung) | neue Pro-Aufträge sofort gesperrt; der Wechsel auf Community ist im Leerlauf live möglich, sonst zurückgestellt. Der **native Pro-Lizenzkontext bleibt** bis zum Neustart bestehen (`nativeProContextActive`) – es gibt keine Aussage „ohne Netz“ |
+| Dasselbe Pro-Modell erneut laden (Idle-Unload/Reload, Force aus → an) | funktioniert mit Patch-Set 5 auf Linux und Windows real nachgewiesen, inklusive regulaerem Prozessende; der fruehere Linux-Shutdownfehler ist korrigiert. Kein nativer Reset-Vertrag |
+| Pro-Modell A → anderes Pro-Modell B | **nur nach Neustart**; `pro_identity_change_requires_restart`, `PUT /api/models/active` bleibt unverändert und lässt die laufende Instanz geladen |
+| Neuer/rotierter Key bei bereits initialisiertem Pro-Kontext | **nur nach Neustart**; keine neue Freigabe, `key_context_change_requires_restart` |
+| Pro-Modell ohne Key | **gesperrt** (`pro_requires_key`; nativ nur eine bis zu 300 s lange Lizenzwarteschleife) |
+| Zwei Kroko-Modelle oder eine zweite Instanz gleichzeitig | **gesperrt** (`concurrent_native_identity`) |
+| Native-Entwicklerbuild wechseln | nur durch Austausch des Builds und Neustart; das oeffentliche Produkt ist immer Pro-faehig (ein Key ersetzt keinen Pro-Build) |
+
+Bestätigter nativer Kontext: Der Lizenzdienst lehnt eine zusätzliche externe
+Prüfung ab, solange der native Pro-Reporter desselben Keys im Prozess lebt
+(isolierter Test, 26.10.2026). Für dasselbe Pro-Modell und denselben Key gilt
+daher die bestätigte native Ladung als Nachweis (`licenseSource:
+"native_context"`); sie ersetzt keine Freigabe für andere Modelle oder Keys und
+wird von Force Community immer überstimmt. Dadurch kann eine abgelehnte
+Zweitprüfung ein laufendes Pro-Modell nicht herabstufen, und ein Wechsel
+Pro → Community → dasselbe Pro funktioniert ohne zweite Provider-Verbindung.
+
+`GET /api/models/management` enthält neben `krokoLicense` das Feld
+`krokoRuntime` (keine Secrets), das fünf getrennte Aussagen trägt:
+installierte Variante (`installedVariant`), Lizenzberechtigung
+(`licenseEntitled`, `licenseSource`, `licenseModelUuid`, `forceCommunity`), gewünschte Modelle
+(`desiredModels`), tatsächlich aktive Kroko-Modelle (`activeKrokoModels`,
+`activeProPresent`) sowie Neustartbedarf (`restartRequired`, `restartReason`)
+zusammen mit `nativeProContextActive`, `liveNativeInstances`,
+`proAdmissionRevoked`, `modelRefreshPending` und `lastReconcile`. Eine
+erfolgreiche Lizenzprüfung ändert nur die Berechtigung; `activeKrokoModels`
+wechselt erst, wenn der Scheduler das Modell wirklich trägt.
+
 ## FastAPI Example
 
 ```powershell
@@ -338,8 +420,11 @@ files, shell logs, and generated reports.
   `stt-install-kroko --build --variant pro` or Docker
   `KROKO_VARIANT=pro` as documented in the central build guide.
 - The validated VPS runtime must share one Pro-16 recognizer between final and
-  realtime; see [`build/vps`](../build/vps/README.md). This is a documented
-  server/runtime constraint, not a general limit of the adapter API.
+  realtime; see [`build/vps`](../build/vps/README.md). The server enforces this
+  for every Kroko model: a second native instance, a second Kroko model or a
+  Pro model change inside one process is refused before the native load (see
+  *Modell- und Lizenzwechsel im laufenden Prozess*). The adapter API itself
+  still allows several independent recognizer objects outside the server.
 - CUDA runs require both CUDA-capable hardware and a Kroko-ONNX build with CUDA
   provider support.
 - On Windows, prefer the helper's `cross-platform-builds` wheel workflow over a

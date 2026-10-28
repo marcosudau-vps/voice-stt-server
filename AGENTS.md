@@ -12,9 +12,10 @@ Compose- oder VPS-Pfade nicht parallel in weiteren Dokumenten als neue
 Wahrheitsquelle pflegen; dort nur auf diese zentralen Dateien verweisen.
 
 Secrets, Modelle, Wheels, Laufzeitdaten und erzeugte Release-Logs duerfen nicht
-committet werden. Kroko Pro erfordert einen expliziten Pro-Build; ein
-Runtime-Key allein ersetzt `--variant pro` beziehungsweise
-`KROKO_VARIANT=pro` nicht.
+committet werden. Die oeffentliche V2-Distribution `voice-stt-server` enthaelt die Pro-faehige
+Kroko-Runtime. Ein Runtime-Key oder eine Betreiberkonfiguration ersetzt keine
+verifizierte Native-Identitaet. Entwickler koennen weiterhin explizite
+`--variant free`-/`--variant pro`-Native-Builds verwenden.
 
 ## Größere Änderungsaktionen
 

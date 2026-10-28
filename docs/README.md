@@ -31,6 +31,8 @@ die aktuelle Dokumentation eingeordnet:
 
 ## Einstiegspunkte
 
+- [V2-Branch-Hierarchie und historische AP-SRV-070-Integrationsabweichung](branch-v2.md): chronologische Git-/PR-Nachweise, Mermaid-Grafiken, Beschluss zum unveränderten historischen Verlauf und Integrationsregeln für Kroko/Cleanup.
+
 - [Zentraler Build und Deployment](../build/BUILD.md)
 - [Releaseprozess und Operator-Einrichtung](release-process.md)
 - [Marcos VPS-Deployment](../build/vps/README.md)
@@ -38,6 +40,8 @@ die aktuelle Dokumentation eingeordnet:
 - [Installation](installation.md)
 - [Konfiguration](configuration.md)
 - [FastAPI-Server](fastapi-server.md)
+- [OpenAI-kompatible HTTP-API: eigenständiges Router-Modul](openai-http-api.md)
+- [Zentrale Server-Authentifizierung: SecurityService und vier Gates](server-authentication.md)
 - [Windows-/CPU-Deployment](windows-cpu-deployment.md)
 - [Transkriptions-Engines](transcription-engines.md)
 - [Faster-Whisper](faster-whisper.md)
@@ -50,12 +54,18 @@ die aktuelle Dokumentation eingeordnet:
 
 ## Produktflächen und Engines
 
-VoiceSTT wird als zwei vollständige, alternative Distributionen ausgeliefert:
-`voice-stt-server` (Kroko Free) und `voice-stt-server-pro` (Kroko Pro). Beide
-enthalten die passende native Laufzeit bereits, stellen dasselbe Importpaket
-`voice_stt_server` und dieselbe CLI `voice-stt-server` bereit und schließen
-einander aus. Welche Laufzeit installiert ist, entscheidet die Distribution -
-niemals ein Runtime-Key.
+Die fruehere Untersuchung der gemeinsamen Kroko-Distribution steht im
+[Untersuchungsstand vom 22.10.2026](2026-10-22_kroko-unified-runtime-v2.md)
+beschrieben (historisch; dortige Addon-/Supervisor-Entwürfe sind überholt,
+maßgeblich ist `build/BUILD.md`).
+
+V2 besitzt eine oeffentliche Produktdistribution: `voice-stt-server` mit
+eingebetteter Pro-faehiger Kroko-Runtime, Importpaket `voice_stt_server` und
+CLI `voice-stt-server`. Community-Modelle funktionieren ohne Key; Pro-Modelle
+brauchen eine gueltige modellbezogene Berechtigung. Nativefaehigkeit stammt
+aus installierter Provenienz, niemals aus einem Runtime-Key. Oeffentliche
+Releasefreigabe und unabhaengige Abnahme bleiben getrennte Gates; siehe
+[Releaseprozess](release-process.md) und [Lizenzgate](licenses.md#unified-v2-release-gate).
 
 Als unterstützte Produktions-STT-Engines sind ausschließlich **Faster-Whisper**
 und **Kroko-ONNX** dokumentiert und qualifiziert. Weitere Adapter im Quellbaum

@@ -30,7 +30,7 @@ from tools.build_distribution import merge_kroko_runtime
 from tests.unit.test_build_distribution import make_kroko_wheel
 
 ROOT = Path(__file__).resolve().parents[2]
-PRODUCTS = [("voicestt", None), ("voice-stt-server", "free"), ("voice-stt-server-pro", "pro")]
+PRODUCTS = [("voicestt", None), ("voice-stt-server", "pro")]
 VERSIONS = ["2.0.0", "2.0.0-alpha.2", "2.0.0-beta.3", "2.0.0-rc.1", "2.0.0-rc.1+Build.5"]
 
 
@@ -178,7 +178,7 @@ def test_real_installed_metadata_preserves_original_semver(
     assert observed["identity"] == json.loads(original.to_json())
 
 
-@pytest.mark.parametrize("variant", [None, "free", "pro"])
+@pytest.mark.parametrize("variant", [None, "pro"])
 @pytest.mark.parametrize("foreign_git", [False, True])
 def test_sdist_to_wheel_preserves_identity_without_git_and_under_foreign_git(
     source, tmp_path, consumer, variant, foreign_git
@@ -228,7 +228,7 @@ def test_repeat_wheels_have_identical_bytes_and_ignore_stale_source_resource(sou
     assert run(["git", "status", "--porcelain"], source).stdout == ""
 
 
-@pytest.mark.parametrize("variant", ["free", "pro"])
+@pytest.mark.parametrize("variant", ["pro"])
 def test_installed_public_native_provenance_with_explicit_synthetic_runtime_fixture(
     source, tmp_path, consumer, variant
 ):
@@ -354,7 +354,7 @@ def test_old_resource_free_stable_install_remains_usable(source, tmp_path, consu
 
 def test_actual_multiple_installed_products_are_rejected(source, tmp_path, consumer):
     legacy = build(source, tmp_path / "legacy")
-    free = build(source, tmp_path / "free", variant="free")
+    free = build(source, tmp_path / "public", variant="pro")
     install(consumer, legacy, tmp_path)
     install(consumer, free, tmp_path)
     result = inspect_installed(consumer, tmp_path, success=False)
@@ -397,7 +397,6 @@ meta.write_text(meta.read_text().replace("Version: 2.0.0", "Version: 9.9.9"))
 
 
 @pytest.mark.parametrize("variant,version,error", [
-    ("free", "2.0.0", "PackageNotFoundError"),
     ("pro", "2.0.0", "PackageNotFoundError"),
     (None, "2.0.0-rc.1", "SemVerError"),
 ])

@@ -73,7 +73,10 @@ PATCHED_UPSTREAM_SOURCES = (
 #: against declared byte counts and source-controlled SHA-256 digests, and
 #: invokes xwin with explicit --manifest, --sdk-version, and --crt-version
 #: arguments without relying on unpinned upstream latest fallbacks.
-PATCH_SET_REVISION = 4
+# Revision 5: the existing native reporter receives a stop request before
+# singleton destruction joins it, fixing the reproduced Linux Pro exit hang.
+# This lifecycle correction is a native byte change, independent of packaging.
+PATCH_SET_REVISION = 5
 
 #: Revision of the builder logic itself: which revision gets checked out, which
 #: patches are applied, how the compiler is invoked, and which produced wheel is

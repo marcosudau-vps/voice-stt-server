@@ -11,6 +11,40 @@ allgemeingueltiger Teil des Projekts.
 
 ## Schnellstart
 
+### Technisch notwendiger Native-Shutdown-Fix (27.10.2026)
+
+Ein realer Linux-Pro-Lauf aktivierte und transkribierte korrekt, hing danach
+aber beim Prozessende. Der gepinnte Native-Destruktor jointe einen Reporter
+mit Endlosschleife ohne Stop. Patch-Set 5 beendet den bestehenden Asio-Loop
+ueber ein atomares Stopflag vor join. Keine neue Status-/Supervisorarchitektur.
+Nur dieser reproduzierte Nativefehler rechtfertigt neue Nativebytes und damit
+neue Fingerprints; reine Produkt-/Pythonaenderungen bleiben cacheunabhaengig.
+Alte Artefakte werden nicht umetikettiert. Upstream-/Builder-/Toolchainpins
+bleiben unveraendert. Neubuild und reale Plattformqualifikation sind Pflicht;
+offene Nachweise bedeuten BLOCKED, nicht eine behauptete Fehlerbehebung.
+
+### Offizielles V2-Produkt
+
+Eine oeffentliche Distribution: `voice-stt-server`, mit eingebetteter
+Pro-faehiger Kroko-Runtime. Genau ein Wheel je CPython-3.12-Ziel
+`linux_x86_64` und `win_amd64`; genau ein Image fuer `linux/amd64`.
+Community-Modelle benoetigen keinen Key, Pro-Modelle eine gueltige
+modellbezogene Berechtigung. Keine Betreiberkompilation bei `pip install`.
+Der historische `voicestt`-Pfad unten dient ausschliesslich der Entwicklung.
+
+Produktwheel: `python tools/build_distribution.py pro --kroko-wheel PATH
+--out-dir DIR --work-dir WORK`. Der Input muss ein verifiziertes Pro-Artefakt
+der bestehenden Fingerprint-/Cacheautoritaet sein. Native Inputs werden durch
+Produktnamen oder Python-Aenderungen nicht veraendert. Paketierung erhaelt
+einen `.dist-info`-Owner, integriert `.data/platlib`-Payloads korrekt und
+buendelt gepruefte Original-/Zusatzhinweise auch auf Windows. Pruefung:
+`python tools/qualify_build_identity.py --candidate-dir DIR --check-reports`.
+
+Oeffentliche Freigabe bleibt BLOCKED, solange Rechte oder Pflichtqualifikation
+fehlen: [Lizenzgate](../docs/licenses.md#unified-v2-release-gate).
+RC-Schema 3 besitzt genau einen internen `pro`-Eintrag je Produkt-/Imageblock.
+Dieser bezeichnet den Native-Buildinput, keine zweite Edition.
+
 ### Lokale Python-Installation
 
 Linux-Voraussetzungen installieren, virtuelle Umgebung anlegen und VoiceSTT
@@ -48,27 +82,24 @@ nicht in Shell-Historien, Images, Compose-Dateien oder Git abgelegt werden.
 ### Oeffentliches Production-Image (AP-SRV-070 W4C)
 
 Der Production-Docker-Pfad kompiliert Kroko nie selbst und installiert
-VoiceSTT nie editable: `tools/build_production.py` baut zuerst das
-VoiceSTT-Wheel (`python -m build`), loest danach ueber den vorhandenen
-Kroko-Fingerprint-/Artifact-Store (W4A) ein verifiziertes Linux/AMD64-Wheel
+VoiceSTT nie editable: `tools/build_production.py` loest ueber den vorhandenen
+Kroko-Fingerprint-/Artifact-Store (W4A) ein verifiziertes Pro-Linux/AMD64-Wheel
 auf (REUSE, sonst einmaliger Build im eigenstaendigen
-[`build/kroko-builder.Dockerfile`](kroko-builder.Dockerfile)) und baut dann
-erst das eigentliche Production-Image aus dem neuen zweistufigen
+[`build/kroko-builder.Dockerfile`](kroko-builder.Dockerfile)) und baut daraus
+das vollstaendige Produktwheel. Danach entsteht das Production-Image aus dem zweistufigen
 `Dockerfile` (Ubuntu 24.04, `builder`/`runtime`, non-root, kein
 Kroko-Builder-Stage):
 
 ```bash
-python tools/build_production.py free
 python tools/build_production.py pro
 python tools/build_production.py all
 ```
 
-Jeder Lauf schreibt `dist/build-manifest.json` mit Git-Commit, VoiceSTT- und
-Kroko-Artefaktidentitaet, Image-Tags und Image-ID. Die beiden oeffentlichen
-Produktidentitaeten sind `voice-stt-server` (Free) und `voice-stt-server-pro`
-(Pro) - beide mit demselben VoiceSTT-Stand, nur mit unterschiedlichem
-Kroko-Build-Input. Ein vorhandener Kroko-Runtime-Key ist niemals Build-Input
-und kann eine Free-Variante nie zu Pro machen.
+Jeder Lauf schreibt `dist/build-manifest.json` mit Commit/Tree, Produktwheel,
+Native-Artefaktidentitaet und Imageidentitaet. Die einzige Produktidentitaet
+ist `voice-stt-server`; `pro` und `all` bauen jeweils nur dieses Produkt.
+Das Image installiert dasselbe vollstaendige Produktwheel wie der Kandidat,
+keine separate Kroko-Distribution. Ein Key ist niemals Native-Buildinput.
 
 Danach mit dem oeffentlichen, portablen `docker-compose.yml` starten:
 
@@ -79,12 +110,12 @@ curl -fsS http://127.0.0.1:8010/health
 
 `docker-compose.yml` hat portable Defaults fuer Port, Datenverzeichnis und
 optionale Custom-Model-Pfade; kein Wert ist an Marcos Infrastruktur
-gebunden. Fuer Pro `VOICESTT_IMAGE=voice-stt-server-pro:local` setzen und den
+gebunden. Fuer Pro-Modelle den
 Lizenz-Key erst zur Laufzeit als Secret bereitstellen (`VOICESTT_API_KEY`
 bzw. `KROKO_API_KEY` ueber `env_file`, nie im Compose-File selbst):
 
 ```bash
-docker run --rm -e KROKO_API_KEY voice-stt-server-pro:local \
+docker run --rm -e KROKO_API_KEY voice-stt-server:local \
   /opt/venv/bin/python -c 'import kroko_onnx; print("Kroko runtime importiert")'
 ```
 
@@ -140,10 +171,9 @@ andere explizite Werte sind Identitaetsfehler. `VOICESTT_VERSION` bleibt
 das Versionslabel-Buildargument, `VOICESTT_BUILD_VERSION` der zentrale
 SemVer-Build-/Entwicklungseingang. Kein zweiter Versionszaehler.
 
-Im generischen Production-Image ist die installierte Distribution weiterhin
-`voicestt`, auch wenn das Image `voice-stt-server-pro` und die nachgewiesene
-Kroko-Runtime `pro` heissen. Oeffentliche Produktwheels sind getrennte
-Distributionen. Weder Lizenzkey noch Modellname belegen die Runtimevariante.
+Im Production-Image und den oeffentlichen Produktwheels ist die installierte
+Distribution `voice-stt-server`, die native Faehigkeit `pro`. Weder Lizenzkey
+noch Modellname noch Betreiberkonfiguration belegen diese Faehigkeit.
 Info-/Settings-/Wire-/OpenAPI-Identitaet wird einmal je App validiert;
 [API-Vertrag](../docs/client-development/06-http-api-und-authentifizierung.md#oeffentliche-serveridentitaet).
 Fehlende Zusatzherkunft bleibt incomplete, kein pauschaler Startabbruch.
@@ -172,9 +202,10 @@ Gitroot; abweichende Version-/Distributionseingaenge werden abgewiesen.
 `VOICESTT_BUILD_VERSION` und `VOICESTT_SERVER_COMMIT` duerfen paketierte
 Identitaet nicht veraendern: nicht gesetzt/leer oder identisch ist erlaubt,
 abweichende Werte sind Initialisierungsfehler. Explizites `unknown`
-widerspricht einem bekannten Paketcommit. `VOICESTT_DISTRIBUTION_VARIANT`
-waehlt beim Packaging `free`/`pro`; generisches Docker-Packaging bleibt
-`voicestt`. `VOICESTT_VERSION` bleibt das OCI-Versionsargument, keine zweite
+widerspricht einem bekannten Paketcommit. `VOICESTT_DISTRIBUTION_VARIANT=pro`
+waehlt beim Packaging `voice-stt-server`; ohne Auswahl entsteht die
+Entwicklungsdistribution `voicestt`. `free` ist keine oeffentliche Produktauswahl.
+Das Produktimage installiert `voice-stt-server`. `VOICESTT_VERSION` bleibt das OCI-Versionsargument, keine zweite
 Produktversionsquelle. Runtimekeys waehlen nie eine Variante.
 
 Produkt-SemVer bleibt exakt erhalten, waehrend `packaging.version.Version`
@@ -200,25 +231,25 @@ HTTP-/Sessionannahme mit redigiertem `IdentityError`.
 
 Production-/Distributions-/RC-Werkzeuge verlangen vollstaendige, saubere
 Quellherkunft und vergleichen dasselbe Herkunftsobjekt mit Paketmetadaten,
-nativen Free-/Pro-Wheeltags, eingebetteter Kroko-Provenienz und OCI-Labels.
+nativen Pro-Wheeltags, eingebetteter Kroko-Provenienz und OCI-Labels.
 Das fertige generische Image wird zusaetzlich ueber den installierten
 Metadatenresolver und echte HTTP-/WebSocket-Endpunkte geprueft: ein frischer
 unprivilegierter Container mit `--network none` startet den unveraenderten
-Server nur auf containerinternem Loopback. Beide nativen Varianten,
+Server nur auf containerinternem Loopback. Pro-Runtime und
 Info-/Settings-/OpenAPI-/Refusalidentitaet muessen bestehen: zuerst
 `ready=false` vor dem Lifespanstart, dann unveraenderte Identitaet nach
 normalem Startup ohne Modelle bei `sttReady=false` und `ok=false`.
 Das bestehende `ready` signalisiert abgeschlossene Initialisierung, nicht
 gesunde Modelle. Keine Hostports, Modellmounts oder Downloads.
-Release-Manifestformat, Promotion, Publikation
-und Resume bleiben unveraendert; qualifizierte Bytes werden nicht neu gebaut.
+RC-Schema 3 konsolidiert das Produkt; Promotion, Publikation
+und Resume behalten ihre Sicherheitsgarantien; qualifizierte Bytes werden nicht neu gebaut.
 
 Der vorhandene dispatch-only RC-Workflow fuehrt die echte Packagingmatrix
-gezielt aus, installiert danach die kompletten oeffentlichen Free-/Pro-Wheels
+gezielt aus, installiert danach die kompletten oeffentlichen Produktwheels
 in frische Umgebungen auf Linux und Windows und prueft native Imports,
 `pip check`, HTTP-/Wireidentitaet und Info bei `ready=false`. Vor der
 bestehenden Manifestqualifikation bindet `tools/qualify_build_identity.py`
-beide Installationsberichte an alle vier Wheelbytes und deren native
+beide Installationsberichte an beide Plattformwheels und deren native
 Herkunft. Zusaetzliche Berichte und Packagingbelege sind externe
 Workflowartefakte, keine neuen RC-Manifestfelder. Diese schweren Pfade
 laufen nicht bei jedem PR.
@@ -227,8 +258,7 @@ Windows-Zielwheels werden im Job `build-windows` auf Ubuntu 24.04
 cross-kompiliert. `tools/release_candidate.py --platform windows` verwendet
 die bestehenden V2-Checkout-/Patchhelfer, den gepinnten Windows-
 Compilercontainer und den vorhandenen Windows-/AMD64-/CP312-Fingerprintrechner,
-nicht die Toolchain des Linuxhosts. Verifizierte Free-/Pro-Artefakte bleiben
-variantengetrennt wiederverwendbar. Der nativen Kompilation folgt dasselbe
+nicht die Toolchain des Linuxhosts. Der offizielle Kandidat verwendet ausschliesslich verifizierte Pro-Artefakte. Der nativen Kompilation folgt dasselbe
 Retagging mit den gepinnten Container-Werkzeugen; kein NSIS-Installer wird
 fuer Produktwheels benoetigt.
 
@@ -236,11 +266,11 @@ Das Zwischenartefakt `candidate-windows-build` enthaelt fertige Produktwheels
 und Distributionsmanifeste. Vor dem Upload und nach dem Download werden
 Wheelhashes, native Variante/Tags und Quellprovenienz geprueft.
 `candidate-windows` installiert genau diese Bytes auf `windows-latest`
-unter CPython 3.12 x64: getrennte frische Free-/Pro-Umgebungen, kein Docker
+unter CPython 3.12 x64: eine frische Produktumgebung, kein Docker
 und kein erneuter Build auf Windows. Nur der erfolgreiche native
 Installationsbericht fliesst zusammen mit den Linuxbelegen in die bestehende
-Vier-Wheel-RC-Abnahme ein. Manifestformat, private Staging-/Publikations-
-grenzen, Promotion und Resume bleiben unveraendert.
+Zwei-Wheel-RC-Abnahme nach Schema 3 ein. Private Staging-/Publikations-
+grenzen, Promotion und Resume behalten ihre Sicherheitsgarantien.
 
 Ein gepinnter Hash macht eine rollierende Download-URL nicht unveraenderlich.
 Insbesondere muss das Microsoft-Channel-Manifest bytegenau zu den
@@ -272,7 +302,7 @@ Ein reproduzierbarer VoiceSTT-Build besteht aus mehreren getrennten Ebenen:
 | --- | --- | --- |
 | Projektquelle | Python-Code, Dockerfile, Setup-Metadaten, Dokumentation | Ja |
 | Python-Abhaengigkeiten | Kernpaket und gewaehlte Extras | Im Image ja; lokale venv nein |
-| Native Kroko-Runtime | Aus `kroko-onnx` gebautes Wheel, Variante `free` oder `pro` | Im Image ja, Lizenzbedingungen beachten |
+| Native Kroko-Runtime | Offizielles Produkt: eingebetteter Pro-Input; Entwickler: `free` oder `pro` | Im Image ja, Lizenzbedingungen beachten |
 | Modelle | Whisper-, Kroko- und Wake-Word-Modelle | Lokal/read-only mounten; nicht in diesem Repo |
 | Secrets | API-, Admin-, GitHub- und Kroko-Lizenz-Keys | Nein; nur Secret Store oder lokale env-Datei |
 | Laufzeitdaten | Logs, SQLite, Audiodateien, `config/runtime.json` | Nein; persistentes `/data`-Volume |
@@ -293,9 +323,8 @@ Runtime uebergeben werden. Eine Free-Runtime kann Pro-Modelle nicht laden.
 | Kroko Community | `stt-install-kroko --build --variant free` | Community-faehige Kroko-Runtime im aktiven Python |
 | Kroko Pro | `stt-install-kroko --build --variant pro` | Lizenzfaehige Kroko-Runtime im aktiven Python |
 | Kroko-Wheel ohne Installation | `stt-install-kroko --build --skip-install --work-dir DIR` | Wheel im Kroko-Artefaktverzeichnis |
-| Production-Image Free | `python tools/build_production.py free` | `voice-stt-server:<version>` (Ubuntu 24.04, non-root) |
-| Production-Image Pro | `python tools/build_production.py pro` | `voice-stt-server-pro:<version>`, gleicher VoiceSTT-Stand |
-| Production-Image beide | `python tools/build_production.py all` | Beide Images plus `dist/build-manifest.json` |
+| Production-Image | `python tools/build_production.py pro` | `voice-stt-server:<version>` (Ubuntu 24.04, non-root) |
+| Alle offiziellen Images | `python tools/build_production.py all` | Dasselbe einzelne Produkt plus `dist/build-manifest.json` |
 | Nur Kroko-Builder-Image | `docker build -f build/kroko-builder.Dockerfile -t voicestt-kroko-builder .` | Eigenstaendiges Linux/AMD64-Builder-Image (W4A-Pfad, ausserhalb des Production-Images) |
 | Pro-Wheel-Upgrade | `docker build -f Dockerfile.pro-upgrade -t voicestt-cpu:pro-upgrade .` | Marcos enger `selfhost/stt-voice`-Reparaturpfad; nicht Teil des oeffentlichen W4C-Pfads |
 
@@ -312,7 +341,7 @@ GitHub-Fassung dieser Dokumentation.
 ### Unterstuetzte Python- und Betriebssystempfade
 
 - VoiceSTT-Kern: Python 3.11 oder neuer.
-- Docker-CPU-Image: Python 3.12 auf Debian Bookworm Slim.
+- Docker-CPU-Image: Python 3.12 auf dem digestgepinnten Ubuntu 24.04.
 - Kroko Linux-Build: Git, CMake, C/C++-Toolchain, OpenSSL- und zlib-Header.
 - Kroko Windows-Build: CPython 3.12 x64, Git und laufendes Docker Desktop mit
   Linux-/WSL2-Engine.
@@ -445,28 +474,11 @@ Zwei Workflows, beide ausschliesslich per `workflow_dispatch`:
 Die gewoehnliche CI (`.github/workflows/ci.yml`) ist durchgehend
 `contents: read` und kann strukturell nichts veroeffentlichen.
 
-Zwei vollstaendige, alternative Distributionen werden dabei gebaut:
-
-```text
-exakter Commit/Tree
-  ├── Kroko Free  -> voice-stt-server      -> Image voice-stt-server
-  └── Kroko Pro   -> voice-stt-server-pro  -> Image voice-stt-server-pro
-```
-
-Jedes Distributions-Wheel enthaelt die passende native Kroko-Laufzeit bereits
-(`tools/build_distribution.py` fuegt das qualifizierte Kroko-Wheel byteweise
-ein und taggt das Ergebnis auf die reale Plattform um). Ein Endanwender baut
-Kroko also nie selbst. Es gibt bewusst **kein** separates oeffentliches
-Kroko-Paket und **keinen** sdist fuer diese beiden Distributionen - ein sdist
-koennte die native Laufzeit nicht transportieren und wuerde die
-Vollstaendigkeitsgarantie brechen.
-
-Kroko-Artefakte werden ueber den GitHub-Actions-Cache wiederverwendet, mit dem
-**autoritativen Fingerprint** als Schluessel, der im Buildcontainer aufgeloest
-wird. Free und Pro haben getrennte Schluessel und getrennte Namensraeume. Der
-Cache ist immer nur Optimierung: jedes wiederverwendete Artefakt wird gegen die
-bestehende Fingerprint-/Artefakt-Autoritaet revalidiert, und ein Cache-Miss
-baut aus der Quelle.
+Ein vollstaendiges Produkt wird gebaut: exakter Commit/Tree -> verifiziertes
+Kroko-Pro-Artefakt -> `voice-stt-server`-Wheel -> `voice-stt-server`-Image.
+Windows und Linux verwenden je einen Pro-Cache mit autoritativem Fingerprint;
+jeder Cachehit wird revalidiert. Das Image nutzt exakt das Linux-Produktwheel.
+Kein separates oeffentliches Kroko-Paket und kein oeffentlicher Produkt-sdist.
 
 Der lokale Orchestrator dafuer ist `tools/release_candidate.py`:
 
@@ -480,7 +492,7 @@ python tools/release_candidate.py --out-dir candidate --no-manifest
 
 Vollstaendige Prozessbeschreibung, Zustandsreihenfolge, Resume-Semantik und die
 komplette Operator-Einrichtung (eine Repository-Variable, ein Repository-Secret,
-zwei PyPI Trusted Publisher, eine geschuetzte Umgebung):
+ein PyPI Trusted Publisher, eine geschuetzte Umgebung):
 [`docs/release-process.md`](../docs/release-process.md).
 
 ### Eine Engine fuer Dry-Run und echte Publikation (AP-SRV-070 W5-R01-C1)
@@ -490,7 +502,7 @@ W6-Publikationsreihenfolge als Daten kodiert ist (`STEP_DEFINITIONS`), nicht
 als verstreute Fallunterscheidung:
 
 ```text
-PREPARED -> TAGGED -> PyPI (Free + Pro) -> Docker Hub -> GHCR
+PREPARED -> TAGGED -> PyPI (voice-stt-server) -> Docker Hub -> GHCR
   -> externe Verifikation -> bewegliche Aliase -> GitHub Release
   -> finale Verifikation -> COMPLETE
 ```
@@ -517,7 +529,7 @@ keine Konvention, sondern eine Eigenschaft der Engine-Schleife selbst
 (siehe `tests/unit/test_release_engine.py::DryRunNeverWritesTests`).
 
 `release_tooling/adapters.py` implementiert die echten Publikationsadapter
-(PyPI fuer **beide** Distributionen - auf dem GitHub-Weg ueber PyPI Trusted
+(PyPI fuer die einzige Produktdistribution - auf dem GitHub-Weg ueber PyPI Trusted
 Publishing, lokal ueber Twine; Docker Hub und GHCR ueber
 `docker buildx imagetools create`, also Manifest-Promotion per Digest statt
 eines zweiten Builds; bewegliche Aliase; Git-Tag ueber `git tag`/`git push`;
@@ -544,7 +556,7 @@ Fehler (`OrderError`), keine stille Ausnahme.
 
 Der Release-State (`release_state/<version>.json`, git-ignoriert, niemals
 Secrets) bindet die exakte Quell-Commit-/Tree-Identitaet, beide
-Distributions-Wheels, beide Image-Manifest-Digests und die Identitaet des
+Plattformwheels des Produkts, dessen OCI-Manifestdigest und die Identitaet des
 qualifizierten Kandidaten an eine Version und laesst sich nach einem
 Teilausfall wieder aufnehmen - ohne die Version automatisch zu wechseln
 (Abschnitt "Kein verschwendeter oeffentlicher Versionsstand" weiter unten).
@@ -578,13 +590,16 @@ berechnet der Befehl nur die naechste Version, ohne `VERSION` zu schreiben.
 ### RC-Manifest (AP-SRV-070 W5/W6)
 
 `release_tooling.rc_manifest` definiert das eine kanonische Format fuer
-einen Release-Kandidaten (`W5-RC1`, `W5-RC2`, ...): Produktversion,
-Quell-Commit/-Tree, Wheel-/Sdist-Datei plus SHA-256, Kroko-Free-/Pro-
-Fingerprint plus Artefakt-SHA-256, Free-/Pro-Image-Tag plus Image-ID,
-OCI-Version/-Revision, Qualifizierungszeitpunkt/-kontext und
-Freigabestatus - ohne jegliches Secret. W5-R02 friert genau ein solches
-Manifest ein; W6 darf nichts veroeffentlichen, das von den darin gebundenen
-Identitaeten abweicht.
+einen Release-Kandidaten nach Schema 3: Produktversion, Quell-Commit/-Tree,
+genau eine Distribution `voice-stt-server` unter `distributions.pro` mit je
+einem CP312-Wheel fuer Linux und Windows samt SHA-256, Tags und jeweiliger
+Pro-Nativeherkunft (Fingerprint und Native-Wheel-SHA-256). `images.pro`
+bindet genau ein Linux/AMD64-Produktimage an den OCI-Manifestdigest und eine
+digestgepinnte private Stagingreferenz; eine lokale Image-ID genuegt nicht.
+OCI-Version/-Revision, Kandidaten-/Runidentitaet, Qualifizierungsbelege und
+technisches `releaseReadiness` bleiben getrennt von `redistributionApproval`.
+Kein oeffentlicher sdist und keine zweite Edition. Schema 2 wird abgewiesen;
+Publikation und Resume duerfen die gebundenen Identitaeten nicht ersetzen.
 
 ### Kein verschwendeter oeffentlicher Versionsstand
 
@@ -606,8 +621,8 @@ Veroeffentlichung darf die Version wechseln.
    ausfuehren.
 5. W5-R02 friert das RC-Manifest fuer exakt diesen Commit ein.
 6. W6 fuehrt `python release.py publish --manifest <RC-Manifest> --yes`
-   gegen das eingefrorene Manifest aus; der Git-Tag entsteht erst nach
-   externer Verifikation. Vor diesem Lauf muessen
+   gegen das eingefrorene Manifest aus; nach allen vorgeschalteten Gates
+   entsteht der Git-Tag vor PyPI und den Registry-Publikationen. Vor diesem Lauf muessen
    `VOICESTT_RELEASE_GHCR_REPO`/`VOICESTT_RELEASE_DOCKERHUB_REPO` gesetzt
    und die Zugangsdaten der jeweiligen Werkzeuge (Twine, `docker login`,
    Git-Credential-Helper, `gh auth login`) bereits vorhanden sein - keiner
@@ -652,9 +667,17 @@ Wichtige Paketbesonderheiten:
   im Wheel.
 - `stt-install-kroko` wird als Console-Script aus
   `VoiceSTT.install_kroko:main` registriert.
-- Kroko-ONNX selbst ist keine Standardabhaengigkeit und wird separat gebaut.
+- In der Entwicklungsdistribution ist Kroko-ONNX keine Standardabhaengigkeit
+  und wird separat gebaut. Das oeffentliche Produktwheel bettet die bereits
+  gebaute Pro-Runtime ein.
 
 ## Kroko im Detail
+
+Die historische Untersuchung einer gemeinsamen Distribution mit optionaler
+Pro-Komponente steht unter
+[Unified Kroko Runtime V2](../docs/2026-10-22_kroko-unified-runtime-v2.md)
+dokumentiert. Das aktuelle Produkt bettet die Pro-faehige Runtime ein;
+die folgenden Free-/Pro-Buildoptionen betreffen interne Native-Entwicklerbuilds.
 
 ### Community und Pro
 
@@ -845,14 +868,14 @@ keine allgemeine Zusage ueber alle Kroko-Versionen.
 kompiliert Kroko:
 
 1. `builder` installiert eine venv unter `/opt/venv` und installiert darin
-   CPU-Torch, das bereits aufgeloeste Kroko-Wheel (`dist/kroko/*.whl`) und
-   das bereits gebaute VoiceSTT-Wheel (`dist/voicestt/*.whl`) mit den
+   CPU-Torch und das vollstaendige Produktwheel (`dist/voicestt/*.whl`) mit
+   eingebetteter Pro-Runtime und den
    benoetigten Extras.
 2. `runtime` kopiert nur `/opt/venv` in ein schlankes Ubuntu-24.04-Image,
    legt den nicht-root Benutzer `voicestt` und `/var/lib/voicestt` an und
    setzt den korrigierten liveness-only `HEALTHCHECK`.
 
-Beide Wheels sind Pflicht-Build-Context-Eingaben; sie werden von
+Das Produktwheel ist die Pflicht-Build-Context-Eingabe; es wird von
 `tools/build_production.py` erzeugt (siehe oben), nicht vom Dockerfile
 selbst. Der eigenstaendige Kroko-Builder lebt in
 [`build/kroko-builder.Dockerfile`](kroko-builder.Dockerfile) und wird nie vom
@@ -866,8 +889,8 @@ docker run --rm -v "$PWD/.kroko-artifacts:/artifact-store" \
 ```
 
 `tools/build_production.py` orchestriert genau diese beiden Schritte
-(Kroko-Wheel aufloesen, dann Production-Image bauen) fuer `free`, `pro` oder
-`all`.
+(Pro-Nativewheel aufloesen und einbetten, dann Production-Image bauen) fuer
+`pro` oder `all`; beide waehlen dasselbe einzelne Produkt.
 
 ### Schnelles Pro-Wheel-Upgrade
 
@@ -953,12 +976,12 @@ Runtime-Konfiguration gemeinsam wiederhergestellt werden.
 
 | Symptom | Wahrscheinliche Ursache | Pruefung/Loesung |
 | --- | --- | --- |
-| Pro-Modell meldet Payload-/Blockfehler | Free-Wheel im Image | Image explizit mit `KROKO_VARIANT=pro` neu bauen |
+| Pro-Modell meldet Payload-/Blockfehler | Falsches Modell oder historischer Free-Nativebuild | Modellhash und installierte Produkt-/Nativeprovenienz pruefen; offizielles Pro-faehiges Produkt verwenden |
 | Lizenz fehlt/ungueltig | Key nicht im Container oder falsche Berechtigung | Nur Variablennamen/`docker exec env` pruefen, Key nie ausgeben; Kroko-Portal kontrollieren |
 | Lizenzserver nicht erreichbar | DNS, Egress, TLS oder Systemzeit | HTTPS-Ausgang und Uhrzeit des Hosts pruefen |
 | Container endet mit 139 beim zweiten Pro-Modell | Zwei native Pro-Recognizer | Dasselbe Pro-Modell teilen und `use_main_model_for_realtime: true` setzen |
 | YAML-Aenderung wirkt nicht | `/data/config/runtime.json` ueberschreibt sie | Persistierte Runtime ueber Admin-API anpassen oder kontrolliert entfernen |
-| Docker baut trotz Pro-Key Community | Key beeinflusst den Build nicht | `--build-arg KROKO_VARIANT=pro` verwenden |
+| Key aendert Nativefaehigkeit nicht | Key ist nur ein Laufzeit-Credential | Offizielles Produkt via `tools/build_production.py pro` bauen; Modellberechtigung separat pruefen |
 | `stt-install-kroko` fehlt | `kroko-builder`-Extra nicht installiert | `python -m pip install '.[kroko-builder]'` |
 | Windows-Builder findet Docker nicht | Docker Desktop Engine nicht gestartet | `docker version` auf Client und Server pruefen |
 | Asynchrone Lizenzmeldungen trotz Quiet-Option | Altes/ungepatchtes Kroko-Wheel | Mit aktuellem VoiceSTT-Installer neu bauen |
@@ -968,7 +991,7 @@ Runtime-Konfiguration gemeinsam wiederhergestellt werden.
 - [ ] Quellcommit dokumentiert und Checkout sauber
 - [ ] Python-Version und Plattform dokumentiert
 - [ ] Gewaehlte Extras dokumentiert
-- [ ] Kroko-Variante explizit `free` oder `pro`
+- [ ] Offizieller Pro-Nativeinput dokumentiert (interner Entwicklerbuild: `free` oder `pro`)
 - [ ] Kroko-Quellbranch/-commit nachvollziehbar
 - [ ] Keine Secrets oder Modelle im Buildkontext
 - [ ] `pip check` erfolgreich

@@ -1,37 +1,21 @@
-"""Public production Docker build orchestrator (AP-SRV-070 W4C).
+"""Build the public V2 production image.
 
-Turns the already-qualified VoiceSTT wheel and a verified Linux/AMD64 Kroko
-artifact into the two public production images:
-
-.. code-block:: text
-
-    VoiceSTT source
-      -> VoiceSTT wheel (python -m build)
-      -> Kroko artifact resolve (existing W4A fingerprint/artifact-store
-         authority, run inside build/kroko-builder.Dockerfile - REUSE if a
-         verified artifact already exists, BUILD ONCE via the existing
-         authorized Linux path otherwise)
-      -> production Docker image build (Dockerfile, no editable install, no
-         native Kroko compilation)
-      -> voice-stt-server / voice-stt-server-pro
-      -> build manifest
-
-This module never re-implements or redesigns the Kroko fingerprint/
-artifact-store authority (``VoiceSTT.kroko.*``), the STT model management
-authority, or the packaging/version authority (``VoiceSTT._version``) - it
-only calls the public CLI/API each of those already expose.
-"""
+Resolve the verified Pro native artifact with the existing pinned builder and
+cache authority, build one complete voice-stt-server product wheel, then install
+that same wheel in the linux/amd64 image. No separate native distribution,
+editable install, public push, or runtime credential is involved in this build."""
 
 from __future__ import annotations
 
 import argparse
+import zipfile
 import json
 import os
 import re
 import shutil
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, replace, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
@@ -70,15 +54,14 @@ def production_base_image_ref() -> str:
 
 VARIANT_FREE = "free"
 VARIANT_PRO = "pro"
-SUPPORTED_VARIANTS = (VARIANT_FREE, VARIANT_PRO)
+SUPPORTED_VARIANTS = (VARIANT_PRO,)
 ALL_VARIANTS_TARGET = "all"
 
-#: The two public production product identities (AP-SRV-070 W4C, section 5.2).
+#: The single public production product identity (AP-SRV-070 W4C, section 5.2).
 #: Free/Pro is a build-time-only choice; neither name is ever influenced by a
 #: runtime Kroko license key.
 IMAGE_NAMES = {
-    VARIANT_FREE: "voice-stt-server",
-    VARIANT_PRO: "voice-stt-server-pro",
+    VARIANT_PRO: "voice-stt-server",
 }
 
 
@@ -147,7 +130,7 @@ def normalize_variant(variant: str) -> str:
 def image_name_for(variant: str) -> str:
     """The public image repository name for one build-time Kroko variant.
 
-    This is the single Free/Pro authority for the production build: a
+    This is the single product-name authority for the production build: a
     runtime Kroko license key never reaches this function and can therefore
     never change which image name a build produces (AP-SRV-070 W4C, gate
     W4C-G30/G31).
@@ -542,24 +525,21 @@ def build_production_image(
     commit_tag = f"{image}:{git_commit[:12]}"
 
     product_wheels = list((dist_dir / "voicestt").glob("*.whl"))
-    runtime_wheels = list((dist_dir / "kroko").glob("*.whl"))
-    if not product_wheels:
-        raise BuildError(f"no VoiceSTT wheel found under {dist_dir / 'voicestt'}")
-    if not runtime_wheels:
-        raise BuildError(f"no Kroko wheel found under {dist_dir / 'kroko'}")
-    if len(product_wheels) != 1 or len(runtime_wheels) != 1:
-        raise BuildError("production image requires exactly one product and one Kroko wheel")
+    if len(product_wheels) != 1:
+        raise BuildError("production image requires exactly one complete product wheel")
     try:
         identity = wheel_identity(product_wheels[0])
         identity.require_complete()
         if (identity.distributionName, identity.productVersion, identity.sourceCommit) != (
-            "voicestt", voicestt_version, git_commit
+            "voice-stt-server", voicestt_version, git_commit
         ):
             raise IdentityError("Docker build arguments conflict with product wheel identity")
-        metadata_tag = kroko_artifacts.read_wheel_metadata(runtime_wheels[0]).get("build", "")
-        filename_tag = kroko_artifacts.parse_wheel_filename(runtime_wheels[0].name)["build"]
-        if metadata_tag != filename_tag or not re.fullmatch(r"\d+" + variant, metadata_tag):
-            raise IdentityError("Docker image variant conflicts with Kroko wheel identity")
+        from tools.qualify_build_identity import validate_distribution
+        with zipfile.ZipFile(product_wheels[0]) as archive:
+            embedded = json.loads(archive.read("voice_stt_server/_embedded_kroko.json"))
+        validate_distribution(product_wheels[0], identity, variant,
+                              kroko_sha256=embedded["kroko"]["wheelSha256"],
+                              fingerprint=embedded["kroko"]["fingerprint"])
     except (IdentityError, kroko_artifacts.KrokoArtifactError) as exc:
         raise BuildError(str(exc)) from None
 
@@ -625,7 +605,7 @@ def validate_image_identity(image_ref: str, details: Dict[str, Any], *,
         "serverVersion": source_identity.productVersion,
         "serverCommit": source_identity.sourceCommit,
         "identityStatus": "complete",
-        "distribution": {"name": "voicestt", "packageVersion": source_identity.packageVersion},
+        "distribution": {"name": "voice-stt-server", "packageVersion": source_identity.packageVersion},
         "runtime": {"krokoVariant": variant},
         "build": {"sourceTree": source_identity.sourceTree, "sourceDirty": False,
                   "sourceDate": source_identity.sourceDate},
@@ -635,7 +615,7 @@ def validate_image_identity(image_ref: str, details: Dict[str, Any], *,
     result = runner([
         "docker", "run", "--rm", "--network", "none",
         "--entrypoint", "/opt/venv/bin/python", image_ref, "-I", "-c",
-        INSTALLED_CHECK, source_identity.to_json(), variant,
+        INSTALLED_CHECK, replace(source_identity, distributionName="voice-stt-server", krokoVariant=variant).to_json(), variant,
     ])
     print(result.stdout)
     try:
@@ -718,9 +698,6 @@ def run(target: str, *, dist_dir: Path, kroko_artifact_store: Optional[Path] = N
     resolved_build_date = build_date or resolve_source_build_date(git_commit, runner)
 
     dist_dir.mkdir(parents=True, exist_ok=True)
-    wheel_path = build_voicestt_wheel(
-        dist_dir=dist_dir, runner=runner, source_identity=source_identity
-    )
 
     builder_image = build_kroko_builder_image(runner=runner)
 
@@ -732,12 +709,6 @@ def run(target: str, *, dist_dir: Path, kroko_artifact_store: Optional[Path] = N
         "buildDate": resolved_build_date,
         "buildDateSource": "explicit" if build_date else "git-commit-timestamp",
         "productionBaseImage": production_base_image_ref(),
-        "voicesttWheel": {
-            "path": str(wheel_path),
-            "name": wheel_path.name,
-            "bytes": wheel_path.stat().st_size,
-            "sha256": kroko_artifacts.sha256_of(wheel_path),
-        },
         "toolVersions": tool_versions,
         "variants": {},
     }
@@ -750,11 +721,18 @@ def run(target: str, *, dist_dir: Path, kroko_artifact_store: Optional[Path] = N
             work_dir_host=work_dir,
             runner=runner,
         )
-        copy_kroko_wheel_to_context(
-            variant=variant,
-            host_wheel_path=Path(kroko_payload["hostWheelPath"]),
-            dist_dir=dist_dir,
+        from tools.build_distribution import build_distribution
+        product_dir = dist_dir / "voicestt"
+        if product_dir.exists():
+            shutil.rmtree(product_dir)
+        distribution = build_distribution(
+            variant=variant, kroko_wheel=Path(kroko_payload["hostWheelPath"]),
+            out_dir=product_dir, work_dir=dist_dir / "product-work",
+            fingerprint=kroko_payload["fingerprint"],
+            timestamp=datetime.fromisoformat(resolved_build_date.replace("Z", "+00:00")),
+            source_identity=source_identity,
         )
+        manifest["voicesttWheel"] = distribution
         image_info = build_production_image(
             variant=variant,
             git_commit=git_commit,
@@ -770,6 +748,7 @@ def run(target: str, *, dist_dir: Path, kroko_artifact_store: Optional[Path] = N
         )
         manifest["variants"][variant] = {
             "kroko": kroko_payload,
+            "distribution": distribution,
             "image": image_info,
             "imageId": image_details.get("Id"),
             "imageLabels": (image_details.get("Config") or {}).get("Labels"),

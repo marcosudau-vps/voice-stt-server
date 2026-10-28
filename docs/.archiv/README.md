@@ -72,6 +72,14 @@ Begründung im Archiv erhalten.
 
 | Aktion | Aktionsdatum | Status | Archiv |
 | --- | --- | --- | --- |
+| Unified Kroko V2: finale Produkt- und Releasekonsolidierung (Produktnachweise PASS, Release/RC BLOCKED) | 27.10.2026 | Prüfung offen | [Plan](kroko_v2_finalization/2026-10-27_PLAN.md), [Originalauftrag](kroko_v2_finalization/2026-10-27_ORIGINALAUFTRAG.txt), [Abschlussvergleich](kroko_v2_finalization/2026-10-27_ABSCHLUSS_SOLL_IST.md), [Abweichungen](kroko_v2_finalization/2026-10-27_ABSCHLUSS_ABWEICHUNGEN.md), [Finale Linux-/Windows-Qualifikation](kroko_v2_finalization/2026-10-27_NACHTRAG_FINALE_QUALIFIKATION.md), [PR16-Korrekturpruefung](kroko_v2_finalization/2026-10-27_PR16_REVIEW_KORREKTUREN.md) |
+| OpenAI-Routen, zentrale Authentifizierung und Modularisierungs-Roadmap (PR #15) | 25.10.2026 | Prüfung offen | [Plan](server_modularization_20261025/2026-10-25_PLAN.md) |
+| Selektive Kroko-V2-Verbesserungen ohne Besitzerprozess (Implementierungs-PR: #15; Quell-/Referenz-PR: #14, nicht gemergt) | 25.10.2026 | Prüfung offen | [Plan](kroko_v2_selective_improvements/2026-10-25_PLAN.md) |
+| Finale Abnahmevorbereitung PR #15 (Arbeitsakte, Traceability, Testevidenz) | 25.10.2026 | Prüfung offen | [Arbeitsakte](pr15_final_abnahmevorbereitung/) |
+| Korrekturlauf PR #15 nach Review 6401918956 (Auto-Lizenz-Lifecycle, Modellfreigabe) | 25.10.2026 | In Umsetzung | [Arbeitsakte](pr15_korrekturlauf_20261025/) |
+| Abschlusskorrektur PR #15 nach revidierter Abnahmegrundlage 6408087404 (Race, Force-Sperre, Native-Guard, Modellabgleich) | 26.10.2026 | Prüfung offen | [Plan](pr15_korrekturlauf_20261025/2026-10-26_PLAN_ABSCHLUSSKORREKTUR.md), [Soll/Ist](pr15_korrekturlauf_20261025/2026-10-26_UMSETZUNGSVERGLEICH.md), [Abweichungen](pr15_korrekturlauf_20261025/2026-10-26_ABWEICHUNGEN.md), [Abschlussnachtrag](pr15_korrekturlauf_20261025/2026-10-26_ABSCHLUSSNACHTRAG.md) |
+| Unabhängige Vorarbeit: Kroko-Modellkatalog | 22.10.2026 | Prüfung offen | [Konzept](kroko_unified_runtime_v2/CATALOG/2026-10-22_KONZEPT.md), [Soll/Ist](kroko_unified_runtime_v2/CATALOG/2026-10-22_IMPLEMENTIERUNG.md), [Testevidenz](kroko_unified_runtime_v2/CATALOG/2026-10-22_TEST_EVIDENZ.md) |
+| Unified Kroko Runtime V2 (AP-KR-010 bis 030) | 22.10.2026 | Prüfung offen | [Gesamtplanung](kroko_unified_runtime_v2/2026-10-22_GESAMTPLAN.md), [AP-KR-010](kroko_unified_runtime_v2/AP-KR-010/2026-10-22_SOLL_IST.md) |
 | Sitzungslokale Wake-Word-Konfiguration | 25.07.2026 | Abgeschlossen | [session-wakeword](session-wakeword/) |
 | Neues Logging- und Event-System | 31.07.2026 | Abgeschlossen | [neues_logging_event_system](neues_logging_event_system/) |
 | SQLite-first Eventstream und Admin-Logvertrag | 02.08.2026 | Abgeschlossen | [sqlite_first_admin_eventstream](sqlite_first_admin_eventstream/) |

@@ -1,22 +1,7 @@
-"""The canonical public VoiceSTT import package (AP-SRV-070 W5-R04).
+"""Public import surface for the unified voice-stt-server V2 distribution.
 
-Both public distributions - ``voice-stt-server`` (Kroko Free runtime) and
-``voice-stt-server-pro`` (Kroko Pro runtime) - expose this one import name, so
-application code never changes when an installation moves between Free and
-Pro::
-
-    from voice_stt_server import AudioToTextRecorder
-
-The historical :mod:`VoiceSTT` package stays importable and stays the place the
-implementation actually lives; this module is a thin, lazy re-export of the
-same objects, so the two names are never two implementations. Adding a name
-rather than renaming one is deliberate: it gives the public product a correct,
-stable identity without breaking a single existing import.
-
-The *installed distribution* - not a runtime license key - decides which native
-Kroko runtime is present. :func:`embedded_kroko` reports what this
-installation actually carries.
-"""
+The complete product embeds the Pro-capable native runtime. Community models
+need no key; Pro model admission requires model-specific permission."""
 
 from VoiceSTT._version import resolve_version as _resolve_version
 

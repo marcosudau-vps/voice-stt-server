@@ -415,15 +415,13 @@ class PortabilityTests(unittest.TestCase):
                     step for step in document["jobs"][job]["steps"]
                     if (step.get("uses") or "").startswith("actions/cache@")
                 ]
-                self.assertEqual(len(cache_steps), 2)
+                self.assertEqual(len(cache_steps), 1)
                 keys = sorted(step["with"]["key"] for step in cache_steps)
-                self.assertTrue(keys[0].startswith("kroko-free-"))
-                self.assertTrue(keys[1].startswith("kroko-pro-"))
-                self.assertIn("fingerprints.outputs.free", keys[0])
-                self.assertIn("fingerprints.outputs.pro", keys[1])
+                self.assertTrue(keys[0].startswith("kroko-pro-"))
+                self.assertIn("fingerprints.outputs.pro", keys[0])
                 paths = sorted(step["with"]["path"] for step in cache_steps)
-                self.assertTrue(paths[0].endswith("/free"))
-                self.assertTrue(paths[1].endswith("/pro"))
+                self.assertTrue(paths[0].endswith("/pro"))
+                self.assertTrue(paths[0].endswith("/pro"))
 
     def test_the_candidate_workflow_requires_a_clean_checkout(self):
         # A candidate must bind an exact committed source.

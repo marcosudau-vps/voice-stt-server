@@ -807,6 +807,8 @@ class RestSettingsV2Tests(unittest.TestCase):
                  "wakeWord.noiseSuppressionEnabled",
                  "wakeWord.vadThreshold",
                  "wakeWord.inferenceBackend",
+                 # PR-#15-Korrekturlauf: serverweiter Kroko-Community-Intent.
+                 "kroko.forceCommunity",
                  "runtimeSuppression.manual",
                  "runtimeSuppression.wakeWord"},
             )

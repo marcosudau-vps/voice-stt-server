@@ -47,7 +47,8 @@ def test_production_dockerfile_has_no_kroko_builder_stage():
 
 def test_production_dockerfile_installs_prebuilt_wheels_as_build_inputs():
     assert "dist/voicestt" in DOCKERFILE
-    assert "dist/kroko" in DOCKERFILE
+    assert "COPY dist/kroko" not in DOCKERFILE
+    assert "pip install /build/dist/kroko" not in DOCKERFILE
 
 
 def test_production_dockerfile_runtime_targets_ubuntu_2404():

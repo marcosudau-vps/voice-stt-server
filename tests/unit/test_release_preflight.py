@@ -171,13 +171,13 @@ class RegistryAndCredentialCheckTests(PreflightTestCase):
 
     def test_both_public_distributions_are_reported(self):
         report = self._run()
-        self.assertIn("voice-stt-server", self._find(report, "pypi_project_free").detail)
-        self.assertIn("voice-stt-server-pro", self._find(report, "pypi_project_pro").detail)
+        self.assertIn("voice-stt-server", self._find(report, "pypi_project_pro").detail)
+        self.assertIn("voice-stt-server", self._find(report, "pypi_project_pro").detail)
 
     def test_both_public_images_are_reported(self):
         report = self._run()
-        self.assertIn("voice-stt-server", self._find(report, "image_name_free").detail)
-        self.assertIn("voice-stt-server-pro", self._find(report, "image_name_pro").detail)
+        self.assertIn("voice-stt-server", self._find(report, "image_name_pro").detail)
+        self.assertIn("voice-stt-server", self._find(report, "image_name_pro").detail)
 
     def test_credential_presence_never_leaks_the_value(self):
         # W5R4-G49: only a boolean ever reaches a report.
@@ -229,14 +229,8 @@ class StateConflictCheckTests(PreflightTestCase):
 
         state = new_state(
             version="2.0.0", source_commit="a" * 40, source_tree="b" * 40,
-            distributions={
-                "free": {"name": "voice-stt-server", "wheels": "w.whl=" + "c" * 64},
-                "pro": {"name": "voice-stt-server-pro", "wheels": "p.whl=" + "d" * 64},
-            },
-            images={
-                "free": {"tag": "voice-stt-server:2.0.0", "digest": "sha256:" + "1" * 64},
-                "pro": {"tag": "voice-stt-server-pro:2.0.0", "digest": "sha256:" + "2" * 64},
-            },
+            distributions={'pro': {'name': 'voice-stt-server', 'wheels': 'p.whl=' + 'd' * 64}},
+            images={'pro': {'tag': 'voice-stt-server:2.0.0', 'digest': 'sha256:' + '2' * 64}},
         )
         save_state(default_state_path(self.repo_root, "2.0.0"), state)
         report = self._run()

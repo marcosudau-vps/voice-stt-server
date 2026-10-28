@@ -84,7 +84,7 @@ def test_incomplete_manual_identity_is_not_an_official_candidate(complete_identi
 
 
 @pytest.mark.parametrize("name,variant", [
-    ("voice-stt-server", "free"), ("voice-stt-server-pro", "pro"),
+    ("voice-stt-server", "pro"),
 ])
 def test_public_package_variant_is_bound(complete_identity, name, variant):
     payload = asdict(replace(complete_identity, distributionName=name, krokoVariant=variant))

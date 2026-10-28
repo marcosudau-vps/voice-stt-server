@@ -4,6 +4,32 @@ VoiceSTT verwaltet grosse STT-Modelle fuer Faster-Whisper und Kroko ueber eine
 gemeinsame serverautoritative Schicht. Wake-Word-Assets gehoeren nicht zu
 diesem System.
 
+## Installierte Kroko-Faehigkeit
+
+Die einheitliche V2-Distribution `voice-stt-server` bringt eine Pro-faehige
+Runtime mit. Der Manager liest die tatsaechliche Produkt-/Nativeidentitaet;
+Betreibereinstellungen, `VOICESTT_KROKO_VARIANT` und Keys setzen keine Faehigkeit.
+Ohne bekannte Nativeidentitaet bleibt sie `unknown`. Entwickler koennen weiter
+verifizierte separate Free-/Pro-Nativewheels verwenden.
+
+Community ist ohne Key verfuegbar. Ein lokales Pro-Modell wird erst bei gueltiger
+modellbezogener Berechtigung auswaehlbar; Berechtigung ist keine Aktivierung.
+Force Community sperrt neue Pro-Jobs sofort. Keyentzug/-rotation bleiben
+an Generation und nativen Kontext gebunden; Pythonstatus autorisiert keinen
+bestehenden Pro-Kontext neu. Final/Realtime teilen bei gleicher Krokoidentitaet
+dieselbe Instanz; verschiedene Proidentitaeten scheitern vor dem Native-Load.
+Oeffentliche Statusfelder behalten ihren Vertrag und zeigen echte Faehigkeit,
+Lizenzberechtigung, aktives Modell und gegebenenfalls Neustartbedarf getrennt.
+
+## Kroko-Katalogmetadaten
+
+Der [Offline-Modellkatalog](kroko-model-catalog.md) ergänzt die Discovery um
+strukturierte Anbieter-Metadaten, Filter und einen reinen Downloadplan.
+Katalogeinträge werden nicht automatisch zu Produktmodellen im Manager.
+Portal-UUID und bestehende Manifest-ID bleiben getrennt. Das zwölf Modelle
+umfassende Manifest, Produktrechte und die folgenden Provisioningregeln
+bleiben unverändert.
+
 ## Speicher und Suchreihenfolge
 
 Der vorhandene `data_root_path` ist die einzige persistente Laufzeitwurzel.
@@ -106,8 +132,10 @@ erhalten.
 
 Kroko-Pro-Modelle muessen zur explizit aufgeloesten Runtimevariante `pro`
 passen. Ein Lizenzschluessel ist ausschliesslich Runtime-Credential: seine
-Anwesenheit waehlt weder Pro noch entscheidet sie Modell-Eligibility. Ob die
-konkrete Pro-Runtime mit dem Credential laden kann, entscheidet nur der echte
+blosse Anwesenheit waehlt weder Pro noch macht sie ein Modell eligible. Die
+Eligibility kommerzieller Kroko-Modelle entscheidet der Lizenz-Guard (naechster
+Abschnitt) anhand einer frischen, modellgebundenen Pruefung; ob die konkrete
+Pro-Runtime mit dem Credential laden kann, entscheidet erst der echte
 Load-Probe. Der Lizenzschluessel wird weder in Modellmetadaten noch Status,
 API-Antworten, Audit-/Performance-Events, Diagnosen oder Runtime-Persistenz
 geschrieben; bekannte Aliase und verschachtelte Kroko-Optionsfelder werden an
@@ -115,15 +143,52 @@ allen diesen Grenzen zentral entfernt bzw. redigiert.
 Native Kroko-Runtimes und ASR-Modelle sind getrennte Artefakte; diese Schicht
 baut keine native Runtime.
 
-Die Runtimevariante hat genau eine dokumentierte Praezedenz:
+## Lizenz-Eligibility und Runtime-Kompatibilitaet
 
-1. `stt_engine_settings.kroko_onnx.runtime_variant`
-2. `transcription_engine_options.runtime_variant`, wenn Final Kroko verwendet
-3. `realtime_transcription_engine_options.runtime_variant`, wenn Realtime Kroko verwendet
-4. `VOICESTT_KROKO_VARIANT`
-5. `free`
+Lizenzberechtigung und technische Lauffaehigkeit sind zwei getrennte Guards,
+die beide bestehen muessen:
 
-Nur `free` und `pro` sind gueltig. Engine-Optionen werden bei Probe, Worker-
+1. **Lizenz-Guard** (nur kommerzielle Kroko-Produkte): Der Server injiziert
+   dem Manager eine lesende `license_policy`. Ein Pro-Modell ist in
+   `_eligible`/`candidate_eligible` genau dann zulaessig, wenn fuer die UUID
+   der tatsaechlich vorliegenden `.data`-Datei (gelesen aus dem Dateiheader)
+   ein frischer modellgebundener Nachweis (`VALID`, TTL-begrenzt) besteht und
+   kein nur per Neustart loesbarer nativer Konflikt vorliegt. Den Pfad dieser
+   Datei loest der Manager selbst auf (`locate_local_path`, dieselben Roots wie
+   die Snapshot-Discovery, einschliesslich Engine-`model_dir`/-`model_path`
+   und Custom-Paths); Vorpruefung und Admission koennen dadurch nie
+   verschiedene Dateien adressieren. Ohne injizierte Policy gilt das
+   Legacy-Verhalten (Variante + Enabled). Die LKG-Wiederherstellung filtert
+   entfallene Pro-Rollen heraus, sodass kein abgelaufener Nachweis ein
+   Pro-Modell wiederbelebt.
+2. **Runtime-Guard** (unveraendert strikt fuer Pro, geoeffnet fuer Community):
+   Kommerzielle Modelle verlangen exakt die installierte Variante `pro`.
+   Community-Modelle sind auf Free- **und** Pro-Installationen zulaessig –
+   die native Lizenzpruefung wird fuer sie nicht konsultiert. Modelle mit
+   unbekannter Lizenzklasse behalten den bisherigen strikten Vergleich.
+
+Ein gueltiger Nachweis schaltet die Auswahl frei – auch bei einer
+Community-Konfiguration (Key + lokales Pro-Modell); er aktiviert nichts.
+Verfügbarkeit, Provisionierung, Load-Probe und die Last-Known-Good-Mechanik
+bleiben davon unberührt und können einen Start weiterhin verhindern
+(fehlende/beschaedigte Datei, falsche Runtime). Nach einem Hintergrundergebnis
+oder einer Force-Aenderung gleicht der Service Snapshot, aktive Zuordnung und
+Status ueber den vorhandenen transaktionalen Refresh ab; Kroko-Kandidaten
+werden dabei nie neben einer anderen lebenden Kroko-Instanz geprueft (ein
+Prozess betreibt hoechstens eine native Kroko-Instanz; ein Wechsel erfolgt im
+Leerlauf ueber den regulaeren Entlade-Pfad, bei aktiver Arbeit wird er als
+`modelRefreshPending` zurueckgestellt). `GET /api/models/management` enthaelt
+den redigierten Lizenzstatus als `krokoLicense` (Scope `model`, keine Secrets)
+und `krokoRuntime` (installierte Variante, Berechtigung, gewuenschtes und
+tatsaechlich aktives Modell, Neustartbedarf getrennt ausgewiesen; siehe
+[Kroko-ONNX](kroko-onnx.md#modell--und-lizenzwechsel-im-laufenden-prozess)).
+
+Die Runtimevariante des Managers wird aus der validierten installierten
+Produkt-/Nativeidentitaet aufgeloest (`pro`, Entwicklerbuild `free`, sonst
+`unknown`). Die fruehere Konfigurationspraezedenz bis zum Default `free`
+gilt dafuer nicht mehr. Ein `runtime_variant`-Wert oder
+`VOICESTT_KROKO_VARIANT` ersetzt keine installierte Faehigkeit.
+Engine-Optionen werden bei Probe, Worker-
 Start, Recovery und Modellwechsel anhand der tatsaechlich aufgeloesten Engine
 gewaehlt. Dadurch erhaelt ein Kroko-Fallback nie Faster-Whisper-Optionen und
 umgekehrt; bei identischen Engines bleiben die lanespezifischen Optionen

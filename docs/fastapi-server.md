@@ -11,11 +11,13 @@
 VoiceSTT. It serves a local browser UI and exposes a WebSocket endpoint that
 streams microphone audio into per-session recorder state machines.
 
-This reference server is intended for source checkouts. It is not installed by
-the PyPI wheel; keeping it source-only keeps the wheel lean and avoids adding
-web-server dependencies for users who only need the recorder/API library. For
-pip-only installs, use the Python recorder/API examples instead. If you want
-the FastAPI reference server, clone the repository or install from Git.
+This page primarily shows **source-checkout** commands for the FastAPI
+browser server. The maintained `api_fastapi_server` package is also included
+by the current `setup.py` package selection, and the installed server CLI
+(`voice-stt-server`, compatibility alias `stt-server`) delegates to the
+same application. Dependencies and supported distribution variants depend on
+the selected installation; the canonical build/deployment reference is
+[BUILD.md](../build/BUILD.md).
 
 ## Install
 
@@ -51,6 +53,20 @@ Open:
 ```text
 http://localhost:8010
 ```
+
+## HTTP modules and authentication (PR #15)
+
+The OpenAI-compatible endpoints `GET /v1/models` and
+`POST /v1/audio/transcriptions` are implemented in the standalone
+[`api_fastapi_server/openai_routes.py` module](openai-http-api.md).
+This is a route/SSE extraction, not a second inference engine: model resolution
+and scheduling remain in the shared server service.
+
+Admin, OpenAI-Bearer, session-scoped logtokens and the explicitly invoked
+Kroko model-license adapter are coordinated by the common
+[`SecurityService` module](server-authentication.md), with **separate**
+permissions and scope rules. A Kroko license probe does not automatically
+activate a Pro runtime.
 
 ## Server Overview
 
@@ -223,6 +239,24 @@ audio and pending transcriptions block unloading with HTTP 409; otherwise the
 worker engines are stopped and their model references are released. A later
 realtime or HTTP transcription loads the configured lanes again. Health checks
 stay successful while this intentional unloaded state is active.
+
+Kroko license operations (all admin-guarded): `POST /api/models/refresh`
+re-evaluates the license policy before the transactional snapshot rebuild;
+`POST /api/kroko/license/refresh` runs an explicit bounded recheck
+(optional JSON body `{"timeout": seconds, 0 < t ≤ 60}`) and, on a fresh Pro
+grant, applies it through the regular model-refresh path. `GET
+/api/models/management` carries the redacted license state as `krokoLicense`
+(`status`, model-scoped `proEnabled`, no secrets) and `krokoRuntime`, which
+keeps *installed variant*, *license entitlement*, *desired models*, *actually
+active models* and *restart required* apart (`restartRequired` with
+`restartReason`, `nativeProContextActive`, `modelRefreshPending`,
+`proAdmissionRevoked`, `lastReconcile`). A successful license check never
+claims an active Pro instance. A confirmed `kroko.forceCommunity` patch refuses
+new Pro jobs before the response returns; the Community switch follows in the
+background when the server is idle and is reported as pending otherwise. A
+Pro-to-Pro model change or a new key against an initialised native Pro context
+needs a process restart and is refused before the native load; see
+[Kroko-ONNX](kroko-onnx.md#modell--und-lizenzwechsel-im-laufenden-prozess).
 
 Both model selectors use the complete mounted local registry. Kroko ONNX and
 Faster-Whisper models can therefore be assigned independently to either the

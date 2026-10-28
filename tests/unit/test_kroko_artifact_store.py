@@ -863,23 +863,36 @@ class SecretLeakageTests(StoreBaseTest):
         )
 
     def test_runtime_key_lookup_outside_the_builder_is_unchanged(self):
-        """The Secret Boundary correction must not touch runtime key reading.
+        """Every legacy runtime key source remains effective after extraction.
 
-        Root Finding C is exclusively about the *build* subprocess
-        environment; the engine's own runtime key lookup
-        (kroko_onnx_engine.py) is untouched by this correction and still
-        reads the same four environment variables directly.
+        Root Finding C isolates *build* child processes from credentials.
+        Runtime key lookup was moved from kroko_onnx_engine.py to the shared
+        VoiceSTT.kroko.credentials module. Verify behavior, not source text:
+        each legacy environment variable must still reach the actual
+        recognizer kwargs when higher-priority variables are absent.
         """
+        from VoiceSTT.kroko.credentials import (
+            KROKO_KEY_ENV_NAMES,
+            effective_recognizer_key,
+        )
         from VoiceSTT.transcription_engines import kroko_onnx_engine as engine_module
 
-        with mock.patch.dict(os.environ, {"KROKO_API_KEY": self.SECRET}, clear=False):
-            self.assertEqual(os.environ.get("KROKO_API_KEY"), self.SECRET)
-        source = engine_module.__file__
-        import pathlib
+        self.assertEqual(tuple(KROKO_KEY_ENV_NAMES), self.KEY_ENVS)
+        self.assertIs(engine_module.effective_recognizer_key, effective_recognizer_key)
 
-        text = pathlib.Path(source).read_text(encoding="utf-8")
+        backend = object.__new__(engine_module.KrokoOnnxBackend)
+        backend.config = object()
+        backend.engine_options = {}
+        backend.model_path = "synthetic.data"
+        backend.sample_rate = 16000
+
         for name in self.KEY_ENVS:
-            self.assertIn(name, text, f"engine no longer reads {name} at runtime")
+            environment = dict.fromkeys(self.KEY_ENVS, "")
+            environment[name] = self.SECRET
+            with self.subTest(key_source=name):
+                with mock.patch.dict(os.environ, environment, clear=False):
+                    self.assertEqual(effective_recognizer_key({}), self.SECRET)
+                    self.assertEqual(backend._recognizer_kwargs()["key"], self.SECRET)
 
 
 class RootFindingBLinuxBuildEnvTests(unittest.TestCase):

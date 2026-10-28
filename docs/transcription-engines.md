@@ -8,8 +8,8 @@ different one via `realtime_transcription_engine`.
 ## Supported production engines
 
 Exactly two engines are supported, documented and qualified as the production
-surface. Both are installed and ready in the public distributions
-(`voice-stt-server` / `voice-stt-server-pro`) — there is nothing extra to
+surface. Both are installed and ready in the public distribution
+`voice-stt-server` — there is nothing extra to
 install or compile.
 
 | Engine names | Role | Guide |
@@ -98,12 +98,12 @@ authority also refuses a model whose required runtime variant does not match the
 installed one, so a licensed Pro model can never be loaded by a Free runtime.
 See [stt-model-management.md](stt-model-management.md).
 
-## Free and Pro
+## Native capability and model entitlement
 
-Kroko Free and Kroko Pro are different native runtimes. Which one you have is
-decided by which distribution or image you installed
-(`voice-stt-server` vs `voice-stt-server-pro`), never by a runtime license key —
-the key is a credential for an already-installed Pro runtime. See
+The single public distribution and image contain a Pro-capable Kroko runtime.
+Community models work without a key; Pro models need valid model-specific
+entitlement. Installed provenance establishes native capability; a runtime key
+does not change it. Separate Free native builds remain a developer option. See
 [kroko-onnx.md](kroko-onnx.md) and [../build/BUILD.md](../build/BUILD.md).
 
 ## Extending

@@ -1,9 +1,4 @@
-"""The canonical RC manifest, schema v2 (AP-SRV-070 W5-R04).
-
-Gate W5R4-G16: the manifest binds the exact source, package, Kroko and image
-identities - now for **two** complete alternative distributions, each with its
-own embedded native runtime.
-"""
+"""Schema-3 candidate source, platform, native and image identity guards."""
 
 from __future__ import annotations
 
@@ -15,15 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from release_support import (  # noqa: E402
-    COMMIT,
-    FREE_WHEEL,
-    FREE_WHEEL_WIN,
-    PRO_WHEEL,
-    PRO_WHEEL_WIN,
-    TREE,
-    make_manifest,
-)
+from release_support import COMMIT, PRO_WHEEL, PRO_WHEEL_WIN, TREE, make_manifest
 
 from release_tooling import rc_manifest  # noqa: E402
 from release_tooling.errors import ManifestError, SecretDetectedError  # noqa: E402
@@ -33,21 +20,21 @@ class SchemaTests(unittest.TestCase):
     def test_a_complete_candidate_validates(self):
         rc_manifest.validate_rc_manifest(make_manifest())
 
-    def test_the_schema_version_is_two(self):
-        self.assertEqual(rc_manifest.SCHEMA_VERSION, 2)
-        self.assertEqual(make_manifest()["schemaVersion"], 2)
+    def test_the_schema_version_is_three(self):
+        self.assertEqual(rc_manifest.SCHEMA_VERSION, 3)
+        self.assertEqual(make_manifest()["schemaVersion"], 3)
 
-    def test_both_distributions_are_bound(self):
+    def test_the_unified_distribution_is_bound(self):
         manifest = make_manifest()
         self.assertEqual(
             rc_manifest.distribution_names(manifest),
-            {"free": "voice-stt-server", "pro": "voice-stt-server-pro"},
+            {'pro': 'voice-stt-server'},
         )
 
     def test_each_distribution_binds_its_kroko_variant_and_artifact(self):
         # The identity chain Kroko artifact -> distribution wheel -> PyPI.
         manifest = make_manifest()
-        for variant in ("free", "pro"):
+        for variant in ("pro",):
             block = manifest["distributions"][variant]
             self.assertEqual(block["krokoVariant"], variant)
             self.assertRegex(block["krokoArtifactSha256"], r"^[0-9a-f]{64}$")
@@ -55,12 +42,12 @@ class SchemaTests(unittest.TestCase):
 
     def test_each_wheel_declares_its_interpreter_and_platform(self):
         # B2: CPython 3.12 on Linux x86_64 and Windows AMD64.
-        for variant, expected in (("free", FREE_WHEEL), ("pro", PRO_WHEEL)):
+        for variant, expected in (('pro', PRO_WHEEL),):
             wheel = make_manifest()["distributions"][variant]["wheels"][0]
             self.assertEqual(wheel["filename"], expected)
             self.assertEqual(wheel["pythonTag"], "cp312")
             self.assertEqual(wheel["platformTag"], "linux_x86_64")
-        for variant, expected in (("free", FREE_WHEEL_WIN), ("pro", PRO_WHEEL_WIN)):
+        for variant, expected in (('pro', PRO_WHEEL_WIN),):
             wheel = make_manifest()["distributions"][variant]["wheels"][1]
             self.assertEqual(wheel["filename"], expected)
             self.assertEqual(wheel["pythonTag"], "cp312")
@@ -73,7 +60,7 @@ class SchemaTests(unittest.TestCase):
 
     def test_images_bind_an_oci_manifest_digest_and_a_staging_reference(self):
         manifest = make_manifest()
-        for variant in ("free", "pro"):
+        for variant in ("pro",):
             self.assertRegex(
                 rc_manifest.expected_image_digest(manifest, variant), r"^sha256:[0-9a-f]{64}$"
             )
@@ -106,76 +93,74 @@ class ValidationFailureTests(unittest.TestCase):
 
         self.assertIn("krokoVariant", self._invalid(mutate))
 
-    def test_the_two_distributions_may_not_share_a_name(self):
+    def test_retired_product_name_is_rejected(self):
         def mutate(m):
-            m["distributions"]["pro"]["name"] = "voice-stt-server"
-
-        self.assertIn("different PyPI names", self._invalid(mutate))
+            m["distributions"]["pro"]["name"] = "voice-stt-server-pro"
+        self.assertIn("only public distribution", self._invalid(mutate))
 
     def test_a_distribution_without_wheels_is_rejected(self):
         def mutate(m):
-            m["distributions"]["free"]["wheels"] = []
+            m["distributions"]["pro"]["wheels"] = []
 
         self.assertIn("non-empty list", self._invalid(mutate))
 
     def test_a_short_sha256_is_rejected(self):
         def mutate(m):
-            m["distributions"]["free"]["wheels"][0]["sha256"] = "abc"
+            m["distributions"]["pro"]["wheels"][0]["sha256"] = "abc"
 
         self.assertIn("sha256", self._invalid(mutate))
 
     def test_missing_platform_tag_is_rejected(self):
         def mutate(m):
-            m["distributions"]["free"]["wheels"][0].pop("platformTag")
+            m["distributions"]["pro"]["wheels"][0].pop("platformTag")
 
         self.assertIn("platformTag", self._invalid(mutate))
 
     def test_missing_a_required_platform_wheel_is_rejected(self):
         def mutate(m):
             # Drop the Windows wheel
-            m["distributions"]["free"]["wheels"] = [m["distributions"]["free"]["wheels"][0]]
+            m["distributions"]["pro"]["wheels"] = [m["distributions"]["pro"]["wheels"][0]]
 
         self.assertIn("must include a wheel for platform", self._invalid(mutate))
 
     def test_duplicate_platform_wheel_is_rejected(self):
         def mutate(m):
-            m["distributions"]["free"]["wheels"].append(
-                dict(m["distributions"]["free"]["wheels"][0], filename="voice_stt_server-2.0.0-cp312-cp312-linux_x86_64_2.whl")
+            m["distributions"]["pro"]["wheels"].append(
+                dict(m["distributions"]["pro"]["wheels"][0], filename="voice_stt_server-2.0.0-cp312-cp312-linux_x86_64_2.whl")
             )
 
         self.assertIn("duplicate platform tags", self._invalid(mutate))
 
     def test_unsupported_platform_tag_is_rejected(self):
         def mutate(m):
-            m["distributions"]["free"]["wheels"][0]["platformTag"] = "macosx_10_9_x86_64"
+            m["distributions"]["pro"]["wheels"][0]["platformTag"] = "macosx_10_9_x86_64"
 
         self.assertIn("platformTag must be one of", self._invalid(mutate))
 
     def test_an_image_without_a_digest_is_rejected(self):
         def mutate(m):
-            m["images"]["free"].pop("digest")
+            m["images"]["pro"].pop("digest")
 
         self.assertIn("digest", self._invalid(mutate))
 
     def test_an_image_id_is_not_accepted_as_a_digest(self):
         # The v1 mistake: a local image Id is not a registry-checkable identity.
         def mutate(m):
-            m["images"]["free"]["digest"] = "abc123"
+            m["images"]["pro"]["digest"] = "abc123"
 
         self.assertIn("OCI manifest digest", self._invalid(mutate))
 
     def test_a_staging_reference_must_be_digest_pinned(self):
         # A tag-pinned staging reference could silently move under the release.
         def mutate(m):
-            m["images"]["free"]["staging"] = "ghcr.io/x/voice-stt-server-staging:latest"
+            m["images"]["pro"]["staging"] = "ghcr.io/x/voice-stt-server-staging:latest"
 
         self.assertIn("digest-pinned", self._invalid(mutate))
 
-    def test_the_two_images_may_not_share_a_digest(self):
+    def test_additional_product_image_is_rejected(self):
         def mutate(m):
-            m["images"]["pro"]["digest"] = m["images"]["free"]["digest"]
-
-        self.assertIn("share one manifest digest", self._invalid(mutate))
+            m["images"]["free"] = dict(m["images"]["pro"])
+        self.assertIn("exactly", self._invalid(mutate))
 
     def test_an_invalid_candidate_id_is_rejected(self):
         self.assertIn("candidateId", self._invalid(lambda m: m.update(candidateId="!!")))
@@ -203,16 +188,16 @@ class ValidationFailureTests(unittest.TestCase):
 
 
 class IdentityHelperTests(unittest.TestCase):
-    def test_state_identity_contains_both_distributions_and_images(self):
+    def test_state_identity_contains_the_unified_product_and_image(self):
         identity = rc_manifest.state_identity(make_manifest())
-        self.assertEqual(sorted(identity["distributions"]), ["free", "pro"])
-        self.assertEqual(sorted(identity["images"]), ["free", "pro"])
+        self.assertEqual(sorted(identity["distributions"]), ["pro"])
+        self.assertEqual(sorted(identity["images"]), ["pro"])
 
     def test_state_identity_is_order_stable(self):
         manifest = make_manifest()
         shuffled = make_manifest()
-        shuffled["distributions"]["free"]["wheels"] = list(
-            reversed(shuffled["distributions"]["free"]["wheels"])
+        shuffled["distributions"]["pro"]["wheels"] = list(
+            reversed(shuffled["distributions"]["pro"]["wheels"])
         )
         self.assertEqual(
             rc_manifest.state_identity(manifest), rc_manifest.state_identity(shuffled)
@@ -233,8 +218,8 @@ class IdentityHelperTests(unittest.TestCase):
     def test_expected_pypi_files_are_per_distribution(self):
         manifest = make_manifest()
         self.assertEqual(
-            sorted(rc_manifest.expected_pypi_files(manifest, "free")),
-            sorted([FREE_WHEEL, FREE_WHEEL_WIN]),
+            sorted(rc_manifest.expected_pypi_files(manifest, "pro")),
+            sorted([PRO_WHEEL, PRO_WHEEL_WIN]),
         )
         self.assertEqual(
             sorted(rc_manifest.expected_pypi_files(manifest, "pro")),

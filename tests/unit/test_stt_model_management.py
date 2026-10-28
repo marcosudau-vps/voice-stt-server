@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
+pytestmark = pytest.mark.usefixtures("pro_capable_test_runtime")
+
 from VoiceSTT_server.stt_model_management import (
     AtomicModelProvisioner,
     LOAD_VERIFIED,
@@ -618,57 +620,15 @@ def _variant_settings(**overrides):
     return SimpleNamespace(**values)
 
 
-def test_kroko_runtime_variant_defaults_to_community_free_and_ignores_key(monkeypatch):
-    monkeypatch.setenv("KROKO_API_KEY", "credential-does-not-select-pro")
-    monkeypatch.delenv("VOICESTT_KROKO_VARIANT", raising=False)
-    parsed = OperatorIntent.from_settings(_variant_settings())
-    assert parsed.kroko_runtime_variant == "free"
-
-
-@pytest.mark.parametrize(
-    ("settings", "environment", "expected"),
-    [
-        (
-            _variant_settings(
-                stt_engine_settings={"kroko_onnx": {"runtime_variant": "free"}},
-            ),
-            "pro",
-            "free",
-        ),
-        (
-            _variant_settings(
-                stt_engine_settings={"kroko_onnx": {"runtime_variant": "pro"}},
-                transcription_engine_options={"runtime_variant": "free"},
-                realtime_transcription_engine_options={"runtime_variant": "free"},
-            ),
-            "free",
-            "pro",
-        ),
-        (
-            _variant_settings(
-                transcription_engine_options={"runtime_variant": "pro"},
-                realtime_transcription_engine_options={"runtime_variant": "free"},
-            ),
-            "free",
-            "pro",
-        ),
-        (
-            _variant_settings(
-                transcription_engine="faster_whisper",
-                realtime_transcription_engine="kroko_onnx",
-                realtime_transcription_engine_options={"runtime_variant": "pro"},
-            ),
-            "free",
-            "pro",
-        ),
-        (_variant_settings(), "pro", "pro"),
-    ],
-)
-def test_kroko_runtime_variant_has_one_deterministic_precedence(
-    settings, environment, expected, monkeypatch
-):
-    monkeypatch.setenv("VOICESTT_KROKO_VARIANT", environment)
-    assert OperatorIntent.from_settings(settings).kroko_runtime_variant == expected
+@pytest.mark.parametrize("installed", ["unknown", "free", "pro"])
+@pytest.mark.parametrize("configured", [None, "free", "pro"])
+def test_kroko_runtime_capability_comes_only_from_installed_identity(monkeypatch, installed, configured):
+    import VoiceSTT_server.stt_model_management as management
+    monkeypatch.setattr(management, "installed_kroko_variant", lambda: installed)
+    monkeypatch.setenv("KROKO_API_KEY", "credential-does-not-select-capability")
+    monkeypatch.setenv("VOICESTT_KROKO_VARIANT", "pro")
+    settings = _variant_settings(stt_engine_settings={"kroko_onnx": {"runtime_variant": configured}})
+    assert OperatorIntent.from_settings(settings).kroko_runtime_variant == installed
 
 
 def test_kroko_credential_redaction_is_recursive_and_context_aware(monkeypatch):

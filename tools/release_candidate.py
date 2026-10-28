@@ -7,8 +7,7 @@ source commit on a clean Linux runner:
 
     exact source commit/tree
         |
-        +-- Kroko Free native artifact  -> voice-stt-server wheel  -> Free image
-        +-- Kroko Pro  native artifact  -> voice-stt-server-pro wheel -> Pro image
+        +-- Kroko Pro  native artifact  -> voice-stt-server wheel -> product image
         |
         +-- private GHCR staging packages (digest-pinned)
         +-- canonical RC manifest + SHA-256 inventory
@@ -235,17 +234,12 @@ def build_candidate(
         # 2. The complete public distribution wheel, with that exact qualified
         #    Kroko runtime merged in.
         kroko_payload = build_manifest["variants"][variant]["kroko"]
-        distribution = build_distribution.build_distribution(
-            variant=variant,
-            kroko_wheel=Path(kroko_payload["hostWheelPath"]),
-            out_dir=out_dir / "dist",
-            work_dir=out_dir / "work",
-            fingerprint=kroko_payload["fingerprint"],
-            timestamp=datetime.fromisoformat(
-                build_manifest["buildDate"].replace("Z", "+00:00")
-            ),
-            source_identity=source,
-        )
+        distribution = dict(build_manifest["variants"][variant]["distribution"])
+        destination = out_dir / "dist" / distribution["filename"]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        import shutil
+        shutil.copy2(distribution["path"], destination)
+        distribution["path"] = str(destination)
         validate_distribution(
             Path(distribution["path"]), source, variant,
             kroko_sha256=build_production.kroko_artifacts.sha256_of(
@@ -389,7 +383,7 @@ def build_windows_candidate(
     kroko_work_dir: Optional[Path] = None,
     runner=build_production.default_runner,
 ) -> Dict[str, Any]:
-    """Cross-builds Free/Pro Windows wheels on Linux; qualification is native."""
+    """Cross-builds the unified Windows wheel on Linux; qualification is native."""
     source = candidate_source(source_tree, runner)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -489,7 +483,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
         prog="release_candidate.py",
         description=(
             "AP-SRV-070 W5-R04: build a complete VoiceSTT release candidate "
-            "(both distributions, both images, manifests) on a clean runner."
+            "(one product, two platform wheels, one image, manifests) on a clean runner."
         ),
     )
     parser.add_argument("--out-dir", default=None, type=Path)

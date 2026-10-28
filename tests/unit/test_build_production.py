@@ -61,9 +61,9 @@ def contains(*fragment):
 
 
 def test_image_name_for_maps_free_and_pro_to_distinct_public_identities():
-    assert bp.image_name_for("free") == "voice-stt-server"
-    assert bp.image_name_for("pro") == "voice-stt-server-pro"
-    assert bp.image_name_for("FREE") == "voice-stt-server"
+    assert bp.image_name_for("pro") == "voice-stt-server"
+    assert bp.image_name_for("pro") == "voice-stt-server"
+    assert bp.image_name_for("PRO") == "voice-stt-server"
 
 
 def test_image_name_for_rejects_unknown_variant():
@@ -82,9 +82,9 @@ def test_a_runtime_kroko_key_can_never_select_a_variant():
 @pytest.mark.parametrize(
     "target,expected",
     [
-        ("free", ["free"]),
         ("pro", ["pro"]),
-        ("all", ["free", "pro"]),
+        ("pro", ["pro"]),
+        ("all", ["pro"]),
     ],
 )
 def test_variants_for_target(target, expected):
@@ -101,9 +101,9 @@ def test_variants_for_target_rejects_unknown_target():
 # --------------------------------------------------------------------------
 
 
-def _describe_payload(*, present, wheel_name="kroko_onnx-1.12.9-1free-cp312-cp312-manylinux_2_28_x86_64.whl"):
+def _describe_payload(*, present, wheel_name="kroko_onnx-1.12.9-1pro-cp312-cp312-manylinux_2_28_x86_64.whl"):
     payload = {
-        "variant": "free",
+        "variant": "pro",
         "fingerprint": "deadbeefcafef00d",
         "inputs": {},
         "artifactStore": "/artifact-store",
@@ -112,8 +112,8 @@ def _describe_payload(*, present, wheel_name="kroko_onnx-1.12.9-1free-cp312-cp31
     if present:
         payload["artifact"] = {
             "fingerprint": "deadbeefcafef00d",
-            "variant": "free",
-            "wheelPath": f"/artifact-store/free/deadbeefcafef00d/{wheel_name}",
+            "variant": "pro",
+            "wheelPath": f"/artifact-store/pro/deadbeefcafef00d/{wheel_name}",
             "wheelFilename": wheel_name,
             "wheelSha256": "0" * 64,
         }
@@ -125,7 +125,7 @@ def _describe_payload(*, present, wheel_name="kroko_onnx-1.12.9-1free-cp312-cp31
 def test_resolve_kroko_wheel_reuses_a_verified_artifact_without_building(tmp_path):
     store = tmp_path / "store"
     work = tmp_path / "work"
-    wheel = store / "free" / "deadbeefcafef00d" / "kroko_onnx-1.12.9-1free-cp312-cp312-manylinux_2_28_x86_64.whl"
+    wheel = store / "pro" / "deadbeefcafef00d" / "kroko_onnx-1.12.9-1pro-cp312-cp312-manylinux_2_28_x86_64.whl"
     wheel.parent.mkdir(parents=True)
     wheel.write_bytes(b"fake wheel bytes")
 
@@ -133,7 +133,7 @@ def test_resolve_kroko_wheel_reuses_a_verified_artifact_without_building(tmp_pat
     runner.respond(contains("--describe-artifact"), stdout=json.dumps(_describe_payload(present=True)))
 
     payload = bp.resolve_kroko_wheel(
-        variant="free",
+        variant="pro",
         builder_image="voicestt-kroko-builder:test",
         artifact_store_host=store,
         work_dir_host=work,
@@ -149,7 +149,7 @@ def test_resolve_kroko_wheel_reuses_a_verified_artifact_without_building(tmp_pat
 def test_resolve_kroko_wheel_builds_once_on_a_real_miss(tmp_path):
     store = tmp_path / "store"
     work = tmp_path / "work"
-    wheel = store / "free" / "deadbeefcafef00d" / "kroko_onnx-1.12.9-1free-cp312-cp312-manylinux_2_28_x86_64.whl"
+    wheel = store / "pro" / "deadbeefcafef00d" / "kroko_onnx-1.12.9-1pro-cp312-cp312-manylinux_2_28_x86_64.whl"
 
     runner = RecordingRunner()
     call_count = {"describe": 0}
@@ -171,7 +171,7 @@ def test_resolve_kroko_wheel_builds_once_on_a_real_miss(tmp_path):
         raise AssertionError(f"unexpected command: {cmd}")
 
     payload = bp.resolve_kroko_wheel(
-        variant="free",
+        variant="pro",
         builder_image="voicestt-kroko-builder:test",
         artifact_store_host=store,
         work_dir_host=work,
@@ -198,7 +198,7 @@ def test_resolve_kroko_wheel_raises_if_build_did_not_actually_produce_an_artifac
 
     with pytest.raises(bp.BuildError):
         bp.resolve_kroko_wheel(
-            variant="free",
+            variant="pro",
             builder_image="voicestt-kroko-builder:test",
             artifact_store_host=store,
             work_dir_host=work,
@@ -218,12 +218,12 @@ def test_host_wheel_path_rejects_a_path_outside_the_mounted_store(tmp_path):
 
 def test_build_production_image_requires_voicestt_wheel(tmp_path):
     (tmp_path / "kroko").mkdir()
-    (tmp_path / "kroko" / "kroko_onnx-1.12.9-1free-cp312-cp312-manylinux_2_28_x86_64.whl").write_bytes(b"x")
+    (tmp_path / "kroko" / "kroko_onnx-1.12.9-1pro-cp312-cp312-manylinux_2_28_x86_64.whl").write_bytes(b"x")
     (tmp_path / "voicestt").mkdir()
 
-    with pytest.raises(bp.BuildError, match="no VoiceSTT wheel"):
+    with pytest.raises(bp.BuildError, match="exactly one complete product wheel"):
         bp.build_production_image(
-            variant="free",
+            variant="pro",
             git_commit="a" * 40,
             voicestt_version="2.0.0",
             dist_dir=tmp_path,
@@ -233,53 +233,31 @@ def test_build_production_image_requires_voicestt_wheel(tmp_path):
 
 
 def test_build_production_image_requires_kroko_wheel(tmp_path):
-    (tmp_path / "voicestt").mkdir()
-    (tmp_path / "voicestt" / "voicestt-2.0.0-py3-none-any.whl").write_bytes(b"x")
-    (tmp_path / "kroko").mkdir()
-
-    with pytest.raises(bp.BuildError, match="no Kroko wheel"):
-        bp.build_production_image(
-            variant="free",
-            git_commit="a" * 40,
-            voicestt_version="2.0.0",
-            dist_dir=tmp_path,
-            build_date="2026-09-07T19:06:57Z",
-            runner=RecordingRunner(),
-        )
+    _stage_identity_wheels(tmp_path)
+    for wheel in (tmp_path / "kroko").glob("*.whl"):
+        wheel.unlink()
+    runner = RecordingRunner()
+    runner.respond(lambda cmd: cmd[:2] == ("docker", "build"), stdout="")
+    bp.build_production_image(
+        variant="pro", git_commit="a" * 40, voicestt_version="2.0.0",
+        dist_dir=tmp_path, build_date="2026-09-07T19:06:57Z", runner=runner,
+    )
+    assert len(runner.calls) == 1
 
 
 def test_build_production_image_tags_free_and_pro_distinctly(tmp_path):
     _stage_identity_wheels(tmp_path)
-
     runner = RecordingRunner()
     runner.respond(lambda cmd: cmd[:2] == ("docker", "build"), stdout="")
-
-    free_info = bp.build_production_image(
-        variant="free", git_commit="a" * 40, voicestt_version="2.0.0",
-        dist_dir=tmp_path, build_date="2026-09-07T19:06:57Z", runner=runner,
-    )
-    for wheel in (tmp_path / "kroko").glob("*.whl"):
-        wheel.unlink()
-    from tests.unit.test_build_distribution import make_kroko_wheel
-    make_kroko_wheel(tmp_path / "kroko", "pro")
-    pro_info = bp.build_production_image(
+    info = bp.build_production_image(
         variant="pro", git_commit="a" * 40, voicestt_version="2.0.0",
         dist_dir=tmp_path, build_date="2026-09-07T19:06:57Z", runner=runner,
     )
-
-    assert free_info["image"] == "voice-stt-server"
-    assert pro_info["image"] == "voice-stt-server-pro"
-    assert free_info["versionTag"] != pro_info["versionTag"]
-
-    free_build_cmd = runner.calls[0]
-    assert "--build-arg" in free_build_cmd
-    assert "VOICESTT_KROKO_VARIANT=free" in free_build_cmd
-    pro_build_cmd = runner.calls[1]
-    assert "VOICESTT_KROKO_VARIANT=pro" in pro_build_cmd
-    for call in runner.calls:
-        joined = " ".join(call)
-        assert "KROKO_API_KEY" not in joined
-        assert "KROKO_LICENSE" not in joined
+    assert info["image"] == "voice-stt-server"
+    assert info["versionTag"] == "voice-stt-server:2.0.0"
+    assert len(runner.calls) == 1
+    assert "VOICESTT_KROKO_VARIANT=pro" in runner.calls[0]
+    assert "KROKO_API_KEY" not in " ".join(runner.calls[0])
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +294,7 @@ def test_the_build_manifest_records_where_the_build_date_came_from():
     runner = RecordingRunner()
     runner.respond(lambda cmd: tuple(cmd[:2]) == ("docker", "build"), stdout="")
     info = bp.build_production_image(
-        variant="free", git_commit="a" * 40, voicestt_version="2.0.0",
+        variant="pro", git_commit="a" * 40, voicestt_version="2.0.0",
         dist_dir=_staged_dist_dir(), build_date="2026-09-07T19:06:57Z", runner=runner,
     )
     assert info["buildDate"] == "2026-09-07T19:06:57Z"
@@ -334,18 +312,20 @@ def _staged_dist_dir():
 
 def _stage_identity_wheels(root):
     from tests.unit.test_build_distribution import make_base_wheel, make_kroko_wheel
+    from tools.build_distribution import merge_kroko_runtime
     from VoiceSTT._build_identity import BuildIdentity
-
     (root / "voicestt").mkdir()
     (root / "kroko").mkdir()
-    wheel = make_base_wheel(root / "voicestt", "voicestt")
+    base = make_base_wheel(root, "voice-stt-server")
     identity = BuildIdentity(
         1, "2.0.0", "2.0.0", "a" * 40, "b" * 40, False,
-        "2026-09-07T19:06:57Z", "voicestt", None, "git",
+        "2026-09-07T19:06:57Z", "voice-stt-server", "pro", "git",
     )
-    with zipfile.ZipFile(wheel, "a") as archive:
+    with zipfile.ZipFile(base, "a") as archive:
         archive.writestr("VoiceSTT/_build_identity.json", identity.to_json())
-    make_kroko_wheel(root / "kroko")
+    native = make_kroko_wheel(root / "kroko", "pro")
+    merge_kroko_runtime(base_wheel=base, kroko_wheel=native, variant="pro",
+                        out_dir=root / "voicestt", fingerprint="synthetic")
     return identity
 
 
@@ -353,9 +333,8 @@ def test_image_variant_cannot_override_the_actual_runtime(tmp_path):
     _stage_identity_wheels(tmp_path)
     with pytest.raises(bp.BuildError, match="variant"):
         bp.build_production_image(
-            variant="pro", git_commit="a" * 40, voicestt_version="2.0.0",
+            variant="free", git_commit="a" * 40, voicestt_version="2.0.0",
             dist_dir=tmp_path, build_date="2026-09-07T19:06:57Z",
-            runner=RecordingRunner(),
         )
 
 
@@ -363,7 +342,7 @@ def test_build_metadata_is_not_silently_retagged_as_a_different_docker_version(t
     runner = RecordingRunner()
     with pytest.raises(bp.BuildError, match="unchanged registry tag contract"):
         bp.build_production_image(
-            variant="free", git_commit="a" * 40, voicestt_version="2.0.0-rc.1+build.5",
+            variant="pro", git_commit="a" * 40, voicestt_version="2.0.0-rc.1+build.5",
             dist_dir=tmp_path, build_date="2026-09-07T19:06:57Z", runner=runner,
         )
     assert runner.calls == []
@@ -374,7 +353,7 @@ def test_docker_build_args_must_match_product_resource(tmp_path, commit, version
     _stage_identity_wheels(tmp_path)
     with pytest.raises(bp.BuildError, match="arguments"):
         bp.build_production_image(
-            variant="free", git_commit=commit, voicestt_version=version,
+            variant="pro", git_commit=commit, voicestt_version=version,
             dist_dir=tmp_path, build_date="2026-09-07T19:06:57Z",
             runner=RecordingRunner(),
         )
@@ -386,26 +365,26 @@ def test_image_runtime_and_labels_are_both_checked(tmp_path):
         "org.opencontainers.image.version": source.productVersion,
         "org.opencontainers.image.revision": source.sourceCommit,
         "org.opencontainers.image.created": source.sourceDate,
-        "com.voicestt.kroko-variant": "free",
+        "com.voicestt.kroko-variant": "pro",
     }
     runner = RecordingRunner()
     runner.respond(lambda cmd: cmd[:2] == ("docker", "run"), stdout="{}")
     with pytest.raises(bp.BuildError, match="installed"):
         bp.validate_image_identity(
             "image:test", {"Config": {"Labels": labels}},
-            source_identity=source, variant="free", build_date=source.sourceDate,
+            source_identity=source, variant="pro", build_date=source.sourceDate,
             runner=runner,
         )
     labels["org.opencontainers.image.revision"] = "d" * 40
     with pytest.raises(bp.BuildError, match="labels"):
         bp.validate_image_identity(
             "image:test", {"Config": {"Labels": labels}},
-            source_identity=source, variant="free", build_date=source.sourceDate,
+            source_identity=source, variant="pro", build_date=source.sourceDate,
             runner=RecordingRunner(),
         )
 
 
-@pytest.mark.parametrize("variant", ["free", "pro"])
+@pytest.mark.parametrize("variant", ["pro"])
 @pytest.mark.parametrize("broken", [None, "missing", "malformed", "duplicate", "native", "identity", "exit"])
 def test_image_endpoints_require_isolated_native_hash_bound_evidence(tmp_path, variant, broken):
     source = _stage_identity_wheels(tmp_path)
@@ -418,7 +397,7 @@ def test_image_endpoints_require_isolated_native_hash_bound_evidence(tmp_path, v
     info = {
         "serverVersion": source.productVersion, "serverCommit": source.sourceCommit,
         "identityStatus": "complete",
-        "distribution": {"name": "voicestt", "packageVersion": source.packageVersion},
+        "distribution": {"name": "voice-stt-server", "packageVersion": source.packageVersion},
         "runtime": {"krokoVariant": variant},
         "build": {"sourceTree": source.sourceTree, "sourceDirty": False,
                   "sourceDate": source.sourceDate},

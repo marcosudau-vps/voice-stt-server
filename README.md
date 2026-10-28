@@ -34,52 +34,37 @@ published; the exact commands are below.
 
 ---
 
-## Two distributions: Free and Pro
+## One V2 distribution
 
-Kroko-ONNX Free and Kroko-ONNX Pro are different native runtimes and cannot be
-swapped at runtime. VoiceSTT therefore ships as **two complete, alternative
-distributions**, each with its matching runtime already inside it:
+`voice-stt-server` is the single public product. Its wheel and container image
+include the qualified Pro-capable Kroko runtime. Community models work without
+a Kroko key. Pro models require a valid entitlement for the actual model UUID;
+a key or `runtime_variant=pro` cannot manufacture native capability. The key is
+a runtime credential for model-specific permission.
 
-| | Free | Pro |
-| --- | --- | --- |
-| PyPI distribution | `voice-stt-server` | `voice-stt-server-pro` |
-| Container image | `voice-stt-server` | `voice-stt-server-pro` |
-| Embedded Kroko runtime | Free | Pro |
-| Kroko Community models | yes | yes |
-| Kroko licensed Pro models | no | yes (runtime key required) |
+The public import is `voice_stt_server` and the CLI is `voice-stt-server`.
+No separate native package or operator native build is needed. The historical
+`voicestt` source/development distribution remains available for contributors.
 
-Both expose the **same import package and the same CLI**, so nothing in your
-application changes when you move between them:
-
-```python
-from voice_stt_server import AudioToTextRecorder
-```
-
-Three consequences worth stating plainly:
-
-- **The installed distribution decides the runtime.** A Pro license key is a
-  runtime credential for a Pro runtime that is already installed; it never
-  turns a Free installation into a Pro one.
-- **They are alternatives, not layers.** Install one or the other into an
-  environment, never both.
-- **No native build.** Neither distribution asks you to compile Kroko or to
-  install a separate wheel afterwards.
+Real Linux and Windows native/product qualification has passed; the
+[qualification record](docs/.archiv/kroko_v2_finalization/2026-10-27_NACHTRAG_FINALE_QUALIFIKATION.md)
+binds the tested artifacts to their source commit. Technical feature review is
+separate from public release approval, which remains **BLOCKED**: verified
+redistribution rights, a complete two-platform RC with verified OCI staging
+manifest identity, and independent acceptance remain outstanding. See
+[license gates](docs/licenses.md#unified-v2-release-gate).
 
 ---
 
 ## Installation
 
-Supported targets for the two public distributions are **CPython 3.12** on
+Supported targets for the public product are **CPython 3.12** on
 **Linux x86-64** and **Windows x86-64**. That is the matrix the embedded native
 runtime is actually built and qualified for, so it is the only matrix the
 packaging claims.
 
 ```bash
-# Free
 pip install voice-stt-server
-
-# Pro
-pip install voice-stt-server-pro
 ```
 
 That is the whole installation. Faster-Whisper, the packaged Silero ONNX voice
@@ -271,21 +256,19 @@ See [docs/stt-model-management.md](docs/stt-model-management.md).
 
 ## Containers
 
-Two production images are published per release, mirroring the two
-distributions:
+One production image is intended for publication in both registries:
 
 ```text
 marcosudau/voice-stt-server            ghcr.io/marcosudau-vps/voice-stt-server
-marcosudau/voice-stt-server-pro        ghcr.io/marcosudau-vps/voice-stt-server-pro
 ```
 
 Each release publishes an immutable exact tag (`2.0.0`) plus the movable
-aliases `2.0`, `2` and `latest`. Free/Pro is a build-time identity: it is fixed
-by which image you run, never inferred from a runtime key.
+aliases `2.0`, `2` and `latest` for stable releases. The image contains the
+Pro-capable runtime; model entitlement is checked separately at runtime.
 
-The images are CPU-only, run as a non-root user, and expose port `8010`. They
-install pre-built wheels and never compile anything at image-build time. Build
-them locally with:
+The image is CPU-only, runs as a non-root user, and exposes port `8010`. It
+installs the complete pre-built product wheel and never compiles Kroko during
+the image build. Build it locally with:
 
 ```bash
 python tools/build_production.py all
@@ -306,7 +289,7 @@ is rebuilt after qualification.
 
 ```text
 exact commit -> candidate build + qualification -> approval
-  -> git tag -> PyPI (Free + Pro) -> Docker Hub -> GHCR (manifest promotion)
+  -> git tag -> PyPI (voice-stt-server) -> Docker Hub -> GHCR (manifest promotion)
   -> verification -> movable aliases -> GitHub Release -> final verification
 ```
 
@@ -340,6 +323,8 @@ Full description and the operator setup checklist:
 **Server**
 
 - [FastAPI server](docs/fastapi-server.md)
+- [OpenAI-compatible HTTP module](docs/openai-http-api.md)
+- [Server authentication and SecurityService](docs/server-authentication.md)
 - [Client development](docs/client-development/README.md)
 - [Trigger architecture](docs/einheitliche-triggerarchitektur.md)
 - [Structured logging](docs/structured-logging.md)
