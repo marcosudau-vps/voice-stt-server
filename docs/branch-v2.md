@@ -212,7 +212,7 @@ flowchart TB
     RELEASE["Gesonderte Server-/Client-Releasefreigabe<br/>Merge nach main"]
 
     D --> SQ
-    K -->|"Review + Squash" | SQ
+    K -->|Review und Squash| SQ
     SQ --> CF
     CF --> CS
     CS --> Q
