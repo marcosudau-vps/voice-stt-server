@@ -31,6 +31,8 @@ die aktuelle Dokumentation eingeordnet:
 
 ## Einstiegspunkte
 
+- [V2-Branch-Hierarchie und historische AP-SRV-070-Integrationsabweichung](branch-v2.md): chronologische Git-/PR-Nachweise, Mermaid-Grafiken, Beschluss zum unveränderten historischen Verlauf und Integrationsregeln für Kroko/Cleanup.
+
 - [Zentraler Build und Deployment](../build/BUILD.md)
 - [Releaseprozess und Operator-Einrichtung](release-process.md)
 - [Marcos VPS-Deployment](../build/vps/README.md)
