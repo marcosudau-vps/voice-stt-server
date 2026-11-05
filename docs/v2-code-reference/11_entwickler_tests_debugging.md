@@ -79,7 +79,10 @@ Gezielte Auswahl nach Thema:
 **Beobachtet am 2026-11-05** (Python 3.12, Linux, ohne Modelldateien;
 `torch` stammte lokal aus PyPI und war eine CUDA-Variante, weil
 `download.pytorch.org` in dieser Cloud-Umgebung gesperrt ist – die Tests
-laufen dennoch rein auf der CPU): Ergebnisse der finalen Läufe siehe die
+laufen dennoch rein auf der CPU): `python -m pytest -q tests/unit
+tests/compatibility` → 2302 passed, 15 skipped, 1506 subtests (8:51 min);
+`python -m pytest -q tests/packaging` → 37 passed. In GitHub-CI laufen
+dieselben Suiten auf Ubuntu und Windows mit echtem CPU-Torch. Details in der
 Abschlussakte `docs/.archiv/v2_release_cleanup/2026-11-05_SOLL_IST_UND_ABSCHLUSSBERICHT.md`.
 
 Die Dateien direkt unter `tests/` (z. B. `realtimestt_test.py`,
