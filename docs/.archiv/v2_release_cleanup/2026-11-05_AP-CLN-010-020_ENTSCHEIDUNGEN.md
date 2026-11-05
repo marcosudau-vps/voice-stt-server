@@ -50,3 +50,103 @@ gleichzeitig (a) die Release-Workflows geändert werden dürfen, (b) die
 Alt-Dokumentation mitgepflegt werden darf und (c) `tools/` ein echtes Paket
 mit nur einer Importidentität wird. Der neue Pfadvertragstest zeigt dabei
 alle zu ändernden Stellen an.
+
+---
+
+## Neubewertung im zweiten Lauf (2026-11-05, nach verbindlichem Abschlussauftrag)
+
+Die obige Entscheidung des ersten Laufs (keine Verschiebung) wurde durch den
+Abschlussauftrag vom 2026-11-05 ausdrücklich verworfen: Pfadreferenzen, CI
+und Importe sind Migrationsaufgaben, alte Doku-Verweise keine pauschalen
+Blocker. Der Text oben bleibt als Historie unverändert stehen.
+
+### Tatsächlich umgesetzt (AP-CLN-010)
+
+| Bereich | Alt | Neu | Kompatibilität |
+| --- | --- | --- | --- |
+| Tools | `tools/*.py`, `tools/verify_session_wakeword.ps1` | `engineering/tools/` | `tools/<name>.py` als Shim (Skript → `main()`, Import → dieselbe Modulidentität via `sys.modules`) |
+| Release | `release_tooling/*.py` | `engineering/release/` | `release_tooling/__init__.py` registriert alle Untermodule als Aliase; `release.py` → `engineering.release.cli` |
+| Docker | `docker/nginx.conf`, `Dockerfile.pro-upgrade` | `engineering/deployment/docker/` | keine (Datendateien; Alt-Doku-Divergenz dokumentiert) |
+| VPS | `build/vps/{docker-compose.yml,profile.yaml,release-voice-stt.sh,service.yaml,stt-config.yaml}`, `build/vps/build-area/{requirements.txt,restore-venv.sh}` | `engineering/deployment/vps/` | `build/vps/release-voice-stt.sh` und `build/vps/build-area/restore-venv.sh` als `exec`-Wrapper |
+| Entwürfe | 5 Engine-Dateien aus `VoiceSTT/transcription_engines/` | `engineering/drafts/transcription_engines/` | keine (bewusst nicht importierbar/paketiert) |
+
+**Bewusst nicht verschoben (mit Nachweis):**
+
+- `build/kroko-builder.Dockerfile`: zunächst nach `engineering/build/`
+  verschoben, dann zurückgenommen. Die unveränderliche `build/BUILD.md`
+  verlinkt die Datei als Nachbardatei, und
+  `tests/unit/test_docs_surface.py::MaintainedLinkIntegrityTests` erzwingt
+  diesen Link; zusätzlich hasht der Fingerprint-Guard
+  (`tests/unit/test_kroko_fingerprint.py`) ihren Inhalt. Ein Symlink wäre auf
+  Windows-Checkouts nicht verlässlich. Damit bleibt `engineering/build/`
+  derzeit leer und wurde nicht angelegt.
+- `build/kroko-redistribution.json`: kanonische Freigabequelle (Auftrag).
+- `build_identity_support.py`, `wakeword_package_resources.py`: von
+  `setup.py` im PEP-517-Build importiert und per `MANIFEST.in` im sdist
+  enthalten; Verschiebung würde den sdist-Rebuild-Vertrag ändern.
+- Root-`Dockerfile`, `docker-compose.yml`, `release.py`, `setup.py`,
+  `pyproject.toml`, `MANIFEST.in`, `config.yaml`: funktionsnotwendige Root-Einstiege.
+- `install_windows_cpu.ps1`, `activate_venv_install_reqs.ps1`: beide setzen das
+  Skriptverzeichnis als Projektwurzel voraus.
+- Tuning-Profile `parakeet-*` in `api_fastapi_server/server.py`: geprüft und
+  behalten. Sie sind engine-neutrale Zeitprofile (Batch, Pausen, VAD-Zeiten),
+  wählen keine Engine und sind öffentliche CLI-Choices (`--profile`).
+
+### Tatsächlich umgesetzt (AP-CLN-020)
+
+- `app_browserclient/`, `app_talk_with_llm/`, `app_webserver/` → `examples/`
+  (Inhalt inkl. `README.MD` unverändert, R100). `.gitignore`-Regel
+  `examples/` entfernt. Angepasst: `example_app_config.PROJECT_ROOT`
+  (`APP_DIR.parents[1]`), `ui_openai_voice_interface` (`parents[2]`,
+  Import `examples.app_talk_with_llm…`), `install_cpu.bat`
+  (`%~dp0..\..\install_windows_cpu.ps1`), `examples/app_webserver/stt_server.py`
+  (Import `examples.app_webserver.server`), Tests
+  `test_browser_client_contract.py`, `test_project_config.py`.
+- `MANIFEST.in`: `prune engineering`, `prune examples`.
+- Entfernt als nachweislich obsolet (nur entfernte Engines): manuelle Skripte
+  `tests/realtimestt_omnilingual_test.py`, `tests/realtimestt_test_whispercpp.py`;
+  `tests/install_extras_matrix.py` auf die verbleibenden Extras umgestellt.
+
+### Vollständige Liste der Umbenennungen (`git diff -M --name-status 4f30c0f..HEAD`, Status R)
+
+| Alt | Neu |
+| --- | --- |
+| `Dockerfile.pro-upgrade` | `engineering/deployment/docker/Dockerfile.pro-upgrade` |
+| `docker/nginx.conf` | `engineering/deployment/docker/nginx.conf` |
+| `build/vps/build-area/requirements.txt` | `engineering/deployment/vps/build-area/requirements.txt` |
+| `build/vps/docker-compose.yml` | `engineering/deployment/vps/docker-compose.yml` |
+| `build/vps/profile.yaml` | `engineering/deployment/vps/profile.yaml` |
+| `build/vps/service.yaml` | `engineering/deployment/vps/service.yaml` |
+| `build/vps/stt-config.yaml` | `engineering/deployment/vps/stt-config.yaml` |
+| `VoiceSTT/transcription_engines/openai_api_engine.py` | `engineering/drafts/transcription_engines/openai_api_engine.py` |
+| `VoiceSTT/transcription_engines/openai_whisper_engine.py` | `engineering/drafts/transcription_engines/openai_whisper_engine.py` |
+| `VoiceSTT/transcription_engines/parakeet_engine.py` | `engineering/drafts/transcription_engines/parakeet_engine.py` |
+| `VoiceSTT/transcription_engines/sherpa_onnx_engine.py` | `engineering/drafts/transcription_engines/sherpa_onnx_engine.py` |
+| `VoiceSTT/transcription_engines/whisper_cpp_engine.py` | `engineering/drafts/transcription_engines/whisper_cpp_engine.py` |
+| `release_tooling/adapters.py` | `engineering/release/adapters.py` |
+| `release_tooling/aliases.py` | `engineering/release/aliases.py` |
+| `release_tooling/candidate.py` | `engineering/release/candidate.py` |
+| `release_tooling/cli.py` | `engineering/release/cli.py` |
+| `release_tooling/config.py` | `engineering/release/config.py` |
+| `release_tooling/engine.py` | `engineering/release/engine.py` |
+| `release_tooling/errors.py` | `engineering/release/errors.py` |
+| `release_tooling/gitinfo.py` | `engineering/release/gitinfo.py` |
+| `release_tooling/pipeline.py` | `engineering/release/pipeline.py` |
+| `release_tooling/preflight.py` | `engineering/release/preflight.py` |
+| `release_tooling/rc_manifest.py` | `engineering/release/rc_manifest.py` |
+| `release_tooling/redaction.py` | `engineering/release/redaction.py` |
+| `release_tooling/remote_checks.py` | `engineering/release/remote_checks.py` |
+| `release_tooling/state.py` | `engineering/release/state.py` |
+| `tools/verify_session_wakeword.ps1` | `engineering/tools/verify_session_wakeword.ps1` |
+| `app_browserclient/client.js` | `examples/app_browserclient/client.js` |
+| `app_browserclient/index.html` | `examples/app_browserclient/index.html` |
+| `app_browserclient/server.py` | `examples/app_browserclient/server.py` |
+| `app_talk_with_llm/README.MD` | `examples/app_talk_with_llm/README.MD` |
+| `app_talk_with_llm/active.wav` | `examples/app_talk_with_llm/active.wav` |
+| `app_talk_with_llm/custom_api_chat_endpoint.py` | `examples/app_talk_with_llm/custom_api_chat_endpoint.py` |
+| `app_talk_with_llm/example_app_config.py` | `examples/app_talk_with_llm/example_app_config.py` |
+| `app_talk_with_llm/inactive.wav` | `examples/app_talk_with_llm/inactive.wav` |
+| `app_talk_with_llm/install_cpu.bat` | `examples/app_talk_with_llm/install_cpu.bat` |
+| `app_talk_with_llm/ui_openai_voice_interface.py` | `examples/app_talk_with_llm/ui_openai_voice_interface.py` |
+| `app_webserver/client.py` | `examples/app_webserver/client.py` |
+| `app_webserver/server.py` | `examples/app_webserver/server.py` |

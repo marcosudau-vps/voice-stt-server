@@ -4,7 +4,9 @@ Datum: 2026-11-05
 Repository: `marcosudau-vps/voice-stt-server`
 Basis: `feat/einheitliche-triggerarchitektur-distributed` @ `4f30c0fda9da6470333cad996c13865c31e6474e` (beim Start per `git fetch` verifiziert, keine Abweichung zum Auftrag)
 Arbeitsbranch: `feat/v2-release-cleanup`
-Geprüfter Code-/Doku-Stand: `c2b2d7d` (dieser Bericht wird als eigener, rein dokumentierender Commit darauf gesetzt)
+Geprüfter Code-/Doku-Stand erster Lauf: `c2b2d7d`. **Finaler Stand nach dem
+Abschlussauftrag (zweiter Lauf): siehe „Teil 2“ am Ende dieser Datei.** Die
+Abschnitte 1–6 dokumentieren den ersten Lauf und bleiben als Historie stehen.
 Draft-PR: https://github.com/marcosudau-vps/voice-stt-server/pull/18
 Review-Status: `REVIEW_READY` (eingereicht). **Kein** `ROOT_PASS`, **keine** Freigabe, **kein** Merge, **keine** Veröffentlichung.
 
@@ -72,9 +74,16 @@ keine Modelldateien, kein Netzwerkzugriff auf Produktionssysteme.
 | GitHub-CI Linux | Workflow `CI` | `721c13b` | alle Schritte `success` inkl. Unit-, Packaging-Tests und `git diff --check` (Job am Ende durch Concurrency als `cancelled` markiert) – Run https://github.com/marcosudau-vps/voice-stt-server/actions/runs/41938928706 |
 | GitHub-CI final | Workflow `CI` | `c2b2d7d` / Bericht-Commit | siehe Abschnitt 4a |
 
-### 4a. Abschlussläufe
+### 4a. Abschlussläufe (erster Lauf, Stand `c2b2d7d`)
 
-(wird nach Abschluss der Läufe ergänzt)
+| Prüfung | Ergebnis |
+| --- | --- |
+| `pytest tests/unit tests/compatibility` | PASS – 2350 passed, 24 skipped, 1402 subtests (9:31 min) |
+| `pytest tests/packaging` (erster Versuch) | FAIL – 32 failed: lokale venv ohne Modul `build` (Umgebungsfehler, keine Codeursache) |
+| `pytest tests/packaging` (nach `pip install build wheel`) | PASS – 33 passed (5:22 min) |
+| `python release.py preflight` (sauberer Baum) | Exit 1 – einziges FAIL `dockerhub_repo_configured` (lokal nicht konfiguriert), übrige Checks PASS/WARN |
+| GitHub-CI `e423028` PR-Lauf 41940581684 | Ubuntu und Windows SUCCESS |
+| GitHub-CI `e423028` Push-Lauf 41940574543 | Ubuntu FAILURE (`No space left on device` beim Installieren der CUDA-Torch-Abhängigkeiten), Windows SUCCESS – Ursache und Behebung siehe Teil 2 |
 
 ## 5. Feature-/Quellenmatrix und Abdeckung
 
