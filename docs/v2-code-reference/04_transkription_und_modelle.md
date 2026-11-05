@@ -45,39 +45,40 @@ heuristisch) wird mit `--realtime-use-syllable-boundaries` aktiviert.
 
 ## 2. Engines
 
+V2 unterstützt **genau zwei** Transkriptions-Engines.
 `VoiceSTT/transcription_engines/factory.py` registriert in
-`ENGINE_CLASS_PATHS` folgende Namen (Normalisierung: Kleinschreibung, `-` →
-`_`; unbekannte Namen → `UnsupportedTranscriptionEngineError`):
+`ENGINE_CLASS_PATHS` ausschließlich:
 
-| Engine-Klasse | registrierte Namen |
-| --- | --- |
-| `FasterWhisperEngine` | `faster_whisper` |
-| `KrokoOnnxEngine` | `kroko_onnx`, `kroko`, `banafo_kroko` |
-| `WhisperCppEngine` | `whisper_cpp` |
-| `OpenAIWhisperEngine` | `openai_whisper` |
-| `OpenAIAPIEngine` | `openai_api` |
-| `ParakeetEngine` | `parakeet`, `nvidia_parakeet` |
-| `CohereTranscribeEngine` | `cohere_transcribe`, `cohere` |
-| `GraniteSpeechEngine` | `granite_speech`, `granite` |
-| `Qwen3ASREngine` | `qwen3_asr`, `qwen_asr` |
-| `OmnilingualASREngine` | `omnilingual_asr`, `omnilingual`, `meta_omnilingual_asr`, `omni_asr` |
-| `MoonshineEngine` | `moonshine`, `moonshine_streaming` |
-| `SherpaOnnxParakeetEngine` | `sherpa_onnx_parakeet`, `sherpa_parakeet`, `parakeet_sherpa_onnx` |
-| `SherpaOnnxMoonshineEngine` | `sherpa_onnx_moonshine`, `sherpa_moonshine`, `moonshine_sherpa_onnx` |
-| `FunASREngine` | `funasr` |
+| Engine-Kennung | Klasse | Modul |
+| --- | --- | --- |
+| `faster_whisper` | `FasterWhisperEngine` | `VoiceSTT/transcription_engines/faster_whisper_engine.py` |
+| `kroko_onnx` | `KrokoOnnxEngine` | `VoiceSTT/transcription_engines/kroko_onnx_engine.py` |
 
-`GET /api/config` gibt diese Liste als `supportedEngines` aus.
+Regeln:
 
-### Status-Einordnung (aus dem Code abgeleitet)
+- Namen werden nur normalisiert (Kleinschreibung, `-` → `_`); es gibt
+  **keine** Aliase mehr (`kroko`, `banafo_kroko` wurden entfernt).
+- `get_supported_transcription_engines()` liefert `["faster_whisper",
+  "kroko_onnx"]`; `GET /api/config` und das V1-`hello` geben genau diese
+  Liste als `supportedEngines` aus.
+- Jeder andere Name führt in `create_transcription_engine` zu
+  `UnsupportedTranscriptionEngineError` mit dem Text
+  „Unsupported transcription engine '<name>'. Supported engines:
+  faster_whisper, kroko_onnx“.
+- Serverseitig prüft `enforce_supported_engines` (aufgerufen von
+  `enforce_cpu_model_policy`) beide Lanes **vor** jedem Engine-Import:
+  beim Start (`create_app`), bei `POST /api/config/validate` und bei
+  `PUT /api/models/active` (dort `400`).
 
-| Engine | Server-Modellverwaltung | CPU-Speicherrichtlinie | Default in `ServerSettings` | Einordnung |
-| --- | --- | --- | --- | --- |
-| `faster_whisper` | ja (`FasterWhisperAdapter`) | ja (`model_size_rank`) | Final-Lane | **produktiv verdrahtet** |
-| `kroko_onnx` | ja (`KrokoAdapter`) | ja (Rang 2) | Realtime-Lane | **produktiv verdrahtet**, Native-Wheel in der öffentlichen Distribution |
-| alle übrigen | nein | nein (Rang `None` → Richtlinie greift nicht) | – | **vorhanden, experimentell / nicht qualifiziert**: Adapter und Unit-Tests existieren, aber keine Discovery/Provisionierung/Readiness im Server |
+Beide Engines sind in Modellverwaltung (`FasterWhisperAdapter`,
+`KrokoAdapter`) und CPU-Speicherrichtlinie (`model_size_rank`) eingebunden.
 
-`STTModelManager` kennt nur die Adapter `faster_whisper` und `kroko_onnx`
-(`stt_model_management.py:656f.`).
+**Nicht Teil des Produkts:** Fünf frühere Adapter liegen nur noch als
+nicht paketierte Entwürfe unter `engineering/drafts/transcription_engines/`
+(kein `__init__.py`, per `prune engineering` aus sdist ausgeschlossen, nicht
+in `find_packages`). Sieben weitere wurden entfernt. Diese Grenze prüft
+`tests/unit/test_v2_engine_boundary.py`; die gebauten Archive prüft
+`tests/packaging/test_v2_distribution_contents.py`.
 
 ## 3. CPU-Modellrichtlinie
 
@@ -184,4 +185,4 @@ Leerlauf-Entladung: `model_idle_unload_enabled` (Default an),
 - [`api_fastapi_server/kroko_runtime.py`](../../api_fastapi_server/kroko_runtime.py) – `enforce_kroko_single_identity`
 - [`VoiceSTT/kroko/models.py`](../../VoiceSTT/kroko/models.py), [`VoiceSTT/assets/kroko/models.json`](../../VoiceSTT/assets/kroko/models.json)
 - [`VoiceSTT/core/realtime_text_stabilizer.py`](../../VoiceSTT/core/realtime_text_stabilizer.py), [`VoiceSTT/core/realtime_boundary_detector.py`](../../VoiceSTT/core/realtime_boundary_detector.py)
-- Tests: [`tests/unit/test_stt_model_management.py`](../../tests/unit/test_stt_model_management.py), [`tests/unit/test_kroko_model_authority.py`](../../tests/unit/test_kroko_model_authority.py), [`tests/unit/test_fastapi_server_multi_user.py`](../../tests/unit/test_fastapi_server_multi_user.py), [`tests/unit/test_realtime_text_stabilizer.py`](../../tests/unit/test_realtime_text_stabilizer.py), [`tests/unit/test_faster_whisper_engine.py`](../../tests/unit/test_faster_whisper_engine.py), [`tests/unit/test_kroko_onnx_engine.py`](../../tests/unit/test_kroko_onnx_engine.py), [`tests/unit/test_additional_transcription_engines.py`](../../tests/unit/test_additional_transcription_engines.py), [`tests/unit/test_local_model_resolver.py`](../../tests/unit/test_local_model_resolver.py)
+- Tests: [`tests/unit/test_stt_model_management.py`](../../tests/unit/test_stt_model_management.py), [`tests/unit/test_kroko_model_authority.py`](../../tests/unit/test_kroko_model_authority.py), [`tests/unit/test_fastapi_server_multi_user.py`](../../tests/unit/test_fastapi_server_multi_user.py), [`tests/unit/test_realtime_text_stabilizer.py`](../../tests/unit/test_realtime_text_stabilizer.py), [`tests/unit/test_faster_whisper_engine.py`](../../tests/unit/test_faster_whisper_engine.py), [`tests/unit/test_kroko_onnx_engine.py`](../../tests/unit/test_kroko_onnx_engine.py), [`tests/unit/test_v2_engine_boundary.py`](../../tests/unit/test_v2_engine_boundary.py), [`tests/unit/test_local_model_resolver.py`](../../tests/unit/test_local_model_resolver.py)

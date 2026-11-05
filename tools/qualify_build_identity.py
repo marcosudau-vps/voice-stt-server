@@ -23,6 +23,9 @@ from VoiceSTT._version import resolve_version  # noqa: E402
 from build_identity_support import capture_identity, match_identity, wheel_identity  # noqa: E402
 from tools.build_distribution import distribution_name_for, verify_bundled_notices, DistributionBuildError  # noqa: E402
 
+#: Stdlib-only CPU-only installer/checker, run inside the fresh venv.
+CPU_ONLY_TOOL = Path(__file__).resolve().with_name("cpu_only.py")
+
 
 def sha256(path: Path) -> str:
     with path.open("rb") as handle:
@@ -196,9 +199,18 @@ def qualify_installed_wheel(path: Path, identity: BuildIdentity) -> dict:
                     "VOICESTT_DISTRIBUTION_VARIANT"):
             env.pop(key, None)
         env.update(VOICESTT_OFFLINE_MODELS="1", HF_HUB_OFFLINE="1", TRANSFORMERS_OFFLINE="1")
+        # V2 CPU-only contract: install the CPU torch build first and pin it
+        # through PIP_CONSTRAINT, so the wheel's own dependency resolution can
+        # never replace it with a CUDA build (and its nvidia-* runtimes); then
+        # prove the result machine-checkably before the identity check.
+        constraints = root / "cpu-constraints.txt"
+        env["PIP_CONSTRAINT"] = str(constraints)
+        constraints.write_text("", encoding="utf-8")
         for args in (
+            [str(CPU_ONLY_TOOL), "install-torch", "--constraint-out", str(constraints)],
             ["-m", "pip", "install", str(path.resolve())],
             ["-m", "pip", "check"],
+            [str(CPU_ONLY_TOOL), "check"],
             ["-I", "-c", INSTALLED_CHECK, identity.to_json()],
         ):
             result = subprocess.run(

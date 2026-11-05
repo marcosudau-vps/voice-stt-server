@@ -97,10 +97,18 @@ jobs:
           echo "PY=$PY" >> "$GITHUB_ENV"
           WHEEL=$(ls dist/*.whl | head -n1)
           "$PY" -m pip install --upgrade pip
-          "$PY" -m pip install "${WHEEL}[recommended,server]"
+          # V2 is CPU-only: install torch from the CPU index and pin that exact
+          # build, so the wheel's dependency resolution can never replace it
+          # with the CUDA build and its multi-GB nvidia-* runtimes.
+          SMOKE_CONSTRAINTS="${RUNNER_TEMP}/cpu-constraints-smoke.txt"
+          "$PY" tools/cpu_only.py install-torch --constraint-out "$SMOKE_CONSTRAINTS"
+          PIP_CONSTRAINT="$SMOKE_CONSTRAINTS" "$PY" -m pip install "${WHEEL}[recommended,server]"
 
       - name: pip check (installed distribution)
         run: $PY -m pip check
+
+      - name: CPU-only dependency contract (installed distribution)
+        run: $PY tools/cpu_only.py check
 
       - name: Import / version check from the installed distribution
         run: |
@@ -165,11 +173,16 @@ jobs:
       - name: Install development/test dependencies (source checkout)
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -e ".[recommended,server]"
-          python -m pip install -r requirements-dev.txt
+          DEV_CONSTRAINTS="${RUNNER_TEMP}/cpu-constraints-dev.txt"
+          python tools/cpu_only.py install-torch --constraint-out "$DEV_CONSTRAINTS"
+          PIP_CONSTRAINT="$DEV_CONSTRAINTS" python -m pip install -e ".[recommended,server]"
+          PIP_CONSTRAINT="$DEV_CONSTRAINTS" python -m pip install -r requirements-dev.txt
 
       - name: pip check (dev environment)
         run: python -m pip check
+
+      - name: CPU-only dependency contract (dev environment)
+        run: python tools/cpu_only.py check
 
       - name: Run fast unit/guard/packaging/release-tool test suite
         run: python -m pytest -q tests/unit tests/compatibility

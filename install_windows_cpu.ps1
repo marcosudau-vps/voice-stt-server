@@ -7,7 +7,7 @@ if (-not (Test-Path -LiteralPath $PythonExe)) {
 }
 
 & $PythonExe -m pip install --upgrade pip setuptools wheel
-& $PythonExe -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+& $PythonExe -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 & $PythonExe -m pip install -e "${ProjectRoot}[faster-whisper,silero-onnx-cpu,wakewords,kroko-builder,server,example-app]"
 
 Write-Host "CPU-only environment installed at $PythonExe"

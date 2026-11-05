@@ -193,7 +193,7 @@ class ReferenceCoverageTests(unittest.TestCase):
             "ENGINE_CLASS_PATHS",
         )
         names = {key.value for key in node.keys}
-        self.assertGreater(len(names), 10)
+        self.assertTrue(names)
         page = _read("04_transkription_und_modelle.md")
         missing = sorted(name for name in names if f"`{name}`" not in page)
         self.assertEqual(missing, [])

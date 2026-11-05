@@ -393,6 +393,13 @@ jobs:
                   assert any(n.startswith("kroko_onnx/") for n in names), f"{wheel['filename']}: no embedded Kroko runtime"
                   assert any(n.startswith("voice_stt_server/") for n in names), f"{wheel['filename']}: no canonical import package"
                   assert embedded["variant"] == variant, embedded
+                  # V2 product boundary: exactly two transcription engines.
+                  engines = sorted(
+                      n.rsplit("/", 1)[1] for n in names
+                      if n.startswith("VoiceSTT/transcription_engines/") and n.endswith("_engine.py")
+                  )
+                  assert engines == ["faster_whisper_engine.py", "kroko_onnx_engine.py"], engines
+                  assert not any(n.startswith("engineering/") for n in names), f"{wheel['filename']}: engineering/ leaked"
                   print(f"{variant} ({wheel['platformTag']}): {wheel['filename']} embeds {variant} runtime")
           PYEOF
 

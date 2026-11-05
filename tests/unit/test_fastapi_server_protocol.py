@@ -208,11 +208,11 @@ settings:
         self.assertIsNone(normalize_engine_name(None))
         self.assertEqual(normalize_engine_name("Qwen3-ASR"), "qwen3_asr")
 
-    def test_supported_engines_include_kroko_for_fastapi_config(self):
-        engines = get_supported_transcription_engines()
-
-        for name in ("kroko_onnx", "kroko", "banafo_kroko"):
-            self.assertIn(name, engines)
+    def test_supported_engines_are_exactly_the_v2_product_engines(self):
+        self.assertEqual(
+            get_supported_transcription_engines(),
+            ["faster_whisper", "kroko_onnx"],
+        )
 
     def test_segment_ids_replace_realtime_with_final(self):
         state = SegmentState()

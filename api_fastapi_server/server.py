@@ -8737,7 +8737,7 @@ def model_size_rank(engine, model):
 
     engine = normalize_engine_name(engine or "faster_whisper")
     value = str(model or "").lower().replace("_", "-")
-    if engine in {"kroko", "kroko_onnx", "banafo_kroko"}:
+    if engine == "kroko_onnx":
         return 2
     if engine != "faster_whisper":
         return None
@@ -8765,10 +8765,31 @@ def model_size_rank(engine, model):
     return None
 
 
+def enforce_supported_engines(settings):
+    """Reject engines outside the V2 product (faster_whisper, kroko_onnx).
+
+    Runs before any engine import, so an unsupported selection becomes a
+    clear ``ValueError`` (HTTP 400 on the admin routes, a readable startup
+    error otherwise) instead of an import failure deep inside a worker.
+    """
+    from VoiceSTT.transcription_engines.factory import (
+        is_supported_transcription_engine,
+        unsupported_engine_message,
+    )
+
+    for value in (
+        settings.transcription_engine,
+        settings.realtime_transcription_engine,
+    ):
+        if value is not None and not is_supported_transcription_engine(value):
+            raise ValueError(unsupported_engine_message(value))
+
+
 def enforce_cpu_model_policy(settings):
     """Enforce the configurable CPU-only two-lane model memory guard."""
 
     settings.device = "cpu"
+    enforce_supported_engines(settings)
     try:
         kroko_manifest = load_manifest()
     except Exception:
