@@ -56,8 +56,27 @@ def installed_distribution_names() -> List[str]:
     return sorted({(dist.metadata["Name"] or "") for dist in metadata.distributions()})
 
 
+def _marker_applies(requirement: str) -> bool:
+    """Whether the environment marker of ``requirement`` holds *here*.
+
+    torch's CPU wheels can still list GPU runtimes guarded by markers such as
+    ``platform_system == "Linux"`` (seen on the Windows CPU build); those are
+    never installed on the current platform and must not count. ``packaging``
+    is a base dependency of the product (and vendored by pip); without it the
+    check stays conservative and counts every entry.
+    """
+    if ";" not in requirement:
+        return True
+    try:
+        from packaging.requirements import Requirement  # noqa: PLC0415
+    except ImportError:  # pragma: no cover - conservative fallback
+        return True
+    parsed = Requirement(requirement)
+    return parsed.marker is None or parsed.marker.evaluate({"extra": ""})
+
+
 def gpu_requirements_of(distribution: str) -> List[str]:
-    """``Requires-Dist`` entries of ``distribution`` that name a GPU runtime."""
+    """Active ``Requires-Dist`` entries of ``distribution`` naming a GPU runtime."""
     try:
         requirements = metadata.requires(distribution) or []
     except metadata.PackageNotFoundError:
@@ -65,7 +84,7 @@ def gpu_requirements_of(distribution: str) -> List[str]:
     offending = []
     for requirement in requirements:
         name = re.split(r"[\s;<>=!~\[(]", requirement.strip(), maxsplit=1)[0]
-        if _GPU_DISTRIBUTION_RE.match(name):
+        if _GPU_DISTRIBUTION_RE.match(name) and _marker_applies(requirement):
             offending.append(requirement)
     return offending
 

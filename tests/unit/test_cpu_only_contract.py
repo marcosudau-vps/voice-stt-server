@@ -80,7 +80,24 @@ class CheckTests(unittest.TestCase):
         self.assertEqual(report["gpuDistributions"], ["nvidia-cublas-cu12"])
 
     def test_torch_metadata_requiring_gpu_runtimes_fails(self):
-        report = self._check(_fake_torch(), requires=("nvidia-cudnn-cu13==9.1; platform_system == 'Linux'",))
+        report = self._check(_fake_torch(), requires=("nvidia-cudnn-cu13==9.1",))
+        self.assertFalse(report["ok"])
+
+    def test_gpu_requirements_for_another_platform_do_not_count(self):
+        # Regression (CI windows-latest, torch 2.15.0+cpu): the CPU wheel lists
+        # nvidia-*/triton entries guarded by platform_system == "Linux".
+        import platform
+
+        other = "Windows" if platform.system() == "Linux" else "Linux"
+        same = platform.system()
+        report = self._check(_fake_torch(), requires=(
+            f'nvidia-cudnn-cu13==9.26.0.51; platform_system == "{other}"',
+            f'triton~=3.9.0; platform_system == "{other}" and python_version < "3.16"',
+        ))
+        self.assertTrue(report["ok"], report)
+        report = self._check(_fake_torch(), requires=(
+            f'nvidia-cudnn-cu13==9.26.0.51; platform_system == "{same}"',
+        ))
         self.assertFalse(report["ok"])
 
 
