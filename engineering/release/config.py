@@ -4,11 +4,10 @@ Three identities already have exactly one authority in this repository and
 this module deliberately reuses all of them instead of hardcoding a copy:
 
 * The product version: ``VoiceSTT._version``.
-* The public production **image** name: ``tools.build_production``
-  (AP-SRV-070 W4C). That module has no package ``__init__.py`` - it is
-  imported the same way its own unit tests import it, by adding ``tools/`` to
-  ``sys.path``.
-* The public **distribution** name: ``tools.build_distribution``
+* The public production **image** name: ``engineering.tools.build_production``
+  (AP-SRV-070 W4C), imported by its one package identity since the V2
+  engineering consolidation (formerly via ``tools/`` on ``sys.path``).
+* The public **distribution** name: ``engineering.tools.build_distribution``
   (AP-SRV-070 W5-R04), imported the same way.
 
 AP-SRV-070 W5-R04 changed how the registry roots are resolved. Previously both
@@ -28,20 +27,16 @@ import sys
 from pathlib import Path
 from typing import Dict, Optional
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
-
-_TOOLS_DIR = REPO_ROOT / "tools"
-if str(_TOOLS_DIR) not in sys.path:
-    sys.path.insert(0, str(_TOOLS_DIR))
-
-from build_production import IMAGE_NAMES, SUPPORTED_VARIANTS, image_name_for  # noqa: E402
-from build_distribution import (  # noqa: E402
-    DISTRIBUTION_NAMES,
-    distribution_name_for,
-)
+REPO_ROOT = Path(__file__).resolve().parents[2]
 
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
+
+from engineering.tools.build_production import IMAGE_NAMES, SUPPORTED_VARIANTS, image_name_for  # noqa: E402
+from engineering.tools.build_distribution import (  # noqa: E402
+    DISTRIBUTION_NAMES,
+    distribution_name_for,
+)
 
 from VoiceSTT._version import DISTRIBUTION_NAME  # noqa: E402
 

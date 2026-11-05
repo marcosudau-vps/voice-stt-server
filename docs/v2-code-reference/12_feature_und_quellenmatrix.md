@@ -21,7 +21,7 @@ Statuswerte:
 | F07 | Final-/Realtime-Lanes, fairer Scheduler | `server.py:FairInferenceQueue`, `InferenceScheduler` | `tests/unit/test_fastapi_server_multi_user.py`, `test_fastapi_server_multi_user_asr_integration.py` | getestet, beobachtet (`/health.scheduler`) | 04 |
 | F08 | Engine `faster_whisper` | `VoiceSTT/transcription_engines/faster_whisper_engine.py` | `tests/unit/test_faster_whisper_engine.py` | getestet | 04 |
 | F09 | Engine `kroko_onnx` | `VoiceSTT/transcription_engines/kroko_onnx_engine.py` | `tests/unit/test_kroko_onnx_engine.py`, `test_kroko_native_integration.py` | getestet | 04 |
-| F10 | Weitere Engines (whisper.cpp, OpenAI-Whisper/-API, Parakeet, Cohere, Granite, Qwen3, Omnilingual, Moonshine, Sherpa-ONNX, FunASR) | `VoiceSTT/transcription_engines/*` | `tests/unit/test_additional_transcription_engines.py`, `test_whisper_cpp_engine.py`, `test_openai_whisper_engine.py`, `test_moonshine_engine.py`, `test_sherpa_onnx_engine.py`, `test_cohere_transcribe_engine.py`, `test_granite_speech_engine.py`, `test_omnilingual_asr_engine.py` | experimentell | 04 |
+| F10 | Engine-Produktgrenze: nur `faster_whisper`, `kroko_onnx`; 5 Entwürfe isoliert, 7 Engines entfernt | `VoiceSTT/transcription_engines/factory.py`, `engineering/drafts/transcription_engines/` | `tests/unit/test_v2_engine_boundary.py`, `tests/packaging/test_v2_distribution_contents.py` | getestet | 04 |
 | F11 | CPU-Speicherrichtlinie + Kroko-Einzelidentität | `server.py:enforce_cpu_model_policy`, `kroko_runtime.py` | `tests/unit/test_fastapi_server_multi_user.py`, `test_kroko_pr15_final_correction.py` | getestet | 04 |
 | F12 | Server-Modellverwaltung (Discovery, Readiness, Recovery) | `VoiceSTT_server/stt_model_management.py` | `tests/unit/test_stt_model_management.py`, `test_kroko_model_authority.py` | getestet | 04 |
 | F13 | Automatische Modellprovisionierung | `AtomicModelProvisioner`, `STTModelManager._provision` | `tests/unit/test_stt_model_management.py` | blockiert für alle 23 ausgelieferten Modelle (`provisioning_allowed = False`) | 04 |
@@ -48,12 +48,14 @@ Statuswerte:
 | F34 | Kroko-Native-Guard (Neustartpflichten) | `VoiceSTT/kroko/native_guard.py` | `tests/unit/test_kroko_pr15_final_correction.py`, `test_kroko_pr15_b1b2_regression.py` | getestet | 08 |
 | F35 | Eventkanäle, Redaktion, SQLite-Store | `VoiceSTT_server/event_logging.py` | `tests/unit/test_server_operations.py`, `test_fastapi_server_multi_user.py` | getestet | 09 |
 | F36 | Entwickler-Wheel + CI-Installationsprüfung | `setup.py`, `.github/workflows/ci.yml` | CI, `tests/packaging/test_identity_installation.py` | getestet | 10 |
-| F37 | Produkt-Wheel mit eingebettetem Kroko | `tools/build_distribution.py` | `tests/unit/test_build_distribution.py`, `test_unified_product.py` | getestet (ohne echten Native-Build lokal) | 10 |
-| F38 | Produktionsimage | `Dockerfile`, `tools/build_production.py` | `tests/unit/test_production_docker_contract.py`, `test_build_production.py` | getestet (Vertragsprüfung, kein lokaler Docker-Build) | 02, 10 |
-| F39 | Release-Candidate-Workflow | `release-candidate.yml`, `tools/release_candidate.py` | `tests/unit/test_release_candidate.py`, `test_release_workflows.py` | getestet (statisch); nicht ausgeführt | 10 |
-| F40 | Release-State-Machine + Veröffentlichung | `release_tooling/*`, `release-publish.yml` | `tests/unit/test_release_*.py` | blockiert (`build/kroko-redistribution.json: BLOCKED`) | 08, 10 |
+| F37 | Produkt-Wheel mit eingebettetem Kroko | `engineering/tools/build_distribution.py` | `tests/unit/test_build_distribution.py`, `test_unified_product.py` | getestet (ohne echten Native-Build lokal) | 10 |
+| F38 | Produktionsimage | `Dockerfile`, `engineering/tools/build_production.py` | `tests/unit/test_production_docker_contract.py`, `test_build_production.py` | getestet (Vertragsprüfung, kein lokaler Docker-Build) | 02, 10 |
+| F39 | Release-Candidate-Workflow | `release-candidate.yml`, `engineering/tools/release_candidate.py` | `tests/unit/test_release_candidate.py`, `test_release_workflows.py` | getestet (statisch); nicht ausgeführt | 10 |
+| F40 | Release-State-Machine + Veröffentlichung | `engineering/release/*`, `release-publish.yml` | `tests/unit/test_release_*.py` | blockiert (`build/kroko-redistribution.json: BLOCKED`) | 08, 10 |
 | F41 | Alt-Server `stt-server-legacy` / CLI `stt` | `VoiceSTT_server/stt_server.py`, `stt_cli_client.py` | CI prüft nur Existenz der Console-Scripts | im Code nicht eindeutig als V2-qualifiziert nachweisbar | 02 |
-| F42 | Beispiel-Browserclient | `app_browserclient/` | `tests/unit/test_browser_client_contract.py` | getestet (Vertrag) | 07 |
+| F43 | CPU-only-Abhängigkeitsvertrag (CPU-Torch + Constraint + Nachweis) | `engineering/tools/cpu_only.py`, `.github/workflows/ci.yml`, `engineering/tools/qualify_build_identity.py`, `Dockerfile` | `tests/unit/test_cpu_only_contract.py`; echte Installation nur in GitHub-CI (lokal: `download.pytorch.org` durch Netzwerkrichtlinie gesperrt) | getestet (Logik/Verdrahtung); Installationsnachweis über CI | 02, 10 |
+| F44 | Engineering-Struktur + Kompatibilitätseinstiege (`tools/`, `release_tooling/`, `build/vps/*.sh`) | `engineering/`, `tools/*.py`, `release_tooling/__init__.py` | `tests/unit/test_engineering_path_contract.py` | getestet | 01, 11 |
+| F42 | Beispiel-Browserclient | `examples/app_browserclient/` | `tests/unit/test_browser_client_contract.py` | getestet (Vertrag) | 07 |
 
 ## Abdeckungsprüfung
 
@@ -70,7 +72,10 @@ Statuswerte:
   Seite 03 steht.
 - **Engines:** derselbe Test prüft, dass jeder Name aus `ENGINE_CLASS_PATHS`
   in Seite 04 steht.
-- **Nicht vollständig erfasst:** Die einzelnen Felder aller V1-Nachrichten
-  (`status`, `timeline`, `ready`) und die vollständige Parameterliste des
-  Bibliotheks-Recorders `AudioToTextRecorder` sind nur auszugsweise
-  dokumentiert. Eine „100 %“-Aussage wird daher nicht getroffen.
+- **V1-Nachrichtenfelder und Recorder-Parameter:** seit dieser Fassung
+  maschinell erzeugt in Seite 13 (AST bzw. `inspect.signature`, 86
+  Parameter).
+- **Grenzen:** Die Feldlisten in Seite 13 sind die Vereinigung literaler
+  Dict-Schlüssel; zur Laufzeit dynamisch ergänzte Felder sind dort nur
+  benannt, soweit der Code sie explizit hinzufügt. Eine „100 %“-Aussage wird
+  nicht getroffen.

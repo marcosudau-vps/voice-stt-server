@@ -5,7 +5,7 @@
 # and an external reviewer approved.
 #
 # The order below is not implemented here. It comes from the one canonical
-# release state machine (release_tooling/engine.py), and each job advances only
+# release state machine (engineering/release/engine.py), and each job advances only
 # its own portion of it via `release.py publish --until <STATE>`:
 #
 #   PREPARED -> TAGGED -> PYPI_PUBLISHED -> DOCKERHUB_PUBLISHED

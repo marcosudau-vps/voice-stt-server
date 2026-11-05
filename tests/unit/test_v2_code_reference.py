@@ -38,6 +38,7 @@ PAGES = (
     "10_build_ci_und_release_technik.md",
     "11_entwickler_tests_debugging.md",
     "12_feature_und_quellenmatrix.md",
+    "13_anhang_v1_nachrichten_und_recorder.md",
 )
 
 _LINK_RE = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")

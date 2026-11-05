@@ -2,13 +2,13 @@
 # hostpaths, domains, networks, ports or secret paths are baked in here -
 # every value below has a portable default and can be overridden through the
 # environment or an optional env_file. See build/BUILD.md for the full
-# contract and tools/build_production.py for how the Free/Pro images
-# referenced by VOICESTT_IMAGE are produced.
+# contract and engineering/tools/build_production.py for how the unified
+# (Pro-capable) image referenced by VOICESTT_IMAGE is produced.
 #
 # `docker compose build`/`up --build` requires dist/voicestt/*.whl and
 # dist/kroko/*.whl to already exist in the build context - this Dockerfile
 # never builds the wheel or compiles Kroko itself. Run
-# `python tools/build_production.py <free|pro|all>` first, or set
+# `python engineering/tools/build_production.py <pro|all>` first, or set
 # VOICESTT_IMAGE to an image already built that way and skip `--build`.
 services:
   server:

@@ -19,21 +19,78 @@ Kroko-Native-Wheel nur für `cp312` (`linux_x86_64`, `win_amd64`) gebaut wird.
 mit Python 3.12 (`.github/workflows/ci.yml`, Matrix `os`). Andere Plattformen
 sind im Code nicht qualifiziert.
 
-### Extras (Auswahl, `extras_require` in `setup.py`)
+### Extras (vollständig, `extras_require` in `setup.py`)
 
 | Extra | Inhalt |
 | --- | --- |
-| `server` | `fastapi>=0.115`, `uvicorn[standard]>=0.30`, `python-multipart`, `sse-starlette`, `httpx`, `PyYAML>=6.0`, `tzdata` |
-| `recommended` / `default` | faster-whisper (+ `av`) und `silero-vad[onnx-cpu]>=6.2.1` |
-| `faster-whisper`, `silero-onnx`, `silero-vad`, … | einzelne Engines bzw. VAD |
-| `openwakeword` / `oww`, `porcupine`, `wakewords` | Wake-Word-Backends |
+| `minimal` | leer |
+| `faster-whisper` | `faster-whisper==1.2.1`, `av>=11,<19` |
+| `silero-vad`, `silero` | `silero-vad>=6.2.1` |
+| `silero-onnx`, `silero-onnx-cpu`, `vad-onnx` | `silero-vad[onnx-cpu]>=6.2.1` |
 | `kroko-builder` | `huggingface_hub` (nur Build-Werkzeug) |
-| `example-app` | Abhängigkeiten von `app_talk_with_llm` |
-| `all` | Vereinigung der obigen produktiven Extras |
+| `porcupine`, `pvporcupine`, `pvp` | `pvporcupine==1.9.5` |
+| `openwakeword`, `oww` | `openwakeword>=0.6.0` |
+| `wakewords`, `wake-words` | beide Wake-Word-Backends |
+| `server` | `fastapi>=0.115`, `uvicorn[standard]>=0.30`, `python-multipart`, `sse-starlette`, `httpx`, `PyYAML>=6.0`, `tzdata` |
+| `recommended`, `default` | faster-whisper + Silero-ONNX-CPU |
+| `example-app` | Abhängigkeiten von `examples/app_talk_with_llm` |
+| `all` | faster-whisper, Silero-ONNX, kroko-builder, Wake-Word, server, example-app |
 
-Weitere Engine-Extras (`whisper-cpp`, `openai-whisper`, `sherpa-onnx`,
-`transformers`/`moonshine`/`granite`/`cohere`, `omnilingual-asr`, `qwen`) sind
-deklariert; zu deren Status siehe Seite 04.
+Für nicht unterstützte Engines gibt es **keine** Extras mehr;
+`tests/packaging/test_v2_distribution_contents.py` prüft das an den
+`Provides-Extra`-Metadaten des gebauten Wheels.
+
+### Laufzeitabhängigkeiten (Basis, `base_requirements`)
+
+`packaging`, `PyAudio`, `webrtcvad-wheels`, `halo`, `torch`, `scipy`,
+`websockets`, `websocket-client`, `soundfile`. `torchaudio` ist entfallen:
+`silero-vad[onnx-cpu]` verlangt nur `torch` (lokal geprüft mit
+`importlib.metadata.requires("silero-vad")`), und keine der beiden
+unterstützten Engines importiert `torchaudio`.
+
+### CPU-only-Vertrag
+
+V2 läuft ausschließlich auf der CPU. `torch` bleibt nötig
+(`VoiceSTT/core/initialization.py` und `runtime.py` nutzen
+`torch.multiprocessing`, `VoiceSTT/core/silero_vad.py` den PyTorch-Fallback,
+`silero-vad` hängt von `torch` ab). Eine normale PyPI-Auflösung von `torch`
+installiert unter Linux jedoch die CUDA-Variante samt `nvidia-*`/`triton`.
+Weil `install_requires` keinen anderen Paketindex vorschreiben kann, gilt:
+
+1. Erst CPU-Torch aus `https://download.pytorch.org/whl/cpu` installieren,
+   dann diese Version per pip-Constraint festhalten:
+
+```bash
+python engineering/tools/cpu_only.py install-torch --constraint-out cpu-constraints.txt
+```
+
+```bash
+PIP_CONSTRAINT=cpu-constraints.txt python -m pip install -e ".[recommended,server]"
+```
+
+2. Nachweis:
+
+```bash
+python engineering/tools/cpu_only.py check
+```
+
+`check` schlägt fehl, wenn `torch.version.cuda` oder `torch.version.hip`
+gesetzt ist, eine `nvidia-*`/`cuda-*`/`triton`/`onnxruntime-gpu`-Distribution
+installiert ist, die `torch`-Metadaten GPU-Laufzeiten verlangen oder eine
+CPU-Tensoroperation scheitert. `torch.cuda.is_available()` wird bewusst
+nicht verwendet.
+
+Verdrahtet ist das in CI (Wheel-Smoke- und Dev-Umgebung), in
+`engineering/tools/qualify_build_identity.qualify_installed_wheel` (frische
+venv der Release-Candidate-Qualifikation), im Produktions-`Dockerfile`
+(CPU-Index, `PIP_CONSTRAINT`, CUDA-/NVIDIA-Prüfung) und in
+`install_windows_cpu.ps1` (CPU-Index).
+
+**Verbleibende Einschränkung:** Ein schlichtes `pip install voice-stt-server`
+ohne vorherige CPU-Torch-Installation kann unter Linux weiterhin die
+CUDA-Variante von PyPI ziehen; das lässt sich über Paketmetadaten nicht
+verhindern. Unter Windows liefert PyPI bereits CPU-Wheels. Unterstützt ist
+der oben beschriebene Weg.
 
 ## 2. Kommandozeilen-Einstiege
 
@@ -100,11 +157,16 @@ Modelle müssen also lokal bereitliegen oder über die Modellverwaltung
 
 - Zweistufig auf `ubuntu:24.04`, per Digest gepinnt.
 - **Builder:** installiert Python 3.12, erstellt `/opt/venv`, installiert
-  Torch/Torchaudio aus dem CPU-Index, dann **das vorab gebaute Wheel** aus
-  `dist/voicestt/*.whl` mit Extras `[faster-whisper,silero-onnx-cpu,server]`
-  sowie `openwakeword==0.6.0` ohne Abhängigkeiten (der
-  `tflite-runtime`-Eintrag wird aus den Metadaten entfernt), abschließend
-  `pip check`. Der Docker-Build selbst baut **kein** Wheel.
+  `torch` aus dem CPU-Index und pinnt diese Version in
+  `/build/cpu-constraints.txt` (`PIP_CONSTRAINT`), dann **das vorab gebaute
+  Wheel** aus `dist/voicestt/*.whl` mit Extras
+  `[faster-whisper,silero-onnx-cpu,server]` sowie `openwakeword==0.6.0` ohne
+  Abhängigkeiten (der `tflite-runtime`-Eintrag wird aus den Metadaten
+  entfernt), abschließend `pip check`, eine Prüfung
+  `torch.version.cuda is None` / `hip is None` und ein Abbruch, falls
+  `nvidia-*`/`cuda-*`/`triton`-Pakete installiert sind. Der Docker-Build
+  selbst baut **kein** Wheel. (Ein lokaler Docker-Build wurde in dieser
+  Cloud-Umgebung nicht ausgeführt.)
 - **Runtime:** Nutzer `voicestt` (UID/GID 10001), `WORKDIR` und `VOLUME`
   `/var/lib/voicestt`, `EXPOSE 8010`, `HEALTHCHECK` gegen
   `http://127.0.0.1:8010/health`.
@@ -131,11 +193,11 @@ Ein Dienst `server` (Build-Kontext `.`, Target `runtime`, Image
 | Threads | `OMP_NUM_THREADS=${VOICESTT_CPU_THREADS:-4}` |
 
 Weil das Dockerfile `dist/voicestt/*.whl` kopiert, muss vor
-`docker compose build` ein Wheel dort liegen; `tools/build_production.py`
+`docker compose build` ein Wheel dort liegen; `engineering/tools/build_production.py`
 erzeugt es (Seite 10). Alternativ setzt man `VOICESTT_IMAGE` auf ein bereits
 gebautes Image.
 
-`tools/compose.py` ist ein optionaler Wrapper, der aus dem Abschnitt
+`engineering/tools/compose.py` ist ein optionaler Wrapper, der aus dem Abschnitt
 `deployment` der Root-`config.yaml` Umgebungsvariablen für
 `docker compose` ableitet (`build_compose_environment`) und danach
 `docker compose -p <compose_project> ...` aufruft.
@@ -151,7 +213,7 @@ Servers ist im Code nicht nachweisbar.
 ## Primäre Quellen
 
 - [`setup.py`](../../setup.py) – `resolve_distribution_variant`, `extras_require`, `entry_points`
-- [`Dockerfile`](../../Dockerfile), [`docker-compose.yml`](../../docker-compose.yml), [`tools/compose.py`](../../tools/compose.py)
+- [`Dockerfile`](../../Dockerfile), [`docker-compose.yml`](../../docker-compose.yml), [`engineering/tools/compose.py`](../../engineering/tools/compose.py)
 - [`api_fastapi_server/server.py`](../../api_fastapi_server/server.py) – `parse_args`, `ServerSettings.__post_init__`, `main`
 - [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)
 - Tests: [`tests/unit/test_production_docker_contract.py`](../../tests/unit/test_production_docker_contract.py), [`tests/unit/test_project_config.py`](../../tests/unit/test_project_config.py), [`tests/packaging/test_identity_installation.py`](../../tests/packaging/test_identity_installation.py), [`tests/unit/test_engineering_path_contract.py`](../../tests/unit/test_engineering_path_contract.py)

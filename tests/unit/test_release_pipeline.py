@@ -16,10 +16,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from release_support import make_manifest, make_state  # noqa: E402
 
-from release_tooling.engine import STEP_DEFINITIONS  # noqa: E402
-from release_tooling.pipeline import PIPELINE_STEPS, dry_run  # noqa: E402
-from release_tooling.remote_checks import ABSENT, MATCH  # noqa: E402
-from release_tooling.state import STATE_ORDER  # noqa: E402
+from engineering.release.engine import STEP_DEFINITIONS  # noqa: E402
+from engineering.release.pipeline import PIPELINE_STEPS, dry_run  # noqa: E402
+from engineering.release.remote_checks import ABSENT, MATCH  # noqa: E402
+from engineering.release.state import STATE_ORDER  # noqa: E402
 
 
 class RefusingAdapter:

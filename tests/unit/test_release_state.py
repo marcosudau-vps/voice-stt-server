@@ -17,8 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from release_support import make_manifest, make_state  # noqa: E402
 
-from release_tooling.errors import OrderError, StateError  # noqa: E402
-from release_tooling.state import (  # noqa: E402
+from engineering.release.errors import OrderError, StateError  # noqa: E402
+from engineering.release.state import (  # noqa: E402
     STATE_INDEX,
     STATE_ORDER,
     ReleaseState,
@@ -32,7 +32,7 @@ from release_tooling.state import (  # noqa: E402
     load_state,
     save_state,
 )
-from release_tooling import rc_manifest  # noqa: E402
+from engineering.release import rc_manifest  # noqa: E402
 
 
 class StateOrderTests(unittest.TestCase):
@@ -255,7 +255,7 @@ class PersistenceTests(unittest.TestCase):
             self.assertIsNone(load_state(Path(tmp) / "nothing.json"))
 
     def test_a_state_carrying_a_secret_is_refused(self):
-        from release_tooling.errors import SecretDetectedError
+        from engineering.release.errors import SecretDetectedError
 
         state = make_state("PREPARED")
         state.candidate["apiToken"] = "pypi-AgEIcHlwaS5vcmc-secret-value"

@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import unittest
 
-from release_tooling.errors import SecretDetectedError
-from release_tooling.redaction import assert_no_secrets, looks_like_secret_key_name, redact_text
+from engineering.release.errors import SecretDetectedError
+from engineering.release.redaction import assert_no_secrets, looks_like_secret_key_name, redact_text
 
 
 class SecretKeyNameTests(unittest.TestCase):

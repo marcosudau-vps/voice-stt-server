@@ -14,7 +14,7 @@ from logging.handlers import RotatingFileHandler
 
 
 APP_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = APP_DIR.parent
+PROJECT_ROOT = APP_DIR.parents[1]  # repository root (app lives in examples/)
 PROJECT_CONFIG_PATH = PROJECT_ROOT / "config.yaml"
 SECRETS_ENV_PATH = PROJECT_ROOT / ".env"
 

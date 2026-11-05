@@ -2,7 +2,7 @@
 #
 # Unified V2 product image. The single complete wheel in dist/voicestt
 # contains the qualified Pro-capable runtime; no separate native installation.
-# Both stages retain the pinned Ubuntu digest from tools/build_production.py.
+# Both stages retain the pinned Ubuntu digest from engineering/tools/build_production.py.
 
 FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517 AS builder
 

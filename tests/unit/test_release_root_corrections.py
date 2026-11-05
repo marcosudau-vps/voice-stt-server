@@ -16,11 +16,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from release_support import make_manifest, make_state  # noqa: E402
 
-from release_tooling import cli, gitinfo, rc_manifest  # noqa: E402
-from release_tooling.adapters import GitTagAdapter  # noqa: E402
-from release_tooling.errors import ConflictError  # noqa: E402
-from release_tooling.remote_checks import ABSENT  # noqa: E402
-from tools import release_candidate  # noqa: E402
+from engineering.release import cli, gitinfo, rc_manifest  # noqa: E402
+from engineering.release.adapters import GitTagAdapter  # noqa: E402
+from engineering.release.errors import ConflictError  # noqa: E402
+from engineering.release.remote_checks import ABSENT  # noqa: E402
+from engineering.tools import release_candidate  # noqa: E402
 
 
 class PublishHappyPathVersionTests(unittest.TestCase):
@@ -38,9 +38,9 @@ class PublishHappyPathVersionTests(unittest.TestCase):
                 to_json_dict=lambda: {"mode": "REAL", "finalState": "TAGGED"},
             )
 
-            with mock.patch("release_tooling.preflight.run_preflight", return_value=preflight), \
-                 mock.patch("release_tooling.adapters.build_default_adapters", return_value={}), \
-                 mock.patch("release_tooling.engine.run_engine", return_value=engine_result) as run_engine:
+            with mock.patch("engineering.release.preflight.run_preflight", return_value=preflight), \
+                 mock.patch("engineering.release.adapters.build_default_adapters", return_value={}), \
+                 mock.patch("engineering.release.engine.run_engine", return_value=engine_result) as run_engine:
                 code = cli.main([
                     "publish",
                     "--manifest", str(manifest_path),

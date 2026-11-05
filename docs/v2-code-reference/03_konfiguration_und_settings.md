@@ -61,7 +61,7 @@ Regeln aus `load_yaml_config_defaults` (`server.py:10334`):
   `vad_filter: false` → `--no-vad-filter`, `openai_api_enabled: false` →
   `--disable-openai-api`.
 - Weitere Top-Level-Abschnitte (z. B. `deployment`, `example_app` in der
-  Root-`config.yaml`) ignoriert der Server; sie werden von `tools/compose.py`
+  Root-`config.yaml`) ignoriert der Server; sie werden von `engineering/tools/compose.py`
   bzw. der Beispiel-App gelesen.
 
 ## 2. Umgebungsvariablen

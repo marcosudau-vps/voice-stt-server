@@ -21,19 +21,19 @@ Weiterverteilungsfreigabe gebunden, die derzeit `BLOCKED` ist (Abschnitt 5).
 | Schritt | Werkzeug | Ergebnis |
 | --- | --- | --- |
 | Entwickler-Wheel | `python -m build --outdir dist` | `voicestt-<v>-*.whl` + sdist (CI) |
-| Öffentliches Produkt-Wheel | `tools/build_distribution.py pro --kroko-wheel … --out-dir …` | `voice-stt-server`-Wheel mit eingebetteter Kroko-Laufzeit |
-| Produktionsimage | `tools/build_production.py {pro,all}` | Wheel → Kroko-Artefakt auflösen → Docker-Image (`linux/amd64`) |
+| Öffentliches Produkt-Wheel | `engineering/tools/build_distribution.py pro --kroko-wheel … --out-dir …` | `voice-stt-server`-Wheel mit eingebetteter Kroko-Laufzeit |
+| Produktionsimage | `engineering/tools/build_production.py {pro,all}` | Wheel → Kroko-Artefakt auflösen → Docker-Image (`linux/amd64`) |
 | Kroko-Native | `build/kroko-builder.Dockerfile`, `stt-install-kroko` | natives Kroko-Wheel; Fingerprint über `VoiceSTT/kroko/buildinputs.py` + `fingerprint.py` |
 
 Hinweise aus dem Code:
 
-- `tools/build_production.py` akzeptiert als Ziel nur `pro` oder `all`
+- `engineering/tools/build_production.py` akzeptiert als Ziel nur `pro` oder `all`
   (`SUPPORTED_VARIANTS = ("pro",)`); der Kommentar in `docker-compose.yml`
   nennt noch `free`. Maßgeblich ist die CLI.
 - `--dist-dir` muss das `dist/` des Repositorys sein, weil das Dockerfile
   daraus kopiert.
 - Das Basis-Image ist zweimal gepinnt (Dockerfile und
-  `PRODUCTION_BASE_IMAGE_DIGEST` in `tools/build_production.py`);
+  `PRODUCTION_BASE_IMAGE_DIGEST` in `engineering/tools/build_production.py`);
   `tests/unit/test_production_docker_contract.py` prüft Gleichstand.
 - Wake-Word-Assets: Das Paket enthält genau die Dateien aus dem Manifest
   (`wakeword_package_resources.bundled_package_data_files`), nicht per Glob.
@@ -46,18 +46,30 @@ Auslöser: `pull_request`, `push` auf `main`, `feat/**`, `work/**`,
 Matrix `ubuntu-24.04` und `windows-latest`, Python 3.12:
 
 1. Wheel + sdist bauen, `twine check`.
-2. Frische venv, **nicht-editierbare** Installation des Wheels mit
-   `[recommended,server]`, `pip check`, Import- und Versionsprüfung
-   (`VoiceSTT_server`, `voice_stt_server`, `resolve_version()`),
-   Existenz aller fünf Console-Scripts, Paket-Assets (`warmup_audio.wav`,
-   `kroko/models.json`, `static/index.html`, Wake-Word-Modelle).
-3. Editierbare Dev-Installation + `requirements-dev.txt`, `pip check`.
+2. Frische venv: CPU-Torch per `engineering/tools/cpu_only.py install-torch`
+   (CPU-Index, Constraint-Datei), dann **nicht-editierbare** Installation des
+   Wheels mit `[recommended,server]` unter `PIP_CONSTRAINT`, `pip check`,
+   `cpu_only.py check`, Import- und Versionsprüfung (`VoiceSTT_server`,
+   `voice_stt_server`, `resolve_version()`), Existenz aller fünf
+   Console-Scripts, Paket-Assets (`warmup_audio.wav`, `kroko/models.json`,
+   `static/index.html`, Wake-Word-Modelle).
+3. Editierbare Dev-Installation + `requirements-dev.txt`, ebenfalls mit
+   vorab installiertem CPU-Torch und `PIP_CONSTRAINT`, dann `pip check` und
+   `cpu_only.py check`.
 4. `python -m pytest -q tests/unit tests/compatibility`.
 5. `python -m pytest -q tests/packaging`.
 6. `git diff --check`.
 
 Alle Actions sind auf volle Commit-SHAs gepinnt; das prüft
-`tests/unit/test_release_workflows.py`.
+`tests/unit/test_release_workflows.py`. Die CPU-only-Verdrahtung prüft
+`tests/unit/test_cpu_only_contract.py`.
+
+Hintergrund: Vor dieser Änderung zog `pip install -e ".[recommended,server]"`
+unter Linux die CUDA-Variante von `torch` mit mehreren GB `nvidia-*`-Wheels;
+der Push-Lauf
+https://github.com/marcosudau-vps/voice-stt-server/actions/runs/41940574543
+brach deshalb mit `OSError: [Errno 28] No space left on device` ab. Die
+Korrektur entfernt die CUDA-Installation, statt Platz freizuräumen.
 
 ## 4. Release-Candidate (`.github/workflows/release-candidate.yml`)
 
@@ -65,10 +77,10 @@ Nur `workflow_dispatch` (Eingabe `qualification_context`). Jobs:
 
 | Job | Runner | Wesentliche Schritte |
 | --- | --- | --- |
-| `candidate-linux` | ubuntu-24.04 | Fingerprints auflösen (`tools/release_candidate.py --print-fingerprints`), Kroko-Pro-Artefakt wiederherstellen, Login **nur** zu privatem GHCR-Staging (`packages: write`), Linux-Kandidat bauen, installierte Identitäten qualifizieren (`tools/qualify_build_identity.py`), Artefakte hochladen |
+| `candidate-linux` | ubuntu-24.04 | Fingerprints auflösen (`engineering/tools/release_candidate.py --print-fingerprints`), Kroko-Pro-Artefakt wiederherstellen, Login **nur** zu privatem GHCR-Staging (`packages: write`), Linux-Kandidat bauen, installierte Identitäten qualifizieren (`engineering/tools/qualify_build_identity.py`), Artefakte hochladen |
 | `build-windows` | ubuntu-24.04 | Windows-Wheels per Cross-Build, Identitäten prüfen |
 | `candidate-windows` | windows-latest | Windows-Kandidat installieren und qualifizieren |
-| `candidate` | ubuntu-24.04 | RC-Manifest bauen (`python release.py manifest build`), validieren, „keine öffentliche Release-Schreiboperation“ nachweisen, Paket-Smoketest aller Plattform-Wheels, Qualifikation (`python release.py manifest qualify`) |
+| `candidate` | ubuntu-24.04 | Paket-Smoketest prüft je Plattform-Wheel zusätzlich, dass genau `faster_whisper_engine.py` und `kroko_onnx_engine.py` enthalten sind und nichts aus `engineering/`; RC-Manifest bauen (`python release.py manifest build`), validieren, „keine öffentliche Release-Schreiboperation“ nachweisen, Paket-Smoketest aller Plattform-Wheels, Qualifikation (`python release.py manifest qualify`) |
 
 ## 5. Veröffentlichung (`.github/workflows/release-publish.yml`)
 
@@ -84,7 +96,7 @@ Nur `workflow_dispatch` mit `candidate_run_id` und `version`. Top-Level
 
 Jeder Job ruft `python release.py publish --until <STATE>` auf.
 
-### Release-State-Machine (`release_tooling/state.py`)
+### Release-State-Machine (`engineering/release/state.py`)
 
 ```text
 PREPARED -> TAGGED -> PYPI_PUBLISHED -> DOCKERHUB_PUBLISHED -> GHCR_PUBLISHED
@@ -99,12 +111,12 @@ Nachfolger erlaubt; alles andere ist `OrderError`.
 - `run_engine` im Modus `REAL` verlangt
   `redistribution_verified(manifest["redistributionApproval"])` **und**
   `releaseReadiness == "QUALIFIED"`; sonst `ManifestError`
-  (`release_tooling/engine.py`).
+  (`engineering/release/engine.py`).
 - `build/kroko-redistribution.json` steht auf `"status": "BLOCKED"`.
 
 ## 6. Root-Einstieg `release.py`
 
-`release.py` ist eine dünne Fassade auf `release_tooling.cli.main`.
+`release.py` ist eine dünne Fassade auf `engineering.release.cli.main`.
 Unterbefehle (beobachtet mit `--help`):
 
 | Befehl | Wirkung laut Code/Help |
@@ -125,7 +137,7 @@ Registry-/Credential-Konfiguration `FAIL`. Es wurde nichts geschrieben.
 ## Primäre Quellen
 
 - [`setup.py`](../../setup.py), [`build_identity_support.py`](../../build_identity_support.py), [`wakeword_package_resources.py`](../../wakeword_package_resources.py), [`VERSION`](../../VERSION)
-- [`tools/build_production.py`](../../tools/build_production.py), [`tools/build_distribution.py`](../../tools/build_distribution.py), [`tools/release_candidate.py`](../../tools/release_candidate.py), [`tools/qualify_build_identity.py`](../../tools/qualify_build_identity.py)
-- [`release.py`](../../release.py), [`release_tooling/cli.py`](../../release_tooling/cli.py), [`release_tooling/state.py`](../../release_tooling/state.py), [`release_tooling/engine.py`](../../release_tooling/engine.py), [`release_tooling/preflight.py`](../../release_tooling/preflight.py), [`release_tooling/config.py`](../../release_tooling/config.py)
+- [`engineering/tools/build_production.py`](../../engineering/tools/build_production.py), [`engineering/tools/build_distribution.py`](../../engineering/tools/build_distribution.py), [`engineering/tools/release_candidate.py`](../../engineering/tools/release_candidate.py), [`engineering/tools/qualify_build_identity.py`](../../engineering/tools/qualify_build_identity.py)
+- [`release.py`](../../release.py), [`engineering/release/cli.py`](../../engineering/release/cli.py), [`engineering/release/state.py`](../../engineering/release/state.py), [`engineering/release/engine.py`](../../engineering/release/engine.py), [`engineering/release/preflight.py`](../../engineering/release/preflight.py), [`engineering/release/config.py`](../../engineering/release/config.py)
 - [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml), [`release-candidate.yml`](../../.github/workflows/release-candidate.yml), [`release-publish.yml`](../../.github/workflows/release-publish.yml)
 - Tests: [`tests/unit/test_release_workflows.py`](../../tests/unit/test_release_workflows.py), [`tests/unit/test_release_state.py`](../../tests/unit/test_release_state.py), [`tests/unit/test_release_engine.py`](../../tests/unit/test_release_engine.py), [`tests/unit/test_release_preflight.py`](../../tests/unit/test_release_preflight.py), [`tests/unit/test_build_production.py`](../../tests/unit/test_build_production.py), [`tests/unit/test_build_distribution.py`](../../tests/unit/test_build_distribution.py), [`tests/unit/test_unified_product.py`](../../tests/unit/test_unified_product.py), [`tests/unit/test_version_authority.py`](../../tests/unit/test_version_authority.py), [`tests/packaging/test_identity_installation.py`](../../tests/packaging/test_identity_installation.py)

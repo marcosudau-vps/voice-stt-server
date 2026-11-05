@@ -8,8 +8,8 @@ import zipfile
 import pytest
 
 from VoiceSTT._build_identity import BuildIdentity, IdentityError
-from tools import qualify_build_identity as q
-from tools.release_candidate import CandidateError, candidate_source
+from engineering.tools import qualify_build_identity as q
+from engineering.tools.release_candidate import CandidateError, candidate_source
 
 
 @pytest.fixture
@@ -181,14 +181,14 @@ def test_cli_malformed_inputs_fail_redacted(tmp_path, monkeypatch, capsys):
     {"sourceDirty": True}, {"sourceDirty": None}, {"sourceCommit": None}, {"sourceTree": None},
 ])
 def test_rc_source_requires_clean_complete_provenance(source, monkeypatch, changes):
-    import tools.release_candidate as rc
+    import engineering.tools.release_candidate as rc
     monkeypatch.setattr(rc, "capture_identity", lambda *args, **kwargs: replace(source, **changes))
     with pytest.raises(IdentityError):
         candidate_source(source.sourceTree, None)
 
 
 def test_rc_source_tree_mismatch_fails(source, monkeypatch):
-    import tools.release_candidate as rc
+    import engineering.tools.release_candidate as rc
     monkeypatch.setattr(rc, "capture_identity", lambda *args, **kwargs: source)
     with pytest.raises(CandidateError, match="tree"):
         candidate_source("e" * 40, None)

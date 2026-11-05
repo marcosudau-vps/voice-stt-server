@@ -13,10 +13,25 @@ Modulen und Importbeziehungen:
 | `VoiceSTT_server` | Prozess-Einstieg und Server-Infrastruktur: `server.py` re-exportiert `main`, `create_app`, `ServerSettings` aus `api_fastapi_server.server`; dazu Modellverwaltung (`stt_model_management.py`), strukturiertes Event-Logging (`event_logging.py`), OpenAI-Kompatibilität (`openai_compat.py`), Laufzeitkonfigurationsspeicher (`operations.py`), Credential-Redaktion, sowie der eigenständige Alt-Server `stt_server.py` und CLI-Client `stt_cli_client.py`. | `VoiceSTT_server/server.py` |
 | `api_fastapi_server` | Die FastAPI-Anwendung: HTTP-Routen, WebSocket-Endpunkte V1/V2/Logs, Sitzungsverwaltung, Scheduler, Aktivierungs-Zustandsmaschine (`activation.py`), Befehlsparser (`activation_commands.py`), Segment-Ledger, Wake-Admission, Settings-Control-Plane (`settings_control.py`), Sicherheitsfassade (`security/`), Protokoll V2 (`protocol_v2/`). | `api_fastapi_server/server.py:8817` (`create_app`) |
 
-Zusätzlich liegen im Repository-Root Werkzeuge, die **nicht** als Paket
-installiert werden: `tools/` (Build/Distribution/Qualifikation),
-`release_tooling/` mit Root-Einstieg `release.py` (siehe Seite 10) sowie die
-Beispielordner `app_browserclient/`, `app_webserver/`, `app_talk_with_llm/`.
+Zusätzlich enthält das Repository Bereiche, die **nicht** paketiert werden
+(nicht in `find_packages`, per `prune engineering` / `prune examples` aus dem
+sdist ausgeschlossen):
+
+| Bereich | Inhalt |
+| --- | --- |
+| `engineering/tools/` | Build-, Distributions-, Qualifikations- und Entwicklerwerkzeuge (z. B. `build_production.py`, `build_distribution.py`, `release_candidate.py`, `qualify_build_identity.py`, `cpu_only.py`) |
+| `engineering/release/` | Release-State-Machine, Preflight, RC-Manifest, Adapter; Root-Einstieg `release.py` (Seite 10) |
+| `engineering/deployment/docker/` | `nginx.conf`, historischer Reparaturpfad `Dockerfile.pro-upgrade` |
+| `engineering/deployment/vps/` | servergebundene VPS-Hilfen (Vor-V2-Buildpfad, keine Produktautorität) |
+| `engineering/drafts/transcription_engines/` | fünf nicht unterstützte Engine-**Entwürfe**, ohne `__init__.py`, von keinem Produktcode importiert |
+| `examples/` | Beispielanwendungen `app_browserclient`, `app_talk_with_llm`, `app_webserver` |
+| `tools/`, `release_tooling/`, `build/vps/*.sh` | nur noch Kompatibilitätseinstiege, die auf `engineering/` weiterleiten (Seite 11) |
+
+Am Root verbleiben funktionsnotwendige Einstiege: `setup.py`, `pyproject.toml`,
+`MANIFEST.in`, `Dockerfile`, `docker-compose.yml`, `release.py`,
+`build_identity_support.py` und `wakeword_package_resources.py` (beide von
+`setup.py` importiert), `config.yaml`, sowie `build/` mit den kanonischen
+Dateien `kroko-builder.Dockerfile` und `kroko-redistribution.json`.
 
 ## 2. Laufzeitkomponenten des Servers
 

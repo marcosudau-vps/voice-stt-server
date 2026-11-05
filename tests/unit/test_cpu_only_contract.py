@@ -17,7 +17,7 @@ from unittest import mock
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
-from tools import cpu_only  # noqa: E402
+from engineering.tools import cpu_only  # noqa: E402
 
 
 def _fake_torch(cuda=None, hip=None):
@@ -87,14 +87,14 @@ class CheckTests(unittest.TestCase):
 class WiringTests(unittest.TestCase):
     def test_ci_installs_cpu_torch_and_checks_both_environments(self):
         ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-        self.assertEqual(ci.count("tools/cpu_only.py install-torch"), 2)
-        self.assertIn("$PY tools/cpu_only.py check", ci)
-        self.assertIn("python tools/cpu_only.py check", ci)
+        self.assertEqual(ci.count("engineering/tools/cpu_only.py install-torch"), 2)
+        self.assertIn("$PY engineering/tools/cpu_only.py check", ci)
+        self.assertIn("python engineering/tools/cpu_only.py check", ci)
         self.assertIn('PIP_CONSTRAINT="$SMOKE_CONSTRAINTS"', ci)
         self.assertIn('PIP_CONSTRAINT="$DEV_CONSTRAINTS" python -m pip install -e', ci)
 
     def test_release_candidate_qualification_uses_the_cpu_contract(self):
-        text = (REPO_ROOT / "tools" / "qualify_build_identity.py").read_text(encoding="utf-8")
+        text = (REPO_ROOT / "engineering" / "tools" / "qualify_build_identity.py").read_text(encoding="utf-8")
         self.assertIn('"install-torch"', text)
         self.assertIn('[str(CPU_ONLY_TOOL), "check"]', text)
         self.assertIn('env["PIP_CONSTRAINT"]', text)

@@ -144,10 +144,10 @@ Der Code trennt beides strikt:
 - Die **Veröffentlichung** einer Distribution mit eingebetteter
   Pro-Laufzeit verlangt `redistribution_verified(...)`: Status `VERIFIED`,
   passende `upstreamRevision` und nicht-leere `evidenceRef`
-  (`release_tooling/config.py:193`). Die kanonische Datei
+  (`engineering/release/config.py:193`). Die kanonische Datei
   `build/kroko-redistribution.json` steht aktuell auf `status: "BLOCKED"`;
   eine echte Veröffentlichung bricht deshalb mit „BLOCKED: Pro runtime
-  redistribution rights are not verified“ ab (`release_tooling/engine.py`).
+  redistribution rights are not verified“ ab (`engineering/release/engine.py`).
 
 Eine juristische Freigabe lässt sich aus dem Code nicht ableiten.
 
@@ -156,5 +156,5 @@ Eine juristische Freigabe lässt sich aus dem Code nicht ableiten.
 - [`api_fastapi_server/security/`](../../api_fastapi_server/security/service.py) – `service.py`, `admin.py`, `openai.py`, `logs.py`, `kroko.py`
 - [`VoiceSTT/kroko/credentials.py`](../../VoiceSTT/kroko/credentials.py), [`license_api.py`](../../VoiceSTT/kroko/license_api.py), [`license_state.py`](../../VoiceSTT/kroko/license_state.py), [`native_guard.py`](../../VoiceSTT/kroko/native_guard.py), [`models.py`](../../VoiceSTT/kroko/models.py)
 - [`api_fastapi_server/server.py`](../../api_fastapi_server/server.py) – `kroko_runtime_status` (6802), `resolved_engine_options` (1300)
-- [`release_tooling/config.py`](../../release_tooling/config.py), [`build/kroko-redistribution.json`](../../build/kroko-redistribution.json)
+- [`engineering/release/config.py`](../../engineering/release/config.py), [`build/kroko-redistribution.json`](../../build/kroko-redistribution.json)
 - Tests: [`tests/unit/test_server_security_modularization.py`](../../tests/unit/test_server_security_modularization.py), [`tests/unit/test_kroko_license_lifecycle.py`](../../tests/unit/test_kroko_license_lifecycle.py), [`tests/unit/test_kroko_live_license.py`](../../tests/unit/test_kroko_live_license.py), [`tests/unit/test_kroko_pr15_final_correction.py`](../../tests/unit/test_kroko_pr15_final_correction.py), [`tests/unit/test_kroko_pr15_b1b2_regression.py`](../../tests/unit/test_kroko_pr15_b1b2_regression.py), [`tests/unit/test_kroko_native_integration.py`](../../tests/unit/test_kroko_native_integration.py), [`tests/unit/test_unified_product.py`](../../tests/unit/test_unified_product.py)

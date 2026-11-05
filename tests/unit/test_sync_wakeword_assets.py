@@ -21,7 +21,7 @@ from unittest import mock
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-TOOL_PATH = REPO_ROOT / "tools" / "sync_wakeword_assets.py"
+TOOL_PATH = REPO_ROOT / "engineering" / "tools" / "sync_wakeword_assets.py"
 
 _spec = importlib.util.spec_from_file_location("sync_wakeword_assets", TOOL_PATH)
 sync = importlib.util.module_from_spec(_spec)
