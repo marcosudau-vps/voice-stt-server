@@ -386,3 +386,45 @@ Echte Modellinferenz, native Pro-Qualifikation, Docker-/RC-Build und
 Release-Dry-Run werden durch diesen begrenzten Korrekturlauf nicht neu
 qualifiziert. Keine Veröffentlichung, kein Deployment, kein VPS-Zugriff,
 kein Merge und keine unabhängige Abnahme erteilt.
+
+
+## T3-5. GitHub-Nachweis und abschließender Abgabezustand
+
+Fachlicher Code-/Test-/Dokumentationscommit der Nachkorrektur:
+`37594b385481ee61f888d3dd3fd1ac1cd3991931`
+(`fix(v2): remove active legacy profiles and clarify CPU-only installation`).
+Dieser Commit wurde nach vollständiger lokaler Qualifikation normal auf den
+bestehenden Branch gepusht. Kein neuer Branch/PR, kein Force-Push.
+
+Die tatsächlich zu diesem SHA gehörenden Läufe sind abgeschlossen:
+
+| Lauf | Ubuntu | Windows |
+| --- | --- | --- |
+| [Push-CI 42156941999](https://github.com/marcosudau-vps/voice-stt-server/actions/runs/42156941999) | SUCCESS | SUCCESS |
+| [PR-CI 42156946996](https://github.com/marcosudau-vps/voice-stt-server/actions/runs/42156946996) | SUCCESS | SUCCESS |
+
+Alle vier Jobs sind grün, einschließlich Wheel/sdist, `twine check`,
+Installation des gebauten Wheels, `pip check`, CPU-only-Prüfungen der
+Installations- und Entwicklungsumgebung, Unit-/Contracttests,
+Packaging-Installationen und CI-`git diff --check`.
+Die PR-Joblogs bestätigen auf Ubuntu **2310 passed, 15 skipped, 1547 subtests**
+und auf Windows **2309 passed, 16 skipped, 1547 subtests**; auf jeder Plattform
+zusätzlich **37 Packaging-Tests bestanden**. Jeweils nur die bestehende
+Starlette/httpx-DeprecationWarning. Keine CI-Nachkorrektur am Code erforderlich.
+
+Dieser nachträgliche CI-Nachweis ist eine reine Akten-Ergänzung nach dem
+geprüften Code-Commit. Auch die vollständige CI dieses abschließenden
+Aktencommits muss vor Abgabe erfolgreich abgeschlossen sein. Der genaue
+**finale PR-HEAD** (einschließlich dieser Akten-Ergänzung) und die genau dazu
+gehörenden finalen Push-/PR-CI-Links werden in der aktuellen Beschreibung von
+[PR #18](https://github.com/marcosudau-vps/voice-stt-server/pull/18) festgehalten;
+der Commit dieser Ergänzung ist außerdem unmittelbar über die Git-Historie
+dieser Datei nachvollziehbar. Dadurch bleiben die obigen Code-Commit-Nachweise
+prüfbar, ohne einem Commit seinen erst nach Erstellung entstehenden SHA
+rückwirkend einzutragen.
+
+Abgabeziel nach dieser letzten CI-Prüfung: **REVIEW_READY** für die unabhängige
+technische Abnahme. Der PR bleibt **Draft**. Kein `ROOT_PASS`, keine erteilte
+unabhängige Abnahme, kein Merge, kein Release und kein Deployment.
+Redistribution weiterhin `BLOCKED`; die in T3-4 abgegrenzten ausstehenden
+Release-/Inferenzqualifikationen bleiben unverändert.
