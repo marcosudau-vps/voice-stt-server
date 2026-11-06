@@ -28,8 +28,8 @@ from VoiceSTT.transcription_engines.kroko_onnx_engine import (
     KrokoOnnxStreamingSession,
 )
 from VoiceSTT.kroko import models as kroko_models
-from tests.unit import test_additional_transcription_engines as audio_fixtures
-from tests.unit.test_additional_transcription_engines import AudioVector
+from tests.unit import audio_engine_fixtures as audio_fixtures
+from tests.unit.audio_engine_fixtures import AudioVector
 
 
 KROKO_ONNX_KEY_ENV_NAMES = (
@@ -225,11 +225,14 @@ class KrokoOnnxEngineTests(unittest.TestCase):
             os.close(saved_stdout)
             os.close(saved_stderr)
 
-    def test_supported_engines_include_kroko_aliases(self):
+    def test_supported_engines_expose_only_the_canonical_kroko_name(self):
+        # V2 engine cleanup: the historical aliases ``kroko`` and
+        # ``banafo_kroko`` are no longer registered.
         engines = get_supported_transcription_engines()
 
-        for name in ("kroko_onnx", "kroko", "banafo_kroko"):
-            self.assertIn(name, engines)
+        self.assertIn("kroko_onnx", engines)
+        for alias in ("kroko", "banafo_kroko"):
+            self.assertNotIn(alias, engines)
 
     def test_factory_creates_kroko_engine_with_mocked_backend(self):
         with patch(

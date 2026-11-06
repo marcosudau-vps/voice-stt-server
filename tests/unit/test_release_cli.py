@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from release_support import make_manifest  # noqa: E402
 
-from release_tooling import cli, rc_manifest  # noqa: E402
+from engineering.release import cli, rc_manifest  # noqa: E402
 
 
 def run_cli(argv):
@@ -195,7 +195,7 @@ class PublishRefusalTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "rc-manifest.json"
             rc_manifest.write_rc_manifest(path, make_manifest())
-            with mock.patch("release_tooling.adapters.build_default_adapters") as build_adapters:
+            with mock.patch("engineering.release.adapters.build_default_adapters") as build_adapters:
                 code, _, err = run_cli(["publish", "--manifest", str(path), "--yes"])
         # The manifest's commit is not this checkout's HEAD, so preflight fails.
         self.assertEqual(code, cli.EXIT_FAILED)
@@ -262,7 +262,7 @@ class PrecheckPypiCommandTests(unittest.TestCase):
 
             stage_dir = tmp_path / "stage"
             fake_report = {'pro': {'status': 'ABSENT', 'project': 'voice-stt-server', 'version': '2.0.0', 'matched': [], 'absent': [w['filename'] for w in manifest['distributions']['pro']['wheels']], 'conflicts': []}}
-            with mock.patch("release_tooling.remote_checks.precheck_pypi", return_value=fake_report):
+            with mock.patch("engineering.release.remote_checks.precheck_pypi", return_value=fake_report):
                 code, out, err = run_cli([
                     "precheck-pypi",
                     "--manifest", str(manifest_path),

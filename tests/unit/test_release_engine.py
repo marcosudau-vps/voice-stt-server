@@ -19,20 +19,20 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from release_support import make_manifest, make_state  # noqa: E402
 
-from release_tooling.engine import (  # noqa: E402
+from engineering.release.engine import (  # noqa: E402
     STEP_DEFINITIONS,
     ExecutionMode,
     StepKind,
     plan_from,
     run_engine,
 )
-from release_tooling.errors import (
+from engineering.release.errors import (
     ConflictError,
     ManifestError,
     VerificationUnavailableError,
 )  # noqa: E402
-from release_tooling.remote_checks import ABSENT, MATCH  # noqa: E402
-from release_tooling.state import STATE_ORDER  # noqa: E402
+from engineering.release.remote_checks import ABSENT, MATCH  # noqa: E402
+from engineering.release.state import STATE_ORDER  # noqa: E402
 
 STEP_KEYS = [step.key for step in STEP_DEFINITIONS]
 

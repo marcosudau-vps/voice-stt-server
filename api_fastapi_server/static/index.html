@@ -1745,7 +1745,6 @@
       if (!settings) return;
       const finalEngine = settings.transcription_engine || "--";
       const realtimeEngine = settings.realtime_transcription_engine || settings.transcription_engine || "--";
-      const usesParakeet = String(finalEngine).includes("parakeet") || String(realtimeEngine).includes("parakeet");
       state.wakeEnabled = Boolean(settings.wake_word_enabled);
       updateStateRail(state.lastServerState || "idle");
       ui.tuningProfile.textContent = settings.tuning_profile === "custom"
@@ -1765,9 +1764,8 @@
       ui.wakeInfo.textContent = settings.wake_word_enabled
         ? (settings.wakeword_backend || "Weckwort") + " / " + (settings.wake_words || "Modell")
         : "Aus";
-      ui.decodeInfo.textContent = usesParakeet
-        ? "Parakeet: Stapel " + settings.batch_size + "; Beam ungenutzt"
-        : "Beam " + settings.beam_size + " final / " + settings.beam_size_realtime + " realtime";
+      ui.decodeInfo.textContent = "Beam " + settings.beam_size + " final / " + settings.beam_size_realtime
+        + " realtime; Stapel " + settings.batch_size + " final / " + settings.realtime_batch_size + " realtime";
     }
 
     function formatSeconds(value) {

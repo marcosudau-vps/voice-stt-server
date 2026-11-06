@@ -67,8 +67,8 @@ def test_both_production_stages_pin_the_base_image_by_digest():
     """
     import sys
 
-    sys.path.insert(0, str(REPO_ROOT / "tools"))
-    import build_production as bp
+    sys.path.insert(0, str(REPO_ROOT))
+    from engineering.tools import build_production as bp
 
     from_lines = [line for line in DOCKERFILE.splitlines() if line.startswith("FROM ")]
     assert len(from_lines) == 2, from_lines
@@ -81,8 +81,8 @@ def test_the_dockerfile_and_the_declared_base_image_cannot_drift_apart():
     import re
     import sys
 
-    sys.path.insert(0, str(REPO_ROOT / "tools"))
-    import build_production as bp
+    sys.path.insert(0, str(REPO_ROOT))
+    from engineering.tools import build_production as bp
 
     digests = set(re.findall(r"FROM \S+@(sha256:[0-9a-f]{64})", DOCKERFILE))
     assert digests == {bp.PRODUCTION_BASE_IMAGE_DIGEST}, digests

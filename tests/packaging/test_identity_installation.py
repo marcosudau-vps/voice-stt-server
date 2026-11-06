@@ -26,7 +26,7 @@ import pytest
 from VoiceSTT._build_identity import RESOURCE_NAME
 from VoiceSTT.kroko import buildinputs
 from build_identity_support import wheel_identity
-from tools.build_distribution import merge_kroko_runtime
+from engineering.tools.build_distribution import merge_kroko_runtime
 from tests.unit.test_build_distribution import make_kroko_wheel
 
 ROOT = Path(__file__).resolve().parents[2]

@@ -8,7 +8,6 @@ pvporcupine==1.9.5
 webrtcvad-wheels==2.0.14
 halo==0.0.31
 torch
-torchaudio
 scipy==1.17.1
 openwakeword>=0.6.0
 websockets==16.0

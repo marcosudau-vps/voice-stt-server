@@ -2,7 +2,10 @@
 
 This is a release-prep helper rather than a normal unit test. It intentionally
 installs the current working tree into separate virtual environments so package
-metadata and optional dependencies are tested through pip.
+metadata and optional dependencies are tested through pip. Since the V2 engine
+cleanup only the Faster-Whisper/Kroko product extras, Silero VAD, wake-word,
+server and example extras exist; install CPU-only torch first (see
+``tools/cpu_only.py``).
 """
 
 from __future__ import annotations
@@ -63,48 +66,31 @@ MATRIX = (
         ),
     ),
     MatrixCase(
-        name="whispercpp-openwakeword",
-        extras="whisper-cpp,openwakeword",
+        name="openwakeword",
+        extras="openwakeword",
         checks=BASE_CHECKS
         + (
-            "dist:pywhispercpp",
-            "module:pywhispercpp",
             "dist:openwakeword",
             "module:openwakeword",
         ),
     ),
     MatrixCase(
-        name="openai-whisper-porcupine",
-        extras="openai-whisper,porcupine",
+        name="porcupine",
+        extras="porcupine",
         checks=BASE_CHECKS
         + (
-            "dist:openai-whisper",
-            "module:whisper",
             "dist:pvporcupine",
             "module:pvporcupine",
         ),
     ),
     MatrixCase(
-        name="sherpa-wakewords",
-        extras="sherpa-onnx,wakewords",
+        name="wakewords-server",
+        extras="wakewords,server",
         checks=BASE_CHECKS
         + (
-            "dist:sherpa-onnx",
-            "module:sherpa_onnx",
             "dist:pvporcupine",
             "dist:openwakeword",
-        ),
-    ),
-    MatrixCase(
-        name="transformers-qwen-parakeet",
-        extras="transformers,qwen,parakeet",
-        checks=BASE_CHECKS
-        + (
-            "dist:transformers",
-            "module:transformers",
-            "dist:qwen-asr",
-            "dist:nemo_toolkit",
-            "module:nemo.collections.asr",
+            "dist:fastapi",
         ),
     ),
     MatrixCase(
@@ -113,14 +99,10 @@ MATRIX = (
         checks=BASE_CHECKS
         + (
             "dist:faster-whisper",
-            "dist:pywhispercpp",
-            "dist:openai-whisper",
-            "dist:sherpa-onnx",
-            "dist:transformers",
-            "dist:qwen-asr",
-            "dist:nemo_toolkit",
+            "dist:silero-vad",
             "dist:pvporcupine",
             "dist:openwakeword",
+            "dist:fastapi",
         ),
     ),
 )

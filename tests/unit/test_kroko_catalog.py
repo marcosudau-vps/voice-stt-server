@@ -15,7 +15,7 @@ from VoiceSTT.kroko.catalog import (
     create_download_plan, load_catalog, parse_entry,
 )
 from VoiceSTT.kroko.models import KrokoModelManifest, default_manifest_path, load_manifest
-from tools.kroko_catalog_cli import main
+from engineering.tools.kroko_catalog_cli import main
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURES = Path(__file__).parent / "fixtures" / "kroko_catalog"
@@ -322,7 +322,7 @@ def test_cli_commands_and_exact_lookup(capsys):
 
 def test_cli_script_outside_checkout(tmp_path):
     result = subprocess.run(
-        [sys.executable, str(ROOT / "tools/kroko_catalog_cli.py"), "--catalog", str(CATALOG), "summary"],
+        [sys.executable, str(ROOT / "engineering/tools/kroko_catalog_cli.py"), "--catalog", str(CATALOG), "summary"],
         cwd=tmp_path, capture_output=True, text=True, check=True,
     )
     assert json.loads(result.stdout)["total"] == 124

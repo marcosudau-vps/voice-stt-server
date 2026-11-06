@@ -19,15 +19,15 @@ from pathlib import Path
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-for extra in (REPO_ROOT, REPO_ROOT / "tools", Path(__file__).resolve().parent):
+for extra in (REPO_ROOT, Path(__file__).resolve().parent):
     if str(extra) not in sys.path:
         sys.path.insert(0, str(extra))
 
-import release_candidate  # noqa: E402
+from engineering.tools import release_candidate  # noqa: E402
 
-from release_tooling import candidate as candidate_module  # noqa: E402
-from release_tooling import rc_manifest  # noqa: E402
-from release_tooling.errors import ManifestError  # noqa: E402
+from engineering.release import candidate as candidate_module  # noqa: E402
+from engineering.release import rc_manifest  # noqa: E402
+from engineering.release.errors import ManifestError  # noqa: E402
 
 COMMIT = "934e3be7c78aa9358f9b42b9fa4dc282bed54d6c"
 TREE = "2936f70ca44b7a902e1e5c7c5ca69eacc3154fdb"
@@ -353,7 +353,7 @@ class WindowsCandidateBuildTests(unittest.TestCase):
                 1, "2.0.0", "2.0.0", COMMIT, TREE, False,
                 "2026-10-19T21:34:01Z", "voicestt", None, "git",
             )
-            with patch("build_distribution.build_distribution", return_value=fake_dist), \
+            with patch("engineering.tools.build_distribution.build_distribution", return_value=fake_dist), \
                  patch.object(release_candidate, "candidate_source", return_value=source), \
                  patch.object(release_candidate, "resolve_windows_kroko", return_value=record) as resolve, \
                  patch.object(release_candidate, "validate_distribution"), \

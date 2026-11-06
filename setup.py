@@ -89,8 +89,11 @@ wakeword_package_data = [
 
 
 INSTALL_GUIDE = """
-VoiceSTT lets you choose the transcription and wake-word dependencies you
-want to install.
+VoiceSTT V2 supports exactly two transcription engines, Faster-Whisper and
+Kroko-ONNX, and runs on the CPU only. Install PyTorch from the CPU index first
+so that pip does not resolve the CUDA build on Linux:
+
+    pip install torch --index-url https://download.pytorch.org/whl/cpu
 
 Recommended default local Whisper install:
 
@@ -107,20 +110,13 @@ Core package only, without a transcription engine or wake-word backend:
 Install multiple extras by separating them with commas:
 
     pip install "voicestt[faster-whisper,porcupine]"
-    pip install "voicestt[whisper-cpp,openwakeword]"
+    pip install "voicestt[faster-whisper,openwakeword]"
 
 Available extras include:
 
 - faster-whisper: default CTranslate2 Whisper backend
-- whisper-cpp: whisper.cpp backend through pywhispercpp
-- openai-whisper: original OpenAI Whisper Python backend
-- sherpa-onnx: sherpa-onnx CPU backends
 - silero-vad: packaged Silero model assets and PyTorch wrapper
 - silero-onnx/silero-onnx-cpu: fastest Silero VAD CPU ONNX Runtime backend
-- omnilingual/omnilingual-asr: Meta Omnilingual ASR backend for Linux/WSL2 with Python 3.11.x only; uses omnilingual-asr>=0.2.0 with matching torch/torchaudio builds
-- transformers: shared Transformers dependency for Moonshine, Granite, and Cohere
-- moonshine, granite, cohere: aliases for the Transformers dependency set
-- qwen: Qwen ASR backend
 - kroko-builder: helper command for building/installing Kroko-ONNX plus Hugging Face model downloads
 - porcupine: Porcupine wake-word backend
 - openwakeword: OpenWakeWord wake-word backend
@@ -133,12 +129,6 @@ Available extras include:
 WebRTC VAD is installed with the core package. AudioToTextRecorder also
 initializes a Silero VAD path. Install the recommended/default or
 silero-onnx-cpu extra for a self-contained local Silero ONNX Runtime backend.
-
-Meta Omnilingual ASR install note: use Linux or WSL2 with Python 3.11.x.
-Native Windows cannot run the Omnilingual runtime because fairseq2n has no
-Windows wheel, and Python 3.12.x currently cannot resolve omnilingual-asr>=0.2.0
-from PyPI because the upstream package metadata excludes normal 3.12 patch
-releases.
 
 For live Kroko-ONNX usage, install the builder helper and then build Kroko in
 the same Python environment:
@@ -245,7 +235,6 @@ base_requirements = [
     requirement("webrtcvad-wheels"),
     requirement("halo"),
     requirement("torch"),
-    requirement("torchaudio"),
     requirement("scipy"),
     requirement("websockets"),
     requirement("websocket-client"),
@@ -260,28 +249,12 @@ faster_whisper_requirements = [
     # public server distributions).
     requirement("av"),
 ]
-whisper_cpp_requirements = ["pywhispercpp"]
-openai_whisper_requirements = ["openai-whisper"]
-sherpa_onnx_requirements = ["sherpa-onnx"]
 silero_vad_requirements = [
     "silero-vad>=6.2.1; python_version >= '3.8'",
 ]
 silero_onnx_requirements = [
     "silero-vad[onnx-cpu]>=6.2.1; python_version >= '3.8'",
 ]
-transformers_requirements = ["transformers"]
-parakeet_requirements = ["nemo_toolkit[asr]"]
-omnilingual_asr_marker = (
-    "python_version >= '3.10' and python_version < '3.12' "
-    "and platform_system != 'Windows'"
-)
-omnilingual_asr_requirements = [
-    "torch==2.8.0; %s" % omnilingual_asr_marker,
-    "torchaudio==2.8.0; %s" % omnilingual_asr_marker,
-    "omnilingual-asr>=0.2.0; %s" % omnilingual_asr_marker,
-]
-qwen_requirements = ["qwen-asr"]
-qwen_vllm_requirements = ["qwen-asr[vllm]"]
 kroko_builder_requirements = ["huggingface_hub"]
 porcupine_requirements = [requirement("pvporcupine")]
 openwakeword_requirements = [requirement("openwakeword")]
@@ -304,42 +277,14 @@ app_talk_with_llm_requirements = [
     "keyboard==0.13.5",
 ]
 
-all_optional_requirements = unique_requirements(
-    faster_whisper_requirements
-    + whisper_cpp_requirements
-    + openai_whisper_requirements
-    + sherpa_onnx_requirements
-    + silero_onnx_requirements
-    + transformers_requirements
-    + omnilingual_asr_requirements
-    + qwen_requirements
-    + kroko_builder_requirements
-    + porcupine_requirements
-    + openwakeword_requirements
-)
-
 extras_require = {
     "minimal": [],
     "faster-whisper": faster_whisper_requirements,
-    "whisper-cpp": whisper_cpp_requirements,
-    "whispercpp": whisper_cpp_requirements,
-    "openai-whisper": openai_whisper_requirements,
-    "sherpa-onnx": sherpa_onnx_requirements,
-    "sherpa": sherpa_onnx_requirements,
     "silero-vad": silero_vad_requirements,
     "silero": silero_vad_requirements,
     "silero-onnx": silero_onnx_requirements,
     "silero-onnx-cpu": silero_onnx_requirements,
     "vad-onnx": silero_onnx_requirements,
-    "transformers": transformers_requirements,
-    "moonshine": transformers_requirements,
-    "granite": transformers_requirements,
-    "cohere": transformers_requirements,
-    "omnilingual-asr": omnilingual_asr_requirements,
-    "omnilingual": omnilingual_asr_requirements,
-    "meta-omnilingual-asr": omnilingual_asr_requirements,
-    "qwen": qwen_requirements,
-    "qwen3-asr": qwen_requirements,
     "kroko-builder": kroko_builder_requirements,
     "porcupine": porcupine_requirements,
     "pvporcupine": porcupine_requirements,
