@@ -70,11 +70,17 @@ neue venv verwenden, statt deren Torch-Version als CPU-Constraint zu übernehmen
 ```bash
 python3.12 -m venv .venv-v2
 source .venv-v2/bin/activate
-python -m pip install --upgrade pip
+python -m pip install --upgrade pip "packaging>=24.0"
 ```
 
 2. CPU-Torch aus `https://download.pytorch.org/whl/cpu` installieren,
    die Version per absolutem pip-Constraint festhalten und sofort prüfen:
+
+`packaging` muss bereits vor dieser ersten Prüfung vorhanden sein: Der Prüfer
+verwendet es zur Auswertung von `Requires-Dist`-Umgebungsmarkern. Andernfalls
+wertet er konservativ auch GPU-Requirements für andere Plattformen als aktiv;
+ein korrektes Windows-CPU-Wheel mit Linux-only-Metadaten könnte dadurch
+abgelehnt werden. `packaging` gehört ohnehin zu den Produktabhängigkeiten.
 
 ```bash
 python engineering/tools/cpu_only.py install-torch --constraint-out "$VIRTUAL_ENV/cpu-constraints.txt"
@@ -104,7 +110,7 @@ entsprechende Ablauf (ebenfalls mit einem neuen `.venv-v2`-Verzeichnis):
 ```powershell
 py -3.12 -m venv .venv-v2
 .\.venv-v2\Scripts\Activate.ps1
-python -m pip install --upgrade pip
+python -m pip install --upgrade pip "packaging>=24.0"
 $cpuConstraint = Join-Path $env:VIRTUAL_ENV "cpu-constraints.txt"
 python engineering/tools/cpu_only.py install-torch --constraint-out $cpuConstraint
 python engineering/tools/cpu_only.py check

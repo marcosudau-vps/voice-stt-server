@@ -428,3 +428,25 @@ technische Abnahme. Der PR bleibt **Draft**. Kein `ROOT_PASS`, keine erteilte
 unabhängige Abnahme, kein Merge, kein Release und kein Deployment.
 Redistribution weiterhin `BLOCKED`; die in T3-4 abgegrenzten ausstehenden
 Release-/Inferenzqualifikationen bleiben unverändert.
+
+
+## T3-6. Präzisierung der frischen Installationsumgebung
+
+Bei der abschließenden Prüfung der Installationsreihenfolge wurde die neue
+Anleitung um `packaging>=24.0` vor dem **ersten** CPU-only-Check ergänzt
+(Linux und PowerShell). `packaging` ist bereits eine Basisabhängigkeit des
+Produkts, fehlt aber in einer frisch angelegten venv vor der Produktinstallation.
+Ohne diesen Marker-Parser arbeitet `cpu_only.py` absichtlich konservativ und
+kann Linux-only-GPU-Requirements im Windows-CPU-Wheel als aktiv behandeln.
+Die GitHub-Logs bestätigen, dass die reine CPU-Torch-Installation `packaging`
+nicht mitinstalliert; die bestehenden CI-Prüfungen erfolgen hingegen erst nach
+der Produktinstallation und verfügen dann bereits über diesen Parser.
+
+Dies korrigiert ausschließlich die zuvor neu beschriebene Vorabprüfung der
+Installation. Keine Änderung des CPU-only-Werkzeugs, der Abhängigkeiten des
+Produkts, der Torch-Version, des Packaging-Verfahrens oder des Produktcodes.
+Die Dokumentations-/Oberflächenprüfung wurde danach erneut erfolgreich
+abgeschlossen (39 passed, 85 subtests passed). Die finale CI wird auch auf
+dem Commit dieser reinen Dokumentationspräzisierung geprüft; genauer SHA und
+vollständige endgültige Run-Links stehen in der aktuellen PR-Beschreibung.
+Alle bisherigen Ergebnisse und Nachweise in dieser Akte bleiben erhalten.
