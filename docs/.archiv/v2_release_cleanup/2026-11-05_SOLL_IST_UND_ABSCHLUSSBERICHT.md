@@ -283,3 +283,106 @@ historische Pfaddivergenzen (Alt-Doku nennt alte Orte):
 | `engineering/build/` | nicht angelegt (einzige Kandidatendatei aus Integritätsgründen am Root-Ort) |
 | Registereintrag `docs/.archiv/README.md` | weiterhin bewusst nicht erfolgt (Ausnahmeakte) |
 | Unabhängige Abnahme, Merge, Veröffentlichung | NICHT ERFOLGT; Redistribution weiterhin `BLOCKED` (unverändert) |
+
+
+---
+
+# Teil 3 – Finale Nachkorrektur vor unabhängiger Abnahme (2026-11-06)
+
+Ausgangsstand: `f03fa5e95041d265175c00c669c2e21b3aa4b8bc`.
+Fortsetzung ausschließlich auf `feat/v2-release-cleanup` im bestehenden
+Draft-PR #18 gegen `feat/einheitliche-triggerarchitektur-distributed`.
+Die Abschnitte der beiden vorherigen Läufe bleiben historische Nachweise.
+
+## T3-1. Tatsächliche Restkorrekturen
+
+- Die drei bisherigen Parakeet-Tuning-Profile aus `TUNING_PROFILES` entfernt.
+  Öffentlich bleibt nur `custom` (beide CLI-Aliase erhalten). Allgemeine
+  Beam-/Batch-/Timing-/VAD-Werte bleiben einzeln konfigurierbar.
+- Den CLI-Hilfetext bereinigt. Unbekannte Profilnamen werden durch argparse
+  beziehungsweise die YAML-Prüfung kontrolliert abgelehnt. Ein alter Profilname
+  in persistierten Laufzeitsettings verhindert den Start mit einer klaren
+  Meldung: `custom` verwenden und allgemeine Tuning-Werte explizit setzen.
+  Eine gespeicherte alte Profilbeschreibung wird aus dem gültigen Profil neu
+  abgeleitet. Keine automatische Umdeutung alter Profile.
+- Den Parakeet-Sonderzweig in `applySettings` entfernt. Engine-/Modellnamen,
+  CPU-/Compute-Type, Beam, beide Batch-Größen, Timing, VAD und Wake-Word bleiben
+  sichtbar; gemeinsame Modelle behalten die Anzeige „wie final“.
+- Den ausführbaren `api_fastapi_server/run_multi_user_perf.cmd` von nicht mehr
+  unterstützten Moonshine-Defaults auf Faster-Whisper (`small`/`tiny`, CPU)
+  samt passenden Engine-Optionen und Cachepfad umgestellt.
+- Alte Profil-Positivtests durch Tests für V2-Defaults, explizite allgemeine
+  Tuning-Parameter, CLI-/YAML-/persistierte Profilablehnung, API-Capabilities,
+  negative Engine-Auswahl und UI-Parameter ersetzt beziehungsweise erweitert.
+  Factory-Regressionsnachweis: kompatible GPU-Argumente werden weiterhin
+  angenommen, jedoch vor Engine-Erzeugung auf CPU/Index 0 gesetzt.
+- Die zusätzliche Leerzeile am Ende von `audio_engine_fixtures.py` entfernt;
+  Whitespace-Prüfung umfasst auch den gesamten PR-Diff gegen `4f30c0f`.
+
+## T3-2. Erhaltene Verträge und gezielte Bestandsprüfung
+
+Die Factory bleibt exakt auf `faster_whisper` und `kroko_onnx` begrenzt.
+Die fünf isolierten Engine-Entwürfe, Kroko Community/Pro, Lizenzprüfung,
+Modellverwaltung, Recorder, Scheduler, HTTP/WebSocket V1/V2, `/v1/*`,
+Authentisierung, Logging und Wake-Word wurden nicht neu organisiert.
+Native Fingerprints, Release-State-Machine und Redistribution-Gates bleiben
+unverändert. Die öffentliche Redistribution bleibt `BLOCKED`.
+
+Die ausführbaren Dateien unter `VoiceSTT/`, `VoiceSTT_server/`,
+`api_fastapi_server/`, `voice_stt_server/` sowie `config.yaml`, `setup.py` und
+`requirements.txt` wurden gezielt auf aktive Legacy-Auswahl, Profile,
+Sonderbehandlungen und Abhängigkeiten geprüft. Nach der Bereinigung keine
+weiteren aktiven Legacy-Engine-Referenzen gefunden. `openai_api_*` bezeichnet
+weiterhin die erhaltene OpenAI-kompatible HTTP-Schnittstelle.
+
+GPU-Felder der öffentlichen Recorder-API bleiben kompatibel. Recorder und
+Engine-Factory erzwingen CPU; Kroko lehnt GPU-Provider ab; explizite
+CUDA-Silero-Auswahl wird vor einem GPU-Ladevorgang abgelehnt. Keine GPU-Pakete
+hinzugefügt, keine CPU-only-Prüfung abgeschwächt.
+
+Historische Dokumentation: alle 259 geschützten Dokumente weiterhin
+blob-identisch (eins davon unverändert unter dem bereits verschobenen
+Beispielpfad). Nur die betroffenen Seiten der neuen V2-Code-Referenz angepasst;
+diese bestehende Abschlussakte ausschließlich um Teil 3 ergänzt.
+
+## T3-3. Verbindlicher CPU-only-Installationsweg
+
+Der vorhandene Mechanismus in `engineering/tools/cpu_only.py` und seine
+CI-/RC-/Docker-/Windows-Anbindungen bleiben erhalten. Keine Torch-Versions-
+experimente und kein Packaging-Umbau.
+
+Die aktuelle Installationsreferenz verlangt jetzt ausdrücklich eine **neue
+Python-3.12-venv ohne vorhandenes Torch**, CPU-Torch vom offiziellen CPU-Index,
+einen absoluten Constraintpfad, Prüfung vor der Produktinstallation sowie
+`pip check` und CPU-only-Prüfung danach. Alle späteren Installationen müssen
+denselben Constraint verwenden. Linux- und PowerShell-Ablauf sowie die
+Entwicklungsinstallation sind entsprechend beschrieben.
+
+Ein Indexwechsel repariert eine bestehende CUDA-/ROCm-Installation nicht
+zuverlässig (`Requirement already satisfied`); dafür ist eine neue venv
+vorgesehen. Ein schlichtes Linux-`pip install voice-stt-server` ohne diese
+Vorbereitung kann weiterhin CUDA-Abhängigkeiten beziehen. Diese Einschränkung
+ist ausdrücklich dokumentiert und kein Freigabenachweis für CPU-only.
+
+## T3-4. Prüfungen der Nachkorrektur
+
+Bestehende Windows-Testumgebung, Python 3.12, CPU-Torch `2.13.0+cpu`.
+Keine Tests deaktiviert oder Erwartungen zur Umgehung eines Fehlers gelockert.
+Der erste neue API-Test benötigte korrektes Schließen der Service-/SQLite-
+Ressourcen unter Windows; dies wurde im Test über `ExitStack` ergänzt.
+
+| Prüfung | Ergebnis |
+| --- | --- |
+| Syntax/Import | `compileall` für alle vier Produktpakete PASS; Import-/CLI-Prüfungen in der gezielten Suite PASS |
+| Gezielte Server-/Engine-/CPU-/Engineering-/Doku-/Silero-Tests | 132 passed, 1 skipped, 297 subtests passed |
+| Webinterface | Gesamte Inline-JavaScript-Syntax PASS; tatsächliche Ausführung von `applySettings` mit Node/VM: 8 V2-Konfigurationen (beide Engine-Anordnungen, gemeinsame/getrennte Modelle, Wake-Word an/aus) PASS |
+| CPU-only-Nachweis lokal | PASS: keine GPU-Distributionen, `cuda=null`, `hip=null`, keine aktiven GPU-Requirements, CPU-Tensoroperation erfolgreich |
+| Vollständige Unit-/Contractsuite | PASS: `python -m pytest -q tests/unit tests/compatibility` – 2309 passed, 16 skipped, 1547 subtests passed, 1 bestehende Starlette/httpx-DeprecationWarning (17:42 min) |
+| Packaging | PASS: `python -m pytest -q tests/packaging` – 37 passed (25:28 min) |
+| `git diff --check` gegen die PR-Basis | PASS |
+| GitHub-CI / Code-Commit | Lokale Qualifikation vollständig PASS; nach Push folgt der versionierte CI-Nachtrag. Der tatsächliche finale PR-HEAD und seine CI werden zusätzlich in PR #18 dokumentiert. |
+
+Echte Modellinferenz, native Pro-Qualifikation, Docker-/RC-Build und
+Release-Dry-Run werden durch diesen begrenzten Korrekturlauf nicht neu
+qualifiziert. Keine Veröffentlichung, kein Deployment, kein VPS-Zugriff,
+kein Merge und keine unabhängige Abnahme erteilt.

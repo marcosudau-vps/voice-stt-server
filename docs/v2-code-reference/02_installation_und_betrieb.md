@@ -57,20 +57,61 @@ V2 läuft ausschließlich auf der CPU. `torch` bleibt nötig
 installiert unter Linux jedoch die CUDA-Variante samt `nvidia-*`/`triton`.
 Weil `install_requires` keinen anderen Paketindex vorschreiben kann, gilt:
 
-1. Erst CPU-Torch aus `https://download.pytorch.org/whl/cpu` installieren,
-   dann diese Version per pip-Constraint festhalten:
+Der offizielle Installationsweg beginnt in einer **neuen, isolierten Python-3.12-
+Umgebung ohne vorhandenes Torch**. Die Hilfsskripte werden aus dem Repository
+aufgerufen; sie gehören nicht zum installierten Produkt-Wheel. Ein bloßer
+Indexwechsel ersetzt eine bereits installierte CUDA-/ROCm-Version nicht:
+Pip kann sie als erfüllt behandeln. Für solche Bestandsumgebungen deshalb eine
+neue venv verwenden, statt deren Torch-Version als CPU-Constraint zu übernehmen.
+
+1. Im Repository-Root eine neue Umgebung anlegen und aktivieren (Linux).
+   `.venv-v2` muss ein neuer Verzeichnispfad sein:
 
 ```bash
-python engineering/tools/cpu_only.py install-torch --constraint-out cpu-constraints.txt
+python3.12 -m venv .venv-v2
+source .venv-v2/bin/activate
+python -m pip install --upgrade pip
 ```
 
+2. CPU-Torch aus `https://download.pytorch.org/whl/cpu` installieren,
+   die Version per absolutem pip-Constraint festhalten und sofort prüfen:
+
 ```bash
-PIP_CONSTRAINT=cpu-constraints.txt python -m pip install -e ".[recommended,server]"
+python engineering/tools/cpu_only.py install-torch --constraint-out "$VIRTUAL_ENV/cpu-constraints.txt"
+python engineering/tools/cpu_only.py check
 ```
 
-2. Nachweis:
+3. Nur bei erfolgreicher Prüfung die öffentliche V2-Distribution installieren
+   (nach deren Veröffentlichung; alternativ den qualifizierten Wheel-Pfad
+   anstelle des Paketnamens angeben):
 
 ```bash
+PIP_CONSTRAINT="$VIRTUAL_ENV/cpu-constraints.txt" python -m pip install voice-stt-server
+```
+
+4. Die fertige Installation prüfen. Bei einem Fehler die Installation nicht
+   als CPU-only freigeben:
+
+```bash
+python -m pip check
+python engineering/tools/cpu_only.py check
+```
+
+Jede spätere Installation beziehungsweise Aktualisierung in dieser Umgebung
+muss denselben `PIP_CONSTRAINT` verwenden. Unter PowerShell lautet der
+entsprechende Ablauf (ebenfalls mit einem neuen `.venv-v2`-Verzeichnis):
+
+```powershell
+py -3.12 -m venv .venv-v2
+.\.venv-v2\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+$cpuConstraint = Join-Path $env:VIRTUAL_ENV "cpu-constraints.txt"
+python engineering/tools/cpu_only.py install-torch --constraint-out $cpuConstraint
+python engineering/tools/cpu_only.py check
+# Nur bei erfolgreicher Prüfung fortfahren; Constraint existiert jetzt.
+$env:PIP_CONSTRAINT = $cpuConstraint
+python -m pip install voice-stt-server
+python -m pip check
 python engineering/tools/cpu_only.py check
 ```
 
@@ -109,14 +150,18 @@ Container-Image, siehe unten).
 
 ## 3. Lokaler Start (Entwicklungs-Checkout)
 
-So wird es auch im CI-Job „Install development/test dependencies“ gemacht:
+Zuerst die neue Umgebung und CPU-Torch wie oben vorbereiten und prüfen.
+Die Entwicklungsinstallation verwendet danach denselben Constraint wie die
+CI-Entwicklungsumgebung:
 
 ```bash
-python -m pip install -e ".[recommended,server]"
+PIP_CONSTRAINT="$VIRTUAL_ENV/cpu-constraints.txt" python -m pip install -e ".[recommended,server]"
 ```
 
 ```bash
-python -m pip install -r requirements-dev.txt
+PIP_CONSTRAINT="$VIRTUAL_ENV/cpu-constraints.txt" python -m pip install -r requirements-dev.txt
+python -m pip check
+python engineering/tools/cpu_only.py check
 ```
 
 Start auf Loopback mit eigenem Datenverzeichnis:

@@ -32,6 +32,17 @@ Der Server kennt zwei voneinander getrennte Konfigurationsebenen:
    Fehlt der CLI-/YAML-Wert, kommt er aus dem **Tuning-Profil**
    (`_value_or_default`, `BASE_TUNING_DEFAULTS`, `TUNING_PROFILES`).
 
+V2 bietet ausschließlich das allgemeine Profil `custom` an (Default;
+`--profile custom` beziehungsweise `--tuning-profile custom`). Beam-Größen,
+Batch-Größen, Realtime-Pause, Aufnahme-Mindestlänge, finale Stille,
+frühe Transkription und VAD bleiben einzeln konfigurierbar. Frühere
+Engine-spezifische Profile werden nicht mehr angeboten: CLI und YAML lehnen
+unbekannte Namen kontrolliert ab; auch ein alter `tuning_profile` in
+`<data_root>/config/runtime.json` verhindert den Start mit einer verständlichen
+Fehlermeldung. Zur Umstellung dort `custom` setzen und gewünschte allgemeine
+Tuning-Werte explizit beibehalten. Die Profilbeschreibung wird aus dem gültigen
+Profil neu abgeleitet; eine gespeicherte alte Beschreibung wird nicht verwendet.
+
 Beobachtet (lokal): `parse_args(['--config','config.yaml'])` liefert
 `max_sessions=8` aus der Root-`config.yaml`; zusätzlich `--max-sessions 2`
 ergibt `2`; `VOICESTT_LOG_LIVE=0` ohne YAML ergibt `log_live_enabled=False`.
@@ -55,7 +66,7 @@ Regeln aus `load_yaml_config_defaults` (`server.py:10334`):
   („Verwende dafür ausschließlich die Env-Datei.“).
 - Abgeleitete Felder (`tuning_description`, alle Log-/Store-/Runtime-Pfade)
   sind verboten.
-- `device` darf nur `cpu` sein; `tuning_profile` muss existieren.
+- `device` darf nur `cpu` sein; für `tuning_profile` ist nur `custom` zulässig.
 - Einige YAML-Namen werden auf invertierte CLI-Ziele abgebildet
   (`YAML_CONFIG_TO_ARG_DEST`), z. B. `model_warmup: false` → `--no-model-warmup`,
   `vad_filter: false` → `--no-vad-filter`, `openai_api_enabled: false` →

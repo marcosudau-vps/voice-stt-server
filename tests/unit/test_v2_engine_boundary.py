@@ -72,6 +72,19 @@ class FactoryBoundaryTests(unittest.TestCase):
 
 
 class ServerPolicyBoundaryTests(unittest.TestCase):
+    def test_factory_keeps_gpu_arguments_compatible_but_forces_cpu(self):
+        from unittest import mock
+
+        for name in SUPPORTED:
+            with self.subTest(engine=name):
+                config = TranscriptionEngineConfig(model="x", device="cuda", gpu_device_index=[1, 2])
+                engine = mock.Mock()
+                with mock.patch("VoiceSTT.transcription_engines.factory._load_engine_class", return_value=engine):
+                    create_transcription_engine(name, config)
+                engine.assert_called_once_with(config)
+                self.assertEqual(config.device, "cpu")
+                self.assertEqual(config.gpu_device_index, 0)
+
     def test_unsupported_engines_are_rejected_before_any_import(self):
         from api_fastapi_server.server import ServerSettings, enforce_cpu_model_policy
 
@@ -120,6 +133,16 @@ class ServerPolicyBoundaryTests(unittest.TestCase):
 
 
 class RepositoryLayoutTests(unittest.TestCase):
+    def test_executable_performance_launcher_uses_supported_cpu_engines(self):
+        import re
+
+        text = (REPO_ROOT / "api_fastapi_server/run_multi_user_perf.cmd").read_text(encoding="utf-8")
+        defaults = dict(re.findall(r'set "(VOICESTT_FASTAPI_ASR_\w+)=([^"\r\n]+)"', text))
+        self.assertIn(defaults["VOICESTT_FASTAPI_ASR_ENGINE"], SUPPORTED)
+        self.assertIn(defaults["VOICESTT_FASTAPI_ASR_REALTIME_ENGINE"], SUPPORTED)
+        self.assertEqual(defaults["VOICESTT_FASTAPI_ASR_DEVICE"], "cpu")
+        self.assertNotIn("sherpa", text.lower())
+
     def test_only_the_two_engine_modules_remain_in_the_product_package(self):
         engines = sorted(path.name for path in ENGINE_DIR.glob("*_engine*.py"))
         self.assertEqual(engines, ["faster_whisper_engine.py", "kroko_onnx_engine.py"])

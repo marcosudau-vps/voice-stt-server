@@ -1,4 +1,6 @@
 import json
+import contextlib
+import io
 import queue
 import threading
 import tempfile
@@ -29,6 +31,9 @@ from api_fastapi_server.server import (
     VoiceSTTService,
     SegmentState,
     ServerSettings,
+    TUNING_PROFILES,
+    create_app,
+    enforce_cpu_model_policy,
     parse_args,
     parse_session_wake_word_query,
     resolve_session_wake_word_config,
@@ -104,18 +109,19 @@ class FastAPIServerProtocolTests(unittest.TestCase):
     def test_settings_normalize_hyphenated_engine_names(self):
         args = parse_args([
             "--engine",
-            "cohere-transcribe",
+            "faster-whisper",
             "--realtime-engine",
-            "moonshine-streaming",
+            "kroko-onnx",
             "--engine-options",
             json.dumps({"language": "en"}),
         ])
 
         settings = settings_from_args(args)
 
-        self.assertEqual(settings.transcription_engine, "cohere_transcribe")
-        self.assertEqual(settings.realtime_transcription_engine, "moonshine_streaming")
+        self.assertEqual(settings.transcription_engine, "faster_whisper")
+        self.assertEqual(settings.realtime_transcription_engine, "kroko_onnx")
         self.assertEqual(settings.transcription_engine_options, {"language": "en"})
+        enforce_cpu_model_policy(settings)
 
     def test_yaml_start_config_loads_defaults_and_cli_overrides(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -173,40 +179,123 @@ settings:
                 with self.assertRaisesRegex(SystemExit, message):
                     parse_args(["--config", str(config)])
 
-    def test_parakeet_tuning_profile_sets_latency_oriented_defaults(self):
-        args = parse_args([
-            "--profile",
-            "parakeet-low-latency",
-            "--engine",
-            "parakeet",
-        ])
+    def test_default_custom_profile_preserves_v2_defaults(self):
+        settings = settings_from_args(parse_args([]))
+        enforce_cpu_model_policy(settings)
 
-        settings = settings_from_args(args)
-
-        self.assertEqual(settings.tuning_profile, "parakeet-low-latency")
-        self.assertEqual(settings.batch_size, 1)
-        self.assertEqual(settings.realtime_batch_size, 1)
-        self.assertEqual(settings.realtime_processing_pause, 0.04)
-        self.assertEqual(settings.post_speech_silence_duration, 0.45)
+        self.assertEqual(set(TUNING_PROFILES), {"custom"})
+        self.assertEqual(settings.tuning_profile, "custom")
+        self.assertEqual(settings.transcription_engine, "faster_whisper")
+        self.assertEqual(settings.realtime_transcription_engine, "kroko_onnx")
+        self.assertEqual(settings.device, "cpu")
+        self.assertEqual(settings.batch_size, 16)
+        self.assertEqual(settings.realtime_batch_size, 16)
+        self.assertEqual(settings.realtime_processing_pause, 0.02)
+        self.assertEqual(settings.post_speech_silence_duration, 0.55)
 
     def test_explicit_tuning_flags_override_profile_defaults(self):
         args = parse_args([
             "--profile",
-            "parakeet-low-latency",
+            "custom",
             "--batch-size",
             "4",
+            "--realtime-batch-size", "2",
+            "--beam-size", "7",
+            "--beam-size-realtime", "1",
             "--realtime-processing-pause",
             "0.09",
+            "--min-length-of-recording", "0.18",
+            "--post-speech-silence-duration", "0.45",
+            "--early-transcription-on-silence", "0.15",
+            "--silero-sensitivity", "0.3",
+            "--webrtc-sensitivity", "2",
+            "--no-vad-filter",
         ])
 
         settings = settings_from_args(args)
 
         self.assertEqual(settings.batch_size, 4)
+        self.assertEqual(settings.realtime_batch_size, 2)
+        self.assertEqual(settings.beam_size, 7)
+        self.assertEqual(settings.beam_size_realtime, 1)
         self.assertEqual(settings.realtime_processing_pause, 0.09)
+        self.assertEqual(settings.min_length_of_recording, 0.18)
+        self.assertEqual(settings.post_speech_silence_duration, 0.45)
+        self.assertEqual(settings.early_transcription_on_silence, 0.15)
+        self.assertEqual(settings.silero_sensitivity, 0.3)
+        self.assertEqual(settings.webrtc_sensitivity, 2)
+        self.assertFalse(settings.vad_filter)
+
+    def test_removed_profiles_are_rejected_by_both_cli_flags_and_yaml(self):
+        for profile in ("parakeet-low-latency", "parakeet-balanced", "parakeet-accurate-final"):
+            for flag in ("--profile", "--tuning-profile"):
+                with self.subTest(profile=profile, flag=flag):
+                    error = io.StringIO()
+                    with contextlib.redirect_stderr(error), self.assertRaises(SystemExit) as caught:
+                        parse_args([flag, profile])
+                    self.assertEqual(caught.exception.code, 2)
+                    self.assertIn("custom", error.getvalue())
+            with self.subTest(profile=profile, source="yaml"), tempfile.TemporaryDirectory() as directory:
+                config = Path(directory) / "stt-config.yaml"
+                config.write_text(f"settings:\n  tuning_profile: {profile}\n", encoding="utf-8")
+                with self.assertRaisesRegex(SystemExit, "V2 unterstützt nur 'custom'"):
+                    parse_args(["--config", str(config)])
+
+    def test_persisted_removed_profile_is_rejected_before_server_start(self):
+        for profile in ("parakeet-low-latency", "parakeet-balanced", "parakeet-accurate-final"):
+            with self.subTest(profile=profile), tempfile.TemporaryDirectory() as directory:
+                settings = ServerSettings(data_root_path=directory)
+                path = Path(settings.runtime_config_path)
+                path.parent.mkdir(parents=True)
+                path.write_text(json.dumps({"settings": {"tuning_profile": profile}}), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "Batch-, Timing- und VAD-Werte bitte explizit setzen"):
+                    create_app(settings)
+
+    def test_cli_help_offers_only_the_custom_profile(self):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), self.assertRaises(SystemExit) as caught:
+            parse_args(["--help"])
+        self.assertEqual(caught.exception.code, 0)
+        self.assertIn("--profile {custom}", output.getvalue())
+        self.assertNotIn("parakeet", output.getvalue().lower())
+
+    def test_admin_capabilities_and_legacy_selection_rejection(self):
+        from fastapi.testclient import TestClient
+
+        with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as cleanup:
+            app = create_app(ServerSettings(data_root_path=directory))
+            cleanup.callback(app.state.voicestt_service.stop)
+            client = TestClient(app)
+            cleanup.callback(client.close)
+            response = client.get("/api/config")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["supportedEngines"], ["faster_whisper", "kroko_onnx"])
+            for field in ("transcription_engine", "realtime_transcription_engine"):
+                for engine in ("parakeet", "cohere-transcribe", "moonshine-streaming", "Qwen3-ASR"):
+                    with self.subTest(field=field, engine=engine):
+                        response = client.post("/api/config/validate", json={field: engine})
+                        self.assertEqual(response.status_code, 400, response.text)
+                        self.assertIn("Supported engines: faster_whisper, kroko_onnx", response.text)
+            response = client.post("/api/config/validate", json={"tuning_profile": "parakeet-balanced"})
+            self.assertEqual(response.status_code, 400, response.text)
+            self.assertIn("custom", response.text)
+
+    def test_webinterface_keeps_general_v2_settings_without_legacy_engine_branch(self):
+        html = (Path(__file__).resolve().parents[2] / "api_fastapi_server/static/index.html").read_text(encoding="utf-8")
+        settings_view = html.split("function applySettings(settings) {", 1)[1].split("function formatSeconds", 1)[0]
+        self.assertNotIn("parakeet", settings_view.lower())
+        for field in (
+            "transcription_engine", "realtime_transcription_engine", "model", "realtime_model",
+            "device", "compute_type", "batch_size", "realtime_batch_size", "beam_size",
+            "beam_size_realtime", "realtime_processing_pause", "post_speech_silence_duration",
+            "min_length_of_recording", "wake_word_enabled", "wakeword_backend", "wake_words",
+        ):
+            with self.subTest(field=field):
+                self.assertIn("settings." + field, settings_view)
 
     def test_normalize_engine_name_handles_none(self):
         self.assertIsNone(normalize_engine_name(None))
-        self.assertEqual(normalize_engine_name("Qwen3-ASR"), "qwen3_asr")
+        self.assertEqual(normalize_engine_name("Kroko-ONNX"), "kroko_onnx")
 
     def test_supported_engines_are_exactly_the_v2_product_engines(self):
         self.assertEqual(

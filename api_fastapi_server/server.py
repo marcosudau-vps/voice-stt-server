@@ -164,40 +164,16 @@ TUNING_PROFILES = {
         "description": "Explizite CLI-/Standardwerte verwenden.",
         "settings": {},
     },
-    "parakeet-low-latency": {
-        "description": "Parakeet-Profil für häufige Zwischenergebnisse.",
-        "settings": {
-            "batch_size": 1,
-            "realtime_batch_size": 1,
-            "realtime_processing_pause": 0.04,
-            "min_length_of_recording": 0.18,
-            "post_speech_silence_duration": 0.45,
-            "early_transcription_on_silence": 0.15,
-        },
-    },
-    "parakeet-balanced": {
-        "description": "Parakeet-Profil mit ausgewogenem Verhältnis aus Latenz und finaler Stabilität.",
-        "settings": {
-            "batch_size": 8,
-            "realtime_batch_size": 4,
-            "realtime_processing_pause": 0.06,
-            "min_length_of_recording": 0.2,
-            "post_speech_silence_duration": 0.55,
-            "early_transcription_on_silence": 0.2,
-        },
-    },
-    "parakeet-accurate-final": {
-        "description": "Parakeet-Profil für ruhigere Segmentierung und höhere finale Qualität.",
-        "settings": {
-            "batch_size": 16,
-            "realtime_batch_size": 8,
-            "realtime_processing_pause": 0.1,
-            "min_length_of_recording": 0.3,
-            "post_speech_silence_duration": 0.7,
-            "early_transcription_on_silence": 0.35,
-        },
-    },
 }
+
+
+def validate_tuning_profile(profile):
+    if profile not in TUNING_PROFILES:
+        raise ValueError(
+            f"Unbekanntes Abstimmungsprofil '{profile}'. V2 unterstützt nur 'custom'; "
+            "Batch-, Timing- und VAD-Werte bitte explizit setzen."
+        )
+
 
 ACTIVE_RUNTIME_SETTINGS = {
     "log_calendar_timezone",
@@ -8790,6 +8766,8 @@ def enforce_cpu_model_policy(settings):
 
     settings.device = "cpu"
     enforce_supported_engines(settings)
+    validate_tuning_profile(settings.tuning_profile)
+    settings.tuning_description = TUNING_PROFILES[settings.tuning_profile]["description"]
     try:
         kroko_manifest = load_manifest()
     except Exception:
@@ -10400,8 +10378,11 @@ def load_yaml_config_defaults(path):
             raise SystemExit(f"Ungültiger YAML-Wert für '{name}': {exc}") from exc
         if name == "device" and value != "cpu":
             raise SystemExit("In der YAML-Konfiguration ist ausschließlich device: cpu zulässig.")
-        if name == "tuning_profile" and value not in TUNING_PROFILES:
-            raise SystemExit(f"Unbekanntes Abstimmungsprofil in YAML: {value}")
+        if name == "tuning_profile":
+            try:
+                validate_tuning_profile(value)
+            except ValueError as exc:
+                raise SystemExit(f"Ungültiges Abstimmungsprofil in YAML: {exc}") from exc
         destination, transform = YAML_CONFIG_TO_ARG_DEST.get(
             name,
             (name, lambda item: item),
@@ -10433,7 +10414,7 @@ def parse_args(argv=None):
         dest="tuning_profile",
         choices=sorted(TUNING_PROFILES),
         default="custom",
-        help="Benanntes Abstimmungsprofil. Parakeet-Profile ändern Taktung, Stapel und VAD-Zeiten, nicht die Whisper-Beam-Suche.",
+        help="Abstimmungsprofil (custom). Batch-, Timing- und VAD-Werte über einzelne Optionen setzen.",
     )
     parser.add_argument("--model", default="small")
     parser.add_argument(
@@ -10676,6 +10657,7 @@ def parse_args(argv=None):
 
 
 def _tuning_defaults(profile):
+    validate_tuning_profile(profile)
     defaults = dict(BASE_TUNING_DEFAULTS)
     defaults.update(TUNING_PROFILES[profile]["settings"])
     return defaults

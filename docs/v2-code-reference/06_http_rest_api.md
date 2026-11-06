@@ -20,6 +20,13 @@ nicht abgeschaltet.
 Beobachtet: `PATCH /api/config` von `127.0.0.1` ohne konfigurierten
 Admin-Schlüssel → `200`.
 
+Das Webinterface unter `/` zeigt über `applySettings` die finale und die
+Realtime-Engine (`faster_whisper` beziehungsweise `kroko_onnx`), Modellnamen,
+CPU-Device und Compute-Type, beide Beam- und Batch-Größen, Timing-/VAD-Werte
+und Wake-Word-Informationen. Die Anzeige verwendet allgemeine V2-Parameter
+ohne Sonderzweig für entfernte Engines. Bei gemeinsamem Modell bleibt die
+Anzeige „wie final“ erhalten.
+
 ## Routenübersicht
 
 | Methode | Pfad | Auth | Handler (Zeile) |
