@@ -1,273 +1,65 @@
-# Release Notes
+# Voice-STT-Server – Versionshistorie
 
-## Unreleased
+Diese Versionsübersicht beschreibt **VoiceSTT**. Sie ist keine fortgesetzte Release-Chronik des historischen RealtimeSTT-Ursprungsprojekts. Für dessen Entwicklung gelten die ursprünglichen Repository- und Lizenznachweise. Die maßgebliche technische V2-Beschreibung ist das [Handbuch](docs/v2-handbuch/README.md).
 
-### Changed
+## Noch nicht veröffentlicht
 
-- Kroko: a Voice-STT process now operates at most one native Kroko model
-  instance. Final and realtime must name the same Kroko model (shared
-  instance); a configuration with two different Kroko models is rejected at
-  startup and on model switches instead of loading two recognizers. A
-  different Pro model, a new/rotated key against an already initialised Pro
-  context and a Pro model without a key are refused before the native load
-  (restart required where noted); the model status reports `krokoRuntime`.
+### Kroko-Laufzeitgrenzen
 
-## 2.0.0
+Die interne native Kroko-Verwaltung wurde darauf begrenzt, in einer laufenden Serverinstanz nicht mehrere konkurrierende Kroko-Modelle gleichzeitig vorzuhalten. Werden für Final- und Realtime-Erkennung verschiedene native Kroko-Modelle verlangt, wird die Kombination abgelehnt, statt unbemerkt mehrere native Kontexte zu erzeugen. Ein Pro-Modellwechsel kann einen Neustart erfordern; das beobachtbare Laufzeitverhalten wird im Modellstatus ausgewiesen.
 
-### Added
+Diese Arbeiten liegen auf dem Entwicklungszweig und sind noch kein veröffentlichtes Paket.
 
-- V2 has one complete public distribution: `voice-stt-server` embeds the
-  Pro-capable Kroko native runtime. Each platform wheel
-  contains its runtime, so `pip install voice-stt-server` needs no native
-  Kroko build, no `stt-install-kroko`, no Docker and no separate wheel.
-  It exposes the import package `voice_stt_server` and the CLI
-  `voice-stt-server` (with `stt-server`, `stt-server-legacy` and `stt` kept
-  as compatibility aliases). Community models work without a key; Pro models
-  require model-specific entitlement. Installed provenance - never a
-  runtime licence key - establishes native capability. Supported
-  targets are CPython 3.12 on Linux x86-64 and Windows x86-64, which is the
-  matrix the embedded runtime is actually built and qualified for. No sdist
-  is published for this product, because an sdist cannot carry a
-  native runtime and would break that guarantee.
-- Added the GitHub-native release infrastructure (AP-SRV-070 W5-R04): a
-  dispatch-only candidate workflow that builds and qualifies a complete
-  release candidate on a clean GitHub-hosted runner from an exact source
-  commit, and a dispatch-only publish workflow gated by a protected
-  environment that publishes the already-qualified candidate without
-  rebuilding it. The canonical publication order now creates the immutable
-  Git tag *before* the first irreversible public write, publishes the two
-  platform wheels to one PyPI project via Trusted Publishing (no stored token),
-  promotes the exact product image to Docker Hub and then the same OCI
-  manifest to GHCR by digest, moves the `2.0`/`2`/`latest` aliases only
-  after every exact artifact is verified in both registries, and creates the
-  GitHub Release last. Schema 3 binds one product, both platform wheels and
-  one staging digest. Public release approval remains BLOCKED on independent
-  redistribution rights, complete real RC qualification and acceptance.
-  Real Patch-Set-5 Linux/Windows product qualification has passed; see
-  `docs/.archiv/kroko_v2_finalization/2026-10-27_NACHTRAG_FINALE_QUALIFIKATION.md`
-  and `docs/release-process.md`.
+## 2.0.0 – Release in Vorbereitung
 
-### Changed
+### Produktumfang
 
-- The public documentation surface now names only Faster-Whisper and
-  Kroko-ONNX as supported production STT engines. `docs/engines/` was
-  removed; the two retained guides moved to `docs/faster-whisper.md` and
-  `docs/kroko-onnx.md`, and the README was rewritten. The other engine
-  adapters remain in the source tree but are internal/experimental and are
-  no longer advertised as product features.
-- The Kroko Linux builder container is now a declared, source-controlled
-  build authority (base image pinned by digest, declared apt package set,
-  exactly pinned packaging tools), and the production image base is pinned
-  by digest. The OCI `created` timestamp is derived from the commit rather
-  than the wall clock, so rebuilding the same source keeps the same image
-  identity.
+VoiceSTT bündelt in V2 eine Python-Bibliothek mit einem eigenständig betreibbaren FastAPI-Server. Die vorgesehene Distribution heißt `voice-stt-server`; sie stellt das Importpaket `voice_stt_server` sowie den Programmstart `voice-stt-server` bereit. Die unterstützten Zielsysteme der nativen Distributionspakete sind **CPython 3.12 auf Windows x86-64 und Linux x86-64**. Die historische Produktstruktur mit mehreren öffentlich getrennten Kroko-Varianten wird auf **ein** Paket zusammengeführt.
 
-### Added (earlier in this version)
+Im öffentlichen Produktionsumfang sind **Faster-Whisper** und **Kroko-ONNX** vorgesehen. Frühere Engine-Prototypen sind keine durch V2 zugesagten Backends. Eine gültige Kroko-Pro-Berechtigung erlaubt die Nutzung der entsprechend berechtigten Modelle; Community-Modelle kommen ohne Pro-Key aus. Modellgewichte sind nicht im Serverpaket enthalten. Die native Runtimefähigkeit und die Modellnutzungsberechtigung bleiben getrennte Entscheidungen.
 
-- Added the AP-SRV-070 W5 release infrastructure: a canonical repository-root
-  `release.py` entry point with read-only preflight and a true no-publish
-  dry-run over the fixed W6 publication order (PyPI, then GHCR, then Docker
-  Hub, then external artifact verification, then the Git tag, then the
-  GitHub Release), a non-secret resumable release-state contract so a
-  partial W6 run resumes the same product version instead of ever
-  advancing to a new one, a canonical RC manifest format that binds the
-  exact source, package, Kroko, and image identities a release candidate is
-  qualified against, and a public GitHub Actions CI workflow that builds
-  the wheel/sdist, validates them with `twine check`, installs from the
-  built wheel (never editable), and runs the fast unit/guard/release-tool
-  suite on Windows and Ubuntu 24.04 with Python 3.12. `release.py` performs
-  no public write in this release; W6 is the first run that actually
-  publishes anything.
-- Added a reusable Kroko runtime artifact pipeline (`VoiceSTT/kroko/`): the
-  native Kroko build is pinned to an immutable upstream commit, described by a
-  canonical build fingerprint, and cached in a persistent, configurable
-  artifact store with strictly separated free/pro namespaces. A matching
-  verified artifact is reused by default, `--rebuild-kroko` forces a real
-  rebuild with atomic replacement, and a failed rebuild leaves the previous
-  good artifact intact. The fingerprint deliberately excludes the VoiceSTT
-  product version, server, wake-word and documentation sources, so an ordinary
-  change or a release version bump no longer triggers a native recompilation.
-- Added a Kroko model authority (`VoiceSTT/assets/kroko/models.json`) that pins
-  each known model's identity, SHA-256, size, license class and required
-  runtime variant. It ships metadata only: no Kroko model is bundled, because
-  the upstream redistribution grant is not unambiguous. A normal server start
-  no longer downloads models by itself - provisioning is explicit and
-  hash-verifiable, and free/pro mismatches are refused instead of silently
-  tolerated.
-- Added a single automatic product version authority (`VERSION` plus
-  `VoiceSTT/_version.py`): `setup.py`, the importable package, the running
-  server and the Protocol-v2 handshake now all read the same resolved
-  version instead of three independently hardcoded values. Migrated the
-  baseline to `2.0.0`, the already-established v2 server identity - this is
-  a packaging/versioning-authority consolidation, not a new release bump.
-- Added a deterministic, manifest-derived wake-word package-data authority
-  (`wakeword_package_resources.py`) so the public wheel/sdist only ever
-  contains the 25 manifested dual-backend wake words, the shared pipeline
-  assets and the bundled VAD asset - never the historical, unmanifested
-  model variants that also live under `VoiceSTT/assets/wakeword_models/`.
-- Added `build/BUILD.md` as the canonical project-wide reference for Python
-  packaging, Docker builds, Kroko Community/Pro variants, testing, deployment
-  acceptance and rollback.
-- Added a separate `build/vps` area with secret-free snapshots of the active
-  server stack, a Pro-aware release script and reproducible build-area helpers.
-- Added log protocol version 2 with SQLite-first replay/live delivery,
-  committed cursor metadata, channel-/session-aware retention watermarks,
-  retention-gap and cursor-ahead semantics, and explicit event-store
-  availability.
-- Added fully authenticated server-wide Admin history/replay/live access,
-  including bounded history/filter controls in the browser Admin drawer.
-- Added `transcription.discarded(reason=empty_final)` as the terminal event for
-  empty final recorder results without emitting an empty final text frame.
+### Schnittstellen und Transkriptionsabläufe
 
-- Added a session-local OpenWakeWord contract on `/ws/transcribe`, including
-  tri-state enablement, optional tuning overrides, explicit fallbacks, and
-  effective configuration/capabilities in `hello` and `ready`.
-- Added `models.json`-backed OpenWakeWord discovery with logical IDs, default
-  model selection, pipeline-model mappings, local file validation, and support
-  for configuring the manifest or its directory directly.
-- Added protocol, isolation, model-catalog, fallback, and WebSocket tests for
-  independent Hotkey and Wake Word sessions.
-- Added a detailed implementation and operations guide plus a PowerShell live
-  verification script for the session-local Wake Word contract.
-- Added a versioned structured event system with `system`, `audit`,
-  `transcription`, and `performance` channels, transport-independent
-  correlation and centralized redaction.
-- Added calendar-based JSONL files, indexed SQLite history, filtered history
-  endpoints, and a separate authenticated session-/admin-scoped `/ws/logs`
-  connection with replay and live delivery.
-- Added a mandatory documentation archive process for larger change actions,
-  including a dated plan, a later plan-versus-implementation review, and a
-  separate rationale for material deviations.
-- Added a public production Docker/Compose release path
-  (`tools/build_production.py`, `build/kroko-builder.Dockerfile`, the
-  rewritten `Dockerfile`/`docker-compose.yml`): the production image installs
-  one pre-built product wheel containing the W4A-verified Pro-native payload
-  instead of compiling or editable-installing anything itself, runs Ubuntu
-  24.04 as the non-root `voicestt` user with a persistent
-  `/var/lib/voicestt` root, and produces the single public product identity
-  `voice-stt-server`. The public Compose file no longer needs a separate
-  browserclient/nginx container - the FastAPI server serves the browser
-  client from its own installed package - and its Docker health probe now
-  only proves the process/control plane is alive, never that an STT model is
-  loaded, so a container with no model provisioned yet stays healthy instead
-  of restart-looping.
+- Zustandsbehaftetes WebSocket-Protokoll `/ws/v2` für neue Clients, mit eigenständigen Verbindungs-, Session-, Aktivierungs- und Segmentidentitäten.
+- Serverbestätigte Steuerbefehle und Acknowledgements; ein Client soll seine Anzeige nicht allein aus dem Tastendruck oder einem lokalen Countdown ableiten.
+- Sitzungsbezogene Audioverarbeitung, Wake-Word- und Manual-Aktivierung mit definiertem Vorrang, Zeitgrenzen und Wiederverbindungsverhalten.
+- Getrennte Zuständigkeiten für endgültige und laufende Transkription sowie nachvollziehbare Modellverwaltung.
+- Eigene HTTP-Flächen für Status, Administration und Konfiguration; weiterhin vorhandene OpenAI-kompatible HTTP-Route.
+- Legacy-V1-Kompatibilitätsoberfläche bleibt separat dokumentiert. V2 ist kein stillschweigendes Alias des V1-Protokolls.
 
-### Changed
+### Konfiguration, Rechte und Beobachtbarkeit
 
-- The portable Compose launcher now passes an explicit Kroko build variant
-  from `deployment.kroko_variant`; its project default remains `free`.
-- The VPS release path now defaults to Kroko Pro, verifies the Pro key/model
-  prerequisites without exposing secrets, validates the active Pro-16 model
-  and shared recognizer in `/health`, and restores persisted runtime
-  configuration together with the previous image on rollback.
-- The productive VPS profile uses one shared
-  `Kroko-DE-Pro-16-L-Streaming-001.data` recognizer for final and realtime
-  transcription because two licensed recognizers caused a reproducible native
-  exit 139 with the validated runtime.
-- Audit, transcription, and system `*_logging_enabled` switches now control
-  only optional JSONL/stdout mirrors. Performance uses separate source and
-  mirror switches: `performance_logging_enabled` controls generation and
-  `performance_log_mirror_enabled` controls optional mirroring. No mirror
-  switch suppresses an already generated SQLite or `/ws/logs` event.
-- Empty final results now use a transcription-start ticket to claim their
-  generation/segment terminal exactly once, including duplicate-result and
-  disconnect races through the real text worker.
+Die V2-Settingsarchitektur unterscheidet Werte nach Scope, Quelle, Validierung und Wirksamkeitszeitpunkt. Der Server trennt die Berechtigungen für administrative Eingriffe, Logs, die OpenAI-kompatible API und die Kroko-Modellberechtigung. Eine strukturierte Ereigniserfassung und persistente Logging-Infrastruktur ermöglichen die Analyse von Sitzungen und Fehlern, ohne darauf angewiesen zu sein, dass der Client beliebige interne Zustände errät.
 
-- Structured events are now committed to SQLite before cursor assignment,
-  optional JSONL/stdout mirroring, or `/ws/logs` visibility. Live handlers use
-  payload-free commit wakeups and rescan SQLite, so subscriber queue pressure
-  cannot lose committed events.
-- Store outages now suppress uncommitted normal events, expose degraded health
-  and access metadata, close existing log streams with code `1011`, and reject
-  new log streams until a successful committed event recovers the store.
-- Admin-key comparisons for HTTP and log WebSocket access now use
-  `secrets.compare_digest`.
+### Installation und Betrieb
 
-- Corrected the logging rollout so Docker has one generated-data root
-  (`data_root_path: /data`). Audit, performance, transcription, system, audio,
-  SQLite history, and persisted runtime configuration paths are now derived
-  internally and can no longer drift outside the mounted volume.
-- The FastAPI Wake Word admin and session contracts now expose OpenWakeWord
-  only; Porcupine is omitted from the model catalog and browser selector.
-- Ready notifications are session-specific so they cannot leak another
-  session's effective Wake Word profile.
-- Audit, transcription, performance, and system events now share one event
-  envelope and monotonically assigned cursor across HTTP and WebSocket paths.
+Die endgültigen Produktwheels sollen die native Kroko-Laufzeit enthalten. Ein Endnutzer soll dafür keine Buildtoolchain für Kroko installieren müssen. Die Build- und Installationsqualifikation achtet auf CPU-only-Torch in den vorgesehenen Installationspfaden; unter Linux kann ein unvorbereiteter allgemeiner `pip install`-Aufruf andere Torch-Abhängigkeiten auflösen, weshalb die gesondert dokumentierte CPU-Installation maßgeblich ist. Für Container wird ein Linux/AMD64-Image mit überprüfbaren Paket- und OCI-Identitäten vorbereitet.
 
-## 1.0.2 - 2026-05-31
+### Releaseautomation und Qualitätssicherung
 
-### Changed in V 1.0.2
+Der Server verfügt über getrennte GitHub-Workflows für gewöhnliche CI, die nicht veröffentlichende Herstellung eines qualifizierten Release Candidate und den späteren kontrollierten Publish. Kandidaten binden Source-Commit, Tree, Plattformwheels und Image-Digest. Die Veröffentlichung überprüft externe Artefaktidentitäten und erzeugt den öffentlichen GitHub-Releaseeintrag erst nach erfolgreichen vorgelagerten Schritten. Rechte-, Modell- und Release-Gates dürfen weder durch einen grünen Unit-Test noch durch ein erfolgreiches Wheel-Packaging automatisch übersprungen werden.
 
-- Split the `AudioToTextRecorder` implementation behind the existing public
-  facade into focused core modules for lifecycle, recording, realtime
-  transcription, voice activity, wake-word handling, initialization, shutdown,
-  and formatting.
-- Refreshed recorder architecture and compatibility documentation so the public
-  facade, threading boundaries, and regression checks are easier to audit.
-- Normalized package docstrings and comments to use block-style summaries and
-  focused runtime explanations.
+### Neue Dokumentation
 
-### Removed
+Das bisherige Entwicklungs- und Referenzmaterial wird durch ein umfassendes, aus Code und Tests abgeleitetes [V2-Handbuch](docs/v2-handbuch/README.md) ergänzt. Es enthält 104 Kapitel, technische Kataloge, Betriebsanleitungen und Diagramme. Seine unabhängige Dokumentationsabnahme gilt für den geprüften Codecommit `a8993c5c68042d996eab680d84a5b138a214bb5d`; spätere technische Änderungen erfordern einen Abgleich.
 
-- Removed an unused internal console color helper from `audio_recorder.py`.
+### Wichtige Einschränkungen vor Veröffentlichung
 
-## 1.0.1 - 2026-05-20
+- Version 2.0.0 ist derzeit **noch nicht veröffentlicht**. Im Entwicklungsbranch vorhandene Features sind kein öffentliches Releaseversprechen.
+- Die finale Modell-/Native-Qualifikation mit den exakten Paketen und das gebündelte Redistribution-Gate müssen vor dem Publish abgeschlossen werden.
+- Die neue Dokumentation ersetzt nicht den separaten End-to-End-Test von Server und V2-Windows-Client.
+- V2 unterstützt nicht beliebige Python- oder CPU-Architekturen.
 
-### Added
+## 1.0.0 – Vorheriger veröffentlichter Projektstand
 
-- Added a generic streaming transcription session interface so engines can
-  opt in to incremental realtime decoding while existing engines keep the
-  full-buffer fallback behavior.
-- Added `kroko_onnx` transcription engine for Kroko/Banafo `.data` streaming
-  models.
-- Added Kroko realtime preview support that feeds streaming engines only newly
-  recorded audio frames through a persistent session.
-- Added `stt-install-kroko`, exposed through the `kroko-builder` extra, to help
-  build and install Kroko-ONNX for the active Python environment.
-- Added focused Kroko and realtime streaming unit coverage plus a public manual
-  `tests/voicestt_kroko_test.py` smoke script.
-- Added `omnilingual_asr` transcription engine for Meta
-  Omnilingual ASR on Linux/WSL2 with Python 3.11.x, with support for the
-  published CTC and LLM model cards. Native Windows is not supported because
-  `fairseq2n` has no Windows wheel; Python 3.12.x is blocked by upstream
-  `omnilingual-asr` package metadata.
-- Added `docs/licenses.md` with engine and model-family license notes.
+Version 1.0.0 ist der vorangehende öffentliche VoiceSTT-Veröffentlichungsstand. Die unveränderten Tags und GitHub-Releaseartefakte dokumentieren dessen genauen Inhalt. Der V1-Protokollvertrag bleibt für Bestandsclients separat beschrieben und wird durch das V2-WebSocket-Protokoll nicht rückwirkend ersetzt.
 
-### Changed
+Die frühere umfangreiche RealtimeSTT-Release-Historie wird in dieser VoiceSTT-Datei bewusst **nicht** als eigene VoiceSTT-Chronik ausgegeben. Historische und rechtliche Ursprungsangaben bleiben über die Git-Vorgeschichte und die Original-Lizenzdatei nachvollziehbar.
 
-- Kroko Community models with known public filenames can be auto-downloaded
-  into the VoiceSTT cache when `auto_download_model` is enabled.
-- Kroko final transcription remains one-shot. The new streaming path is used
-  for realtime previews only when the realtime engine advertises streaming
-  support.
-- Kroko model cadence is used to choose automatic finalization tail padding.
-- Omnilingual ASR uses `omniASR_CTC_1B_v2` as the default when the
-  recorder is still configured with a Whisper default model name.
-- Omnilingual in-memory audio is passed to the backend as predecoded waveform
-  dictionaries to avoid the upstream package treating raw float arrays as
-  encoded audio bytes.
+## Technische Referenzen
 
-### Notes
-
-- Install/build Kroko-ONNX separately with
-  `pip install "VoiceSTT[kroko-builder,silero-onnx-cpu]"` followed by
-  `stt-install-kroko --build`, or install a compatible Kroko-ONNX wheel in the
-  same Python environment. The `silero-onnx-cpu` extra provides the local VAD
-  backend used by recorder-based Kroko smoke tests and live microphone use.
-- Licensed Pro models require a Pro-capable Kroko wheel and a key supplied at
-  runtime through configuration, CLI, or environment variables. Do not commit
-  keys, Pro models, generated logs, local wheels, or local cache contents.
-- `Pro-16-L` is the recommended realtime model for the fastest partials. Local
-  private validation observed the expected low-latency partial behavior, but
-  exact cadence depends on runtime, provider, hardware, and scheduling.
-- `suppress_native_output=True` redirects Kroko native stdout/stderr during
-  recognizer calls and sets `KROKO_ONNX_SUPPRESS_LICENSE_OUTPUT=1`. Reliable
-  suppression of asynchronous Pro license refresh messages requires a Kroko
-  wheel rebuilt with VoiceSTT's native quiet-output patch; older Kroko wheels
-  may still print background license status text.
-- Omnilingual ASR support is optional and Linux/WSL2 Python 3.11.x-oriented.
-  Native Windows installs are not supported by the upstream dependency stack at
-  this time, and Python 3.12.x cannot resolve the current upstream package.
-- `omniASR_CTC_1B_v2` is the recommended Omnilingual starting point for local
-  realtime tests in this release. Smaller/larger CTC and LLM models are exposed
-  through model-card plumbing but require their own quality and memory checks.
+- [V2-Handbuch](docs/v2-handbuch/README.md)
+- [Release- und Publish-Verfahren](docs/release-process.md)
+- [Paketierung und Native-Build](build/BUILD.md)
+- [Lizenzstatus und Mitlieferpflichten](docs/licenses.md)
+- [V1/V2-Abgrenzung](docs/v2-handbuch/09-anhaenge/09.03-v1-v2-unterschiede.md)

@@ -1,98 +1,29 @@
-# VoiceSTT-Dokumentation
+# Dokumentation zu Voice-STT-Server V2
 
-Dieser Ordner enthält die dauerhaft gültige Projekt- und
-Serverdokumentation. Historische Planungen und Abschlussvergleiche liegen
-getrennt unter [`.archiv`](.archiv/README.md) und ersetzen die aktuelle
-Referenz nicht.
+Das **[vollständige V2-Handbuch](v2-handbuch/README.md)** ist die maßgebliche, unabhängige geprüfte Dokumentation des aktuellen Serverprojekts. Seine 104 Kapitel decken Systemverständnis, Funktionsweise, Einstellungen, Schnittstellen, Sicherheit, Betrieb, Entwicklung und technische Referenzkataloge ab.
 
-## Aktueller Funktionsstand
+## Für Anwender und Administratoren
 
-Die zuletzt abgeschlossenen größeren Erweiterungen sind vollständig in
-die aktuelle Dokumentation eingeordnet:
+- [Systemüberblick](v2-handbuch/01-grundlagen/01.01-produktueberblick.md)
+- [Installation, Betrieb und Readiness](v2-handbuch/06-betrieb/06.02-installationskonzept.md)
+- [Konfigurationsquellen und Settings](v2-handbuch/03-konfiguration/03.01-konfigurationsarchitektur.md)
+- [Berechtigungen, Admin-Zugriff und Kroko](v2-handbuch/05-administration/05.01-sicherheitsarchitektur.md)
+- [Fehlerdiagnose](v2-handbuch/06-betrieb/06.12-fehlerdiagnose.md)
 
-- [Einheitliche serverseitige Triggerarchitektur](einheitliche-triggerarchitektur.md):
-  eine Session mit einem kontinuierlichen Stream, serverautoritativer
-  `ActivationController`, Recorder-Gate, Protokoll-V2-Wire (§12) und der
-  Legacy-V1-Vertrag `trigger`/`trigger_ack`,
-  Kollisionssemantik von Manual und Wake Word, Command-Phasenmatrix mit
-  sessionweitem `commandId`-Replay, nicht kumulatives `refresh`,
-  Daueraufnahme-Watchdog, `closing_input`-Recovery, immutable Segmentkontexte,
-  terminales Segmentledger und sessionsweit geordneter Background-Drain.
-- [Wake Words](wake-words.md) und
-  [Triggerquellen, Wake Words & Settings (V2)](client-development/09-betriebsmodi-und-serverkonfiguration.md):
-  sicherer Sessionvertrag, kanonischer Wake-Word-Katalog, OpenWakeWord-Modelle,
-  Fallbacks, Isolation und Admin-API. Die ursprüngliche Einführungsdokumentation
-  ist archiviert unter
-  [`.archiv/session-wakeword`](.archiv/session-wakeword/).
-- [Strukturiertes Logging](structured-logging.md): vier Channels, gemeinsamer
-  Event-Envelope, kanonischer SQLite-first Commit, optionale kalenderbasierte
-  JSONL-Spiegel, sessionbezogener Zugriff und global authentifizierter
-  Admin-History-/Livezugriff über `/ws/logs`.
+## Für Client- und Serverentwickler
 
-## Einstiegspunkte
+- [WebSocket-Protokoll V2](v2-handbuch/04-schnittstellen/04.03-websocket-v2.md)
+- [HTTP-/API-Endpunktkatalog](v2-handbuch/08-referenzen/08.04-api-endpunkt-katalog.md)
+- [Commands, Events und Fehler](v2-handbuch/04-schnittstellen/04.04-commands-acknowledgements.md)
+- [Entwicklungs- und Testverfahren](v2-handbuch/07-entwicklung/07.01-entwicklungsumgebung.md)
+- [Quellcodebasierte ergänzende V2-Referenz](v2-code-reference/README.md)
 
-- [V2-Branch-Hierarchie und historische AP-SRV-070-Integrationsabweichung](branch-v2.md): chronologische Git-/PR-Nachweise, Mermaid-Grafiken, Beschluss zum unveränderten historischen Verlauf und Integrationsregeln für Kroko/Cleanup.
+## Release- und Lizenzunterlagen
 
-- [Zentraler Build und Deployment](../build/BUILD.md)
-- [Releaseprozess und Operator-Einrichtung](release-process.md)
-- [Marcos VPS-Deployment](../build/vps/README.md)
-- [Quick Start](quick-start.md)
-- [Installation](installation.md)
-- [Konfiguration](configuration.md)
-- [FastAPI-Server](fastapi-server.md)
-- [OpenAI-kompatible HTTP-API: eigenständiges Router-Modul](openai-http-api.md)
-- [Zentrale Server-Authentifizierung: SecurityService und vier Gates](server-authentication.md)
-- [Windows-/CPU-Deployment](windows-cpu-deployment.md)
-- [Transkriptions-Engines](transcription-engines.md)
-- [Faster-Whisper](faster-whisper.md)
-- [Kroko-ONNX](kroko-onnx.md)
-- [STT-Modellverwaltung](stt-model-management.md)
-- [Wake Words](wake-words.md)
-- [Testing](testing.md)
-- [Troubleshooting](troubleshooting.md)
-- [Modulübersicht](module-map.md)
+Die [Release-Anleitung](release-process.md), das [Build-Runbook](../build/BUILD.md) und die [Lizenz- und Attributionserläuterung](licenses.md) bleiben eigenständige, releasekritische Dokumente. Ein erfolgreich geprüfter Code- oder Dokumentationsstand ist nicht automatisch ein veröffentlichter Build. Die Native- und Redistributonsgates werden separat kontrolliert.
 
-## Produktflächen und Engines
+## Historische und ergänzende Unterlagen
 
-Die fruehere Untersuchung der gemeinsamen Kroko-Distribution steht im
-[Untersuchungsstand vom 22.10.2026](2026-10-22_kroko-unified-runtime-v2.md)
-beschrieben (historisch; dortige Addon-/Supervisor-Entwürfe sind überholt,
-maßgeblich ist `build/BUILD.md`).
+Die [frühere Eigen-Dokumentation](.archiv/stand_vor_v2_handbuch_2026-11-14/README.md) wurde beim Wechsel zum Handbuch in das Entwicklungsarchiv verlagert. Alte dokumentarische Übernahmen aus RealtimeSTT wurden **nicht** als neue aktive oder duplizierte Archivtexte übernommen; ihre Git-Vorgeschichte bleibt erhalten. Wo bisherige Links benötigt werden, führen sie jetzt zu aktuellen Themenkapiteln.
 
-V2 besitzt eine oeffentliche Produktdistribution: `voice-stt-server` mit
-eingebetteter Pro-faehiger Kroko-Runtime, Importpaket `voice_stt_server` und
-CLI `voice-stt-server`. Community-Modelle funktionieren ohne Key; Pro-Modelle
-brauchen eine gueltige modellbezogene Berechtigung. Nativefaehigkeit stammt
-aus installierter Provenienz, niemals aus einem Runtime-Key. Oeffentliche
-Releasefreigabe und unabhaengige Abnahme bleiben getrennte Gates; siehe
-[Releaseprozess](release-process.md) und [Lizenzgate](licenses.md#unified-v2-release-gate).
-
-Als unterstützte Produktions-STT-Engines sind ausschließlich **Faster-Whisper**
-und **Kroko-ONNX** dokumentiert und qualifiziert. Weitere Adapter im Quellbaum
-sind intern/experimentell und keine zugesagte Produktfläche; die Einordnung
-steht in [transcription-engines.md](transcription-engines.md).
-
-## Cliententwicklung
-
-Der kanonische Vertrag für neue Clients (Protokoll V2 auf `/ws/v2`) beginnt
-unter [Cliententwicklung](client-development/README.md). Er beschreibt
-Handshake, Identitäten, Commands und Acks, Events und Sequenzierung,
-Snapshot/Resync, Reconnect, das Audioformat, Wake Words, Settings,
-HTTP-APIs, Authentifizierung und Fehlergrenzen.
-
-Das Legacy-V1-Protokoll `/ws/transcribe` (Browserclient, bestehende Clients)
-ist getrennt unter
-[client-development/legacy-v1](client-development/legacy-v1/README.md)
-dokumentiert und nicht für neue Clients bestimmt.
-
-Prüfberichte zum V2-Vertrag:
-[Audit](audits/v2-client-contract/AUDIT_SUMMARY.md) und
-[unabhängige Prüfung](audits/v2-client-contract-review/INDEPENDENT_REVIEW.md).
-
-## Archiv größerer Änderungen
-
-Vor jeder größeren Änderung ist die verbindliche Regel unter
-[`.archiv/README.md`](.archiv/README.md) zu beachten. Dort werden pro Aktion
-die datierte Gesamtplanung, der spätere Soll-/Ist-Vergleich und gegebenenfalls
-eine getrennte Abweichungsbegründung aufbewahrt. Die Aktion wird außerdem im
-zentralen Statusregister geführt.
+Die [Legacy-V1-/Client-Verträge](client-development/README.md), die [bisherigen Codebelege](v2-code-reference/README.md), [PR-/Entwicklungsakten](.archiv/README.md) und [Audits](audits/) bleiben aus Gründen der technischen Rückverfolgbarkeit zugänglich. Die historisch nachgewiesene Projektherkunft und alle Original-Lizenzhinweise bleiben erhalten.

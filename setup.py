@@ -345,8 +345,7 @@ if distribution_variant is None:
 setuptools.setup(
     name=distribution_name,
     version=current_version,
-    author="Kolja Beigel",
-    author_email="kolja.beigel@web.de",
+    author="Marco Sudau",
     description=(
         "VoiceSTT speech-to-text server with an embedded Kroko %s runtime"
         % distribution_variant

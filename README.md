@@ -19,6 +19,9 @@ if __name__ == "__main__":
 
 ---
 
+
+**V2-Handbuch:** [vollständige Dokumentation mit 104 Kapiteln](docs/v2-handbuch/README.md). Technische Betriebs- und Lizenzgates: [Releaseprozess](docs/release-process.md), [Lizenzübersicht](docs/licenses.md).
+
 ## Status
 
 Version `2.0.0`. The server architecture (protocol v2, activation lifecycle,
