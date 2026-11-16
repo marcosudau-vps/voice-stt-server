@@ -140,9 +140,9 @@ identischer Modulidentität, `--help` über alte CLI-Pfade, VPS-Wrapper).
 
 ## Primäre Quellen
 
-- [`pytest.ini`](../../pytest.ini), [`requirements-dev.txt`](../../requirements-dev.txt)
-- [`api_fastapi_server/server.py`](../../api_fastapi_server/server.py) – `create_app`-Parameter
-- [`VoiceSTT/transcription_engines/base.py`](../../VoiceSTT/transcription_engines/base.py), [`factory.py`](../../VoiceSTT/transcription_engines/factory.py)
-- [`api_fastapi_server/protocol_v2/connection.py`](../../api_fastapi_server/protocol_v2/connection.py)
-- [`tests/unit/conftest.py`](../../tests/unit/conftest.py)
-- [`release_tooling/__init__.py`](../../release_tooling/__init__.py), [`tools/release_candidate.py`](../../tools/release_candidate.py) (Shim-Beispiel)
+- [`pytest.ini`](../../../../pytest.ini), [`requirements-dev.txt`](../../../../requirements-dev.txt)
+- [`api_fastapi_server/server.py`](../../../../api_fastapi_server/server.py) – `create_app`-Parameter
+- [`VoiceSTT/transcription_engines/base.py`](../../../../VoiceSTT/transcription_engines/base.py), [`factory.py`](../../../../VoiceSTT/transcription_engines/factory.py)
+- [`api_fastapi_server/protocol_v2/connection.py`](../../../../api_fastapi_server/protocol_v2/connection.py)
+- [`tests/unit/conftest.py`](../../../../tests/unit/conftest.py)
+- [`release_tooling/__init__.py`](../../../../release_tooling/__init__.py), [`tools/release_candidate.py`](../../../../tools/release_candidate.py) (Shim-Beispiel)

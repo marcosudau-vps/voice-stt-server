@@ -1,6 +1,6 @@
 # Voice-STT-Server V2 – Handbuch (104 Unterkapitel, intern abgenommen)
 
-> Handbuchstand: alle 104 Kapitel intern recherchiert, unabhängig geprüft (PASS) und integriert (Commit `a8993c5c68042d996eab680d84a5b138a214bb5d`); externe ROOT-Endfreigabe ausstehend. Navigation mit allen 104 Kapiteln – Links unverändert.
+> Handbuchstand: alle 104 Kapitel intern recherchiert, unabhängig geprüft (PASS) und integriert (Commit `a8993c5c68042d996eab680d84a5b138a214bb5d`); externe ROOT-Endabnahme am 12.11.2026 erfolgreich (ROOT_PASS). Navigation mit allen 104 Kapiteln – Links unverändert.
 
 ## 01 – Einstieg und Systemverständnis
 

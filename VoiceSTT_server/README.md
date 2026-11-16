@@ -46,12 +46,12 @@ admin key; persisted runtime JSON never contains secrets.
 
 A `/ws/v2` session selects its trigger sources and wake words (canonical ids
 from `GET /api/v2/wake-words`) in the client `hello`; see the
-[v2 client documentation](../docs/client-development/README.md). On the legacy
+[v2 client documentation](../docs/.archiv/stand_vor_handbuch_2026-11-16/client-development/README.md). On the legacy
 v1 endpoint `/ws/transcribe`, each connection can inherit, disable, or
 explicitly enable OpenWakeWord through query parameters, and `hello.logAccess`
 supplies a session-scoped log token
-([legacy v1 docs](../docs/client-development/legacy-v1/README.md)). See also the
-[FastAPI server guide](../docs/fastapi-server.md) and the
-[structured logging contract](../docs/structured-logging.md).
+([legacy v1 docs](../docs/.archiv/stand_vor_handbuch_2026-11-16/client-development/legacy-v1/README.md)). See also the
+[FastAPI server guide](../docs/v2-handbuch/04-schnittstellen/04.01-schnittstellenuebersicht.md) and the
+[structured logging contract](../docs/v2-handbuch/06-betrieb/06.09-logging.md).
 
-See [the complete Windows CPU deployment guide](../docs/windows-cpu-deployment.md).
+See [the complete Windows CPU deployment guide](../docs/v2-handbuch/06-betrieb/06.03-windows-installation.md).

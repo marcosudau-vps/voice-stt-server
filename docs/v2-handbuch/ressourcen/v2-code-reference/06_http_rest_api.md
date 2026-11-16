@@ -190,7 +190,7 @@ curl http://127.0.0.1:8010/v1/audio/transcriptions \
 
 ## Primäre Quellen
 
-- [`api_fastapi_server/server.py`](../../api_fastapi_server/server.py) – `create_app` (8817–10295)
-- [`api_fastapi_server/openai_routes.py`](../../api_fastapi_server/openai_routes.py), [`VoiceSTT_server/openai_compat.py`](../../VoiceSTT_server/openai_compat.py)
-- [`api_fastapi_server/security/admin.py`](../../api_fastapi_server/security/admin.py), [`api_fastapi_server/security/openai.py`](../../api_fastapi_server/security/openai.py), [`api_fastapi_server/security/logs.py`](../../api_fastapi_server/security/logs.py)
-- Tests: [`tests/unit/test_fastapi_server_protocol.py`](../../tests/unit/test_fastapi_server_protocol.py), [`tests/unit/test_openai_compatible_endpoint.py`](../../tests/unit/test_openai_compatible_endpoint.py), [`tests/unit/test_server_info.py`](../../tests/unit/test_server_info.py), [`tests/unit/test_server_security_modularization.py`](../../tests/unit/test_server_security_modularization.py), [`tests/unit/test_wakeword_catalog_api.py`](../../tests/unit/test_wakeword_catalog_api.py), [`tests/unit/test_kroko_license_lifecycle.py`](../../tests/unit/test_kroko_license_lifecycle.py)
+- [`api_fastapi_server/server.py`](../../../../api_fastapi_server/server.py) – `create_app` (8817–10295)
+- [`api_fastapi_server/openai_routes.py`](../../../../api_fastapi_server/openai_routes.py), [`VoiceSTT_server/openai_compat.py`](../../../../VoiceSTT_server/openai_compat.py)
+- [`api_fastapi_server/security/admin.py`](../../../../api_fastapi_server/security/admin.py), [`api_fastapi_server/security/openai.py`](../../../../api_fastapi_server/security/openai.py), [`api_fastapi_server/security/logs.py`](../../../../api_fastapi_server/security/logs.py)
+- Tests: [`tests/unit/test_fastapi_server_protocol.py`](../../../../tests/unit/test_fastapi_server_protocol.py), [`tests/unit/test_openai_compatible_endpoint.py`](../../../../tests/unit/test_openai_compatible_endpoint.py), [`tests/unit/test_server_info.py`](../../../../tests/unit/test_server_info.py), [`tests/unit/test_server_security_modularization.py`](../../../../tests/unit/test_server_security_modularization.py), [`tests/unit/test_wakeword_catalog_api.py`](../../../../tests/unit/test_wakeword_catalog_api.py), [`tests/unit/test_kroko_license_lifecycle.py`](../../../../tests/unit/test_kroko_license_lifecycle.py)

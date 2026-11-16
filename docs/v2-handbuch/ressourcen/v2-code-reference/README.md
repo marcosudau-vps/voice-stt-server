@@ -66,6 +66,6 @@ flowchart LR
 
 ## Primäre Quellen
 
-- [`api_fastapi_server/server.py`](../../api_fastapi_server/server.py) – `create_app`, `ServerSettings`, `parse_args`, `main`
-- [`setup.py`](../../setup.py) – Pakete, Extras, `console_scripts`
-- [`tests/unit/test_v2_code_reference.py`](../../tests/unit/test_v2_code_reference.py) – mechanische Prüfung dieser Referenz
+- [`api_fastapi_server/server.py`](../../../../api_fastapi_server/server.py) – `create_app`, `ServerSettings`, `parse_args`, `main`
+- [`setup.py`](../../../../setup.py) – Pakete, Extras, `console_scripts`
+- [`tests/unit/test_v2_code_reference.py`](../../../../tests/unit/test_v2_code_reference.py) – mechanische Prüfung dieser Referenz

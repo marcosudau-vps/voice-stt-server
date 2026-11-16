@@ -142,7 +142,7 @@ Gesamt: 86 Parameter, kein `**kwargs`.
 
 ## Primäre Quellen
 
-- [`api_fastapi_server/server.py`](../../api_fastapi_server/server.py) – Erzeugungsstellen der V1-Nachrichten, `segment_text_fields`
-- [`VoiceSTT/audio_recorder.py`](../../VoiceSTT/audio_recorder.py) – `AudioToTextRecorder.__init__` (Zeile 103)
-- [`VoiceSTT/core/recorder_config.py`](../../VoiceSTT/core/recorder_config.py), [`VoiceSTT/core/initialization.py`](../../VoiceSTT/core/initialization.py)
-- Tests: [`tests/unit/test_audio_recorder_public_api.py`](../../tests/unit/test_audio_recorder_public_api.py), [`tests/unit/test_server_trigger_contract.py`](../../tests/unit/test_server_trigger_contract.py), [`tests/unit/test_fastapi_server_protocol.py`](../../tests/unit/test_fastapi_server_protocol.py)
+- [`api_fastapi_server/server.py`](../../../../api_fastapi_server/server.py) – Erzeugungsstellen der V1-Nachrichten, `segment_text_fields`
+- [`VoiceSTT/audio_recorder.py`](../../../../VoiceSTT/audio_recorder.py) – `AudioToTextRecorder.__init__` (Zeile 103)
+- [`VoiceSTT/core/recorder_config.py`](../../../../VoiceSTT/core/recorder_config.py), [`VoiceSTT/core/initialization.py`](../../../../VoiceSTT/core/initialization.py)
+- Tests: [`tests/unit/test_audio_recorder_public_api.py`](../../../../tests/unit/test_audio_recorder_public_api.py), [`tests/unit/test_server_trigger_contract.py`](../../../../tests/unit/test_server_trigger_contract.py), [`tests/unit/test_fastapi_server_protocol.py`](../../../../tests/unit/test_fastapi_server_protocol.py)

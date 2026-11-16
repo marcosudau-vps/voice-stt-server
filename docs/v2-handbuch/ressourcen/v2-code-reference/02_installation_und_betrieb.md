@@ -263,8 +263,8 @@ Servers ist im Code nicht nachweisbar.
 
 ## Primäre Quellen
 
-- [`setup.py`](../../setup.py) – `resolve_distribution_variant`, `extras_require`, `entry_points`
-- [`Dockerfile`](../../Dockerfile), [`docker-compose.yml`](../../docker-compose.yml), [`engineering/tools/compose.py`](../../engineering/tools/compose.py)
-- [`api_fastapi_server/server.py`](../../api_fastapi_server/server.py) – `parse_args`, `ServerSettings.__post_init__`, `main`
-- [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml)
-- Tests: [`tests/unit/test_production_docker_contract.py`](../../tests/unit/test_production_docker_contract.py), [`tests/unit/test_project_config.py`](../../tests/unit/test_project_config.py), [`tests/packaging/test_identity_installation.py`](../../tests/packaging/test_identity_installation.py), [`tests/unit/test_engineering_path_contract.py`](../../tests/unit/test_engineering_path_contract.py)
+- [`setup.py`](../../../../setup.py) – `resolve_distribution_variant`, `extras_require`, `entry_points`
+- [`Dockerfile`](../../../../Dockerfile), [`docker-compose.yml`](../../../../docker-compose.yml), [`engineering/tools/compose.py`](../../../../engineering/tools/compose.py)
+- [`api_fastapi_server/server.py`](../../../../api_fastapi_server/server.py) – `parse_args`, `ServerSettings.__post_init__`, `main`
+- [`.github/workflows/ci.yml`](../../../../.github/workflows/ci.yml)
+- Tests: [`tests/unit/test_production_docker_contract.py`](../../../../tests/unit/test_production_docker_contract.py), [`tests/unit/test_project_config.py`](../../../../tests/unit/test_project_config.py), [`tests/packaging/test_identity_installation.py`](../../../../tests/packaging/test_identity_installation.py), [`tests/unit/test_engineering_path_contract.py`](../../../../tests/unit/test_engineering_path_contract.py)

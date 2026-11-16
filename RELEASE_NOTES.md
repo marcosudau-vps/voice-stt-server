@@ -1,6 +1,6 @@
 # Voice-STT-Server – Versionshistorie
 
-Diese Versionsübersicht beschreibt **VoiceSTT**. Sie ist keine fortgesetzte Release-Chronik des historischen RealtimeSTT-Ursprungsprojekts. Für dessen Entwicklung gelten die ursprünglichen Repository- und Lizenznachweise. Die maßgebliche technische V2-Beschreibung ist das [Handbuch](docs/v2-handbuch/README.md).
+Diese Versionsübersicht beschreibt die veröffentlichten und geplanten VoiceSTT-Produktstände. Die maßgebliche technische V2-Beschreibung ist das [Handbuch](docs/v2-handbuch/README.md).
 
 ## Noch nicht veröffentlicht
 
@@ -54,12 +54,12 @@ Das bisherige Entwicklungs- und Referenzmaterial wird durch ein umfassendes, aus
 
 Version 1.0.0 ist der vorangehende öffentliche VoiceSTT-Veröffentlichungsstand. Die unveränderten Tags und GitHub-Releaseartefakte dokumentieren dessen genauen Inhalt. Der V1-Protokollvertrag bleibt für Bestandsclients separat beschrieben und wird durch das V2-WebSocket-Protokoll nicht rückwirkend ersetzt.
 
-Die frühere umfangreiche RealtimeSTT-Release-Historie wird in dieser VoiceSTT-Datei bewusst **nicht** als eigene VoiceSTT-Chronik ausgegeben. Historische und rechtliche Ursprungsangaben bleiben über die Git-Vorgeschichte und die Original-Lizenzdatei nachvollziehbar.
+Historische Veröffentlichungen sind über die unveränderten Git-Tags nachvollziehbar. Verbindliche Copyright- und Lizenztexte stehen in der Original-Lizenzdatei.
 
 ## Technische Referenzen
 
 - [V2-Handbuch](docs/v2-handbuch/README.md)
-- [Release- und Publish-Verfahren](docs/release-process.md)
+- [Release- und Publish-Verfahren](docs/v2-handbuch/ressourcen/release-process.md)
 - [Paketierung und Native-Build](build/BUILD.md)
-- [Lizenzstatus und Mitlieferpflichten](docs/licenses.md)
+- [Lizenzstatus und Mitlieferpflichten](docs/v2-handbuch/ressourcen/licenses.md)
 - [V1/V2-Abgrenzung](docs/v2-handbuch/09-anhaenge/09.03-v1-v2-unterschiede.md)

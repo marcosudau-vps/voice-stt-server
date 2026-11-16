@@ -19,7 +19,7 @@
 #
 # Every job runs inside the protected `release` Environment, so a normal push
 # or a pull request - including one from a fork - can never reach a release
-# secret or a package-write permission. See docs/release-process.md for the
+# secret or a package-write permission. See docs/v2-handbuch/ressourcen/release-process.md for the
 # exact operator setup.
 name: Release publish
 

@@ -3,7 +3,7 @@
 V2 has one public product, `voice-stt-server`, with the qualified Pro-capable
 Kroko native runtime embedded. The historical `voicestt` developer distribution
 is not a public V2 release surface. Native build procedures and authoritative
-inputs remain in [build/BUILD.md](../build/BUILD.md).
+inputs remain in [build/BUILD.md](../../../build/BUILD.md).
 
 ## Release surfaces and platform matrix
 
@@ -145,6 +145,6 @@ This remains a reproducibility limitation; a changed toolchain changes the finge
 instead of reusing mismatched native bytes. Final publication consumes only the
 qualified bytes and OCI manifest.
 
-See [testing](testing.md), [Kroko](kroko-onnx.md),
-[model management](stt-model-management.md) and
-[private VPS deployment](../build/vps/README.md).
+See [testing](../../.archiv/stand_vor_handbuch_2026-11-16/testing.md), [Kroko](../../.archiv/stand_vor_handbuch_2026-11-16/kroko-onnx.md),
+[model management](../../.archiv/stand_vor_handbuch_2026-11-16/stt-model-management.md) and
+[private VPS deployment](../../../build/vps/README.md).

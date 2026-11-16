@@ -118,8 +118,8 @@ Belege: `VoiceSTTService.packet_to_server_samples` (`server.py:7677`),
 
 ## Primäre Quellen
 
-- [`api_fastapi_server/server.py`](../../api_fastapi_server/server.py) – `create_app` (8817), Klassen siehe Tabelle
-- [`VoiceSTT_server/server.py`](../../VoiceSTT_server/server.py) – Re-Export des Einstiegs
-- [`voice_stt_server/__init__.py`](../../voice_stt_server/__init__.py) – öffentliche Importfläche
-- [`setup.py`](../../setup.py) – Paketliste
-- Tests: [`tests/unit/test_fastapi_server_multi_user.py`](../../tests/unit/test_fastapi_server_multi_user.py), [`tests/unit/test_server_info.py`](../../tests/unit/test_server_info.py), [`tests/compatibility/test_client_v2_identity.py`](../../tests/compatibility/test_client_v2_identity.py)
+- [`api_fastapi_server/server.py`](../../../../api_fastapi_server/server.py) – `create_app` (8817), Klassen siehe Tabelle
+- [`VoiceSTT_server/server.py`](../../../../VoiceSTT_server/server.py) – Re-Export des Einstiegs
+- [`voice_stt_server/__init__.py`](../../../../voice_stt_server/__init__.py) – öffentliche Importfläche
+- [`setup.py`](../../../../setup.py) – Paketliste
+- Tests: [`tests/unit/test_fastapi_server_multi_user.py`](../../../../tests/unit/test_fastapi_server_multi_user.py), [`tests/unit/test_server_info.py`](../../../../tests/unit/test_server_info.py), [`tests/compatibility/test_client_v2_identity.py`](../../../../tests/compatibility/test_client_v2_identity.py)

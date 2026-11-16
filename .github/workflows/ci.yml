@@ -1,6 +1,6 @@
 # AP-SRV-070 W5: public CI for VoiceSTT.
 #
-# Scope (see build/BUILD.md and docs/release-process.md): ordinary
+# Scope (see build/BUILD.md and docs/v2-handbuch/ressourcen/release-process.md): ordinary
 # correctness/packaging CI for an open-source repository. It builds the
 # development wheel, proves the wheel installs and runs standalone (never from
 # an editable/source checkout), and runs the fast unit/guard/release-tool suite

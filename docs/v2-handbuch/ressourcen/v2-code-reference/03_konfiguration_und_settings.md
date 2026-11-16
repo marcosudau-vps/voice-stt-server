@@ -217,8 +217,8 @@ Persistenz: Overlay und Revision landen in derselben `runtime.json` unter
 
 ## Primäre Quellen
 
-- [`api_fastapi_server/server.py`](../../api_fastapi_server/server.py) – `ServerSettings` (428), Mengenkonstanten (202–426), `coerce_setting_value` (1243), `load_yaml_config_defaults` (10334), `parse_args` (10392), `settings_from_args` (10681), `update_settings` (7850)
-- [`api_fastapi_server/settings_control.py`](../../api_fastapi_server/settings_control.py) – `builtin_definitions`, `SettingsRegistry.schema_payload`, `ServerSettingsState`
-- [`VoiceSTT_server/operations.py`](../../VoiceSTT_server/operations.py) – `RuntimeConfigStore`
-- [`config.yaml`](../../config.yaml)
-- Tests: [`tests/unit/test_settings_control_plane.py`](../../tests/unit/test_settings_control_plane.py), [`tests/unit/test_settings_runtime_persistence.py`](../../tests/unit/test_settings_runtime_persistence.py), [`tests/unit/test_protocol_v2_settings.py`](../../tests/unit/test_protocol_v2_settings.py), [`tests/unit/test_project_config.py`](../../tests/unit/test_project_config.py), [`tests/unit/test_server_operations.py`](../../tests/unit/test_server_operations.py)
+- [`api_fastapi_server/server.py`](../../../../api_fastapi_server/server.py) – `ServerSettings` (428), Mengenkonstanten (202–426), `coerce_setting_value` (1243), `load_yaml_config_defaults` (10334), `parse_args` (10392), `settings_from_args` (10681), `update_settings` (7850)
+- [`api_fastapi_server/settings_control.py`](../../../../api_fastapi_server/settings_control.py) – `builtin_definitions`, `SettingsRegistry.schema_payload`, `ServerSettingsState`
+- [`VoiceSTT_server/operations.py`](../../../../VoiceSTT_server/operations.py) – `RuntimeConfigStore`
+- [`config.yaml`](../../../../config.yaml)
+- Tests: [`tests/unit/test_settings_control_plane.py`](../../../../tests/unit/test_settings_control_plane.py), [`tests/unit/test_settings_runtime_persistence.py`](../../../../tests/unit/test_settings_runtime_persistence.py), [`tests/unit/test_protocol_v2_settings.py`](../../../../tests/unit/test_protocol_v2_settings.py), [`tests/unit/test_project_config.py`](../../../../tests/unit/test_project_config.py), [`tests/unit/test_server_operations.py`](../../../../tests/unit/test_server_operations.py)

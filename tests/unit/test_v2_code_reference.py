@@ -1,6 +1,6 @@
 """Mechanical guards for the code-derived V2 reference (AP-DOC-V2-100).
 
-``docs/v2-code-reference/`` documents the implementation from source code.
+``docs/v2-handbuch/ressourcen/v2-code-reference/`` documents the implementation from source code.
 These tests keep the most drift-prone facts honest without judging prose:
 
 * every page exists, is substantial and ends with its primary sources;
@@ -21,7 +21,7 @@ import unittest
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-REFERENCE = REPO_ROOT / "docs" / "v2-code-reference"
+REFERENCE = REPO_ROOT / "docs" / "v2-handbuch" / "ressourcen" / "v2-code-reference"
 DOCS = REPO_ROOT / "docs"
 
 PAGES = (

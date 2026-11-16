@@ -142,7 +142,7 @@ und nur an den V2-Client gesendet. Der `EventProjector`
 
 ## Primäre Quellen
 
-- [`VoiceSTT_server/event_logging.py`](../../VoiceSTT_server/event_logging.py) – `sanitize_event_value` (116), `CalendarJsonlSink` (314), `SQLiteEventStore` (438), `StructuredEventHub` (697), `ChannelLogManager` (1322)
-- [`VoiceSTT_server/operations.py`](../../VoiceSTT_server/operations.py) – `RuntimeConfigStore`
-- [`api_fastapi_server/server.py`](../../api_fastapi_server/server.py) – `ServerSettings.__post_init__`, `_log_events_response`, `websocket_logs`
-- Tests: [`tests/unit/test_fastapi_server_multi_user.py`](../../tests/unit/test_fastapi_server_multi_user.py), [`tests/unit/test_protocol_v2_e2e.py`](../../tests/unit/test_protocol_v2_e2e.py), [`tests/unit/test_settings_runtime_persistence.py`](../../tests/unit/test_settings_runtime_persistence.py), [`tests/unit/test_server_operations.py`](../../tests/unit/test_server_operations.py), [`tests/unit/test_server_segment_ledger.py`](../../tests/unit/test_server_segment_ledger.py), [`tests/unit/test_protocol_v2_state_version.py`](../../tests/unit/test_protocol_v2_state_version.py)
+- [`VoiceSTT_server/event_logging.py`](../../../../VoiceSTT_server/event_logging.py) – `sanitize_event_value` (116), `CalendarJsonlSink` (314), `SQLiteEventStore` (438), `StructuredEventHub` (697), `ChannelLogManager` (1322)
+- [`VoiceSTT_server/operations.py`](../../../../VoiceSTT_server/operations.py) – `RuntimeConfigStore`
+- [`api_fastapi_server/server.py`](../../../../api_fastapi_server/server.py) – `ServerSettings.__post_init__`, `_log_events_response`, `websocket_logs`
+- Tests: [`tests/unit/test_fastapi_server_multi_user.py`](../../../../tests/unit/test_fastapi_server_multi_user.py), [`tests/unit/test_protocol_v2_e2e.py`](../../../../tests/unit/test_protocol_v2_e2e.py), [`tests/unit/test_settings_runtime_persistence.py`](../../../../tests/unit/test_settings_runtime_persistence.py), [`tests/unit/test_server_operations.py`](../../../../tests/unit/test_server_operations.py), [`tests/unit/test_server_segment_ledger.py`](../../../../tests/unit/test_server_segment_ledger.py), [`tests/unit/test_protocol_v2_state_version.py`](../../../../tests/unit/test_protocol_v2_state_version.py)

@@ -20,7 +20,7 @@ if __name__ == "__main__":
 ---
 
 
-**V2-Handbuch:** [vollständige Dokumentation mit 104 Kapiteln](docs/v2-handbuch/README.md). Technische Betriebs- und Lizenzgates: [Releaseprozess](docs/release-process.md), [Lizenzübersicht](docs/licenses.md).
+**V2-Handbuch:** [vollständige Dokumentation mit 104 Kapiteln](docs/v2-handbuch/README.md). Technische Betriebs- und Lizenzgates: [Releaseprozess](docs/v2-handbuch/ressourcen/release-process.md), [Lizenzübersicht](docs/v2-handbuch/ressourcen/licenses.md).
 
 ## Status
 
@@ -55,7 +55,7 @@ binds the tested artifacts to their source commit. Technical feature review is
 separate from public release approval, which remains **BLOCKED**: verified
 redistribution rights, a complete two-platform RC with verified OCI staging
 manifest identity, and independent acceptance remain outstanding. See
-[license gates](docs/licenses.md#unified-v2-release-gate).
+[license gates](docs/v2-handbuch/ressourcen/licenses.md#unified-v2-release-gate).
 
 ---
 
@@ -95,7 +95,7 @@ pip install "voice-stt-server[wake-words]"
 
 Building from source, and the development distribution used by this
 repository's own tests, are described in
-[`build/BUILD.md`](build/BUILD.md) and [docs/installation.md](docs/installation.md).
+[`build/BUILD.md`](build/BUILD.md) and [docs/v2-handbuch/06-betrieb/06.02-installationskonzept.md](docs/v2-handbuch/06-betrieb/06.02-installationskonzept.md).
 
 ---
 
@@ -105,8 +105,8 @@ Two engines are supported, documented and qualified as the production surface:
 
 | Engine | Use it for | Guide |
 | --- | --- | --- |
-| `faster_whisper` | The default. Mature Whisper transcription, CPU or GPU, broad language coverage. | [docs/faster-whisper.md](docs/faster-whisper.md) |
-| `kroko_onnx` | Low-latency local streaming recognition with Kroko/Banafo `.data` models, Community or licensed Pro. | [docs/kroko-onnx.md](docs/kroko-onnx.md) |
+| `faster_whisper` | The default. Mature Whisper transcription, CPU or GPU, broad language coverage. | [docs/v2-handbuch/02-funktionsweise/02.06-engines.md](docs/v2-handbuch/02-funktionsweise/02.06-engines.md) |
+| `kroko_onnx` | Low-latency local streaming recognition with Kroko/Banafo `.data` models, Community or licensed Pro. | [docs/v2-handbuch/02-funktionsweise/02.06-engines.md](docs/v2-handbuch/02-funktionsweise/02.06-engines.md) |
 
 ```python
 from voice_stt_server import AudioToTextRecorder
@@ -131,7 +131,7 @@ recorder = AudioToTextRecorder(
 The source tree still contains lazily-loaded adapters for other engine families.
 They are internal and experimental: they are not part of the supported
 production surface, they are not qualified by the release process, and they are
-not documented here. See [docs/transcription-engines.md](docs/transcription-engines.md).
+not documented here. See [docs/v2-handbuch/02-funktionsweise/02.06-engines.md](docs/v2-handbuch/02-funktionsweise/02.06-engines.md).
 
 ---
 
@@ -184,10 +184,10 @@ if __name__ == "__main__":
     recorder.shutdown()
 ```
 
-More patterns: [docs/quick-start.md](docs/quick-start.md) and
-[docs/external-audio.md](docs/external-audio.md).
+More patterns: [docs/v2-handbuch/06-betrieb/06.06-ersteinrichtung.md](docs/v2-handbuch/06-betrieb/06.06-ersteinrichtung.md) and
+[docs/v2-handbuch/04-schnittstellen/04.05-audiotransport.md](docs/v2-handbuch/04-schnittstellen/04.05-audiotransport.md).
 Every constructor parameter is documented in
-[docs/configuration.md](docs/configuration.md).
+[docs/v2-handbuch/03-konfiguration/03.07-session-einstellungen.md](docs/v2-handbuch/03-konfiguration/03.07-session-einstellungen.md).
 
 ---
 
@@ -235,12 +235,12 @@ The legacy `/ws/transcribe` (v1) transport remains a supported compatibility
 path. v1 and v2 are isolated at the transport level and never fall back into
 each other.
 
-Full endpoint reference: [docs/fastapi-server.md](docs/fastapi-server.md).
+Full endpoint reference: [docs/v2-handbuch/04-schnittstellen/04.01-schnittstellenuebersicht.md](docs/v2-handbuch/04-schnittstellen/04.01-schnittstellenuebersicht.md).
 The canonical v2 client contract (handshake, commands, acks, events, audio
 framing, snapshot/resync, wake words, settings) starts at
-[docs/client-development/README.md](docs/client-development/README.md).
+[docs/.archiv/stand_vor_handbuch_2026-11-16/client-development/README.md](docs/.archiv/stand_vor_handbuch_2026-11-16/client-development/README.md).
 Legacy v1 documentation is kept separately under
-[docs/client-development/legacy-v1](docs/client-development/legacy-v1/README.md)
+[docs/.archiv/stand_vor_handbuch_2026-11-16/client-development/legacy-v1](docs/.archiv/stand_vor_handbuch_2026-11-16/client-development/legacy-v1/README.md)
 and must not be used for new clients.
 
 ---
@@ -253,7 +253,7 @@ model management authority validates that a model matches the installed runtime
 variant, so a licensed Pro model can never be loaded silently by a Free
 runtime.
 
-See [docs/stt-model-management.md](docs/stt-model-management.md).
+See [docs/v2-handbuch/02-funktionsweise/02.07-modelle-und-modellverwaltung.md](docs/v2-handbuch/02-funktionsweise/02.07-modelle-und-modellverwaltung.md).
 
 ---
 
@@ -278,7 +278,7 @@ python tools/build_production.py all
 ```
 
 See [`build/BUILD.md`](build/BUILD.md) for the full build matrix, and
-[docs/windows-cpu-deployment.md](docs/windows-cpu-deployment.md) for the tested
+[docs/v2-handbuch/06-betrieb/06.03-windows-installation.md](docs/v2-handbuch/06-betrieb/06.03-windows-installation.md) for the tested
 Windows setup.
 
 ---
@@ -302,7 +302,7 @@ abandoned, conflicting or unverifiable remote state stops the release, and the
 GitHub Release is the last public success marker.
 
 Full description and the operator setup checklist:
-[docs/release-process.md](docs/release-process.md).
+[docs/v2-handbuch/ressourcen/release-process.md](docs/v2-handbuch/ressourcen/release-process.md).
 
 ---
 
@@ -310,43 +310,43 @@ Full description and the operator setup checklist:
 
 **Getting started**
 
-- [Quick start](docs/quick-start.md)
-- [Installation](docs/installation.md)
-- [Configuration reference](docs/configuration.md)
-- [External audio](docs/external-audio.md)
+- [Quick start](docs/v2-handbuch/06-betrieb/06.06-ersteinrichtung.md)
+- [Installation](docs/v2-handbuch/06-betrieb/06.02-installationskonzept.md)
+- [Configuration reference](docs/v2-handbuch/03-konfiguration/03.07-session-einstellungen.md)
+- [External audio](docs/v2-handbuch/04-schnittstellen/04.05-audiotransport.md)
 
 **Engines and models**
 
-- [Transcription engines](docs/transcription-engines.md)
-- [Faster-Whisper](docs/faster-whisper.md)
-- [Kroko-ONNX](docs/kroko-onnx.md)
-- [STT model management](docs/stt-model-management.md)
-- [Wake words](docs/wake-words.md)
+- [Transcription engines](docs/v2-handbuch/02-funktionsweise/02.06-engines.md)
+- [Faster-Whisper](docs/v2-handbuch/02-funktionsweise/02.06-engines.md)
+- [Kroko-ONNX](docs/v2-handbuch/02-funktionsweise/02.06-engines.md)
+- [STT model management](docs/v2-handbuch/02-funktionsweise/02.07-modelle-und-modellverwaltung.md)
+- [Wake words](docs/v2-handbuch/02-funktionsweise/02.04-wake-word.md)
 
 **Server**
 
-- [FastAPI server](docs/fastapi-server.md)
-- [OpenAI-compatible HTTP module](docs/openai-http-api.md)
-- [Server authentication and SecurityService](docs/server-authentication.md)
-- [Client development](docs/client-development/README.md)
-- [Trigger architecture](docs/einheitliche-triggerarchitektur.md)
-- [Structured logging](docs/structured-logging.md)
-- [API compatibility](docs/api-compatibility.md)
+- [FastAPI server](docs/v2-handbuch/04-schnittstellen/04.01-schnittstellenuebersicht.md)
+- [OpenAI-compatible HTTP module](docs/v2-handbuch/04-schnittstellen/04.10-openai-kompatible-api.md)
+- [Server authentication and SecurityService](docs/v2-handbuch/05-administration/05.01-sicherheitsarchitektur.md)
+- [Client development](docs/.archiv/stand_vor_handbuch_2026-11-16/client-development/README.md)
+- [Trigger architecture](docs/v2-handbuch/02-funktionsweise/02.03-activation.md)
+- [Structured logging](docs/v2-handbuch/06-betrieb/06.09-logging.md)
+- [API compatibility](docs/v2-handbuch/09-anhaenge/09.05-kompatibilitaetsvertraege.md)
 
 **Build, release and operations**
 
 - [Build reference](build/BUILD.md)
-- [Release process and operator setup](docs/release-process.md)
-- [Windows / CPU deployment](docs/windows-cpu-deployment.md)
-- [Troubleshooting](docs/troubleshooting.md)
-- [Engine licenses](docs/licenses.md)
+- [Release process and operator setup](docs/v2-handbuch/ressourcen/release-process.md)
+- [Windows / CPU deployment](docs/v2-handbuch/06-betrieb/06.03-windows-installation.md)
+- [Troubleshooting](docs/v2-handbuch/06-betrieb/06.12-fehlerdiagnose.md)
+- [Engine licenses](docs/v2-handbuch/ressourcen/licenses.md)
 
 **Development**
 
-- [Documentation overview](docs/README.md)
-- [Module map](docs/module-map.md)
-- [Testing](docs/testing.md)
-- [Test scripts](docs/test-scripts.md)
+- [Documentation overview](docs/v2-handbuch/README.md)
+- [Module map](docs/v2-handbuch/07-entwicklung/07.02-repository-architektur.md)
+- [Testing](docs/v2-handbuch/07-entwicklung/07.06-testverfahren.md)
+- [Test scripts](docs/v2-handbuch/07-entwicklung/07.06-testverfahren.md)
 
 ---
 
@@ -360,7 +360,7 @@ python -m pytest -q tests/unit
 
 `tests/unit` is the fast suite that CI runs on Ubuntu 24.04 and Windows with
 Python 3.12; it needs no model downloads, no network and no GPU. Real-model and
-hardware tests are opt-in and separate — see [docs/testing.md](docs/testing.md).
+hardware tests are opt-in and separate — see [docs/v2-handbuch/07-entwicklung/07.06-testverfahren.md](docs/v2-handbuch/07-entwicklung/07.06-testverfahren.md).
 
 Larger changes to architecture, public protocols, persisted formats, security
 boundaries or deployment structure follow the process in
@@ -378,7 +378,7 @@ VoiceSTT is released under the MIT License (see [LICENSE](LICENSE)).
 Bundled and optional third-party runtimes and model families carry their own
 licenses; the Kroko-ONNX runtime embedded in each distribution ships its license
 text inside the wheel. Kroko Pro models additionally require a commercial
-license from Kroko/Banafo. See [docs/licenses.md](docs/licenses.md).
+license from Kroko/Banafo. See [docs/v2-handbuch/ressourcen/licenses.md](docs/v2-handbuch/ressourcen/licenses.md).
 
 The release process holds no long-lived PyPI token — publication uses PyPI
 Trusted Publishing (OIDC) — and container registry credentials live only in a
@@ -395,7 +395,7 @@ on this repository rather than in a public issue.
 
 Small, focused changes with tests are easiest to review. Please run
 `python -m pytest -q tests/unit` before opening a pull request, and see
-[docs/testing.md](docs/testing.md) for what belongs in the fast suite versus the
+[docs/v2-handbuch/07-entwicklung/07.06-testverfahren.md](docs/v2-handbuch/07-entwicklung/07.06-testverfahren.md) for what belongs in the fast suite versus the
 opt-in real-model suite.
 
 If VoiceSTT is useful to you, a GitHub star genuinely helps: it is the main way
