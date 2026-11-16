@@ -5,7 +5,7 @@
 # and an external reviewer approved.
 #
 # The order below is not implemented here. It comes from the one canonical
-# release state machine (release_tooling/engine.py), and each job advances only
+# release state machine (engineering/release/engine.py), and each job advances only
 # its own portion of it via `release.py publish --until <STATE>`:
 #
 #   PREPARED -> TAGGED -> PYPI_PUBLISHED -> DOCKERHUB_PUBLISHED
@@ -19,7 +19,7 @@
 #
 # Every job runs inside the protected `release` Environment, so a normal push
 # or a pull request - including one from a fork - can never reach a release
-# secret or a package-write permission. See docs/release-process.md for the
+# secret or a package-write permission. See docs/v2-handbuch/ressourcen/release-process.md for the
 # exact operator setup.
 name: Release publish
 

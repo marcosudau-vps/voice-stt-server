@@ -24,3 +24,7 @@ prune tests_private
 global-exclude *Kopie*.py
 global-exclude *.bak
 global-exclude *.tmp
+# V2 engine cleanup: non-product drafts and engineering tooling never ship in
+# a distribution (the drafts are kept in the repository only).
+prune engineering
+prune examples

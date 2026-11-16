@@ -130,5 +130,5 @@ naechsten Lauf per Fast-forward aktualisiert werden.
 
 - [`VOICE_STT_SERVER_RELEASE_ANLEITUNG.md`](VOICE_STT_SERVER_RELEASE_ANLEITUNG.md)
 - [`../BUILD.md`](../BUILD.md)
-- [`../../docs/kroko-onnx.md`](../../docs/kroko-onnx.md)
-- [`../../docs/licenses.md`](../../docs/licenses.md)
+- [`../../docs/v2-handbuch/02-funktionsweise/02.06-engines.md`](../../docs/v2-handbuch/02-funktionsweise/02.06-engines.md)
+- [`../../docs/v2-handbuch/ressourcen/licenses.md`](../../docs/v2-handbuch/ressourcen/licenses.md)

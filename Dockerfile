@@ -2,7 +2,7 @@
 #
 # Unified V2 product image. The single complete wheel in dist/voicestt
 # contains the qualified Pro-capable runtime; no separate native installation.
-# Both stages retain the pinned Ubuntu digest from tools/build_production.py.
+# Both stages retain the pinned Ubuntu digest from engineering/tools/build_production.py.
 
 FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517 AS builder
 
@@ -27,13 +27,17 @@ COPY dist/voicestt/*.whl /build/dist/voicestt/
 # runtime basis, no native Kroko compilation in this build.
 RUN VOICESTT_WHEEL="$(ls /build/dist/voicestt/*.whl)" && \
     python -m pip install --upgrade pip setuptools wheel && \
-    python -m pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu && \
-    python -m pip install "${VOICESTT_WHEEL}[faster-whisper,silero-onnx-cpu,server]" \
+    python -m pip install torch --index-url https://download.pytorch.org/whl/cpu && \
+    python -c "import torch; print('torch==' + torch.__version__)" > /build/cpu-constraints.txt && \
+    PIP_CONSTRAINT=/build/cpu-constraints.txt python -m pip install \
+      "${VOICESTT_WHEEL}[faster-whisper,silero-onnx-cpu,server]" \
       -r /build/api_fastapi_server/requirements.txt scikit-learn requests && \
     python -m pip install --no-deps 'openwakeword==0.6.0' && \
     sed -i '/^Requires-Dist: tflite-runtime/d' \
       /opt/venv/lib/python3.12/site-packages/openwakeword-*.dist-info/METADATA && \
-    python -m pip check
+    python -m pip check && \
+    python -c "import torch, sys; sys.exit(0 if torch.version.cuda is None and getattr(torch.version, 'hip', None) is None else 1)" && \
+    ! python -m pip list --format=freeze | grep -iE '^(nvidia-|cuda-|triton|pytorch-triton)'
 
 
 FROM ubuntu:24.04@sha256:33ceb71981b602c1a7443a53469e4dba065f7503eab3078a2d7a57a2ab987517 AS runtime

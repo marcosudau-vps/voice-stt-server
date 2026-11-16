@@ -1,6 +1,6 @@
 """GATE 5 – the bundled browser client against the current server contract.
 
-The example client in ``app_browserclient/client.js`` is part of the
+The example client in ``examples/app_browserclient/client.js`` is part of the
 compatibility gate, so its wire behaviour is verified here rather than assumed.
 
 Two things are checked:
@@ -36,7 +36,7 @@ from tests.unit.test_server_controlled_e2e import (
 
 
 CLIENT_JS = (
-    Path(__file__).resolve().parents[2] / "app_browserclient" / "client.js"
+    Path(__file__).resolve().parents[2] / "examples" / "app_browserclient" / "client.js"
 )
 SAMPLE_RATE = 16000
 

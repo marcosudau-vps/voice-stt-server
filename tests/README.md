@@ -1,7 +1,7 @@
 
 # OpenWakeWord Test
 
-For the maintained unit and golden transcription test workflow, see [`../docs/testing.md`](../docs/testing.md).
+For the maintained unit and golden transcription test workflow, see [`../docs/v2-handbuch/07-entwicklung/07.06-testverfahren.md`](../docs/v2-handbuch/07-entwicklung/07.06-testverfahren.md).
 
 1. Set up the openwakeword test project:
    ```bash
@@ -48,4 +48,4 @@ For the maintained unit and golden transcription test workflow, see [`../docs/te
 Unified V2 qualification: use `python -m pytest -q tests/unit tests/compatibility`
 and `python -m pytest -q tests/packaging`. The packaging suite installs real
 Python packages but uses synthetic native fixtures. Genuine Kroko model/lifecycle
-checks are opt-in and documented in [testing](../docs/testing.md#unified-v2-product-qualification).
+checks are opt-in and documented in [testing](../docs/v2-handbuch/07-entwicklung/07.06-testverfahren.md).

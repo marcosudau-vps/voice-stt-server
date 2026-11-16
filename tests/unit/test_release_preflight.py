@@ -17,8 +17,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from tempfile import TemporaryDirectory
 from unittest import mock
 
-from release_tooling import preflight
-from release_tooling.gitinfo import GitIdentity
+from engineering.release import preflight
+from engineering.release.gitinfo import GitIdentity
 
 
 CLEAN_IDENTITY = GitIdentity(commit="a" * 40, tree="b" * 40, dirty=False, branch="work/test")
@@ -211,7 +211,7 @@ class LocalPathGuardTests(PreflightTestCase):
 
     def test_a_clean_manifest_passes(self):
         from release_support import make_manifest
-        from release_tooling import rc_manifest as rcm
+        from engineering.release import rc_manifest as rcm
 
         path = self.repo_root / "rc-manifest.json"
         rcm.write_rc_manifest(path, make_manifest())
@@ -225,7 +225,7 @@ class StateConflictCheckTests(PreflightTestCase):
         self.assertEqual(self._find(report, "no_state_conflict").status, preflight.PASS)
 
     def test_existing_valid_state_passes_and_reports_it(self):
-        from release_tooling.state import default_state_path, new_state, save_state
+        from engineering.release.state import default_state_path, new_state, save_state
 
         state = new_state(
             version="2.0.0", source_commit="a" * 40, source_tree="b" * 40,
@@ -239,7 +239,7 @@ class StateConflictCheckTests(PreflightTestCase):
         self.assertIn("PREPARED", check.detail)
 
     def test_corrupted_state_fails(self):
-        from release_tooling.state import default_state_path
+        from engineering.release.state import default_state_path
 
         state_path = default_state_path(self.repo_root, "2.0.0")
         state_path.parent.mkdir(parents=True, exist_ok=True)
@@ -251,7 +251,7 @@ class StateConflictCheckTests(PreflightTestCase):
 class QualificationCheckTests(PreflightTestCase):
     def test_unqualified_manifest_warns_by_default(self):
         from release_support import make_manifest
-        from release_tooling import rc_manifest as rcm
+        from engineering.release import rc_manifest as rcm
 
         manifest = make_manifest(release_readiness=rcm.READINESS_NOT_QUALIFIED)
         path = self.repo_root / "rc-manifest.json"
@@ -262,7 +262,7 @@ class QualificationCheckTests(PreflightTestCase):
 
     def test_unqualified_manifest_fails_when_qualification_required(self):
         from release_support import make_manifest
-        from release_tooling import rc_manifest as rcm
+        from engineering.release import rc_manifest as rcm
 
         manifest = make_manifest(release_readiness=rcm.READINESS_NOT_QUALIFIED)
         path = self.repo_root / "rc-manifest.json"
@@ -274,7 +274,7 @@ class QualificationCheckTests(PreflightTestCase):
 
     def test_qualified_manifest_passes_when_qualification_required(self):
         from release_support import make_manifest
-        from release_tooling import rc_manifest as rcm
+        from engineering.release import rc_manifest as rcm
 
         manifest = make_manifest(release_readiness=rcm.READINESS_QUALIFIED)
         path = self.repo_root / "rc-manifest.json"
@@ -299,7 +299,7 @@ class QualificationCheckTests(PreflightTestCase):
 class ManifestVersionCheckTests(PreflightTestCase):
     def test_matching_manifest_version_passes(self):
         from release_support import make_manifest
-        from release_tooling import rc_manifest as rcm
+        from engineering.release import rc_manifest as rcm
 
         manifest = make_manifest(version="2.0.0")
         path = self.repo_root / "rc-manifest.json"
@@ -310,7 +310,7 @@ class ManifestVersionCheckTests(PreflightTestCase):
 
     def test_mismatched_manifest_version_fails(self):
         from release_support import make_manifest
-        from release_tooling import rc_manifest as rcm
+        from engineering.release import rc_manifest as rcm
 
         manifest = make_manifest(version="2.0.0")
         path = self.repo_root / "rc-manifest.json"

@@ -41,7 +41,7 @@ buendelt gepruefte Original-/Zusatzhinweise auch auf Windows. Pruefung:
 `python tools/qualify_build_identity.py --candidate-dir DIR --check-reports`.
 
 Oeffentliche Freigabe bleibt BLOCKED, solange Rechte oder Pflichtqualifikation
-fehlen: [Lizenzgate](../docs/licenses.md#unified-v2-release-gate).
+fehlen: [Lizenzgate](../docs/v2-handbuch/ressourcen/licenses.md#unified-v2-release-gate).
 RC-Schema 3 besitzt genau einen internen `pro`-Eintrag je Produkt-/Imageblock.
 Dieser bezeichnet den Native-Buildinput, keine zweite Edition.
 
@@ -158,7 +158,7 @@ python tools/compose.py config --quiet
 
 Reale Engine-Tests benoetigen die jeweilige optionale Runtime und lokale
 Modelle. Die vollstaendige Testmatrix steht in
-[`docs/testing.md`](../docs/testing.md).
+[`docs/v2-handbuch/07-entwicklung/07.06-testverfahren.md`](../docs/v2-handbuch/07-entwicklung/07.06-testverfahren.md).
 
 ## Grundsaetzliche Trennung
 
@@ -175,7 +175,7 @@ Im Production-Image und den oeffentlichen Produktwheels ist die installierte
 Distribution `voice-stt-server`, die native Faehigkeit `pro`. Weder Lizenzkey
 noch Modellname noch Betreiberkonfiguration belegen diese Faehigkeit.
 Info-/Settings-/Wire-/OpenAPI-Identitaet wird einmal je App validiert;
-[API-Vertrag](../docs/client-development/06-http-api-und-authentifizierung.md#oeffentliche-serveridentitaet).
+[API-Vertrag](../docs/.archiv/stand_vor_handbuch_2026-11-16/client-development/06-http-api-und-authentifizierung.md#oeffentliche-serveridentitaet).
 Fehlende Zusatzherkunft bleibt incomplete, kein pauschaler Startabbruch.
 Ein offizieller Kandidat verlangt trotzdem extern belegte saubere Quellen
 und Bindung zwischen Wheel, Krokoartefakt und Image.
@@ -493,7 +493,7 @@ python tools/release_candidate.py --out-dir candidate --no-manifest
 Vollstaendige Prozessbeschreibung, Zustandsreihenfolge, Resume-Semantik und die
 komplette Operator-Einrichtung (eine Repository-Variable, ein Repository-Secret,
 ein PyPI Trusted Publisher, eine geschuetzte Umgebung):
-[`docs/release-process.md`](../docs/release-process.md).
+[`docs/v2-handbuch/ressourcen/release-process.md`](../docs/v2-handbuch/ressourcen/release-process.md).
 
 ### Eine Engine fuer Dry-Run und echte Publikation (AP-SRV-070 W5-R01-C1)
 
@@ -515,7 +515,7 @@ PREPARED -> TAGGED -> PyPI (voice-stt-server) -> Docker Hub -> GHCR
 > bauen. Bewegliche Aliase (`2.0`, `2`, `latest`) bewegen sich erst nach
 > verifizierten exakten Artefakten in beiden Registries. Vollstaendige
 > Beschreibung und Operator-Einrichtung:
-> [`docs/release-process.md`](../docs/release-process.md).
+> [`docs/v2-handbuch/ressourcen/release-process.md`](../docs/v2-handbuch/ressourcen/release-process.md).
 
 `python release.py dry-run` und `python release.py publish` rufen beide
 dieselbe Funktion `engine.run_engine()` mit demselben Adapter-Bundle auf -
@@ -675,7 +675,7 @@ Wichtige Paketbesonderheiten:
 
 Die historische Untersuchung einer gemeinsamen Distribution mit optionaler
 Pro-Komponente steht unter
-[Unified Kroko Runtime V2](../docs/2026-10-22_kroko-unified-runtime-v2.md)
+[Unified Kroko Runtime V2](../docs/v2-handbuch/02-funktionsweise/02.06-engines.md)
 dokumentiert. Das aktuelle Produkt bettet die Pro-faehige Runtime ein;
 die folgenden Free-/Pro-Buildoptionen betreffen interne Native-Entwicklerbuilds.
 
@@ -1004,14 +1004,14 @@ Runtime-Konfiguration gemeinsam wiederhergestellt werden.
 
 ## Weiterfuehrende Referenzen
 
-- [`docs/release-process.md`](../docs/release-process.md): GitHub-nativer
+- [`docs/v2-handbuch/ressourcen/release-process.md`](../docs/v2-handbuch/ressourcen/release-process.md): GitHub-nativer
   Releaseprozess, Zustandsreihenfolge und vollstaendige Operator-Einrichtung
-- [`docs/installation.md`](../docs/installation.md): Extras und
+- [`docs/v2-handbuch/06-betrieb/06.02-installationskonzept.md`](../docs/v2-handbuch/06-betrieb/06.02-installationskonzept.md): Extras und
   plattformspezifische Installation
-- [`docs/kroko-onnx.md`](../docs/kroko-onnx.md): Engine-Optionen
+- [`docs/v2-handbuch/02-funktionsweise/02.06-engines.md`](../docs/v2-handbuch/02-funktionsweise/02.06-engines.md): Engine-Optionen
   und Recorder-Nutzung
-- [`docs/testing.md`](../docs/testing.md): Teststufen und reale Modelltests
-- [`docs/fastapi-server.md`](../docs/fastapi-server.md): Serverprotokoll und
+- [`docs/v2-handbuch/07-entwicklung/07.06-testverfahren.md`](../docs/v2-handbuch/07-entwicklung/07.06-testverfahren.md): Teststufen und reale Modelltests
+- [`docs/v2-handbuch/04-schnittstellen/04.01-schnittstellenuebersicht.md`](../docs/v2-handbuch/04-schnittstellen/04.01-schnittstellenuebersicht.md): Serverprotokoll und
   Laufzeitkonfiguration
-- [`docs/licenses.md`](../docs/licenses.md): Lizenzhinweise aller Engines
+- [`docs/v2-handbuch/ressourcen/licenses.md`](../docs/v2-handbuch/ressourcen/licenses.md): Lizenzhinweise aller Engines
 - [`build/vps/README.md`](vps/README.md): konkrete VPS-Automation

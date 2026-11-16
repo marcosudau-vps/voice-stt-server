@@ -17,10 +17,10 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-if str(REPO_ROOT / "tools") not in sys.path:
-    sys.path.insert(0, str(REPO_ROOT / "tools"))
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 
-import build_production as bp  # noqa: E402
+from engineering.tools import build_production as bp  # noqa: E402
 
 
 class RecordingRunner:
@@ -312,7 +312,7 @@ def _staged_dist_dir():
 
 def _stage_identity_wheels(root):
     from tests.unit.test_build_distribution import make_base_wheel, make_kroko_wheel
-    from tools.build_distribution import merge_kroko_runtime
+    from engineering.tools.build_distribution import merge_kroko_runtime
     from VoiceSTT._build_identity import BuildIdentity
     (root / "voicestt").mkdir()
     (root / "kroko").mkdir()

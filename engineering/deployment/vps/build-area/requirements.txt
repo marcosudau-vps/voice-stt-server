@@ -1,0 +1,10 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.13.0+cpu
+cmake
+ninja
+pybind11
+huggingface_hub
+openwakeword==0.6.0
+scikit-learn
+requests
+-e /home/marco/selfhost/apps/services/voice/voice-stt-server[faster-whisper,silero-onnx-cpu,porcupine,server,kroko-builder]

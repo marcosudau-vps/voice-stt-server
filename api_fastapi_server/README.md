@@ -300,10 +300,10 @@ python api_fastapi_server/server.py \
 ## Protocol
 
 New clients use **protocol v2 on `/ws/v2`**; its canonical contract is
-[`docs/client-development/`](../docs/client-development/README.md). The rest of
+[`docs/.archiv/stand_vor_handbuch_2026-11-16/client-development/`](../docs/.archiv/stand_vor_handbuch_2026-11-16/client-development/README.md). The rest of
 this section describes the **legacy v1** endpoint `/ws/transcribe` used by the
 bundled browser client
-([legacy v1 docs](../docs/client-development/legacy-v1/README.md)).
+([legacy v1 docs](../docs/.archiv/stand_vor_handbuch_2026-11-16/client-development/legacy-v1/README.md)).
 
 The browser sends binary WebSocket audio packets to `/ws/transcribe` (the same
 frame format is used on `/ws/v2`):
@@ -347,7 +347,7 @@ replay followed by live delivery, answers client pings with `log.pong`, and
 reports sink/subscriber loss through best-effort `log.gap` notices and
 authoritative drop counters without mixing log traffic into the
 audio/transcription socket. See
-`docs/structured-logging.md` for the event schema and subscription protocol.
+`docs/v2-handbuch/06-betrieb/06.09-logging.md` for the event schema and subscription protocol.
 
 The session token is valid for 24 hours within the current server process and
 can read only its own session in `audit`, `transcription`, and `performance`.

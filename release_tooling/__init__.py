@@ -1,27 +1,39 @@
-"""AP-SRV-070 W5 release orchestration tooling.
+"""Compatibility package - the release tooling lives in ``engineering/release/``.
 
-This package backs the single repository-root entry point ``release.py``. It
-has no runtime dependency on the VoiceSTT product itself beyond the one
-existing version authority (``VoiceSTT._version``) and the one existing
-product image-name authority (``tools.build_production``) - it does not
-invent a second version or product-identity authority.
-
-Scope (AP-SRV-070 W5, corrected in W5-R01-C1): preflight, resumable release
-state, RC manifest handling, fixed-order/conflict enforcement, and real,
-W6-capable publication adapters for PyPI, GHCR, Docker Hub, the Git tag,
-and GitHub Releases (``release_tooling.adapters``). ``release_tooling.engine``
-is the one shared operation graph/state machine both ``release.py dry-run``
-and ``release.py publish`` walk - the only difference between them is
-``ExecutionMode.DRY_RUN`` versus ``ExecutionMode.REAL``, which decides
-whether any adapter's ``publish()`` is ever actually called. No public
-write has been performed by this codebase itself: every adapter is
-qualified here exclusively through injected fake/mock test doubles (see
-``tests/unit/test_release_adapters.py`` and
-``tests/unit/test_release_engine.py``), because a real write cannot be
-exercised safely in this environment without live credentials and a real
-public registry. W6 invokes this same, already-qualified engine with real
-credentials rather than introducing new critical publication logic after
-RC qualification.
+``release_tooling.<module>`` resolves to the *same* module object as
+``engineering.release.<module>``: one identity, so monkeypatching and module
+state stay consistent for older callers. No release logic lives here; the
+release state machine, gates and adapters are unchanged.
 """
 
-__all__: list = []
+import importlib
+import sys
+from pathlib import Path
+
+_REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(_REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(_REPO_ROOT))
+
+_SUBMODULES = (
+    "adapters",
+    "aliases",
+    "candidate",
+    "cli",
+    "config",
+    "engine",
+    "errors",
+    "gitinfo",
+    "pipeline",
+    "preflight",
+    "rc_manifest",
+    "redaction",
+    "remote_checks",
+    "state",
+)
+
+for _name in _SUBMODULES:
+    _module = importlib.import_module(f"engineering.release.{_name}")
+    sys.modules[f"{__name__}.{_name}"] = _module
+    globals()[_name] = _module
+
+__all__ = list(_SUBMODULES)

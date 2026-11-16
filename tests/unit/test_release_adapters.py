@@ -20,7 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from release_support import DOCKERHUB_ROOT, PRO_DIGEST, PRO_WHEEL, PRO_WHEEL_SHA, PRO_WHEEL_WIN, PRO_WHEEL_WIN_SHA, GHCR_ROOT, RecordingRunner, digest_response, failed, make_manifest, make_state, ok, pypi_fetcher
 
-from release_tooling.adapters import (  # noqa: E402
+from engineering.release.adapters import (  # noqa: E402
     AliasAdapter,
     DockerHubAdapter,
     ExternalUploader,
@@ -31,8 +31,8 @@ from release_tooling.adapters import (  # noqa: E402
     TwineUploader,
     AggregateVerificationAdapter,
 )
-from release_tooling.errors import ConflictError, OrderError, ReleaseError, VerificationUnavailableError  # noqa: E402
-from release_tooling.remote_checks import ABSENT, MATCH  # noqa: E402
+from engineering.release.errors import ConflictError, OrderError, ReleaseError, VerificationUnavailableError  # noqa: E402
+from engineering.release.remote_checks import ABSENT, MATCH  # noqa: E402
 
 MANIFEST = make_manifest()
 BOTH_PUBLISHED = {'voice-stt-server': {PRO_WHEEL: PRO_WHEEL_SHA, PRO_WHEEL_WIN: PRO_WHEEL_WIN_SHA}}
@@ -266,8 +266,8 @@ class GitTagAdapterTests(unittest.TestCase):
         from unittest import mock
 
         adapter = GitTagAdapter(repo_root=Path("."))
-        with mock.patch("release_tooling.gitinfo.local_tag_commit", return_value="0" * 40), \
-             mock.patch("release_tooling.gitinfo.remote_tag_commit", return_value=None):
+        with mock.patch("engineering.release.gitinfo.local_tag_commit", return_value="0" * 40), \
+             mock.patch("engineering.release.gitinfo.remote_tag_commit", return_value=None):
             with self.assertRaises(ConflictError):
                 adapter.verify(MANIFEST, make_state("PREPARED"))
 
@@ -275,18 +275,18 @@ class GitTagAdapterTests(unittest.TestCase):
         from unittest import mock
 
         adapter = GitTagAdapter(repo_root=Path("."))
-        with mock.patch("release_tooling.gitinfo.local_tag_commit", return_value=MANIFEST["sourceCommit"]), \
-             mock.patch("release_tooling.gitinfo.remote_tag_commit", return_value=MANIFEST["sourceCommit"]):
+        with mock.patch("engineering.release.gitinfo.local_tag_commit", return_value=MANIFEST["sourceCommit"]), \
+             mock.patch("engineering.release.gitinfo.remote_tag_commit", return_value=MANIFEST["sourceCommit"]):
             self.assertEqual(adapter.verify(MANIFEST, make_state("PREPARED")), MATCH)
 
     def test_an_unreachable_remote_is_unavailable(self):
         from unittest import mock
 
-        from release_tooling.gitinfo import GitError
+        from engineering.release.gitinfo import GitError
 
         adapter = GitTagAdapter(repo_root=Path("."))
-        with mock.patch("release_tooling.gitinfo.local_tag_commit", return_value=None), \
-             mock.patch("release_tooling.gitinfo.remote_tag_commit", side_effect=GitError("offline")):
+        with mock.patch("engineering.release.gitinfo.local_tag_commit", return_value=None), \
+             mock.patch("engineering.release.gitinfo.remote_tag_commit", side_effect=GitError("offline")):
             with self.assertRaises(VerificationUnavailableError):
                 adapter.verify(MANIFEST, make_state("PREPARED"))
 

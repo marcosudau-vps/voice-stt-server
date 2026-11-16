@@ -7,7 +7,7 @@ from pathlib import Path
 
 from VoiceSTT.core.realtime_text_stabilizer import RealtimeTextStabilizationConfig
 
-from tools.evaluate_realtime_text_stabilizer import (
+from engineering.tools.evaluate_realtime_text_stabilizer import (
     SAMPLE_RATE,
     _revision_spans_from_events,
     aggregate_results,

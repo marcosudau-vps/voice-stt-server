@@ -319,7 +319,7 @@ class PublishOrderTests(unittest.TestCase):
     def test_each_job_bounds_itself_with_the_canonical_until_boundary(self):
         # The order is not re-implemented in YAML - each job hands the state
         # machine a boundary and the state machine enforces everything else.
-        from release_tooling.state import STATE_ORDER
+        from engineering.release.state import STATE_ORDER
 
         text = PUBLISH.read_text(encoding="utf-8")
         boundaries = re.findall(r"--until (\w+)", text)

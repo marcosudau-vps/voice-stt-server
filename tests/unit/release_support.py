@@ -21,9 +21,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from release_tooling import rc_manifest  # noqa: E402
-from release_tooling.remote_checks import CommandResult  # noqa: E402
-from release_tooling.state import ReleaseState, STATE_ORDER, advance, new_state  # noqa: E402
+from engineering.release import rc_manifest  # noqa: E402
+from engineering.release.remote_checks import CommandResult  # noqa: E402
+from engineering.release.state import ReleaseState, STATE_ORDER, advance, new_state  # noqa: E402
 
 VERSION = "2.0.0"
 COMMIT = "934e3be7c78aa9358f9b42b9fa4dc282bed54d6c"

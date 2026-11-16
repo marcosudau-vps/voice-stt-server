@@ -5,13 +5,13 @@ import zipfile
 
 import pytest
 
-from release_tooling import config, rc_manifest
-from release_tooling.engine import ExecutionMode, run_engine
-from release_tooling.errors import ManifestError
-from release_tooling.preflight import _check_redistribution
+from engineering.release import config, rc_manifest
+from engineering.release.engine import ExecutionMode, run_engine
+from engineering.release.errors import ManifestError
+from engineering.release.preflight import _check_redistribution
 from tests.unit.release_support import make_manifest, make_state
 from tests.unit.test_build_distribution import make_base_wheel, make_kroko_wheel
-from tools import build_distribution as bd, build_production as bp
+from engineering.tools import build_distribution as bd, build_production as bp
 
 
 def test_only_one_official_product_and_native_input():

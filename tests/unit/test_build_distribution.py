@@ -20,11 +20,11 @@ import zipfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-for candidate in (REPO_ROOT, REPO_ROOT / "tools"):
+for candidate in (REPO_ROOT,):
     if str(candidate) not in sys.path:
         sys.path.insert(0, str(candidate))
 
-import build_distribution as bd  # noqa: E402
+from engineering.tools import build_distribution as bd  # noqa: E402
 
 KROKO_SHA_PLACEHOLDER = "0" * 64
 

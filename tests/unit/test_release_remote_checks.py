@@ -15,8 +15,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from release_support import RecordingRunner, digest_response, failed, ok, pypi_fetcher  # noqa: E402
 
-from release_tooling.errors import ConflictError, VerificationUnavailableError  # noqa: E402
-from release_tooling.remote_checks import (  # noqa: E402
+from engineering.release.errors import ConflictError, VerificationUnavailableError  # noqa: E402
+from engineering.release.remote_checks import (  # noqa: E402
     ABSENT,
     MATCH,
     check_pypi_release,

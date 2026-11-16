@@ -52,10 +52,7 @@ def installed_kroko_variant() -> str:
 
 
 def normalize_engine(value: Any) -> str:
-    normalized = str(value or "").strip().lower().replace("-", "_")
-    if normalized in {"kroko", "banafo_kroko"}:
-        return "kroko_onnx"
-    return normalized
+    return str(value or "").strip().lower().replace("-", "_")
 
 
 def _as_bool(value: Any) -> bool:

@@ -6,11 +6,11 @@ from unittest.mock import patch
 
 import yaml
 
-from app_talk_with_llm.example_app_config import (
+from examples.app_talk_with_llm.example_app_config import (
     load_example_app_defaults,
     load_example_app_env,
 )
-from tools.compose import build_compose_environment, discover_model_path
+from engineering.tools.compose import build_compose_environment, discover_model_path
 
 
 class ProjectConfigTests(TestCase):

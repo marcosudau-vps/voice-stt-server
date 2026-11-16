@@ -12,8 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from release_support import COMMIT, PRO_WHEEL, PRO_WHEEL_WIN, TREE, make_manifest
 
-from release_tooling import rc_manifest  # noqa: E402
-from release_tooling.errors import ManifestError, SecretDetectedError  # noqa: E402
+from engineering.release import rc_manifest  # noqa: E402
+from engineering.release.errors import ManifestError, SecretDetectedError  # noqa: E402
 
 
 class SchemaTests(unittest.TestCase):

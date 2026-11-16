@@ -109,7 +109,7 @@ jobs:
         id: fingerprints
         run: |
           set -euo pipefail
-          python tools/release_candidate.py --print-fingerprints \
+          python engineering/tools/release_candidate.py --print-fingerprints \
             --kroko-artifact-store "$KROKO_ARTIFACT_STORE" \
             --kroko-work-dir "$KROKO_WORK_DIR" > "$RUNNER_TEMP/fingerprints.json"
           cat "$RUNNER_TEMP/fingerprints.json"
@@ -131,7 +131,7 @@ jobs:
       - name: Build Linux candidate
         run: |
           set -euo pipefail
-          python tools/release_candidate.py \
+          python engineering/tools/release_candidate.py \
             --out-dir "$CANDIDATE_DIR" \
             --platform linux \
             --source-tree "${{ steps.source.outputs.tree }}" \
@@ -144,7 +144,7 @@ jobs:
       - name: Qualify installed Linux package identities
         run: |
           set -euo pipefail
-          python tools/qualify_build_identity.py --candidate-dir "$CANDIDATE_DIR" \
+          python engineering/tools/qualify_build_identity.py --candidate-dir "$CANDIDATE_DIR" \
             --platform linux --install
 
       - name: Upload Linux candidate artifacts
@@ -210,7 +210,7 @@ jobs:
         id: fingerprints
         run: |
           set -euo pipefail
-          python tools/release_candidate.py --platform windows --print-fingerprints > "$RUNNER_TEMP/fingerprints.json"
+          python engineering/tools/release_candidate.py --platform windows --print-fingerprints > "$RUNNER_TEMP/fingerprints.json"
           cat "$RUNNER_TEMP/fingerprints.json"
           echo "pro=$(python -c 'import json,os;print(json.load(open(os.path.join(os.environ["RUNNER_TEMP"],"fingerprints.json")))["pro"])')" >> "$GITHUB_OUTPUT"
 
@@ -223,7 +223,7 @@ jobs:
       - name: Cross-build Windows candidate wheels
         run: |
           set -euo pipefail
-          python tools/release_candidate.py \
+          python engineering/tools/release_candidate.py \
             --out-dir "$CANDIDATE_DIR" \
             --platform windows \
             --source-tree "${{ steps.source.outputs.tree }}" \
@@ -231,7 +231,7 @@ jobs:
             --kroko-work-dir "$KROKO_WORK_DIR"
 
       - name: Validate Windows wheel identities before transfer
-        run: python tools/qualify_build_identity.py --candidate-dir "$CANDIDATE_DIR" --platform windows
+        run: python engineering/tools/qualify_build_identity.py --candidate-dir "$CANDIDATE_DIR" --platform windows
 
       - name: Upload Windows candidate build
         uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
@@ -281,7 +281,7 @@ jobs:
       - name: Qualify installed Windows package identities
         run: |
           set -euo pipefail
-          python tools/qualify_build_identity.py --candidate-dir "$CANDIDATE_DIR" \
+          python engineering/tools/qualify_build_identity.py --candidate-dir "$CANDIDATE_DIR" \
             --platform windows --install
 
       - name: Upload Windows candidate artifacts
@@ -393,13 +393,20 @@ jobs:
                   assert any(n.startswith("kroko_onnx/") for n in names), f"{wheel['filename']}: no embedded Kroko runtime"
                   assert any(n.startswith("voice_stt_server/") for n in names), f"{wheel['filename']}: no canonical import package"
                   assert embedded["variant"] == variant, embedded
+                  # V2 product boundary: exactly two transcription engines.
+                  engines = sorted(
+                      n.rsplit("/", 1)[1] for n in names
+                      if n.startswith("VoiceSTT/transcription_engines/") and n.endswith("_engine.py")
+                  )
+                  assert engines == ["faster_whisper_engine.py", "kroko_onnx_engine.py"], engines
+                  assert not any(n.startswith("engineering/") for n in names), f"{wheel['filename']}: engineering/ leaked"
                   print(f"{variant} ({wheel['platformTag']}): {wheel['filename']} embeds {variant} runtime")
           PYEOF
 
       - name: Validate all package identities and installed qualification reports
         run: |
           set -euo pipefail
-          python tools/qualify_build_identity.py --candidate-dir "$CANDIDATE_DIR" --check-reports
+          python engineering/tools/qualify_build_identity.py --candidate-dir "$CANDIDATE_DIR" --check-reports
 
       - name: Qualify candidate manifest (Option A)
         run: |
@@ -416,7 +423,7 @@ jobs:
       - name: Build final SHA256 inventory
         run: |
           set -euo pipefail
-          python -c 'import os, pathlib; from tools import release_candidate; inv = release_candidate.build_inventory(pathlib.Path(os.environ["CANDIDATE_DIR"])); release_candidate._write_json(pathlib.Path(os.environ["CANDIDATE_DIR"], "sha256-inventory.json"), inv)'
+          python -c 'import os, pathlib; from engineering.tools import release_candidate; inv = release_candidate.build_inventory(pathlib.Path(os.environ["CANDIDATE_DIR"])); release_candidate._write_json(pathlib.Path(os.environ["CANDIDATE_DIR"], "sha256-inventory.json"), inv)'
 
       - name: Verify final SHA256 inventory
         run: |

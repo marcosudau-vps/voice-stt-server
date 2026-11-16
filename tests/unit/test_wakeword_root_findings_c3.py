@@ -1320,7 +1320,7 @@ class F15ContractDocumentationTests(unittest.TestCase):
         return (REPO_ROOT / relative).read_text(encoding="utf-8")
 
     def test_the_wake_word_doc_describes_the_c3_detection_model(self):
-        text = self.read("docs/wake-words.md")
+        text = self.read("docs/.archiv/stand_vor_handbuch_2026-11-16/wake-words.md")
         for needle in (
             "minConsecutivePredictionFrames",
             "prediction frame",
@@ -1335,7 +1335,7 @@ class F15ContractDocumentationTests(unittest.TestCase):
             self.assertIn(needle, text, needle)
 
     def test_the_trigger_doc_describes_the_c3_detection_model(self):
-        text = self.read("docs/einheitliche-triggerarchitektur.md")
+        text = self.read("docs/.archiv/stand_vor_handbuch_2026-11-16/einheitliche-triggerarchitektur.md")
         for needle in (
             "wakeWord.minConsecutivePredictionFrames",
             "Prediction-Frame",
@@ -1359,9 +1359,9 @@ class F15ContractDocumentationTests(unittest.TestCase):
         """
         markers = ("zurückgezogen", "withdrawn", "Fehlinterpretation")
         for relative in (
-            "docs/wake-words.md",
-            "docs/einheitliche-triggerarchitektur.md",
-            "docs/configuration.md",
+            "docs/.archiv/stand_vor_handbuch_2026-11-16/wake-words.md",
+            "docs/.archiv/stand_vor_handbuch_2026-11-16/einheitliche-triggerarchitektur.md",
+            "docs/.archiv/stand_vor_handbuch_2026-11-16/configuration.md",
         ):
             text = self.read(relative)
             paragraphs = text.split("\n\n")
@@ -1387,12 +1387,21 @@ class F15ContractDocumentationTests(unittest.TestCase):
                     )
 
     def test_the_trigger_doc_explains_exactly_once_eventing(self):
-        text = self.read("docs/einheitliche-triggerarchitektur.md")
+        text = self.read("docs/.archiv/stand_vor_handbuch_2026-11-16/einheitliche-triggerarchitektur.md")
         self.assertIn("Exactly-once", text)
         self.assertIn("logisch", text.lower())
 
+    def test_current_handbook_covers_wake_settings(self):
+        root = REPO_ROOT / "docs" / "v2-handbuch"
+        wake = (root / "02-funktionsweise" / "02.04-wake-word.md").read_text(encoding="utf-8")
+        settings = (root / "03-konfiguration" / "03.07-session-einstellungen.md").read_text(encoding="utf-8")
+        for key in ("Trailing Edge", "inferenceBackend", "detectorGain", "vadThreshold"):
+            self.assertIn(key, wake)
+        for key in ("minConsecutivePredictionFrames", "noiseSuppressionEnabled"):
+            self.assertIn(key, settings)
+
     def test_the_configuration_doc_lists_every_c3_wake_key(self):
-        text = self.read("docs/configuration.md")
+        text = self.read("docs/.archiv/stand_vor_handbuch_2026-11-16/configuration.md")
         for key in (
             "wakeWord.minConsecutivePredictionFrames",
             "wakeWord.detectorGain",

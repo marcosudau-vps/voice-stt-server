@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import unittest
 
-from release_tooling import aliases
-from release_tooling.errors import ReleaseError
+from engineering.release import aliases
+from engineering.release.errors import ReleaseError
 
 
 class AliasMappingTests(unittest.TestCase):

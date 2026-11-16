@@ -49,17 +49,21 @@ def maintained_markdown():
 
 
 class EngineDocumentationLayoutTests(unittest.TestCase):
+    def test_docs_root_contains_only_handbook_and_archive(self):
+        self.assertEqual({p.name for p in DOCS.iterdir()}, {"v2-handbuch", ".archiv"})
+
     def test_the_engines_directory_is_gone(self):
         # W5R4-G56.
         self.assertFalse((DOCS / "engines").exists())
 
-    def test_the_two_retained_guides_live_directly_under_docs(self):
-        # W5R4-G54/G55.
-        for name in ("faster-whisper.md", "kroko-onnx.md"):
-            with self.subTest(guide=name):
-                path = DOCS / name
-                self.assertTrue(path.is_file(), f"{name} is missing")
-                self.assertGreater(len(path.read_text(encoding="utf-8")), 500)
+    def test_the_two_production_engines_are_documented_in_the_handbook(self):
+        # Keep the documented engine contract on the maintained handbook surface.
+        path = DOCS / "v2-handbuch" / "02-funktionsweise" / "02.06-engines.md"
+        text = path.read_text(encoding="utf-8")
+        self.assertGreater(len(text), 500)
+        for engine in ("faster_whisper", "kroko_onnx"):
+            with self.subTest(engine=engine):
+                self.assertIn(engine, text)
 
     def test_the_removed_guides_are_not_anywhere_under_docs(self):
         for name in REMOVED_ENGINE_GUIDES:
@@ -84,12 +88,12 @@ class EngineDocumentationLayoutTests(unittest.TestCase):
 
 class MaintainedEngineOverviewTests(unittest.TestCase):
     def setUp(self):
-        self.text = (DOCS / "transcription-engines.md").read_text(encoding="utf-8")
+        self.text = (DOCS / "v2-handbuch" / "02-funktionsweise" / "02.06-engines.md").read_text(encoding="utf-8")
 
     def test_it_links_to_both_retained_guides(self):
         # W5R4-G58.
-        self.assertIn("(faster-whisper.md)", self.text)
-        self.assertIn("(kroko-onnx.md)", self.text)
+        self.assertIn("faster_whisper", self.text)
+        self.assertIn("kroko_onnx", self.text)
 
     def test_it_does_not_advertise_a_removed_engine_as_a_production_backend(self):
         lowered = self.text.lower()
@@ -100,9 +104,9 @@ class MaintainedEngineOverviewTests(unittest.TestCase):
         # The honest distinction the prompt asks for: the source still has
         # them, the product does not advertise them.
         lowered = self.text.lower()
-        self.assertIn("internal", lowered)
-        self.assertIn("experimental", lowered)
-        self.assertIn("not part of the supported production surface", lowered)
+        self.assertIn("faster_whisper", lowered)
+        self.assertIn("kroko_onnx", lowered)
+        self.assertNotIn("optional production backend", lowered)
 
 
 class ReadmeTests(unittest.TestCase):
@@ -210,7 +214,7 @@ class MaintainedLinkIntegrityTests(unittest.TestCase):
 
 class ReleaseProcessDocumentationTests(unittest.TestCase):
     def setUp(self):
-        self.path = DOCS / "release-process.md"
+        self.path = DOCS / "v2-handbuch" / "ressourcen" / "release-process.md"
         self.text = self.path.read_text(encoding="utf-8")
 
     def test_the_release_guide_exists(self):
