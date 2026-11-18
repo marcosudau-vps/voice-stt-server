@@ -1,0 +1,258 @@
+{
+  "branch_note": "feat/v2-release-cleanup NICHT verifizierbar (detached, kein Ref); nur Commit bindend.",
+  "chapter": "08.07",
+  "commit_verification": ".git/HEAD enthaelt exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached). Nur *.py, JSON-Manifeste, setup.py.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "Strikte Variantenpruefung (nur Tests) vs Community-Ausnahme free|pro (Manager)."
+    },
+    {
+      "id": "C2",
+      "thema": "_COMMUNITY_LICENSE_CLASSES enthaelt community, Manifest nur community-unresolved."
+    },
+    {
+      "id": "C3",
+      "thema": "Pfad-Exposition: /management absolute Pfade, /models + /v1/models nicht."
+    },
+    {
+      "id": "C4",
+      "thema": "Zwei Namensraeume: Manifest-ID vs Dateiname; Defaults nutzen Dateiname."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "HEAD exakt Auftrags-Commit; Fakten nur *.py/Manifeste/setup.py.",
+      "beleg": ".git/HEAD:1",
+      "evidenz": "A",
+      "gueltigkeit": "gesamte Akte",
+      "id": "MO8-01"
+    },
+    {
+      "aussage": "Genau 2 Engines: faster_whisper, kroko_onnx; streaming nur kroko True.",
+      "beleg": "factory.py:16-19,22; base.py:117; kroko_onnx_engine.py:597",
+      "evidenz": "A",
+      "gueltigkeit": "Typ",
+      "id": "MO8-02"
+    },
+    {
+      "aussage": "11 FW-IDs aus default_product_authority; kein Test pinnt Menge.",
+      "beleg": "stt_model_management.py:346-370",
+      "evidenz": "B",
+      "gueltigkeit": "Autoritaet ohne Injektion",
+      "id": "MO8-03"
+    },
+    {
+      "aussage": "ProductModel: id+engine Pflicht; provisioning braucht filename/sha64/bytes/source/file.",
+      "beleg": "stt_model_management.py:80-155",
+      "evidenz": "B",
+      "gueltigkeit": "jede Autoritaet",
+      "id": "MO8-04"
+    },
+    {
+      "aussage": "Kroko-Manifest 12 (4 free/community, 8 pro/commercial), Schema 1, Revision 1.",
+      "beleg": "models.json:2-3,28-213; test_kroko_catalog.py:195",
+      "evidenz": "A",
+      "gueltigkeit": "gebündeltes Manifest",
+      "id": "MO8-05"
+    },
+    {
+      "aussage": "Alle 12 provisioning False; Community HF-URL pinned d45212ae, Pro source None.",
+      "beleg": "stt_model_management.py:376-404; test_kroko_catalog.py:211",
+      "evidenz": "A",
+      "gueltigkeit": "Produktbuild",
+      "id": "MO8-06"
+    },
+    {
+      "aussage": "Klassen upstream-local(11)/community-unresolved(4)/commercial(8); Status POLICY/PROHIBITED/LOCAL_ONLY getrennt.",
+      "beleg": "stt_model_management.py:40,346-404; models.json:12-27",
+      "evidenz": "A",
+      "gueltigkeit": "drei Felder",
+      "id": "MO8-07"
+    },
+    {
+      "aussage": "Eligibility: commercial exakt, Community free|pro, Hook fail-closed.",
+      "beleg": "stt_model_management.py:1117-1218; test_stt_model_management.py:451-492",
+      "evidenz": "A",
+      "gueltigkeit": "nur kroko+Variante",
+      "id": "MO8-08"
+    },
+    {
+      "aussage": "Konflikt: check_variant strikt ungenutzt (nur Tests); Manager Community auf pro ok.",
+      "beleg": "kroko/models.py:310-330 vs stt_model_management.py:1193-1205",
+      "evidenz": "A",
+      "gueltigkeit": "dieser Commit",
+      "id": "MO8-09"
+    },
+    {
+      "aussage": "Rollen final+realtime alle; Recovery 100/200/300, Rest None; ohne Prioritaet kein Fallback.",
+      "beleg": "stt_model_management.py:33-35,357-369,994-1000",
+      "evidenz": "A",
+      "gueltigkeit": "Recovery-Ordnung",
+      "id": "MO8-10"
+    },
+    {
+      "aussage": "Discovery FW config+bin/snapshots; Kroko *.data; Wurzeln runtime/models/stt/*.",
+      "beleg": "stt_model_management.py:662-686,411-526",
+      "evidenz": "A",
+      "gueltigkeit": "kein Netz",
+      "id": "MO8-11"
+    },
+    {
+      "aussage": "Zustaende DISCOVERED/VALIDATED/LOAD_VERIFIED; readiness 2; state 4 Werte.",
+      "beleg": "stt_model_management.py:27-31,318-340",
+      "evidenz": "A",
+      "gueltigkeit": "STT-Registry",
+      "id": "MO8-12"
+    },
+    {
+      "aussage": "status: eligible/available; authority + operatorEnabled/scopes; Kandidat mit path.",
+      "beleg": "stt_model_management.py:780-813,293-302",
+      "evidenz": "A",
+      "gueltigkeit": "admin-only",
+      "id": "MO8-13"
+    },
+    {
+      "aussage": "Routen models/management/refresh/lifecycle/load/unload/active; models ohne path; v1 lanes.",
+      "beleg": "server.py:8943-9113; openai_routes.py:43-65",
+      "evidenz": "A",
+      "gueltigkeit": "v1/Admin nicht v2",
+      "id": "MO8-14"
+    },
+    {
+      "aussage": "whisper-1 Routing-Alias (routing_alias/final), kein ProductModel; Override nur dort.",
+      "beleg": "server.py:509-512,8425-8464; openai_routes.py:59-64",
+      "evidenz": "A",
+      "gueltigkeit": "OpenAI-API",
+      "id": "MO8-15"
+    },
+    {
+      "aussage": "Defaults: model small, realtime Kroko-64-L-Datei, Engines fw/kroko, use_main False.",
+      "beleg": "server.py:409-413,447",
+      "evidenz": "A",
+      "gueltigkeit": "Out-of-the-box",
+      "id": "MO8-16"
+    },
+    {
+      "aussage": "KROKO_ONNX_PUBLIC_MODELS 4 Community nur Import-Kompatibilitaet, kein Katalog.",
+      "beleg": "kroko_onnx_engine.py:29-37",
+      "evidenz": "A",
+      "gueltigkeit": "nur Engine",
+      "id": "MO8-17"
+    },
+    {
+      "aussage": "Wake 25, Manifest 2/Revision 2; IDs kanonisch, Kollisionen Fehler.",
+      "beleg": "wakeword_catalog.py:968-1086; models.json:2-3",
+      "evidenz": "A",
+      "gueltigkeit": "gebündeltes Asset",
+      "id": "MO8-18"
+    },
+    {
+      "aussage": "Wake-Payload id/display/aliases/version/available/backends/reason; 8 Reason-Codes.",
+      "beleg": "wakeword_catalog.py:301-323,101-121",
+      "evidenz": "A",
+      "gueltigkeit": "GET wake-words",
+      "id": "MO8-19"
+    },
+    {
+      "aussage": "56 shipped (50+4+models.json+silero); 62 disk, 6 unmanifestiert Diagnose.",
+      "beleg": "wakeword_package_resources.py:36-73; test_package_resources.py:52,74",
+      "evidenz": "A",
+      "gueltigkeit": "Packaging",
+      "id": "MO8-20"
+    },
+    {
+      "aussage": "Variante free|pro nur Provenienz (embedded/Wheel-Tag), nie Key; sonst unknown.",
+      "beleg": "stt_model_management.py:46-51,220-221; identity.py:31-71",
+      "evidenz": "A",
+      "gueltigkeit": "Eligibility",
+      "id": "MO8-21"
+    },
+    {
+      "aussage": "Probe-Katalog 8/3 Felder, UUID, 4MiB, URL-Allowlist; auto_ready immer False.",
+      "beleg": "kroko/catalog.py:23-34,59-91,292-351",
+      "evidenz": "A",
+      "gueltigkeit": "Offline keine Autoritaet",
+      "id": "MO8-22"
+    },
+    {
+      "aussage": "Lizenz NOT_CHECKED/CHECKING/VALID/INVALID/CHECK_FAILED; proEnabled modellgebunden.",
+      "beleg": "license_state.py:38-128",
+      "evidenz": "A",
+      "gueltigkeit": "nur commercial",
+      "id": "MO8-23"
+    },
+    {
+      "aussage": "FW ohne Hash/Bytes/File/Source; nur strukturell; kein Test 11er-Menge.",
+      "beleg": "stt_model_management.py:346-356,480-483",
+      "evidenz": "B",
+      "gueltigkeit": "Autoritaet",
+      "id": "MO8-24"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Kein FW-Metadatenkatalog (kein Hash/Size/Source/filename)."
+    },
+    {
+      "id": "N2",
+      "thema": "Kein Kroko automatisch installierbar (12/12 False)."
+    },
+    {
+      "id": "N3",
+      "thema": "whisper-1 kein ProductModel, nur Alias."
+    },
+    {
+      "id": "N4",
+      "thema": "Unmanifestierte Wake keine Faehigkeit (nur Diagnose)."
+    },
+    {
+      "id": "N5",
+      "thema": "Kein ausgelieferter Kroko-Probe-Katalog; nur Offline-Source."
+    },
+    {
+      "id": "N6",
+      "thema": "check_variant ohne produktive Aufrufstelle."
+    },
+    {
+      "id": "N7",
+      "thema": "Kein Test fuer 11er FW-Menge."
+    }
+  ],
+  "researcher_session": "ses_e34b10482ffeGeThpDZKf5Jtad",
+  "solver_notes": [
+    "FW-11: tiny, tiny.en, base, base.en, small, small.en, medium, medium.en, large-v2, large-v3, large-v3-turbo",
+    "KROKO-12: de-community-64-l, de-128-l, en-64-l, en-128-l, de-pro-16-m, -16-l, -32-m, -32-l, -64-m, -64-l, -128-m, -128-l",
+    "WAKE-25: alexa, alice, computer, hey_alfred(alfred), hey_billy(billy), hey_bro(bro), hey_glados(glados), hey_hermes(hermes), hey_jarvis(jarvis), hey_lucy(lucy), hey_luna(luna), hey_max(max), hey_mira(mira), hey_mycroft(mycroft), hey_nabu(nabu), hey_nexus(nexus), hey_nova(nova), hey_oracle(oracle), hey_rhasspy(rhasspy), hey_rocky(rocky), ivy, pico, stop, timer, weather",
+    "ENGINES-2: faster_whisper (streaming false), kroko_onnx (streaming true)",
+    "Zaehlung: 23 = 11+12; 25x2=50 +4 +models.json +silero = 56 shipped; 62 disk (6: Jarvis.*, jarvis_v1.*, hey_jarvis_v0.1.*)"
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Branch detached, kein Ref."
+    },
+    {
+      "id": "U2",
+      "thema": "Kein versioniertes Wire-Schema /api/models/*."
+    },
+    {
+      "id": "U3",
+      "thema": "Host-Modellinhalte/Header."
+    },
+    {
+      "id": "U4",
+      "thema": "Absicht doppelte Variantenpruefung."
+    },
+    {
+      "id": "U5",
+      "thema": "Ob Distribution real pro ist (Umgebung)."
+    }
+  ],
+  "writer_notes": "Reine Tabelle: 23 STT, 25 Wake, 4 Pipeline, 1 Auxiliary, 2 Engines. Mechanik 02.x/05.x/07.x nur referenzieren. Achtung-Kaesten C1-C4. Keine Diagramme. Keine Secrets/Host-Pfade ausser Mustern."
+}

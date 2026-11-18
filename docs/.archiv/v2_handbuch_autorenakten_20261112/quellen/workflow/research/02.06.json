@@ -1,0 +1,390 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nur Auftragskontext (keine refs/heads, keine packed-refs; detached). Commit verifiziert (.git/HEAD).",
+  "chapter": "02.06",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "correction_round": 0,
+  "conflicts": [
+    {
+      "id": "C-E01",
+      "thema": "Nested recognizer per kwargs.update zuletzt ueber alles; CPU-Pruefung nur Top-Level. AUSNAHME: key fliesst via effective_recognizer_key in Guard-Identitaet ein (Review-R1 F3 verifiziert: credentials.py Z.33-36, engine Z.353-355). Nur provider/model_path/num_threads umgehen Top-Level ungesehen.",
+      "beleg": "kroko_onnx_engine.py Z.353-356,430-479; credentials.py Z.1-6; Tests nur debug/num_threads",
+      "review_fix": "2026-11-08 R1-F3: key aus ungesehen-Liste entfernt."
+    },
+    {
+      "id": "C-E02",
+      "thema": "model_filename + Pfad-Fallback Z.384-415 UNERREICHBAR (Resolver liefert oder wirft); model_filename wirkungslos; model_dir nur via genau-eine-.data-Regel.",
+      "beleg": "kroko_onnx_engine.py Z.377-428; model_resolver.py Z.117-155"
+    },
+    {
+      "id": "C-E03",
+      "thema": "Faster-Whisper greift UNBEDINGT auf faster_whisper.BatchedInferencePipeline zu (auch batch 0); ohne Attribut AttributeError statt TranscriptionEngineError. Nur mit Pin 1.2.1 garantiert.",
+      "beleg": "faster_whisper_engine.py Z.30,45; requirements.txt Z.3"
+    },
+    {
+      "id": "C-E04",
+      "thema": "Worker-Prozess plattformabhaengig: Linux Thread, sonst mp.Process (spawn Default). Eine-Instanz-pro-Prozess nur je Schicht formulieren.",
+      "beleg": "runtime.py Z.25-33; Server echte Threads"
+    },
+    {
+      "id": "C-E05",
+      "thema": "Defaults je Schicht: Bibliothek faster_whisper/None->Haupt; Server faster_whisper + kroko_onnx. Nicht als Produktdefault vereinheitlichen.",
+      "beleg": "audio_recorder.py Z.105-127; initialization.py Z.150-158; server.py Z.412-413"
+    },
+    {
+      "id": "C-E06",
+      "thema": "Kroko supports_streaming=True, Server erzeugt NIE Streaming-Session (nur Bibliothek). Faehigkeit != Nutzung.",
+      "beleg": "kroko_onnx_engine.py Z.597; realtime.py Z.318-340; server.py Z.2045-2057"
+    },
+    {
+      "id": "C-E07",
+      "thema": "transcription_engine_options im switch-Diff, aber aus public_dict ENTFERNT; ueber /api/config nicht lesbar (Bedien-Luecke).",
+      "beleg": "server.py Z.545-553,8056-8057,8149"
+    },
+    {
+      "id": "C-E08",
+      "thema": "Kroko-Identitaet zweistufig: Settings (Manifest-ID/Dateiname) vs Scheduler (Header-UUID/Pfad). Gleiche Namen verschiedener Pfade erst Stufe 2 Konflikt.",
+      "beleg": "kroko_runtime.py Z.20-33,54-73; server.py Z.6868-6886; native_guard.py Z.103-112"
+    }
+  ],
+  "diagram_edges": [
+    "WRK->FAC | Engine einmal erzeugen [E-24,E-25]",
+    "FAC->REG | normalisieren + nachschlagen [E-06,E-07]",
+    "REG->FWE | lazy import FasterWhisperEngine [E-06,E-09]",
+    "REG->KOE | lazy import KrokoOnnxEngine [E-06,E-14]",
+    "FAC->CFG | device=cpu, gpu=0 [E-07]",
+    "FAC->ERR | unsupported bei unbekanntem Namen [E-05,E-07]",
+    "CFG->FWE | Konstruktor [E-01,E-09]",
+    "CFG->KOE | Konstruktor [E-01,E-14]",
+    "KOE->KOB | Backend-Erzeugung [E-14]",
+    "KOB->GUARD | acquire (Modell + Key) [E-14,E-22]",
+    "GUARD->KOB | confirm/release [E-14,E-22]",
+    "KOB->MODEL | strikt lokal aufloesen [E-12,E-15]",
+    "FWE->MODEL | strikt lokal aufloesen [E-13]",
+    "FWE->RES | transcribe/_transcribe [E-10,E-12]",
+    "KOE->KOB | transcribe [E-19]",
+    "KOB->RES | Stream + Text [E-18]",
+    "KOE->SESS | create_streaming_session [E-20,E-21]",
+    "SESS->KOB | reset/accept/decode/result/finish/close [E-20]",
+    "WRK->FAC | genau eine Instanz je Lane [E-24,E-25,K-31]",
+    "WRK->WARM | warmup(asset) [E-24,E-25]",
+    "WARM->FWE/KOE | transcribe(en, use_prompt=False) [E-03]",
+    "WRK->ERR | load_error/Exception [E-24,E-25]",
+    "KOB|GUARD->ERR | Konfliktfehler [E-14,E-22]",
+    "SESS->ERR | closed/finished [E-20]",
+    "OPT->FWE/KOB | engine_options [E-16,E-23,E-26,E-29]",
+    "GUARD->ERR | 4 Konflikt-Codes [E-22]",
+    "RT->KOE|SESS | Streaming-Nutzung vs Server-Nichtnutzung [E-21]",
+    "OPT->FWE | transcribe_with_options [E-11,E-26]",
+    "OPT->KOE | KEIN Pfad (verworfen) [N-E04]",
+    "WRK->RES | Job-Ergebnis [E-25]",
+    "FAC->ERR(forward) | unsupported vor Import [E-28,E-07]",
+    "SW->POL | Kandidat pruefen (switch_models) [E-27]",
+    "POL->SW | CPU + Kroko-Einzelidentitaet [E-27,E-28]",
+    "SW->KG | _kroko_assert_switch_possible (restart-only) [E-27,E-22]",
+    "KG->ERR | Pro-Modell/Key-Wechsel [E-27,E-22]",
+    "SW->OLD | stop() alter Scheduler [E-27,E-25]",
+    "OLD->GUARD | close, Lease frei [E-27,E-14,E-25]",
+    "SW->NEW | neu bauen/starten [E-27,E-25]",
+    "NEW->GUARD | neue Lease [E-27,E-22]"
+  ],
+  "facts": [
+    {
+      "aussage": "Engine erhaelt exakt: model (Pflicht), download_root None, compute_type default, gpu_device_index 0 (int|List), device cpu, beam_size 5, initial_prompt None, suppress_tokens None, batch_size 0, vad_filter True, normalize_audio False, engine_options None. KEIN Feld Sprache/Samplerate/Threads/Prompt-Schalter (nur engine_options/Aufrufparameter).",
+      "beleg": "base.py TranscriptionEngineConfig Z.31-48",
+      "evidenz": "CODE hoch",
+      "gueltigkeit": "beide Engines",
+      "id": "E-01"
+    },
+    {
+      "aussage": "TranscriptionInfo: language None, probability 0.0. TranscriptionResult: text Pflicht, info Default-Factory, details {}.",
+      "beleg": "base.py Z.10-28",
+      "evidenz": "CODE",
+      "gueltigkeit": "beide",
+      "id": "E-02"
+    },
+    {
+      "aussage": "engine_name base, supports_streaming False; Konstruktor speichert config. warmup(audio) -> transcribe(en, use_prompt False). transcribe abstrakt. create_streaming_session wirft TranscriptionEngineError (... does not support chunk streaming.). _normalize_audio wirft bei None/size==0; normalize True -> Peak 0.95. _get_prompt nur bei use_prompt+initial_prompt.",
+      "beleg": "base.py BaseTranscriptionEngine Z.111-167",
+      "evidenz": "CODE+TEST (kroko :699-708)",
+      "gueltigkeit": "beide; Nicht-Streaming Default",
+      "id": "E-03"
+    },
+    {
+      "aussage": "Abstrakt reset/accept_audio(audio, sample_rate)/get_result; decode No-op, finish = decode+get_result, close No-op. Kroko ueberschreibt finish/close.",
+      "beleg": "base.py StreamingTranscriptionSession Z.67-108",
+      "evidenz": "CODE",
+      "gueltigkeit": "Vertrag; aktuell nur Kroko",
+      "id": "E-04"
+    },
+    {
+      "aussage": "TranscriptionEngineError(RuntimeError) Setup/Laufzeit; UnsupportedTranscriptionEngineError abgeleitet nur unbekannter Name.",
+      "beleg": "base.py Z.51-64",
+      "evidenz": "CODE+TEST (boundary :65-71)",
+      "gueltigkeit": "beide/Fabrik",
+      "id": "E-05"
+    },
+    {
+      "aussage": "Exakt 2 Eintraege faster_whisper/kroko_onnx; Default faster_whisper. Normalisierung (name or Default).strip().lower().replace(-,_); KEIN Alias. None/leer -> Default (unterstuetzt); reines Whitespace nach strip leer -> NICHT unterstuetzt. Fehlermeldung sortierte Namen.",
+      "beleg": "factory.py ENGINE_CLASS_PATHS Z.16-19, DEFAULT Z.22, normalize Z.25-29, is_supported Z.32-36, message Z.39-47",
+      "evidenz": "CODE+TEST (boundary :61-63; kroko :228-235; protocol :296-304)",
+      "gueltigkeit": "prozessweit; API supportedEngines",
+      "id": "E-06"
+    },
+    {
+      "aussage": "Reihenfolge: normalisieren -> device=cpu + gpu_device_index=0 SETZEN (Mutation auch bei Ablehnung) -> Registry -> sonst Unsupported...(roher Name) -> import_module(package) -> engine_cls(config). Fehlertext exakt Unsupported transcription engine '<name>'. Supported engines: faster_whisper, kroko_onnx.",
+      "beleg": "factory.py create Z.59-69; _load_engine_class Z.50-56",
+      "evidenz": "CODE+TEST (boundary :65-86)",
+      "gueltigkeit": "prozessweit",
+      "id": "E-07"
+    },
+    {
+      "aussage": "Nur faster_whisper_engine.py + kroko_onnx_engine.py im Paket. 5 Altadapter engineering/drafts (ohne __init__, nicht paketiert); 7 entfernt. Serverstart laedt nur base/factory/model_resolver/_model_utils/faster/kroko. Repo != Produkt.",
+      "beleg": "boundary-Test :33-48,118-184,219-223; MANIFEST.in",
+      "evidenz": "CODE+TEST+CONFIG",
+      "gueltigkeit": "Repo + Wheel",
+      "id": "E-08"
+    },
+    {
+      "aussage": "Lazy-Import faster_whisper; fehlt -> TranscriptionEngineError mit pip-Hinweis VoiceSTT[faster-whisper]. Liest UNBEDINGT faster_whisper.BatchedInferencePipeline (auch batch 0). Danach: engine_options kopieren, Modell strikt lokal, NUR cpu_threads+num_workers per int() in model_kwargs, WhisperModel(pfad,device,compute_type,device_index,download_root,**kwargs). batch>0 -> BatchedInferencePipeline-Ummantelung. KEIN close().",
+      "beleg": "faster_whisper_engine.py _load Z.16-30, __init__ Z.40-66",
+      "evidenz": "CODE+TEST (nur Fehlpfad :11-22)",
+      "gueltigkeit": "faster_whisper Server+Bibliothek",
+      "id": "E-09"
+    },
+    {
+      "aussage": "_normalize_audio -> model.transcribe(audio, language|None, beam_size, initial_prompt nur-use_prompt+gesetzt, suppress_tokens, vad_filter, [batch_size>0]). KEIN temperature/Word-Timestamps/task. supports_streaming False (nicht ueberschrieben); kein transcribe_with_context.",
+      "beleg": "faster_whisper_engine.py transcribe Z.68-83",
+      "evidenz": "CODE",
+      "gueltigkeit": "faster_whisper",
+      "id": "E-10"
+    },
+    {
+      "aussage": "NUR diese Engine: language, beam_size, initial_prompt = options[prompt] or _get_prompt(use_prompt), suppress_tokens, vad_filter, temperature float(options.temperature,0.0), word_timestamps = word in granularities. vad_parameters.threshold NUR wenn threshold!=None UND config.vad_filter. batch_size>0. stream_callback durchgereicht. Nicht-numerisch -> ValueError (nicht gewrappt).",
+      "beleg": "faster_whisper_engine.py Z.85-105",
+      "evidenz": "CODE + Route-Validierung 0.0-1.0 (openai_compat 52-63,140-144)",
+      "gueltigkeit": "faster_whisper, OpenAI-Route/Server-Jobs",
+      "id": "E-11"
+    },
+    {
+      "aussage": "text = join+trim Segmenttexte (leere entfallen). details duration/duration_after_vad/segments(id,seek,start,end,text,tokens,temperature,avg_logprob,compression,no_speech_prob,words)/words flach(word,start,end,probability). stream_callback je nicht-leerem Segment (segment_text, detail).",
+      "beleg": "faster_whisper_engine.py _transcribe Z.107-151",
+      "evidenz": "CODE",
+      "gueltigkeit": "faster_whisper",
+      "id": "E-12"
+    },
+    {
+      "aussage": "Direkter Pfad gilt wenn CTranslate2 (config.json+model.bin) oder snapshots/<ref> darunter. Sonst Reihenfolge options[model_root], VOICESTT_FASTER_WHISPER_MODEL_ROOT, download_root je Root Aliase models--Systran--faster-whisper-<n>, faster-whisper-<n>, <n> + Glob models--*--* Suffix-Match. Nichts -> TranscriptionEngineError (kein impliziter Download). local_files_only/offline aendern nur Praefix. KEIN Downloadpfad.",
+      "beleg": "model_resolver.py 9-109",
+      "evidenz": "CODE+TEST (local_model_resolver :19-39)",
+      "gueltigkeit": "faster_whisper",
+      "id": "E-13"
+    },
+    {
+      "aussage": "Reihenfolge: NumPy -> Pfad -> sample_rate int(Option,16000) -> Tail-Padding -> Native-Suppression (+Quiet-Env) -> nur bei NICHT-injizierter Klasse Native-Lease acquire(identity_for_path, effective_key) -> Recognizer from_transducer -> confirm_loaded. Exception -> Lease frei. close: recognizer None + Lease frei; weakref.finalize Netz.",
+      "beleg": "kroko_onnx_engine.py Backend __init__ 321-347, admit 349-360, release/close 362-369",
+      "evidenz": "CODE+TEST (544-599; pr15 :791-851)",
+      "gueltigkeit": "kroko_onnx beide Lanes",
+      "id": "E-14"
+    },
+    {
+      "aussage": "Quelle engine_options[model_path|model_file] sonst config.model sonst DEFAULT (Kroko-DE-Community-64-L-Streaming-001.data). Existiert -> kanonisiert. Sonst model_root/model_dir/VOICESTT_KROKO_MODEL_ROOT/download_root root/<datei>; model_dir genau EINE *.data (ohne .part). Sonst TranscriptionEngineError (Manager-Verweis). KEIN Download (auch nicht auto_download/ALLOW_DOWNLOAD). model_filename/Fallback Z.384-415 praktisch UNERREICHBAR (Resolver liefert oder wirft).",
+      "beleg": "model_resolver resolve_kroko 112-155; engine _resolve_model_path 372-428",
+      "evidenz": "CODE+TEST (264-436; local :42-54)",
+      "gueltigkeit": "kroko_onnx",
+      "id": "E-15"
+    },
+    {
+      "aussage": "Native Defaults: key aus effective_key, referralcode '', num_threads 1, provider cpu, sample_rate (16000), feature_dim 80, decoding greedy_search, max_active_paths 4, hotwords_file '', hotwords_score 1.5, blank_penalty 0.0, endpoint True + rule1 2.4/rule2 1.2/rule3 20.0. engine_options[recognizer] NICHT-Objekt -> TranscriptionEngineError; Objekt per kwargs.update(nested) ZULETZT ueber alles. from_transducer-AttributeError eigene Meldung.",
+      "beleg": "kroko_onnx_engine _recognizer_kwargs 430-479, _create_recognizer 481-493",
+      "evidenz": "CODE+TEST (:474-517)",
+      "gueltigkeit": "kroko_onnx",
+      "id": "E-16"
+    },
+    {
+      "aussage": "Expliziter provider nur exakt lower==cpu, sonst TranscriptionEngineError (CPU-only Build); Rueckgabe immer cpu. config.device NICHT ausgewertet.",
+      "beleg": "kroko_onnx_engine _provider_from_config 220-230, Verwendung 441",
+      "evidenz": "CODE+TEST (:438-472)",
+      "gueltigkeit": "kroko_onnx",
+      "id": "E-17"
+    },
+    {
+      "aussage": "Pro Aufruf neuer Stream, float32 flach, accept_waveform. tail_padding>0 Nullsamples padding*rate nachschieben. input_finished nur wenn angeboten. Dekodieren solange is_ready: bevorzugt decode_streams([s]) sonst decode_stream; ohne is_ready einmal versuchen sonst Fehler. Text via text_from_output. Sprache Parameter oder Dateiname Kroko-<LL>-.",
+      "beleg": "kroko_onnx_engine transcribe 563-588, _as_float32 495-505, _decode_ready 519-549, _result_text 551-561",
+      "evidenz": "CODE+TEST (:519-542; :686-697)",
+      "gueltigkeit": "kroko_onnx",
+      "id": "E-18"
+    },
+    {
+      "aussage": "engine_name kroko_onnx, supports_streaming True. transcribe normalisiert, Backend mit language = options[language] or language; Ergebnis-Sprache output/options/param, language_probability = 1.0 sobald so eine Sprache bestimmt ist, sonst 0.0 (Review-R2: KEINE Textleere-Bedingung). beam/vad_filter/initial_prompt/use_prompt NICHT weitergegeben. details leer. close -> backend.close().",
+      "beleg": "KrokoOnnxEngine 591-637",
+      "evidenz": "CODE+TEST (:666-684)",
+      "gueltigkeit": "kroko_onnx",
+      "id": "E-19",
+      "review_fix": "2026-11-08 R1-F2: Bedingung korrigiert (Sprache bestimmt, nicht Textleere)."
+    },
+    {
+      "aussage": "Konstruktor legt sofort Stream an (reset). reset: NEUER Stream + closed=False/finished=False. accept_audio wirft bei closed/finished; leer No-op; optional normalisiert; Rate Parameter/Backend-Default. decode No-op wenn zu/kein Stream. get_result bei zu/None TranscriptionResult(text ''). finish EINMALIG Tail+input_finished+dekodieren+Ergebnis; bei zu nur get_result. close: closed True + stream None.",
+      "beleg": "KrokoOnnxStreamingSession 640-750",
+      "evidenz": "CODE+TEST (:710-774)",
+      "gueltigkeit": "kroko_onnx",
+      "id": "E-20"
+    },
+    {
+      "aussage": "NUR Kroko supports_streaming True; Faster-Whisper False. Bibliothek nutzt Sessions nur wenn vorhanden: accept->decode->get_result, Ende finish/close. Server erzeugt NIE Streaming-Session; pro Job transcribe_with_options (falls) oder transcribe. Server-Realtime = Segment-Transkription, kein Chunk-Streaming.",
+      "beleg": "base 117,138-144; kroko 597,606-610; realtime.py 318-453,455-498; server.py 2045-2057 (kein create_streaming_session, Grep-negativ)",
+      "evidenz": "CODE + Session-Tests",
+      "gueltigkeit": "Bibliothek=Streaming; Server=kein Streaming",
+      "id": "E-21"
+    },
+    {
+      "aussage": "Max EINE native Lease -> sonst CONCURRENT_IDENTITY; nach nativem Pro nur gleiche Pro-Identitaet (PRO_IDENTITY_CHANGE/Neustart); Key-gebundener Pro-Kontext nicht mit anderem/entferntem Key (KEY_CONTEXT_CHANGE/Neustart); Pro ohne Key -> PRO_KEY_REQUIRED. Community nach Pro erlaubt (Kontext bleibt). acquire Pro sticky; confirm_loaded = Nachweis; release frei; finalize Netz.",
+      "beleg": "native_guard.py 125-260 (Codes 46-52); Engine-Anbindung 333-360",
+      "evidenz": "CODE+TEST (pr15 :791-851)",
+      "gueltigkeit": "prozessweit, nur kroko echt",
+      "id": "E-22"
+    },
+    {
+      "aussage": "Tier aus JSON-Header (free true->community, false->pro, fehlend->None, nie bewiesen); Identitaet Header-UUID sonst normalisierter Pfad. Key: options[recognizer][key] (auch leer, unterdrueckt Env) > options[key] > ENV KROKO_API_KEY/KROKO_ONNX_KEY/VOICESTT_KROKO_ONNX_KEY/KROKO_KEY > ''. PUBLIC_MODELS 4 Community-Namen = Metadatum, KEINE Whitelist. Suppression-Hierarchie suppress_native_output>suppress_output>quiet>silent (Default False) -> ENV=1 + stdout/stderr prozessweit auf devnull unter RLock.",
+      "beleg": "models.py 466-511; credentials.py 13-47; engine 29-41,92-142",
+      "evidenz": "CODE+TEST (544-599)",
+      "gueltigkeit": "kroko (Lizenzpolitik 02.07)",
+      "id": "E-23"
+    },
+    {
+      "aussage": "Final-Worker EINMALIG Engine aus Config in run(), warmup_audio.wav float32 + engine.warmup(); danach ready. Fehler geloggt+weitergereicht vor ready. Schleife transcribe pro Eintrag. Realtime-Modell im Recorder-Prozess (nicht Worker), nur wenn enable_realtime + nicht use_main + kein externer Executor; ebenfalls Warmup; Rueckfall Haupt-Modell/Optionen. device!=cpu Warnung+Ueberschreiben cpu/0. Worker-Start Linux Thread sonst mp.Process (spawn Default).",
+      "beleg": "core/transcription.py 80-151; initialization.py 146-158,417-472,500-552; runtime.py 17-33",
+      "evidenz": "CODE (kein direkter Engine-Test)",
+      "gueltigkeit": "Bibliothek (NICHT Server-identisch)",
+      "id": "E-24"
+    },
+    {
+      "aussage": "Lane-Worker factory EINMAL; beide teilen engine_initialization_lock (Konstruktor darunter; Kommentar: native CPU-Korruption bei Parallelbau). Init-Fehler -> load_error + error_callback; ready im finally. _warmup nur settings.model_warmup, Fehler Debug. Jobs bei engine None: nicht verfuegbar. stop() schliesst Engine nur wenn Thread in 10s endet (Duck-Typing close()).",
+      "beleg": "server.py SharedEngineWorker 1942-1969, _worker 2012-2030, _warmup 2101-2108, Scheduler 2111-2149, Fabriken 2206-2270",
+      "evidenz": "CODE",
+      "gueltigkeit": "Server beide Lanes",
+      "id": "E-25"
+    },
+    {
+      "aussage": "Server-Defaults: Haupt faster_whisper/small, Realtime kroko_onnx/Kroko-DE-Community-64-L-Streaming-001.data; compute int8; beam 5/3; batch 16/16; vad True; normalize False. resolved_engine_options: erst Lane-Optionen bei passender Engine, dann andere Lane gleiche Engine, dann stt_engine_settings[engine] Options, sonst {}. Optionen aus public_dict ENTFERNT (nicht /api/config-lesbar). Job mit request_options -> transcribe_with_options nur mit Methode; Kroko fehlt -> still verworfen. OpenAI-Route baut prompt/temperature/threshold/granularities, validiert 0.0-1.0.",
+      "beleg": "server.py Defaults 409-424, public_dict 545-553, resolved 1276-1305, Ausfuehrung 2045-2057, Fabriken 2226-2268; openai_routes 204-209; openai_compat 24-147",
+      "evidenz": "CODE+TEST (protocol :315-325; kroko :228-235)",
+      "gueltigkeit": "Server; OpenAI = Faster-Optionen",
+      "id": "E-26"
+    },
+    {
+      "aussage": "Erlaubt: model, realtime_model, transcription_engine, realtime_transcription_engine, use_main_model_for_realtime, language, beide Options-Dicts; unbekannt -> ValueError. Kandidat kopiert+coerced; Modell-/Engine-Aenderung ohne Angabe -> use_main False. enforce_cpu_model_policy (CPU+Kroko-Einzel), _kroko_assert_switch_possible (restart-only VOR Eingriff), Lizenz-Neuauswertung+Modellprobe. Ohne Scheduler nur Uebernahme. Sonst: alt stop (Engine close -> Lease frei), uebernehmen, neu + start + wait_ready + healthy; Fehler Rollback+Rollback-Scheduler. Kroko-Modellwechsel nur ohne laufende Sessions/Transkriptionen, sonst RuntimeError (Entladen noetig). Grenze: stop schliesst Engine erst bei Thread-Ende 10s, sonst Lease bestehen -> neuer Load kann scheitern (CODE, ungetestet).",
+      "beleg": "server.py switch 8042-8232, kroko_assert 6986-7018, quiesced 6970-6984, stop 1981-1996",
+      "evidenz": "CODE+TEST (pr15 :495-550)",
+      "gueltigkeit": "Server (Rollback 02.07, Queues 02.08)",
+      "id": "E-27"
+    },
+    {
+      "aussage": "enforce_supported_engines prueft beide Felder (wenn nicht None) gegen Fabrik -> ValueError mit unsupported_message VOR Import. enforce_cpu_model_policy setzt device cpu, ruft Engine/Tuning/Kroko-Einzel. effective_device wirft ausser cpu; CLI choices (cpu); YAML !=cpu SystemExit. CLI --engine/--transcription-engine (Default faster_whisper), --realtime-... (Default kroko_onnx) OHNE choices; Ablehnung erst Policy. Bibliothek warnt+ueberschreibt still.",
+      "beleg": "server.py 8744-8801,8704-8707,8840-8843, CLI 10425-10453, YAML 10379-10380",
+      "evidenz": "CODE+TEST (boundary :88-105; G-03)",
+      "gueltigkeit": "Server/CLI/YAML",
+      "id": "E-28"
+    },
+    {
+      "aussage": "Faster-Whisper nur cpu_threads + num_workers per int(); num_threads NICHT gemappt. Kroko engine_options[num_threads] Default 1. KEINE Grenzen (0/negativ/riesig ungeprueft). Fehlerformate: int()-ValueError/TypeError vs TranscriptionEngineError(must be integer). KEIN Server-Settings-Feld; OMP_NUM_THREADS Deployment.",
+      "beleg": "faster_whisper_engine 52-55; kroko 198-206,440; server.py 414-415",
+      "evidenz": "CODE (G-21 Detail)",
+      "gueltigkeit": "beide; Deployment",
+      "id": "E-29"
+    },
+    {
+      "aussage": "Belegt: fehlendes Paket (Extra-Hinweis), fehlendes NumPy, fehlendes kroko/OnlineRecognizer/from_transducer, fehlende Modelldatei (Manager-Verweis), Nicht-CPU-Provider, ungueltige Kroko-Optionstypen, geschlossene/beendete Session, Basis-ohne-Streaming, unbekannter Name, Native-Konflikte. Alles TranscriptionEngineError (Unterklasse) ausser Native-Konflikt KrokoNativeConflict(code/restart_required).",
+      "beleg": "faster_whisper 22-28; kroko 59-64,72-89,220-230,311-313,417-427,490-493,529-532,673-676; base 142-151; resolver 104-155; factory 66-67",
+      "evidenz": "CODE+TEST (Fehlpfade)",
+      "gueltigkeit": "beide",
+      "id": "E-30"
+    }
+  ],
+  "investigated_sources": [
+    "transcription_engines/{base,factory,faster_whisper_engine,kroko_onnx_engine,model_resolver,_model_utils}.py",
+    "kroko/{native_guard,credentials,models}.py, core/{transcription,initialization,runtime,realtime}.py",
+    "server.py, kroko_runtime.py, openai_routes.py, openai_compat.py",
+    "Tests (engine_boundary, faster_whisper, kroko_onnx, pr15, local_resolver, protocol)",
+    "MANIFEST.in, setup.py, requirements.txt"
+  ],
+  "not_implemented": [
+    {
+      "id": "N-E01",
+      "thema": "Keine dritte Engine; Registry exakt zwei"
+    },
+    {
+      "id": "N-E02",
+      "thema": "Kein Chunk-Streaming Faster-Whisper"
+    },
+    {
+      "id": "N-E03",
+      "thema": "Kroko ignoriert use_prompt/initial_prompt; nur language"
+    },
+    {
+      "id": "N-E04",
+      "thema": "Keine request-scoped Optionen Kroko (still verworfen)"
+    },
+    {
+      "id": "N-E05",
+      "thema": "Kein GPU-Provider"
+    },
+    {
+      "id": "N-E06",
+      "thema": "Kein impliziter/expliziter Download durch Engine"
+    },
+    {
+      "id": "N-E07",
+      "thema": "Keine Schema-Whitelist-Validierung engine_options"
+    },
+    {
+      "id": "N-E08",
+      "thema": "Keine zweite native Kroko-Instanz / zweites Modell"
+    },
+    {
+      "id": "N-E09",
+      "thema": "Kein close() Faster-Whisper (GC/Prozessende)"
+    },
+    {
+      "id": "N-E10",
+      "thema": "Keine Streaming-Nutzung im FastAPI-Server"
+    },
+    {
+      "id": "N-E11",
+      "thema": "Kein transcribe_with_context in Engines (nur externe Executoren)"
+    }
+  ],
+  "researcher_session": "ses_e469acc9fffe2ya0Tp60WKus3H",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-E01",
+      "thema": "Nested-recognizer-Override-Wirkung nativ + Guard (nur Reihenfolge belegt)"
+    },
+    {
+      "id": "U-E02",
+      "thema": "CPU-Auslastung/Durchsatz cpu/num_threads; 0/negativ-Verhalten"
+    },
+    {
+      "id": "U-E03",
+      "thema": "Thread-Sicherheit gleichzeitiger transcribe auf EINEM Kroko-Recognizer"
+    },
+    {
+      "id": "U-E04",
+      "thema": "Semantik model_filename/_first_existing_data_file (unerreichbar, Absicht unbelegt)"
+    },
+    {
+      "id": "U-E05",
+      "thema": "WhisperModel bei lokalem Pfad + gesetztem download_root"
+    },
+    {
+      "id": "U-E06",
+      "thema": "BatchedInferencePipeline-Verfuegbarkeit ausser Pin 1.2.1"
+    },
+    {
+      "id": "U-E07",
+      "thema": "Native-Lease-Freigabe bei Wechsel vor neuem Load (Thread-Timeout 10s, ungetestet)"
+    }
+  ],
+  "review_notes": "2026-11-08 R1 (6 Findings): E-19 Wahrscheinlichkeit korrigiert; C-E01 key-Nuance; Fakten E-12 (compression_ratio), E-11, E-15, E-21, E-22-E-30 verifiziert ok."
+}

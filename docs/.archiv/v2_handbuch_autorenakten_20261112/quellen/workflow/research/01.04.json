@@ -1,0 +1,455 @@
+{
+  "branch_context": "feat/v2-release-cleanup (Auftragskontext)",
+  "chapter": "01.04",
+  "commit_note": "Researcher meldete fehlendes .git (Subagent-Sichtbeschraenkung). ORCHESTRATOR-VERIFIKATION 2026-11-08: .git vorhanden, git rev-parse HEAD = a8993c5c68042d996eab680d84a5b138a214bb5d, Arbeitsbaum sauber. N-04 damit widerlegt, Commit gueltig. Siehe decisions.md.",
+  "correction_round": 0,
+  "diagram_edges": [
+    "E01 WS-Client -> /ws/v2 Route : Binaerframe [D-01,D-02]",
+    "E02 WS-Client -> /ws/transcribe Route : Binaerframe [D-01,D-03]",
+    "E03 Binaerframe -> decode_audio_packet : 4B-Laenge + JSON + PCM [D-01]",
+    "E04 decode_audio_packet -> ingest_audio_packet : AudioPacket [D-02,D-03]",
+    "E05 ingest_audio_packet -> packet_to_server_samples : Validierung [D-04,D-06]",
+    "E06 packet_to_server_samples -> resample_int16 : int16 mono @ sampleRate [D-04,D-05]",
+    "E07 resample_int16 -> feed_audio : int16 mono @ 16 kHz [D-05,D-06]",
+    "E08 ingest_audio_packet -> Client : warning/error [D-06]",
+    "E09 feed_audio -> audio_queue : 1024-Byte-Chunks (512 Samples = 32 ms) [D-07]",
+    "E10 audio_queue -> Recording-Worker : get(timeout=0.01) [D-09]",
+    "E11 Recording-Worker -> on_recorded_chunk : Sample-Zaelung/Dauerlimit [D-09,D-43]",
+    "E12 Recording-Worker -> Gate : Gate-Pruefung aussen, offen = Aufnahme moeglich [D-10]",
+    "E13 Gate (offen) -> is_voice_active : WebRTC UND Silero, VAD-Pruefung innen [D-10, D-12]",
+    "E14 Gate offen + Sprache -> start() : State recording [D-13,D-43]",
+    "E15 audio_buffer (Pre-Roll) -> frames : alle Frames (Trim aus) [D-15,D-16]",
+    "E16 Wake-Hit (V2) -> frames : Schnitt an release_sample [D-18]",
+    "E17 Aufnahme-Chunks -> frames : append [D-09]",
+    "E18 Stille >= post_speech_silence_duration -> stop() [D-17,D-14]",
+    "E19 stop() -> recorded_audio_queue : frames + segment_context [D-14]",
+    "E20 stop() -> Stabilizer : finalize() ohne Finaltext [D-14,D-32]",
+    "E21 Text-Worker -> recorder.text() : blockierend, 1x pro Session [D-20,D-11]",
+    "E22 text() -> wait_audio() : Queue oder warten [D-11,D-20]",
+    "E23 wait_audio -> set_audio_from_frames : int16 -> float32/32768 [D-21]",
+    "E24 perform_final_transcription -> Executor-Thread : nur wenn transcribe_count==0 [D-22]",
+    "E25 Executor-Thread -> SchedulerTranscriptionExecutor : kind=final [D-22,D-23]",
+    "E26 Executor -> transcribe_for_recorder : InferenceJob, request_id aus Kontext [D-23,D-24]",
+    "E27 transcribe_for_recorder -> FairInferenceQueue.submit : final-Deque, Limits 8/64 [D-24,D-25]",
+    "E28 Queue -> SharedEngineWorker : final vor realtime [D-25,D-26]",
+    "E29 Worker -> Engine : transcribe(float32) [D-27]",
+    "E30 Worker -> _on_inference_result : InferenceResult [D-27,D-28]",
+    "E31 _on_inference_result -> Holder : complete_pending_recorder_transcription [D-28,D-24]",
+    "E32 Holder -> Executor-Thread -> perform_final_transcription : (status,result) [D-22,D-24]",
+    "E33 perform_final_transcription -> preprocess_output : Gross/Punkt [D-30]",
+    "E34 _text_worker -> _publish_final_text : Finaltext [D-20,D-35]",
+    "E35 _publish_final_text -> Ledger resolve_completed : unter _ledger_dispatch_lock [D-35,D-36]",
+    "E36 Ledger -> _publish_ordered_final : nur segment_sequence-Reihenfolge [D-36]",
+    "E37 _publish_ordered_final -> V1-Client : type:final [D-35,D-39]",
+    "E38 _publish_ordered_final -> V2 : transcription.completed [D-34,D-40]",
+    "E39 Realtime-Worker -> frames-Snapshot : Kopie vor Inferenz [D-31]",
+    "E40 Snapshot -> float32 : /32768, Min 50 ms [D-31]",
+    "E41 realtime_executor -> transcribe_for_recorder : kind=realtime, Deadline +1500ms [D-23,D-24]",
+    "E42 Realtime-Job -> Queue-Slot : ersetzt alten (coalesced) [D-25]",
+    "E43 Queue get() -> Drop : deadline_at<now => stale [D-25]",
+    "E44 Worker -> Realtime-Engine : eigener Worker falls nicht use_main_model_for_realtime [D-26,D-27]",
+    "E45 Ergebnis -> Stabilizer.observe : stabil/instabil [D-31,D-32]",
+    "E46 Stabilizer -> Server-Callback : strukturiertes Event [D-32,D-33]",
+    "E47 Server -> V1-Client : type:realtime [D-33]",
+    "E48 Server -> V2 : transcription.interim [D-34]",
+    "E49 Terminal erreicht -> Interim : verworfen, kein Event [D-34]",
+    "E50 Finaltext -> Interim-Stabilizer : KEIN Abgleich im Produktpfad [D-32]",
+    "E51 cancel -> Ledger-Barriere : spaetere Texte cancelled [D-37]",
+    "E52 Input-Close -> flush_buffered_audio : letzter Rest wird final [D-38]",
+    "E53 Leerer Finaltext -> Ledger : discarded/empty_final [D-35]",
+    "E54 Leere Aufnahme -> Ledger : discarded/empty_recording [D-43]",
+    "E55 recorded_audio_queue ueber Limit : aelteste discarded [D-43]",
+    "E56 Scheduler-Reject/Drop (final) : Ledger failed/cancelled [D-29]",
+    "E57 Generationswechsel/Session-Ende : Executor liefert leeren Text [D-24]",
+    "E58 max_audio_queue_seconds erreicht : flush erzwingt Final [D-43]",
+    "E59 HTTP-Upload -> decode_audio_float32 : 16 kHz float32 [D-44]",
+    "E60 resolve_openai_model -> lane : final/realtime [D-45]",
+    "E61 transcribe_openai -> _submit_scheduler_job : gleiche Fair-Queues [D-45,D-25]",
+    "E62 Ergebnis -> complete_pending_api_transcription : Holder, HTTP-Antwort [D-28,D-45]",
+    "E63 stream_callback -> SSE-Delta : pro Engine-Segment [D-46]"
+  ],
+  "facts": [
+    {
+      "aussage": "Rahmen = 4 Byte LE Laenge der JSON-Metadaten + UTF-8-JSON + Rohaudio. Metadaten > 64 KiB abgelehnt; kaputte Metadaten/Nicht-Objekt/nicht-binaere Frames -> AudioPacketError. encode/decode gegenlaeufig.",
+      "beleg": "protocol.py encode/decode_audio_packet Z.40-75, MAX_METADATA_BYTES=64*1024 Z.7",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "D-01"
+    },
+    {
+      "aussage": "V2: Binaerframe vor akzeptiertem hello -> Close 4400, False. Nach Admission: decode -> ingest_audio_packet -> bool. Decode-/Verarbeitungsfehler nur geloggt, Verbindung offen.",
+      "beleg": "protocol_v2/connection.py handle_binary Z.181-198; schema.py:202 (4400)",
+      "evidenz": "CODE+TEST (test_protocol_v2_e2e Z.488)",
+      "gueltigkeit": "V2",
+      "id": "D-02"
+    },
+    {
+      "aussage": "V1: nach Server-hello Binaerframes via decode -> ingest. AudioPacketError -> {type:error,where:audio_packet}; accepted False -> {type:warning}. Kommandos start/stop/clear/ping/metrics/trigger/audio_availability.",
+      "beleg": "server.py websocket_transcribe Z.9912-10152 (hello 10002-10014, Kommandos 10074-10105)",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1",
+      "id": "D-03"
+    },
+    {
+      "aussage": "Validierung: Nutzlast <= max_audio_packet_bytes (Default 512*1024); sampleRate positiv int; channels Default 1, 1..8; format Default pcm_s16le, NUR pcm_s16le; Vielfaches channels*2; frames exakt. Dann int16, Kanal-Mittelwert, resample_int16.",
+      "beleg": "server.py packet_to_server_samples Z.7653-7683 (Default Z.449)",
+      "evidenz": "CODE+TEST (frame_count_mismatch Z.620-628)",
+      "gueltigkeit": "V1+V2",
+      "id": "D-04"
+    },
+    {
+      "aussage": "SERVER_SAMPLE_RATE=16000. Gleiche Rate -> Kopie; sonst scipy resample_poly (gcd up/down), Fallback np.interp, int16-Clip.",
+      "beleg": "server.py Z.147; resample_int16 Z.8682-8701",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2+OpenAI",
+      "id": "D-05"
+    },
+    {
+      "aussage": "Leeres Ergebnis -> (True,None). streaming False -> rejected_audio_chunks++, (False, Stream gestoppt) - V1 nur nach start, V2 immer True. Sonst feed_audio(SERVER_SAMPLE_RATE). Exception -> dropped++, Event recorder.failed (system/error). Danach Dauerlimit + ggf warning.",
+      "beleg": "server.py ingest_audio_packet Z.3011-3042",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "D-06"
+    },
+    {
+      "aussage": "feed_audio: 2D-Mittelwert, resample nur wenn !=16000, int16-Bytes; buf_size=2*buffer_size; exakt buf_size-Stuecke in audio_queue. Defaults 16000/512 -> 1024 Byte = 512 Samples = 32 ms. Server liefert 16k -> kein Re-Resampling.",
+      "beleg": "manual_audio_input.py feed_audio Z.9-34; audio_recorder SAMPLE_RATE/BUFFER_SIZE Z.82-83",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "D-07"
+    },
+    {
+      "aussage": "_create_recorder setzt use_microphone=False; PyAudio-Leser startet nur bei use_microphone. Mikrofon-Pipeline existiert, wird fuer Server-Sessions nicht gestartet.",
+      "beleg": "server.py Z.2751-2841; initialization.py _start_audio_reader Z.475-497; core/audio_input_worker.py",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "Server-Sessions",
+      "id": "D-08"
+    },
+    {
+      "aussage": "Ein Konsument: data=queue.get(timeout=0.01), Sample-Position, on_recorded_chunk, Overflow-Abbau bis allowed_latency_limit (audio_queue_size Default 128). Verzweigung nicht-aufnehmend/aufnehmend. frames.append; Pre-Roll-Puffer wenn idle/pause.",
+      "beleg": "recording.py run_recording_worker Z.124-644 (Einzel 163,169,184-209,242-400,401-580,625-635)",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "D-09"
+    },
+    {
+      "aussage": "controlled: allein gesetztes Gate-Event (bindet activationId+generation), wakeword_detected nicht konsultiert. legacy: wakeword_detected ODER (keine Wake-Words oder Delay vorbei) UND start_recording_on_voice_activity.",
+      "beleg": "activation_control.py recording_activation_gate_is_open Z.191-226",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2 (Policy pro Session)",
+      "id": "D-10"
+    },
+    {
+      "aussage": "text() ruft wait_audio; wait_for_recorded_audio setzt bei leerer Queue start_recording_on_voice_activity=True, wartet start_recording_event (Poll 0.02s). Server startet Schleife als _text_worker pro Session. controlled: folgenlos (Gate entscheidet).",
+      "beleg": "transcription_api.py text Z.22-44; lifecycle.py wait_for_recorded_audio Z.152-237",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1 Legacy; V2 nur Text-Worker-Init",
+      "id": "D-11"
+    },
+    {
+      "aussage": "is_voice_active = (webrtc aktiv ODER now-last<=1.0s) UND silero aktiv. check_voice_activity: WebRTC pro Chunk + Silero-Thread mit Generation. Silero-Schwelle vad_prob > (1-silero_sensitivity), Default 0.05 -> 0.95.",
+      "beleg": "voice_activity.py Z.399-409,221-249,111-160,163-218; Default server.py Z.429",
+      "evidenz": "CODE+TEST (delayed silero confirmation)",
+      "gueltigkeit": "V1+V2",
+      "id": "D-12"
+    },
+    {
+      "aussage": "start_recording: Abbruch wenn now-stop < min_gap_between_recordings (Default 0.0). Sonst state recording, Speicher/Stabilizer-Reset, realtime_recording_id++, Startzeiten, frames=[] (+Pre-Roll D-15), Events+Callback.",
+      "beleg": "lifecycle.py start_recording Z.22-82; Default server.py Z.427",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "D-13"
+    },
+    {
+      "aussage": "Stopp verworfen wenn Dauer < min_length_of_recording (Default 0.2s). Sonst deepcopy frames -> recorded_audio_queue {frames, backdate_*, segment_context}, frames=[], is_recording=False, stabilizer.finalize() OHNE Final-Beobachtung, Events+Callback. _last_recording_was_queued unterscheidet gequet vs leer.",
+      "beleg": "lifecycle.py stop_recording Z.85-139; recording_buffers.py queue_recorded_audio Z.68-92",
+      "evidenz": "CODE+TEST (immutable segment context; empty not queued)",
+      "gueltigkeit": "V1+V2",
+      "id": "D-14"
+    },
+    {
+      "aussage": "Ringpuffer maxlen (rate//buffer)*pre_recording_buffer_duration. KORREKTUR Review-R1 (F1): 16000//512=31/s x 0.75 = int(23.25) = 23 Frames, Dauer 23*512/16000=0.736s. 31 ist Pro-Sekunde-Rate, nicht Pufferlaenge.",
+      "beleg": "initialization.py _initialize_recording_buffers Z.646-652; voice_activity.py selected_pre_recording_buffer_frames Z.278-308; Uebernahme recording.py Z.372-380; Default server.py Z.490",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2 Server-Sessions",
+      "id": "D-15",
+      "review_fix": "2026-11-08 Review-Runde 1 F1: Framezahl 31->23 korrigiert (initialization.py Z.646-649, Defaults audio_recorder Z.82-83, server.py Z.490)"
+    },
+    {
+      "aussage": "preRecordingBuffer {configuredSeconds, includedSeconds, start/endTimestamp, exact}; exact wenn actual bekannt; Fallback configured. Gespiegelt in recording_started/final/realtime-Payloads.",
+      "beleg": "server.py SegmentTimelineTracker.mark_recording_started Z.1460-1496; segment_text_fields Z.1375-1389",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "D-16"
+    },
+    {
+      "aussage": "Bei stop_recording_on_voice_deactivity: Silero- oder WebRTC-Pruefung; Stille erst nach deactivity_silence_confirmation_duration (Default 0.16s) bestaetigt; speech_end nur wenn Dauer > min_length_of_recording; Stopp wenn Stille >= post_speech_silence_duration (Default 0.55s) -> on_vad_stop, stop(), Turn-Callbacks.",
+      "beleg": "recording.py Z.454-580; Defaults audio_recorder Z.84",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "D-17"
+    },
+    {
+      "aussage": "V2: akzeptierter Treffer liefert Grenze in Stream-Samples (operational_zero_point minus pre_roll_ms, geklemmt); frames an release_sample beschnitten, Flag gesetzt. Legacy: entfernt sample_rate*wake_word_buffer_duration Samples (Default 0.1s).",
+      "beleg": "recording.py _wake_detection_step Z.60-121 + Z.404-432/433-450; wake_audio_boundary.py Z.113-169; Default server.py Z.445",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V2 (Evaluator) / Legacy",
+      "id": "D-18"
+    },
+    {
+      "aussage": "Wenn early_transcription_on_silence>0 (Default 0.2s), frames nicht leer, Stille laenger, allowed_to_early_transcribe: Frame-Stand -> float32 -> submit; danach Flag False. FOLGE (Code-Ableitung): perform_final sendet nur bei transcribe_count==0 -> spaeterer Voll-Rest wird NICHT erneut geschickt; Finaltext stammt aus Frame-Stand VOR Aufnahmeende. HEIKELSTE Aussage -> Reviewer-Pruefung D-19/D-22.",
+      "beleg": "recording.py Z.502-520; Default server.py Z.435; perform_final Z.87-107",
+      "evidenz": "CODE+TEST (early final while recording Z.152-213)",
+      "gueltigkeit": "V1+V2",
+      "id": "D-19"
+    },
+    {
+      "aussage": "Text-Worker Endlosschleife text=recorder.text() blockierend; Kontext uebernehmen/loeschen; leer -> discarded_empty_final; sonst _publish_final_text; Exception -> Ledger failed bzw Event+error. Genau EIN Thread pro Session -> Finals serialisiert.",
+      "beleg": "server.py _text_worker Z.4668-4728; Thread Z.2443-2448",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "D-20"
+    },
+    {
+      "aussage": "frames -> int16 -> float32/32768; backdate_stop am Ende schneiden, backdate_resume als int16 zurueck.",
+      "beleg": "recording_buffers.py set_audio_from_frames Z.19-65",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "D-21"
+    },
+    {
+      "aussage": "transcribe: state transcribing, on_transcription_start; truthy Rueckgabe BRICHT ab. perform_final: lock, sendet nur bei transcribe_count==0, wartet 0.1s-Poll auf Antworten. Externer Executor: Thread VoiceSTTExternalFinalTranscription -> call_transcription_executor -> _external_transcription_results; count nur hier.",
+      "beleg": "transcription_api.py Z.47-59,72-142; transcription.py submit Z.202-241, receive Z.244-256",
+      "evidenz": "CODE+TEST (external executor preserves final path Z.679ff)",
+      "gueltigkeit": "V1+V2",
+      "id": "D-22"
+    },
+    {
+      "aussage": "transcribe->transcribe_with_context; final ohne Kontext laedt current_transcription_context; ruft service.transcribe_for_recorder. Zwei Executoren gebunden (final + realtime).",
+      "beleg": "server.py SchedulerTranscriptionExecutor Z.2273-2305; Bindung Z.2831-2840",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "D-23"
+    },
+    {
+      "aussage": "Unbekannte Session -> leeres Ergebnis. request_id aus Kontext (final) bzw uuid. Holder in _pending_recorder_results. InferenceJob: segment aus Kontext/current, seq 0, generation, created_at; deadline_at NUR realtime (+max_realtime_queue_age_ms Default 1500ms). Submit-Ablehnung -> RuntimeError. Warten 0.1s-Schritte; stop/Session-weg/Generation -> leer. Fehler final -> Ledger failed. Erfolg -> record_executor_result + TranscriptionResult.",
+      "beleg": "server.py transcribe_for_recorder Z.8251-8351; Default Z.491",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "D-24"
+    },
+    {
+      "aussage": "Pro Session final-Deque + EIN realtime-Slot. final abgelehnt bei Limits (8/Session, 64/global); realtime ERSETZT alten (coalesced). get: final zuerst, dann realtime; realtime mit deadline<now stale. Round-robin. cancel_session alles cancelled. Drops via drop_callback.",
+      "beleg": "server.py FairInferenceQueue Z.1756-1940 (1783,1786,1807,1799-1816,1841-1849,1876-1891,1828-1861)",
+      "evidenz": "CODE+TEST (coalesce/round-robin/stale Z.630-677)",
+      "gueltigkeit": "V1+V2+OpenAI",
+      "id": "D-25"
+    },
+    {
+      "aussage": "main_queue immer; realtime_queue=main_queue bei use_main_model_for_realtime (Default False) sonst eigene. Ein/zwei Worker. submit routet realtime nur bei eigenem Modell. Engine-Erzeugung unter Lock (native CPU-Schutz).",
+      "beleg": "server.py InferenceScheduler Z.2111-2204 (2124-2129,2180-2183,2123,2017-2022); Default Z.447",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2+OpenAI",
+      "id": "D-26"
+    },
+    {
+      "aussage": "queue.get -> transcribe_with_options sonst transcribe -> text strip/details; Fehler -> failed_jobs. InferenceResult mit queue_delay/inference_duration/total_latency/audio_duration (len/16000). result_callback.",
+      "beleg": "server.py SharedEngineWorker._worker Z.2012-2099",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2+OpenAI",
+      "id": "D-27"
+    },
+    {
+      "aussage": "Erst Performance-Event, dann complete_pending_api (OpenAI) -> bei Treffer return; sonst complete_pending_recorder -> return; sonst session.handle_inference_result. Recorder-Pfad signalisiert Holder, Textverarbeitung bleibt Recorder/Text-Worker.",
+      "beleg": "server.py _on_inference_result Z.8547-8611 (8606-8611); Recorder 8353-8360",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "alle",
+      "id": "D-28"
+    },
+    {
+      "aussage": "coalesced/stale/cancelled getrennt gezaehlt. Final mit Kontext im Ledger terminalisiert (cancelled bei cancel, sonst failed, Grund scheduler_<reason>) + Pending-Fehler. Submit-Ablehnung: realtime -> realtime_rejected; final -> final_rejected + Ledger failed + Pending-Fehler.",
+      "beleg": "server.py on_job_dropped/on_submit_result Z.3050-3091",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "D-29"
+    },
+    {
+      "aussage": "Whitespace trimmen, erster Buchstabe gross; NUR preview=False + letztes Zeichen alphanumerisch -> Punkt. Realtime preview=True (kein Punkt), Final preview=False (Punkt).",
+      "beleg": "text_formatting.py preprocess_output Z.18-44; Final-Aufruf transcription_api Z.119-127",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1 Final + Realtime-Vorschau",
+      "id": "D-30"
+    },
+    {
+      "aussage": "Schleife: nicht-aufnehmend -> Session abschliessen/Timer/sleep 0.02; aufnehmend: awaiting_speech_end pausiert, sonst Silben-Scheduler (Trigger syllable-boundary/-followup/-fallback) oder Timer-Pfad (realtime_processing_pause Default 0.02s, Trigger timer). _run_realtime: Identitaet vor Snapshot einfrieren, Frames kopieren, danach vergleichen (sonst verwerfen); float32 Min 50ms sonst Skip; Modellwahl main vs realtime vs streaming; leer -> empty_count + leere Beobachtung.",
+      "beleg": "realtime.py run_realtime_worker Z.31-1048 (Einzel 988-1008,1011-1035,945-986,1019-1037), _run_realtime Z.687-834,176-188,318-340; Default Z.431",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "D-31"
+    },
+    {
+      "aussage": "Stabilizer: Ignoriergruende wrong-recording/wrong-segment/finalized/stale-sequence/empty-text/outlier. Akzeptiert: NFKC-Projektion, Evidenz/Zeichen; stable waechst nur bei public_consensus_aligned+laenger; unstable=Rest; display=stable+unstable. publish_allowed False -> Delta zurueckgehalten. Schwellen 2/0.6s Zeichen, 4/0.75s Leer/Satz. finalize() ohne Beobachtung setzt nur _finalized - KEIN Final-Interim-Abgleich im Produktpfad (einziger Aufruf stop_recording; FinalObservation nur Tests/Tools).",
+      "beleg": "realtime_text_stabilizer.py 262-402,425-540,944-994,21-36; Aufruf lifecycle Z.126",
+      "evidenz": "CODE+TEST (stabilizer-Tests)",
+      "gueltigkeit": "V1 + V2-Wire-Felder",
+      "id": "D-32"
+    },
+    {
+      "aussage": "Callback-Wahl via settings.realtime_callback (stabilized vs update); strukturiert zusaetzlich stabilization_update. Provenienz-Pruefung (recording_id/Kontext), spaete verworfen. Payload type:realtime mit text/rawText/displayText/stable/unstable/consensus/isOutlier/commitReason/sequence/recordingId/segment/timestamp. + Timeline realtime_transcript.",
+      "beleg": "server.py _on_realtime_text Z.4900-4979, _on_realtime_stabilization_event Z.4981-5119; Bindung Z.2745-2749,2842-2847",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1 (+Domaenenquelle V2)",
+      "id": "D-33"
+    },
+    {
+      "aussage": "realtime_transcript -> transcription.interim. Optionale Felder recordingId/sequence/rawText/displayText/stable*/unstable*/committed*/visual*/consensus*/publicConsensusAligned/internalRevision/isOutlier/stablePrefixConflict/commitReason/stableNormalizedOffset/timing; text=payload[text]. Interims NACH Terminal desselben Segments vor Erzeugung verworfen (keine ID/Seq/Luecke).",
+      "beleg": "protocol_v2/events.py Z.54-73,114-162,357-391,123-131,151-159",
+      "evidenz": "CODE+TEST (interim-E2E Z.1239-1259)",
+      "gueltigkeit": "V2",
+      "id": "D-34"
+    },
+    {
+      "aussage": "_publish_final_text: ledger.resolve_completed unter Lock; nur bei Freigabe _publish_ordered_final: type:final (text/segmentId/requestId/activationId/Sequence/segmentSequence/segment/Textfelder) an Legacy-Manager, Timeline final_transcript, Performance stream.final_text, Event transcription.completed, Statuswechsel (ausser recording/closed). Leer -> discarded_empty_final -> discarded/empty_final.",
+      "beleg": "server.py Z.4796-4814,4816-4898,4536-4567; leer Z.4771-4794",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2 (V2 Projektion)",
+      "id": "D-35"
+    },
+    {
+      "aussage": "Jedes Segment segment_sequence (aufsteigend) + request_id. Publikation nur in Reihenfolge: _drain_locked ab _next_publish_sequence, stoppt am Loch; Fertiges hinter offenem Segment bleibt prepared. Doppelte/konkurrierende Terminals genau einmal. Nach close_activation terminal erst wenn alle Segmente terminal UND gedraint.",
+      "beleg": "segment_ledger.py accept 232-260, resolve_completed 316-353, drain 490-510, terminalize 512-553",
+      "evidenz": "CODE+TEST (out-of-order/hole Z.31, terminal release Z.44, win-once Z.56)",
+      "gueltigkeit": "V1+V2",
+      "id": "D-36"
+    },
+    {
+      "aussage": "requested_terminal==cancelled: spaeter fertiger Text NICHT vorbereitet/publiziert sondern cancelled terminalisiert; gedrainter nicht zurueckgenommen. cancel_all: erst alle cancelled, dann einmal drain (Session-Abbruch).",
+      "beleg": "segment_ledger.py mark_cancel 171, resolve_completed 325-344, cancel_all 375-419; server _handle_cancel_accept 3574ff",
+      "evidenz": "CODE+TEST (suppress prepared Z.81, no-retract Z.124, cancel_all Z.94)",
+      "gueltigkeit": "V1+V2",
+      "id": "D-37"
+    },
+    {
+      "aussage": "Input-Close Reihenfolge: Notify __input_closing__ -> recorder.close_controlled_activation -> NUR wenn Gate zu: laufende Aufnahme flush_buffered_audio (stop->Queue->Final) -> Ledger-Close (acceptedSegmentCount) -> Exactly-once-Reservierung -> controller.input_closed -> Publish. Fehlschlag -> closing_input + Recovery.",
+      "beleg": "server.py _run_input_close Z.4053-4139 (Fehler 4099-4104, Recovery 4141ff)",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V2 / V1-controlled",
+      "id": "D-38"
+    },
+    {
+      "aussage": "Jedes Timeline-Event als Legacy-Payload (type:timeline) via run_coroutine_threadsafe an V1-Verbindung, danach an V2-Observer. V2 NICHT im ConnectionManager (keine Legacy-Payloads). Observer-Fehler gefangen.",
+      "beleg": "server.py publish_session Z.1745-1748, _notify_protocol_observer Z.5976-5991, _publish_timeline_event Z.5880-5950; V2-Dispatch connection Z.688-716; Nicht-Registrierung Z.10133-10135",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "D-39"
+    },
+    {
+      "aussage": "Envelope type/protocolVersion/sessionId/eventId/eventSeq (monoton+1)/stateVersion (nur State-Events via NON_STATE_EVENTS)/occurredAtUnixMs. Gleicher logical_key -> gleiches Envelope. Sink -> call_soon_threadsafe -> Queue -> Writer-Task send_text(json).",
+      "beleg": "protocol_v2/session.py mint_event Z.105-144; server websocket_protocol_v2 Z.10121-10241",
+      "evidenz": "CODE+TEST (monotonic/unique Z.1078, no-legacy Z.1181)",
+      "gueltigkeit": "V2",
+      "id": "D-40"
+    },
+    {
+      "aussage": "Nach hello.accepted: SettingsPort, ProtocolSessionState, EventProjector, Runtime-Suppression aus Hello, set_protocol_observer, DANN session.start_streaming() + hello.accepted mit Snapshot+Log-Token. Kommandos: activation.command/trigger_suppression.set/audio_availability.set/session_settings.patch/session.snapshot.request - KEIN Start/Stop.",
+      "beleg": "connection.py _activate_session Z.307-343, _handle_command Z.347-369; schema Z.44-56",
+      "evidenz": "CODE+TEST (hello+snapshot Z.269)",
+      "gueltigkeit": "V2",
+      "id": "D-41"
+    },
+    {
+      "aussage": "start: Epoch+1, wake_epoch=None, streaming=True, Status wakeword_wait (Wake aktiv & delay<=0) sonst listening. stop: Epoch+1, streaming=False, idle, _reset_activation_locked(stream_stopped), Wake-Reset, flush, Queue-Trim, Sprecher frei, ggf activation_closed + Ledger-Close, idle.",
+      "beleg": "server.py start_streaming Z.2850-2863, stop_streaming Z.2865-2889",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1",
+      "id": "D-42"
+    },
+    {
+      "aussage": "_on_recording_start: Lifecycle-Pruefung (sonst flush+Sprecher frei); Sprecherlimit; Controller recording_started bzw Legacy-Aktivierung legacy-<session>-<n>; ledger.accept_segment; Kontext an Recorder; Timeline+Publish recording_started (mit preRecordingBuffer); Status recording. Fehler -> reject+flush+frei. _on_recording_stop: Queue-Trim, Dauer, segment_state.final, Kontext an transcription_context, Controller recording_ended, Publish; leer -> discarded/empty_recording; Legacy Wake-Followup. _on_transcription_start: Kontext binden, accepted+started; rejected-Wahrheit bricht Transkription ab.",
+      "beleg": "server.py Z.5294-5439,5441-5532,5534-5587",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "D-43"
+    },
+    {
+      "aussage": "Auth, file Pflicht, Dateiname-Validierung, Formular-Parsing, Modellauswahl inkl Override -> lane. Max openai_max_file_bytes (Default 25 MiB). Archivierung, Thread decode_audio_float32 -> faster_whisper decode 16k float32. duration=len/16000.",
+      "beleg": "openai_routes.py Z.104-209; server.py decode_audio_float32 Z.8671-8679",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "OpenAI",
+      "id": "D-44"
+    },
+    {
+      "aussage": "Aliase whisper-1/main/default/konfiguriertes Modell (+Registry-Aliase) -> final; bei use_main_model_for_realtime False zusaetzlich realtime-Namen -> realtime; openai_model_aliases ueberschreibt (Default {whisper-1:final,fast:realtime}). Eigene sessionId openai-<uuid>, seg 0, seq 0, gen 0, request_options; gleicher _submit_scheduler_job-Pfad; Warten mit timeout Default 600s; Timeout -> cancel + TimeoutError.",
+      "beleg": "server.py resolve_openai_model Z.8425-8484 (Defaults Z.509-512), transcribe_openai Z.8362-8413",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "OpenAI",
+      "id": "D-45"
+    },
+    {
+      "aussage": "stream=true: stream_callback gesetzt; Engine-Callback je Segment segment.text; Route SSE transcript.text.delta, Ende transcript.text.done. EIN Batch, keine VAD-Schleife, kein Stabilizer. Text = join der Segmenttexte.",
+      "beleg": "openai_routes.py Z.211-467; faster_whisper_engine _transcribe Z.107-139",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "OpenAI",
+      "id": "D-46"
+    }
+  ],
+  "investigated_sources": [
+    "protocol.py (Codec)",
+    "server.py (App/Session/Scheduler/Routen)",
+    "protocol_v2/{connection,session,events,schema,commands,snapshot,handshake}.py",
+    "segment_ledger.py",
+    "VoiceSTT/core/activation_control.py",
+    "openai_routes.py",
+    "VoiceSTT/{audio_recorder,manual_audio_input->core/manual_audio_input,recording,recording_buffers,voice_activity,preroll,lifecycle,activation_control,state,transcription,transcription_api,realtime,realtime_text_stabilizer,wake_audio_boundary,text_formatting,initialization,recorder_config}.py",
+    "transcription_engines/{base,faster_whisper_engine,factory}.py",
+    "event_logging.py",
+    "tests (protocol_v2_e2e, fastapi_server_protocol, segment_ledger, slow_final_audio_gap, realtime_stabilizer)"
+  ],
+  "not_implemented": [
+    {
+      "beleg": "stabilizer finalize ohne Beobachtung (lifecycle Z.126); FinalObservation nur Tests/Tools",
+      "id": "N-01",
+      "thema": "Kein Final-/Interim-Abgleich im Produktpfad"
+    },
+    {
+      "beleg": "Kein transcription.revised in schema EVENT_TYPES Z.168-186",
+      "id": "N-02",
+      "thema": "Keine Korrektur/Retract publizierter Interims"
+    },
+    {
+      "beleg": "Kein Konsument im Aufnahme-/VAD-/Chunk-/Inferenzpfad trotz Settings/CLI/Tests",
+      "id": "N-03",
+      "thema": "realtime_min/max_audio_seconds + vad_energy_threshold unbenutzt im Datenpfad (Settings-Katalog gegenpruefen)"
+    }
+  ],
+  "researcher_session": "ses_e471ee4ddffex3yVGWvi5qPOG",
+  "review_hints": [
+    "D-19 heikelste Aussage: transcription_api Z.87-107 vs recording Z.502-520 + transcribe_count-Lebenszyklus pruefen.",
+    "N-03 in 03.x/08.03 gegenpruefen.",
+    "N-06 zwei Queue-Limits trennen (audio_queue_size Eingangs-Puffer vs max_audio_queue_seconds Segmentdauer).",
+    "N-07 Koaleszenz im Normalbetrieb nicht als regelmaessig darstellen."
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "three_flows": "V1 (/ws/transcribe): Server-hello, Audio erst nach start (D-03,D-06), Gate legacy/controlled (D-10,D-42), Ausgabe realtime/final/timeline via ConnectionManager (D-33,D-35,D-39). V2 (/ws/v2): Client-hello -> accepted+Snapshot, Audio sofort offen (D-41), identische Recorder-/Scheduler-Pipeline, projektierte Events mit eventId/eventSeq/stateVersion via Sink (D-34,D-40). OpenAI: keine Session/VAD, ein Batch, gleiche Queues/Engines, kein Stabilizer (D-44..D-46).",
+  "unknown": [
+    {
+      "id": "N-04-ORIGINAL",
+      "status": "WIDERLEGT durch Orchestrator (git rev-parse HEAD + .git vorhanden + Arbeitsbaum sauber, siehe commit_note)",
+      "thema": "Researcher meldete fehlendes .git (Subagent-Artefakt)"
+    },
+    {
+      "id": "N-05",
+      "thema": "Reale Rate des V1-Clients (Client ausserhalb Repos, Code akzeptiert jede positive Rate)"
+    },
+    {
+      "id": "N-07",
+      "thema": "Wirksamkeit Koaleszenz im Normalfall (Queue-Eigenschaft belegt, Haeufigkeit nicht ableitbar)"
+    },
+    {
+      "conflict": "audio_queue_size (Default 128) = Eingangs-Chunk-Puffer (D-09) vs max_audio_queue_seconds_per_session (Default 30s) = Segmentdauer-Limit mit erzwungenem Final (D-43). Aehnliche Namen, verschiedene Stufen - im Kapitel trennen.",
+      "id": "N-06"
+    }
+  ],
+  "review_notes": "2026-11-08 R1-F1: D-15 korrigiert (23 statt 31 Frames). E12/E13: Kapitel nutzt Gate->VAD (recording.py Z.351 aussen/Z.361 innen), Akte invertiert - Kapitel massgeblich. | 2026-11-12 ROOT-R03: E12/E13 codegetreu korrigiert (recording.py:351 aussen Gate, :361 innen VAD); obiger Invertierungsvermerk als behobener historischer Befund geschlossen."
+}

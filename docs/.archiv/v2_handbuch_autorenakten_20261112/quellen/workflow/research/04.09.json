@@ -1,0 +1,220 @@
+{
+  "branch_note": "Detached HEAD ohne Branch-Referenz: kein .git/refs-Eintrag, kein Branch-Name aufloesbar. Aussagen nur fuer exakt diesen Commit, nicht main/Tag/spaeter. docs/client-development NICHT als Evidenz verwendet.",
+  "chapter": "04.09",
+  "commit_verification": "VERIFIZIERT: Quellbaum C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src, Detached-HEAD; .git/HEAD zeichengleich 'a8993c5c68042d996eab680d84a5b138a214bb5d' (40 Hex). Belege nur aus diesem Baum (protocol_v2/*, tests/unit/test_protocol_v2_*.py, vectors, examples/app_browserclient/client.js).",
+  "conflicts": [
+    {
+      "id": "CF-01",
+      "thema": "stateVersion nicht aus Events rekonstruierbar: Suppression/audio/closing erhoehen ohne Event. Autoritaet Ack+Snapshot."
+    },
+    {
+      "id": "CF-02",
+      "thema": "seq/Version laufen auseinander: interim seq ja, Version nein (Vektor seq2/Version1). Nicht gleichsetzen."
+    },
+    {
+      "id": "CF-03",
+      "thema": "Doku-vs-Code: docs/client-development Reducer normativ, aber kein Client-Code im Commit. Doku kein Beleg."
+    },
+    {
+      "id": "CF-04",
+      "thema": "'finalizing' keine Phase (schema.py:91). Nicht als Phase darstellen."
+    },
+    {
+      "id": "CF-05",
+      "thema": "Ack bei Schliessung meldet Eintrittsversion, nicht spaetere Close-Version. 'Neueste' falsch."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "hello --> hello.accepted : eingebetteter Snapshot ohne type (M1-07)",
+    "hello.accepted --> Clientzustand : Vollersetzung aus Snapshot (M1-05, M1-07)",
+    "Funnel --> project : genau ein Trichter (M1-14)",
+    "project --> mint_event : ID/seq/Version/Zeit (M1-03)",
+    "mint --> Lock --> outbound : linearisiert (M1-04)",
+    "Clientzustand --> Reducer : seq == last+1 (M1-04)",
+    "Clientzustand --> snapshot.request : Sprung erkannt (M1-12)",
+    "snapshot.request --> ack applied (M1-08)",
+    "snapshot.request --> snapshot : Neuaufbau, keine Aenderung (M1-08)",
+    "snapshot --> Clientzustand : Version+seq neue Basis (M1-05)",
+    "Event bekannte ID --> verwerfen (M1-09)",
+    "Event kleinere Version --> kein Wechsel (M1-02)",
+    "interim --> nur Segmenttext (Version gleich) (M1-02, M1-15)",
+    "phase_changed --> inputPhase/previous/deadline/remaining (M1-12)",
+    "input_closed --> Foreground idle, Aktivierung pending (M1-14, M1-05)",
+    "completed/cancelled/failed --> pending-Eintrag entfaellt (M1-05)",
+    "closing-Eintritt --> Version+1 ohne Event (M1-13)",
+    "suppression applied --> Version+1 ohne Event (M1-02)",
+    "audio wirksam --> Version+1 ohne Event (M1-02)",
+    "settings.patch applied --> n x changed, genau 1 Erhoehung (M1-06)",
+    "ack --> Zustand : Version/Revision uebernehmen (M1-11)"
+  ],
+  "facts": [
+    {
+      "aussage": "Zwei getrennte monotone Zaehler: stateVersion (sichtbare Aenderung), eventSeq (jedes Wire-Event). Start 0, nur ProtocolSessionState unter RLock.",
+      "beleg": "session.py:32-54 (0/0), Properties 57-66; schema.py:29 Version 2",
+      "evidenz": "A (Code+Test state_version advance exakt +1)",
+      "gueltigkeit": "Version 2, /ws/v2, ein State pro Verbindung.",
+      "id": "M1-01"
+    },
+    {
+      "aussage": "stateVersion NICHT ActivationController.version. Nur Wire-sichtbares erhoeht; diagnostisch/revisionell (watchdog.warning, activation.trigger_suppressed, transcription.interim) via NON_STATE_EVENTS ausgenommen, nur seq.",
+      "beleg": "session.py:mint_event 118-127; schema.py:NON_STATE_EVENTS 191-197; Docstring 17-20",
+      "evidenz": "A (Code+Test diagnostisch nie Version)",
+      "gueltigkeit": "alle projizierten Events.",
+      "id": "M1-02"
+    },
+    {
+      "aussage": "Event-Envelope: type, protocolVersion, sessionId, frische kanonische eventId (UUID v4 Bindestriche), seq=++last, Version (nur state_change), occurredAtUnixMs (Clock oder Legacy*1000 gerundet).",
+      "beleg": "session.py:mint_event 129-144; events.py:_timestamp_ms 511-518, project 144-149; schema.py:new_canonical_id 214-216",
+      "evidenz": "A (Code+Vektor activation_started seq1/Version1)",
+      "gueltigkeit": "alle 18 Typen sofern projiziert.",
+      "id": "M1-03"
+    },
+    {
+      "aussage": "Mint/Auslieferung pro Verbindung linearisiert: genau ein RLock umschliesst Erzeugen+Sink/Queue; Writer erst nach Freigabe.",
+      "beleg": "connection.py:__init__ 83-86, _dispatch_events 681-686, send 129-138",
+      "evidenz": "A (Code+Tests races seq lueckenlos, contract concurrent gapless)",
+      "gueltigkeit": "eine Verbindung; nichts uebergreifend.",
+      "id": "M1-04"
+    },
+    {
+      "aussage": "session.snapshot reine Projektion: type, protocolVersion, serverVersion, serverCommit, sessionId, stateVersion, lastEventSeq, settingsRevision, input(phase, activationId, primarySource, deadlineAtUnixMs, remainingMs, closeRequested), pendingActivations, trigger(configured/suppressed/effective je manual/wakeWord), audioAvailable, requestedSettings, effectiveSettings, wakeWordCapabilities.",
+      "beleg": "snapshot.py:build_snapshot 36-79; Vektor idle_snapshot 132-169",
+      "evidenz": "A (Code+Vektor+Test frozen Feldnamen)",
+      "gueltigkeit": "idle+aktiv; idle IDs/deadline/remaining null, closeRequested false (101-109).",
+      "id": "M1-05"
+    },
+    {
+      "aussage": "Snapshot/Settings-Mutation unter demselben _event_dispatch_lock. Kein Snapshot zwischen Commit/Spiegel/changed; requested/effective/Revision aus EINER settings_projection().",
+      "beleg": "connection.py:_snapshot_payload 781-797, _apply_settings_patch 505-521, _emit_settings_changed 544-582; snapshot.py 55-58",
+      "evidenz": "A (Code+Test kein Mirror-Gap)",
+      "gueltigkeit": "nur Connection-Snapshots.",
+      "id": "M1-06"
+    },
+    {
+      "aussage": "hello.accepted bettet exakt denselben Snapshot ein, nur ohne type (embedded_snapshot); dazu logAccess Bootstrap, bewusst nicht spaeterer Resync-Snapshots.",
+      "beleg": "snapshot.py:embedded_snapshot 82-89; connection.py:_activate_session 330-343",
+      "evidenz": "A (Code)",
+      "gueltigkeit": "erste Lieferung nach Handshake; logAccess nur hier.",
+      "id": "M1-07"
+    },
+    {
+      "aussage": "snapshot.request reiner Lesevorgang: applied-Ack, neuer snapshot, keine Domaenaenderung, kein Version-/seq-Anstieg; Wiederholung erlaubt ohne Zweiteffekt.",
+      "beleg": "connection.py:_apply_snapshot_request 584-592; schema.py:SESSION_SNAPSHOT_REQUEST 48",
+      "evidenz": "A (Code+Tests advances-nothing, no-change-domain)",
+      "gueltigkeit": "einziger Resync-Mechanismus.",
+      "id": "M1-08"
+    },
+    {
+      "aussage": "Command-Idempotenz: erste Antwort gemerkt, Wiederholung byte-gleich inkl. alter Versionen. Gleiche ID anderer Payload -> command_id_conflict; Replay nie Version+.",
+      "beleg": "connection.py:_answer_domain 408-450, _answer_cached 594-616, _memoise 654-661; commands.py:freeze_payload 65-77; activation_commands CONFLICT/REPLAY",
+      "evidenz": "A (Code+Tests suppression/finish Replay Original, conflict advances-nothing)",
+      "gueltigkeit": "alle 5 Typen; Cache sitzungsweit.",
+      "id": "M1-09"
+    },
+    {
+      "aussage": "Pro erkennbarem Command mit kanonischer ID genau ein ack. Unparsebar/unbekannt/ohne kanonische ID: still, kein Ack/Wechsel.",
+      "beleg": "connection.py:handle_text 168-179, _handle_command 347-360; commands.py:parse_command 90-114, Docstring 46-49",
+      "evidenz": "A (Code+Test unknown-not-command)",
+      "gueltigkeit": "v2-Envelope; v1-Toleranz unberuehrt.",
+      "id": "M1-10"
+    },
+    {
+      "aussage": "ack: type, protocolVersion, sessionId, commandId, accepted, result, activationId, inputPhase, stateVersion, settingsRevision, optional errors. accepted nur applied/no_change; result 15 geschlossen; inputPhase 5 normiert (Fallback idle).",
+      "beleg": "connection.py:_emit_ack 620-652; schema.py:RESULT_CODES 124-140, ACCEPTED 143, INPUT_PHASES 92-98; commands.py:is_accepted 279",
+      "evidenz": "A (Code)",
+      "gueltigkeit": "jede Command-Antwort; kein freies Vokabular.",
+      "id": "M1-11"
+    },
+    {
+      "aussage": "Phasen exakt fuenf: idle, waiting_first_speech, segment_active, followup_wait, closing_input. 'finalizing' keine Phase. Kein Domaen-phase-changed-Event; activation.phase_changed abgeleitet vor Ausloeser bei Bewegung.",
+      "beleg": "schema.py:INPUT_PHASES 83-102; events.py Docstring 17-27, _phase_change_event 170-192, _observe_phase 194-207, _PHASE_ANNOUNCING 84-88",
+      "evidenz": "A (Code)",
+      "gueltigkeit": "pro Verbindung Projector mit _phase idle-Start.",
+      "id": "M1-12"
+    },
+    {
+      "aussage": "closing-Eintritt sichtbare Aenderung ohne Lifecycle-Event: Observer versioniert genau einmal pro (Id,Seq), auch bei Recovery-Retry. Ack bei closing meldet Eintrittsversion, nicht spaetere Schliessung.",
+      "beleg": "connection.py:_observe_input_closing 718-740, _closing_version 742-750, _state_version_for 452-479",
+      "evidenz": "A (Code+Tests device-close once, retried-once, finish-entry+close)",
+      "gueltigkeit": "finish/cancel/device/timer-Schliessungen.",
+      "id": "M1-13"
+    },
+    {
+      "aussage": "activation.input_closed exactly-once: genau ein Lifecycle-Trichter, nur dort gehoert; logische Identitaet (input_closed, activationId). causedByCommandId null ohne akzeptiertes finish/cancel.",
+      "beleg": "events.py Docstring 1-8, _logical_key 285-304, _build_input_closed 334-342; session.py 121-124 identisches Envelope",
+      "evidenz": "A (Code)",
+      "gueltigkeit": "v2-Projektion; Legacy unveraendert.",
+      "id": "M1-14"
+    },
+    {
+      "aussage": "Spaetes interim nach projiziertem Terminal verworfen: kein eventId/seq/Luecke. Terminalmenge pro Segment danach.",
+      "beleg": "events.py:project 123-131, Markierung 151-159, _terminal_segments 110",
+      "evidenz": "A (Code)",
+      "gueltigkeit": "nur Interims; andere Typen ungefiltert.",
+      "id": "M1-15"
+    },
+    {
+      "aussage": "Segment-Activation-Zuordnung beim ersten bestaetigten Kontakt gelernt, nie spaeterer Vordergrund ueberschrieben; Widerspruch nur Zaehler (segment_mismatches). Ohne bestaetigte keine Ersatz-Erfindung -> Event entfaellt ggf.",
+      "beleg": "events.py:_remember_segment 211-249, mismatches 246-249, _segment_fields 251-281",
+      "evidenz": "A (Code)",
+      "gueltigkeit": "segmentbezogene Typen.",
+      "id": "M1-16"
+    },
+    {
+      "aussage": "KEIN V2-Client-Reducer im Repo. Einziges Frontend-Beispiel spricht v1 (/ws/transcribe), verarbeitet v1-Nachrichten; kein Symbol wertet seq/Version/snapshot aus. Modell vertraglich, nicht ausgeliefert.",
+      "beleg": "examples/app_browserclient/client.js (TRANSCRIBE_URL /ws/transcribe, handleServerMessage 39-72, kein seq/Version); Grep reducer nur docs/, kein Code",
+      "evidenz": "A (Negativ: Baumsuche, kein Symbol)",
+      "gueltigkeit": "Checkout a8993c5; Nicht-Existenz, kein Zukunftsbeweis.",
+      "id": "M1-17"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "NI-01",
+      "thema": "Client-Reducer/UI-State/Selektoren/Persistenz: kein Code; nur v1-Beispiel. Nur Vertrag, kein Client."
+    },
+    {
+      "id": "NI-02",
+      "thema": "Event-Backlog/Replay nach seq: kein Puffer; Resync nur snapshot.request."
+    },
+    {
+      "id": "NI-03",
+      "thema": "Client-Lueckenpuffer: Server lueckenlos, kein Backlog; Luecke Clientpflicht (R4)."
+    },
+    {
+      "id": "NI-04",
+      "thema": "Resume/Reattach sessionId: _admit immer neue ID; kein Pfad."
+    },
+    {
+      "id": "NI-05",
+      "thema": "Lokaler Deadline-Countdown: Server nur Momentaufnahme; keine Client-Timer."
+    },
+    {
+      "id": "NI-06",
+      "thema": "Optimistische Vorwegnahme: Zustand nur Ack+Event; kein Pfad, Replay/Konflikt dagegen."
+    }
+  ],
+  "researcher_session": "ses_e42d80309ffedMNJKYRz4u54c1",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "UN-01",
+      "thema": "Client-Fortsetzung nach Abbruch: pro Verbindung neue ID, alte beendet. Wiederaufnahme weder belegt noch ausgeschlossen."
+    },
+    {
+      "id": "UN-02",
+      "thema": "Verlorenes Event Mint->Sink: nicht abgedeckt; Heilung Snapshot, keine Garantie."
+    },
+    {
+      "id": "UN-03",
+      "thema": "Version-Reset/Wrap: ab 0 monoton, kein Pfad; lange Sitzungen unspezifiziert."
+    },
+    {
+      "id": "UN-04",
+      "thema": "pendingActivations-Darstellung: Server sortiert seq; UI-Ableitung nicht definiert."
+    }
+  ],
+  "writer_notes": "Reducer-Regeln Client-Vertrag, NICHT implementiert (M1-17). Als 'muss gelten' formulieren. R1 Ordnung seq aufsteigend (M1-01/04). R2 Versionsautoritaet, Diagnostik unveraendert (M1-02). R3 Snapshot ersetzt, Basis (Version,seq) (M1-05/07/08). R4 Luecke -> request, kein Backlog (NI-02, M1-08). R5 Duplikat ID verwerfen; Replay alte Versionen (M1-09). R6 Rueckschritt nur Daten (M1-02/09). R7 Interim nur Text (M1-15). R8 Ack uebernehmen; closing Eintrittsversion (M1-11/13, CF-05). R9 Konflikt kein Wechsel; Ursprung gueltig (M1-09). R10 Phasen 5, kein finalizing; phase_changed vor Ausloeser (M1-12, CF-04). Didaktik: (a) Zwei-Zaehler (seq2/Version1 Beispiel). (b) drei stumme +1 (Suppression/Audio/closing). (c) Resync nur Snapshot. (d) kein Client-Code als Repo. Zahlen: 5 Phasen, 15 Codes, 18 Typen, 10s Handshake. Kanten M1/R. Keine Timeouts/Defaults erfinden."
+}

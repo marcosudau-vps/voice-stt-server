@@ -1,0 +1,339 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached). Nur Commit a8993c5c68042d996eab680d84a5b138a214bb5d bindend.",
+  "chapter": "06.07",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached). Primärquelle server.py (10839 Zeilen) + Fassade/Event/Operations/Identity/_build_identity; Tests wie Akte.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "VPS-Compose target cpu + KROKO_VARIANT vs Root-Dockerfile builder/runtime + VOICESTT_KROKO_VARIANT [S6-31]."
+    },
+    {
+      "id": "C2",
+      "thema": "--config (YAML-Defaults) vs runtime.json (JSON-Overlay) trennen: Dateien/Phasen/Präzedenz verschieden [S6-32]."
+    },
+    {
+      "id": "C3",
+      "thema": "Event-Store/Refresh/Scheduler-Konstruktion in create_app, nicht Lifespan; Lifespan nur Scheduler-Start/Ready/Idle [S6-12/14/15/18]."
+    },
+    {
+      "id": "C4",
+      "thema": "ready ≠ gesund (ok = ready+healthy+logging_ready; ready bleibt nach Unload) [S6-19/25/26]."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [
+    "E1 Operator -> CLI voice-stt-server/stt-server/python -m [S6-01]",
+    "E2 CLI -> parse_args main(argv) [S6-02/07]",
+    "E3 parse_args -> YAML load_yaml (nur mit Pfad) [S6-02/03/04]",
+    "E3a YAML -> X SystemExit Meldung [S6-04]",
+    "E4 parse_args -> ServerSettings via settings_from_args [S6-02/05]",
+    "E4a ServerSettings -> X ValueError post_init/parse_float [S6-06/29]",
+    "E5 CLI -> Logging basicConfig+apply [S6-07]",
+    "E5a CLI -> X RuntimeError uvicorn/FastAPI fehlt [S6-08]",
+    "E6 CLI -> create_app eager [S6-09/16]",
+    "E7 create_app -> Identity resolve [S6-09]",
+    "E7a Identity -> X IdentityError [S6-09/29]",
+    "E8 create_app -> runtime.json load+setattr+post_init [S6-10]",
+    "E8a runtime.json -> X ValueError [S6-10/29]",
+    "E9 create_app -> Policy enforce_cpu_model_policy [S6-11]",
+    "E9a Policy -> X ValueError CPU-Richtlinie [S6-11]",
+    "E10 create_app -> Service Konstruktor [S6-12]",
+    "E11 Service -> Control-Overlay load_control [S6-12]",
+    "E12 Service -> Modell-Refresh sync [S6-12/13]",
+    "E12a Service -> Lizenz-Gate optional Netz 5s [S6-13]",
+    "E13 Service -> Scheduler Konstruktion ohne Threads [S6-12/15]",
+    "E14 Service -> EventHub + SQLite + 3 Daemon-Writer [S6-14]",
+    "E15 CLI -> uvicorn.run(app,host,port,log_level) Einzelprozess [S6-16]",
+    "E16 uvicorn -> Lifespan ASGI-startup extern [S6-16/17]",
+    "E17 Lifespan -> Service service.start(loop) [S6-17/18]",
+    "E18 Service -> EventHub server.starting host/port [S6-18]",
+    "E19 Service -> Scheduler scheduler.start() [S6-15/18/19]",
+    "E20 Service -> ReadyThread daemon [S6-18/20]",
+    "E21 Service -> IdleThread daemon [S6-18/22]",
+    "E22 Scheduler -> Worker Thread je Lane [S6-19]",
+    "E23 Worker -> ReadyThread ready.set finally (auch load_error) [S6-19/20]",
+    "E24 ReadyThread -> Service wait_ready ohne Timeout -> ready.set [S6-20]",
+    "E25 Service -> EventHub server.ready healthy/models [S6-20]",
+    "E25a Service -> EventHub models.load_failed + startupErrors [S6-20/21]",
+    "E26 Worker -> Service _on_scheduler_error worker.failed/startupErrors [S6-21]",
+    "E27 Lifespan -> Service finally service.stop() [S6-17/23]",
+    "E28 Service -> Sessions stop_event + remove_all/close [S6-23]",
+    "E29 Service -> Scheduler scheduler.stop (join 10s) [S6-19/23]",
+    "E30 Service -> Audit/Perf joins 5s + close [S6-23]",
+    "E31 Service -> EventHub server.stopping [S6-23]",
+    "E32 Service -> EventHub events.close flush/queues/sinks [S6-23/24]",
+    "E33 EventHub -> SQLite store.close [S6-24]",
+    "E34 Operator -> /health ready/ok/scheduler/startupErrors immer 200 [S6-25/30]",
+    "E35 /health -> EventHub store_status [S6-14/25]",
+    "E36 Docker/uvicorn -> Lifespan extern gestrichelt SIGTERM/SIGINT [S6-27/28]",
+    "E37 create_app -> App app.state + return (vor Threads) [S6-30]",
+    "E38 App -> /health,/info vor start nutzbar ready=false [S6-25/30]",
+    "VERBOT: Zeiten nur timeout 5/10, 5.0s Lizenz, interval-Formel; kein Port-offen-ab-t; keine Signal-Handler; kein Store/Scheduler-Bau im Lifespan; kein graceful-Timeout"
+  ],
+  "facts": [
+    {
+      "aussage": "Einstieg: voice-stt-server/stt-server → main, legacy → stt_server.main; Fassade re-exportiert; python -m identisch.",
+      "beleg": "setup.py Z.409-423; server.py Z.8-26; Tests Z.123-138.",
+      "evidenz": "K+T",
+      "gueltigkeit": "Produkt + python -m",
+      "id": "S6-01"
+    },
+    {
+      "aussage": "parse_args zweistufig: Vor-Parser nur --config (ENV-Default), YAML laden, Hauptparser, set_defaults vor parse; CLI>YAML>Default.",
+      "beleg": "server.py Z.10394-10408/10655-10656; Tests Z.126-160.",
+      "evidenz": "K+T",
+      "gueltigkeit": "jeder Start",
+      "id": "S6-02"
+    },
+    {
+      "aussage": "Kein YAML-Auto-Fallback: ohne --config/ENV Pfad None; Repo-config nur bei explizitem Pfad.",
+      "beleg": "server.py Z.10396-10407/10333-10337; config.yaml Z.1-10/102.",
+      "evidenz": "K (negativ)",
+      "gueltigkeit": "Startprozess",
+      "id": "S6-03"
+    },
+    {
+      "aussage": "YAML-Fehler → SystemExit Meldung (fehlend/PyYAML/Syntax/Objekt/version/Settings/Secrets/abgeleitet/unbekannt/Wert/Device/Profil); version-Default 1, flach zulässig.",
+      "beleg": "server.py Z.10301-10302/10333-10391; Tests Z.167-180.",
+      "evidenz": "K+T",
+      "gueltigkeit": "nur mit --config",
+      "id": "S6-04"
+    },
+    {
+      "aussage": "settings_from_args: Namespace → ServerSettings (Negations-Flags, wakeword/transcript-Defaults, JSON/Tupel; parse_float SystemExit).",
+      "beleg": "server.py Z.10671-10810; Tests Z.109-124.",
+      "evidenz": "K+T",
+      "gueltigkeit": "Start",
+      "id": "S6-05"
+    },
+    {
+      "aussage": "post_init: 0.0.0.0/8010-Defaults; 7 Pfade unter data_root (relativ ohne); ValueError realtime_log_detail + log_live-ohne-store (vor create_app, ungefangen).",
+      "beleg": "server.py Z.403-543.",
+      "evidenz": "K (U5 ungetestet)",
+      "gueltigkeit": "Start",
+      "id": "S6-06"
+    },
+    {
+      "aussage": "main: parse_args → settings → logging.basicConfig + apply_process_log_level (vor create_app).",
+      "beleg": "server.py Z.10813-10820.",
+      "evidenz": "K",
+      "gueltigkeit": "Start",
+      "id": "S6-07"
+    },
+    {
+      "aussage": "Fehlende Deps → RuntimeError (uvicorn erst in main; load_fastapi in create_app); ungefangen Exit 1.",
+      "beleg": "server.py Z.10822-10828/8804-8813.",
+      "evidenz": "K",
+      "gueltigkeit": "Installationsdefekt",
+      "id": "S6-08"
+    },
+    {
+      "aussage": "create_app startet Identität: load_fastapi + resolve_runtime_identity; COMMIT leer/unknown→unknown, sonst 40 Hex, sonst IdentityError (+ weitere Fälle); Dockerfile setzt aus Build-Arg.",
+      "beleg": "server.py Z.8816-8824; identity.py Z.41-70/111-138; _build_identity.py Z.42-48/210-224; Dockerfile Z.60; Tests Z.26-32.",
+      "evidenz": "K+T",
+      "gueltigkeit": "jeder Start",
+      "id": "S6-09"
+    },
+    {
+      "aussage": "runtime.json überlagert (nur mit data_root): load + setattr außer derived/Secrets/data_root + post_init; fehlend {} / defekt ValueError; Default<YAML<CLI<persistiert.",
+      "beleg": "server.py Z.8826-8842; operations.py Z.401-499; Tests.",
+      "evidenz": "K+T",
+      "gueltigkeit": "Start mit data_root",
+      "id": "S6-10"
+    },
+    {
+      "aussage": "Policy: device=cpu hart, Engines/Profil/Identity/2-Medium-ohne-Large (Rank>3 ValueError); früh-Returns identisch/deaktiviert/unbekannt.",
+      "beleg": "server.py Z.8756-8801/8843; Tests Z.206-260.",
+      "evidenz": "K+T",
+      "gueltigkeit": "Start + Settings-Wechsel",
+      "id": "S6-11"
+    },
+    {
+      "aussage": "Konstruktor-Reihenfolge: Security/Manager/ready-stop/SessionStore/Control-Overlay/Registry/STTManager/Lizenz-sync/Refresh/Scheduler/EventHub/Audit/Perf/WakeWord. Overlay+Snapshot in create_app.",
+      "beleg": "server.py Z.6241-6327.",
+      "evidenz": "K",
+      "gueltigkeit": "Start (Overlay → 05.09)",
+      "id": "S6-12"
+    },
+    {
+      "aussage": "Refresh sync background=False; Netz nur adressiertes Pro-mit-Key-ohne-Force; Timeout 5s; wirft nie (→ community/policy_error).",
+      "beleg": "server.py Z.6379/6581-6719.",
+      "evidenz": "K",
+      "gueltigkeit": "Start (Discovery → 06.06)",
+      "id": "S6-13"
+    },
+    {
+      "aussage": "EventHub/SQLite in create_app: Store + Cursor + 3 Daemon-Writer sofort; server_instance_id uuid4 (/api/v2/info); schreibfähig vor start.",
+      "beleg": "event_logging.py Z.697-763.",
+      "evidenz": "K",
+      "gueltigkeit": "Start",
+      "id": "S6-14"
+    },
+    {
+      "aussage": "Scheduler konstruiert ohne Threads; start/stop steuern Worker; _new_scheduler mit kroko-preflight (werfbar).",
+      "beleg": "server.py Z.2111-2159/7266-7273; Tests Z.267.",
+      "evidenz": "K+T",
+      "gueltigkeit": "Start/Wechsel",
+      "id": "S6-15"
+    },
+    {
+      "aussage": "uvicorn.run fertige App (host/port/log_level); kein reload/workers/timeout/lifespan → Einzelprozess; alles vor Aufruf. Bind-vs-Lifespan U2.",
+      "beleg": "server.py Z.10830-10835.",
+      "evidenz": "K",
+      "gueltigkeit": "CLI/python-m/Docker",
+      "id": "S6-16"
+    },
+    {
+      "aussage": "Lifespan: start im try, stop immer finally; Stop-Fehler geloggt+verschluckt (kein Maskieren).",
+      "beleg": "server.py Z.8852-8872; Tests.",
+      "evidenz": "K+T",
+      "gueltigkeit": "jeder Start/Stop",
+      "id": "S6-17"
+    },
+    {
+      "aussage": "start: loop/bind/starting-Event (host/port, kein Port-Beleg)/monotonic+Speicher/Scheduler-start/Ready-Thread/Idle-Thread; wartet nicht.",
+      "beleg": "server.py Z.7275-7302.",
+      "evidenz": "K",
+      "gueltigkeit": "jeder Start",
+      "id": "S6-18"
+    },
+    {
+      "aussage": "Worker: Daemon je Lane; ready.set im finally auch bei load_error; stop join 10s + engine.close nur beendet; ready≠gesund.",
+      "beleg": "server.py Z.1973-2030/2173-2178; Tests Z.1914-1931.",
+      "evidenz": "K+T",
+      "gueltigkeit": "Start/Wechsel/Reload",
+      "id": "S6-19"
+    },
+    {
+      "aussage": "ReadyThread: wait_ready ohne Timeout → ready.set + server.ready (healthy/models) + models.loaded/load_failed + startupErrors-Publish; Hängen hält ready false, blockiert nichts (Daemon).",
+      "beleg": "server.py Z.2161-2171/8521-8545.",
+      "evidenz": "K",
+      "gueltigkeit": "Start",
+      "id": "S6-20"
+    },
+    {
+      "aussage": "Engine-Fehler → worker.failed (severity/component/Typ) + startupErrors + publish; Server läuft weiter.",
+      "beleg": "server.py Z.6254/7699/8629-8645.",
+      "evidenz": "K",
+      "gueltigkeit": "Start/Cold + später",
+      "id": "S6-21"
+    },
+    {
+      "aussage": "Idle-Monitor Daemon: timeout=max(0.1,...), interval=min(30,timeout/4), sofort-Ausstieg, Skip ohne Policy, Unload ab timeout, RuntimeError=verschieben.",
+      "beleg": "server.py Z.7623-7639.",
+      "evidenz": "K",
+      "gueltigkeit": "Laufzeit (gestrichelt)",
+      "id": "S6-22"
+    },
+    {
+      "aussage": "stop-Reihenfolge: stop_event, Sessions schließen, scheduler.stop, joins 5s, audit/perf close, server.stopping, events.close; scheduler-Wurf bricht Rest (nur Lifespan-except).",
+      "beleg": "server.py Z.7304-7323.",
+      "evidenz": "K",
+      "gueltigkeit": "jeder Stop",
+      "id": "S6-23"
+    },
+    {
+      "aussage": "events.close idempotent: flush, _closed, Queues+Sentinel, joins 5s, Sinks, SQLite; Audit/Perf No-Ops (shared Hub).",
+      "beleg": "event_logging.py Z.1298-1319/1334-1362.",
+      "evidenz": "K",
+      "gueltigkeit": "jeder Stop",
+      "id": "S6-24"
+    },
+    {
+      "aussage": "/health: ready=/ready-Event, ok=ready+healthy(+logging_ready); Body scheduler/models/sttReady/sttModels/startupErrors/eventStore; immer 200.",
+      "beleg": "server.py Z.7685-7700/8885-8905; Tests.",
+      "evidenz": "K+T",
+      "gueltigkeit": "Laufzeit (Tiefe → Health)",
+      "id": "S6-25"
+    },
+    {
+      "aussage": "ready lebt: clear/set bei Modellwechsel, set bei ensure_loaded, kein clear bei unload (ok bei unloaded).",
+      "beleg": "server.py Z.7437-7573/8155-8233; Tests.",
+      "evidenz": "K+T",
+      "gueltigkeit": "Laufzeit (kein Start)",
+      "id": "S6-26"
+    },
+    {
+      "aussage": "Keine eigenen Handler: kein signal/atexit/finalize in api_fastapi_server/server.py; Treffer nur Recorder-CLI (SIGINT-IGN/KeyboardInterrupt); kein audio_recorder/multiprocessing-Import.",
+      "beleg": "Grep-Negativ; audio_input_worker.py Z.43 etc.",
+      "evidenz": "K (negativ)",
+      "gueltigkeit": "Serverprozess (nicht zeichnen)",
+      "id": "S6-27"
+    },
+    {
+      "aussage": "Delegation uvicorn/Docker: keine install_signal/timeout-Params; kein STOPSIGNAL (Default SIGTERM); init:true (Tini); Health Liveness vs VPS ready+ok.",
+      "beleg": "server.py Z.10830-10835; Dockerfile Z.86-102; compose Z.22/43-55/86; vps Z.19/35-60.",
+      "evidenz": "K (Verhalten Dependency U1/U3)",
+      "gueltigkeit": "Container/CLI",
+      "id": "S6-28"
+    },
+    {
+      "aussage": "Fehlerklassen: YAML/parse_float SystemExit Text→1; argparse 0/2; ValueError/IdentityError/RuntimeError → Traceback 1; Modell-Laden nie fatal.",
+      "beleg": "server.py div; operations Z.485-499; settings_control Z.1189-1230; Tests.",
+      "evidenz": "K+T",
+      "gueltigkeit": "Start",
+      "id": "S6-29"
+    },
+    {
+      "aussage": "create_app in app.state vor Threads; /health//info ohne Lifespan (ready=false).",
+      "beleg": "server.py Z.10290-10291/8874-8879; Tests Z.111-120.",
+      "evidenz": "K+T",
+      "gueltigkeit": "Start/Tests",
+      "id": "S6-30"
+    },
+    {
+      "aussage": "VPS target cpu + KROKO_VARIANT inexistent (nur builder/runtime + VOICESTT_KROKO_VARIANT); command python -m + config.",
+      "beleg": "vps Z.11-17/35-40; Dockerfile Z.7/43/47/98-102.",
+      "evidenz": "K",
+      "gueltigkeit": "Deployment (C1)",
+      "id": "S6-31"
+    },
+    {
+      "aussage": "--config YAML-Defaults vs runtime.json JSON-Overlay: Dateien/Phasen/Präzedenz trennen (C2).",
+      "beleg": "server.py Z.10333; operations.py Z.423-430.",
+      "evidenz": "K",
+      "gueltigkeit": "Start (C2)",
+      "id": "S6-32"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Kein Signal-Handler/atexit/Graceful-Timeout/--shutdown-timeout [S6-27/28]."
+    },
+    {
+      "id": "N2",
+      "thema": "Kein STOPSIGNAL/Health-Selbstneustart [S6-28]."
+    },
+    {
+      "id": "N3",
+      "thema": "shutdown_recorder/SIGINT-IGN nur Recorder-CLI, nicht Server (kein Import)."
+    }
+  ],
+  "researcher_session": "ses_e3e072fe5ffe6eunYLJsZqyPjY",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "uvicorn-Signalnummern/Doppelsignal/graceful-Default: Dependency."
+    },
+    {
+      "id": "U2",
+      "thema": "Bind-vs-Lifespan-Reihenfolge in uvicorn."
+    },
+    {
+      "id": "U3",
+      "thema": "Tini-Weiterleitung/Reaping."
+    },
+    {
+      "id": "U4",
+      "thema": "SystemExit-String→Exit-Code interpreterabhängig."
+    },
+    {
+      "id": "U5",
+      "thema": "log_live-ohne-store ValueError ungetestet."
+    }
+  ],
+  "writer_notes": "Install nur referenzieren; YAML/Discovery Startphase; Overlay Laden/Validieren; Health Tiefe auslagern; Recorder-Signale abgrenzen; C3/C4-Korrekturen (06.01-06.06); sequenceDiagram Operator/CLI/parse_args/YAML/Settings/create_app/Service/uvicorn/Lifespan/Scheduler/ReadyThread/EventHub/Stop; E36 extern gestrichelt; keine unbelegten Zeiten/Handler."
+}

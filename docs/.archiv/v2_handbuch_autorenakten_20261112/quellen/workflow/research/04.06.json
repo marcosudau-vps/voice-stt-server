@@ -1,0 +1,280 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup im Checkout nicht als Ref belegbar (keine refs/, keine packed-refs). Belegt ist ausschliesslich der Commit ueber .git/HEAD (detached).",
+  "chapter": "04.06",
+  "commit_verification": ".git/HEAD enthaelt exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached, kein Branch-Ref).",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "18 Typen != Projector-Mappings: LEGACY deckt 13 Zieltypen; trigger_suppressed/settings.changed von Verbindung; Terminals aus drained-Fan-out. Keine 1:1-Tabelle."
+    },
+    {
+      "id": "C2",
+      "thema": "NON_STATE = kein Anstieg, nicht kein Feld. Alle drei tragen aktuelle stateVersion; gleiche Version moeglich, nie gleiche seq."
+    },
+    {
+      "id": "C3",
+      "thema": "activation_refreshed -> phase_changed mit previousPhase==inputPhase: nicht immer Wechsel (Deadline-Bestaetigung)."
+    },
+    {
+      "id": "C4",
+      "thema": "Events-vor-ack nur Codepfad, nicht je Typ getestet; refused Trigger kehrt um (ack zuerst). Kein 'immer erst Events'."
+    },
+    {
+      "id": "C5",
+      "thema": "eventSeq/stateVersion verbindungsgebunden/fluechtig: neuer Handshake neue ID/Zaehler ab 1; keine globale Ordnung/Resume/Vergleich."
+    },
+    {
+      "id": "C6",
+      "thema": "Retry-Identitaet schaerfer als 'dasselbe Event': IDs/Versionen bleiben, Builder-Felder neu berechnet. Gleich nur bei gleicher Quelle."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "Legacy-Lifecycle -> Observer -> _on_domain_event (E1-08, E1-15)",
+    "__session_terminal__ -> request_close(1011) -> transport_close -> close(1011) (E1-20)",
+    "__input_closing__ -> advance_state, kein Event (E1-21)",
+    "LEGACY[legacy] -> Typ | unbekannt -> [] (E1-08, E1-13)",
+    "drained + state -> completed|cancelled|failed (E1-08)",
+    "projector -> Phase? -> phase_changed zuerst (E1-09)",
+    "Builder None -> entfaellt, keine seq (E1-13)",
+    "interim + terminal -> [] vor Mint (E1-13)",
+    "payload -> Segment-Memo erste gewinnt (E1-14)",
+    "logical_key -> Memo identische Huelle (E1-11, E1-12)",
+    "mint -> stateVersion+1 (E1-05)",
+    "mint -> eventSeq+1 (E1-03)",
+    "Envelope(7) -> builder -> dispatch (E1-01)",
+    "Lock -> send -> Queue -> writer -> send_text (E1-15)",
+    "activation.command -> Events -> ack (E1-16)",
+    "ack(trigger_suppressed) -> Event (E1-16)",
+    "patch -> settings.changed[0] +1 -> [1..n] gleich -> ack (E1-18, E1-16)",
+    "Replay -> Memo, kein Event/Anstieg (E1-16)",
+    "closing -> advance -> ack(Eintritt) < input_closed (E1-17)",
+    "closed -> send()=False (E1-22)"
+  ],
+  "facts": [
+    {
+      "aussage": "Huelle an einer Stelle: mint_event baut dict mit sieben Basis-Feldern in Reihenfolge type, protocolVersion, sessionId, eventId, eventSeq, stateVersion, occurredAtUnixMs. Typfelder danach via update(), nicht Basis.",
+      "beleg": "session.py:105-144 (129-141); events.py:144-150; connection.py:567-579, 668-675",
+      "evidenz": "stark",
+      "gueltigkeit": "jedes Server-Domain-Event /ws/v2; keine weiteren Basis-Felder.",
+      "id": "E1-01"
+    },
+    {
+      "aussage": "protocolVersion = ausgehandelte Version (immer 2); sessionId kanonische UUID; nicht-kanonisch -> ValueError.",
+      "beleg": "session.py:32-44 (41-43); connection.py:312-316; schema.py:29, 212-216; tests contract:543-545",
+      "evidenz": "stark",
+      "gueltigkeit": "pro Verbindung; Version aus Hello, nicht pro Event.",
+      "id": "E1-02"
+    },
+    {
+      "aussage": "eventId frische kanonische UUID pro Mint. _last_event_seq ab 0, +1 vor Bau; erstes Event seq=1. Keine 0/Luecke.",
+      "beleg": "session.py:46-50, 128-135; tests contract:547-554, 582-590",
+      "evidenz": "stark",
+      "gueltigkeit": "pro State = pro Verbindung; nicht persistiert.",
+      "id": "E1-03"
+    },
+    {
+      "aussage": "eventSeq strikt monoton lueckenlos, auch parallel: Mint unter RLock. 25 seq -> 1..25; 8x20 Threads -> sortiert 1..160.",
+      "beleg": "session.py:45, 120-128; tests contract:547-554, 592-611; races:297-338",
+      "evidenz": "stark",
+      "gueltigkeit": "Mint-Reihenfolge, nicht Wanduhr.",
+      "id": "E1-04"
+    },
+    {
+      "aussage": "stateVersion ab 0, +1 pro sichtbarem Event VOR Bau; Event traegt neue Version. NON_STATE keine Erhoehung, traegt aktuelle. state_change-Argument ueberschreibt (settings-Gruppen).",
+      "beleg": "session.py:48, 86-101, 114-128; schema.py:189-197; tests contract:556-567",
+      "evidenz": "stark",
+      "gueltigkeit": "NICHT ActivationController.version; Ledger/No-op weichen ab.",
+      "id": "E1-05"
+    },
+    {
+      "aussage": "18 Typen geschlossen EVENT_TYPES: activation.started/phase_changed/input_closed/completed/cancelled/failed/trigger_suppressed, segment.recording_started/ended, transcription.accepted/interim/completed/discarded/failed, watchdog.warning, wakeword.detected/availability_changed, settings.changed. Test: nur diese + hello.accepted/ack/snapshot.",
+      "beleg": "schema.py:146-187; tests e2e:1181-1201; contract:798-804",
+      "evidenz": "stark",
+      "gueltigkeit": "Draht-Vokabular; 18 = EVENT_TYPES, nicht Mappings.",
+      "id": "E1-06"
+    },
+    {
+      "aussage": "NON_STATE genau drei: watchdog.warning, activation.trigger_suppressed, transcription.interim. Erhoehen nicht, verbrauchen seq. Vektor: seq=2 bei Version=1 wie Vorgaenger seq=1.",
+      "beleg": "schema.py:189-197; vectors:89-131; tests contract:212-241; state_version:86-107; e2e:1239-1259",
+      "evidenz": "stark",
+      "gueltigkeit": "alle drei; Feld weiter vorhanden, nicht null.",
+      "id": "E1-07"
+    },
+    {
+      "aussage": "Projector 1:1 Legacy->kanonisch: activation_started->started, refreshed->phase_changed, closed->input_closed, recording_started/ended->segment.*, transcription_started->accepted, realtime_transcript->interim, final_transcript->completed, discarded/cancelled->discarded, failed->failed, watchdog_warning->warning, wakeword_detected->detected, availability_changed->changed. drained -> completed/cancelled/failed nach state. Unbekannt -> [].",
+      "beleg": "events.py:51-80, 114-122, 451-475; tests contract:637-646, 733-758",
+      "evidenz": "stark",
+      "gueltigkeit": "nur ein Lifecycle-Funnel; kein zweiter Emitter.",
+      "id": "E1-08"
+    },
+    {
+      "aussage": "phase_changed ABGELEITET: Phase seit letztem Event geaendert und Event kuendigt nicht selbst an -> erst phase_changed minten, dann Event. _PHASE_ANNOUNCING unterdrueckt; _CATALOG_LEVEL nie; nur bei phase in INPUT_PHASES.",
+      "beleg": "events.py:82-92, 134-142, 170-192; tests e2e:1261-1275",
+      "evidenz": "stark",
+      "gueltigkeit": "phase_changed vor Ausloeser im Block.",
+      "id": "E1-09"
+    },
+    {
+      "aussage": "Nach Mint Phase nachgefuehrt: started->waiting_first_speech hart, input_closed->idle hart; sonst context.phase falls INPUT_PHASEN. Catalog-Level ausgenommen.",
+      "beleg": "events.py:151-161, 194-207, 92",
+      "evidenz": "stark",
+      "gueltigkeit": "Projektor-Memo, keine Autoritaet.",
+      "id": "E1-10"
+    },
+    {
+      "aussage": "logical_key-Memo: gleiches K -> exakt gleiche Huelle inkl. IDs/Versionen, kein Zaehler. Nur vier Schluessel: (input_closed, activationId), (transcription.terminal, segmentId), (activation.terminal, activationId), (settings.changed, revision, policy). Rest ohne Schluessel (frisch).",
+      "beleg": "session.py:120-144; events.py:285-304, 459-463; connection.py:567-571; tests contract:569-580, 716-731; races:250-295",
+      "evidenz": "stark",
+      "gueltigkeit": "pro Verbindung; 8 Retries -> 1 ID/Seq/Version.",
+      "id": "E1-11"
+    },
+    {
+      "aussage": "Memo-Nuance: gespeichert Basis ohne Builder-Felder (Literal, Kopie mutiert). Retry gleiche Identitaet, Felder neu aus payload/context - gleich nur bei gleicher Quelle.",
+      "beleg": "session.py:142-144, 129-141; events.py:144-150",
+      "evidenz": "mittel",
+      "gueltigkeit": "Codepfad; kein Test abweichende Payload.",
+      "id": "E1-12"
+    },
+    {
+      "aussage": "Vier stille Pfade ohne seq (keine Luecke): (1) unbekannter Legacy-Typ -> [], (2) Builder None -> nur ggf. phase_event, (3) interim nach Segment-Terminal -> [] vor Mint, (4) drained mit unbekanntem state -> []. Nach Segment-Terminal seq konstant, naechstes Interim +2 (dazwischen Folge-recording_started, Test). Kein genereller Stopp nach Aktivierungs-Terminal. [R1-F1 2026-11-08: (4) praezisiert, kein generelles Terminal-Drop.]",
+      "beleg": "events.py:119-142, 151-159, 344-352, 393-412, 439-449; tests races:666-762",
+      "evidenz": "stark",
+      "gueltigkeit": "Drop endgueltig; kein Marker.",
+      "id": "E1-13"
+    },
+    {
+      "aussage": "Segment-Identitaet gemerkt (id->(seq, activationId)), da ended erst nach Kontext-Freigabe. Erste BESTAETIGTE gewinnt, nie ersetzt; Widerspruch nur gezaehlt. Ohne payload-activationId nie Vordergrund erfunden -> kein Event.",
+      "beleg": "events.py:101-110, 211-281; tests contract:760-796; races:607-663",
+      "evidenz": "stark",
+      "gueltigkeit": "pro Projektor; seq int-konvertierbar sonst kein Merken.",
+      "id": "E1-14"
+    },
+    {
+      "aussage": "Zustellung linearisiert pro Verbindung: _dispatch_events haelt RLock Mint->Sink; Sink call_soon_threadsafe eine Queue, genau ein Writer. Sink-Reihenfolge = Mint-Reihenfolge; Bloecke zusammenhaengend. Gleicher Lock Settings/Snapshot.",
+      "beleg": "connection.py:82-86, 681-686, 514-519, 781-797; server.py:10147-10192; tests races:47-126, 128-195; settings:1472-1490",
+      "evidenz": "stark",
+      "gueltigkeit": "pro Verbindung; keine globale Ordnung/Persistenz.",
+      "id": "E1-15"
+    },
+    {
+      "aussage": "Reihenfolge Event/ack Codepfad: (a) activation Events vor ack; (b) settings.changed vor ack; (c) refused Trigger ack zuerst, dann Diagnose-Event; (d) snapshot ack zuerst, Snapshot danach; (e) Replay Memo ohne Event/Anstieg.",
+      "beleg": "connection.py:373-390, 408-450, 505-542, 584-592, 663-677; tests settings:1472-1490; state_version:416-451",
+      "evidenz": "mittel",
+      "gueltigkeit": "Codepfad; kein Test je Typ (wie 04.04/Q1-24).",
+      "id": "E1-16"
+    },
+    {
+      "aussage": "ack vs Event: applied+Event ack erhoehte Version; closing-Eintritt Eintrittsversion (eigener advance, kein Event); wirksam ohne Event (suppression/audio) Verbindung +1. No-op/Ablehnung/Konflikt nichts; Recovery-Retry einmal.",
+      "beleg": "connection.py:452-479, 500, 718-750; tests state_version:346-379, 387-414, 453-488",
+      "evidenz": "stark",
+      "gueltigkeit": "monoton; wie 04.04/Q1-19.",
+      "id": "E1-17"
+    },
+    {
+      "aussage": "settings.changed gruppiert Policy live, next_activation, next_session, server_restart, Keys sortiert. Nur ERSTES Event state_change=True, Rest nicht - Transaktion +1, alle gleiche Revision, seq +1 folgend.",
+      "beleg": "connection.py:544-582; settings_control.py:51-60; tests settings:185-217",
+      "evidenz": "stark",
+      "gueltigkeit": "nur Session-Settings; Server via HTTP.",
+      "id": "E1-18"
+    },
+    {
+      "aussage": "occurredAtUnixMs: Legacy-timestamp Sekunden float -> int(round(*1000)); fehlt/nicht konvertierbar -> Verbindungsuhr time.time. Projektor beim Mint, nicht Senden.",
+      "beleg": "events.py:144-148, 511-518; session.py:136-140; server.py:5899-5906",
+      "evidenz": "stark",
+      "gueltigkeit": "Wanduhr, keine Monotonie; nur ein Test Feldanwesenheit.",
+      "id": "E1-19"
+    },
+    {
+      "aussage": "1011-Terminal: __session_terminal__ im Observer vor Projektion abgefangen -> nur request_close(1011). Keine Nachricht/neues Vokabular; idempotent first-wins. Endpoint bricht Receive via transport_close, schliesst Code. Marker aus fail_closed_for_recovery finally ausser Locks.",
+      "beleg": "connection.py:688-702, 140-152; schema.py:206; server.py:4246-4322 (4311-4322), 10149-10152, 10259-10281; tests terminal_recovery:167-198",
+      "evidenz": "stark",
+      "gueltigkeit": "nur v2; Legacy sieht Marker nie.",
+      "id": "E1-20"
+    },
+    {
+      "aussage": "closing_input-Eintritt via __input_closing__ (kein Domain-Event): Observer verbraucht, advance_state(), sendet NICHTS. Key (activationId,Sequence) verhindert Doppel bei Retry. Nicht in LEGACY_TYPES.",
+      "beleg": "connection.py:706-708, 718-750; server.py:5952-5974; tests state_version:453-488",
+      "evidenz": "stark",
+      "gueltigkeit": "Anstieg ohne Event - bewusste Ausnahme.",
+      "id": "E1-21"
+    },
+    {
+      "aussage": "Nach Close dicht: send() _closed -> False ohne Senden. Projektionsausnahme im Observer nur geloggt (exception) - offen, Block kann fehlen.",
+      "beleg": "connection.py:129-138, 709-716",
+      "evidenz": "mittel",
+      "gueltigkeit": "Codepfad; kein Test Ausnahme.",
+      "id": "E1-22"
+    },
+    {
+      "aussage": "Terminals acceptedSegmentCount/terminalSegmentCount int; reason nur cancelled/failed (completed nicht). input_closed reason/causedByCommandId/acceptedSegmentCount; causedBy null bei Timer/Watchdog/Device/Session/Recovery, nie aus availability-Id.",
+      "beleg": "events.py:334-342, 453-475; tests contract:685-714, 733-758; e2e:1116-1179",
+      "evidenz": "stark",
+      "gueltigkeit": "Terminal-Felder; Snapshots 04.07.",
+      "id": "E1-23"
+    },
+    {
+      "aussage": "Typ mehrfach im Zustand gleiche Felder: zwei wakeword.detected zu zwei Activations identische Namen; seq ordnet via input_closed dazwischen (first < closed < second).",
+      "beleg": "tests wakeword_e2e:303-315",
+      "evidenz": "stark",
+      "gueltigkeit": "typuebergreifende Draht-Ordnung.",
+      "id": "E1-24"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Kein Resume/Backfill: Verpasstes nicht nachforderbar; Resync nur snapshot.request."
+    },
+    {
+      "id": "N2",
+      "thema": "Kein Event-ACK/Retransmission/Flow-Control; Retry = Domain-Wiederholung, kein Transport."
+    },
+    {
+      "id": "N3",
+      "thema": "Keine Persistenz seq/Version ueber Verbindungen/Neustarts."
+    },
+    {
+      "id": "N4",
+      "thema": "minted_event()/forget_event() tot: nie aufgerufen, kein Test."
+    },
+    {
+      "id": "N5",
+      "thema": "Kein Event closing_input-Eintritt/Suppression/audioAvailable: nur Versionssprung in ack/Snapshot."
+    },
+    {
+      "id": "N6",
+      "thema": "Kein Close-Reason 1011-Terminal; keine Terminal-Nachricht."
+    }
+  ],
+  "researcher_session": "ses_e4310ea1cffe1Tpm7CKMtFtf5s",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Verlust ohne Test: Sink/Writer/Projektion wirft -> Block fehlt, seq zaehlt weiter (Luecke Zustellung, nicht Zaehler)."
+    },
+    {
+      "id": "U2",
+      "thema": "Reihenfolge konkurrierender Kommandos/Threads: Lock linearisiert, Gewinner Scheduling, unspezifiziert."
+    },
+    {
+      "id": "U3",
+      "thema": "occurredAt-Qualitaet: ohne Legacy-timestamp Projektionszeit, Abweichung unbestimmt, keine Monotonie."
+    },
+    {
+      "id": "U4",
+      "thema": "Obergrenze eventSeq (Integer/JSON) unbehandelt/ungetestet."
+    },
+    {
+      "id": "U5",
+      "thema": "logical_key (terminal, str(id)) kollabiert bei fehlender ID auf 'None'; Auftreten unbelegt/ungetestet."
+    },
+    {
+      "id": "U6",
+      "thema": "Startwerte 0/0 Snapshot ungetestet; Events waehrend start_streaming vor accepted moeglich - ungetestet."
+    }
+  ],
+  "writer_notes": "Aufbau: (1) ein Funnel/kein zweiter Emitter, (2) Huelle sieben+typ Felder, eventId/seq/Version, (3) seq ab 1 lueckenlos/pro Verbindung/kein Verbrauch Drops, (4) Version +1 sichtbar/drei NON_STATE/Version ohne Event, (5) 18 Typen Tabelle Herkunft, (6) Mapping Legacy->v2 + drained, (7) phase_changed abgeleitet (auch Deadline), (8) Retry logical_key, (9) Zustellung Lock/Queue/Writer + Reihenfolge je Fall, (10) 1011-Terminal. Keine Timeouts/Prozente/'immer erst Events'. Kanten diagram_edges. Querverweise: 04.03, 04.04, 04.05, 04.07, 02.03."
+}

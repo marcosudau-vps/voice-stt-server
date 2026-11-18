@@ -1,0 +1,527 @@
+{
+  "schema_version": 1,
+  "note": "Künstlerische/redaktionelle Vorschläge, nicht als Implementierung verifiziert",
+  "items": [
+    {
+      "id": "01.02",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/01.02.md",
+      "proposals": [
+        {
+          "title": "Komponentenübersicht",
+          "type": "flowchart",
+          "research_question": "Welche Hauptkomponenten kommunizieren direkt miteinander?"
+        }
+      ]
+    },
+    {
+      "id": "01.03",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/01.03.md",
+      "proposals": [
+        {
+          "title": "Schichten und Zuständigkeiten",
+          "type": "flowchart",
+          "research_question": "Welche Komponente besitzt welche Verantwortung?"
+        }
+      ]
+    },
+    {
+      "id": "01.04",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/01.04.md",
+      "proposals": [
+        {
+          "title": "Audio-zu-Text-Datenfluss",
+          "type": "flowchart",
+          "research_question": "Welche nachgewiesenen Datenübergaben führen zum Ergebnis?"
+        }
+      ]
+    },
+    {
+      "id": "01.05",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/01.05.md",
+      "proposals": [
+        {
+          "title": "Betriebsmodi im Vergleich",
+          "type": "flowchart",
+          "research_question": "Welche Modi und Triggerkombinationen existieren tatsächlich?"
+        }
+      ]
+    },
+    {
+      "id": "01.06",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/01.06.md",
+      "proposals": [
+        {
+          "title": "Shared vs. Session",
+          "type": "flowchart",
+          "research_question": "Welche Ressourcen sind serverweit, welche sitzungsgebunden?"
+        }
+      ]
+    },
+    {
+      "id": "01.07",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/01.07.md",
+      "proposals": [
+        {
+          "title": "Identitäten und Lebensdauer",
+          "type": "flowchart",
+          "research_question": "Wie sind Client, Connection, Session und Segment verknüpft?"
+        }
+      ]
+    },
+    {
+      "id": "01.09",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/01.09.md",
+      "proposals": [
+        {
+          "title": "Gesamtarchitektur",
+          "type": "flowchart",
+          "research_question": "Welche Systeme und Grenzen sind architektonisch sichtbar?"
+        }
+      ]
+    },
+    {
+      "id": "02.01",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/02.01.md",
+      "proposals": [
+        {
+          "title": "Session-Lebenszyklus",
+          "type": "stateDiagram-v2",
+          "research_question": "Welche Sessionzustände und Übergänge existieren?"
+        }
+      ]
+    },
+    {
+      "id": "02.02",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/02.02.md",
+      "proposals": [
+        {
+          "title": "Audio-Pipeline",
+          "type": "flowchart",
+          "research_question": "Wie durchläuft Audio Eingang, Puffer, VAD und ASR?"
+        }
+      ]
+    },
+    {
+      "id": "02.03",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/02.03.md",
+      "proposals": [
+        {
+          "title": "Activation-Phasen",
+          "type": "stateDiagram-v2",
+          "research_question": "Welche Phasen und erlaubten Übergänge sind im Code definiert?"
+        },
+        {
+          "title": "Activation-Zeitablauf",
+          "type": "sequenceDiagram",
+          "research_question": "Wie wirken Trigger, Timer, Audiofreigabe und Events zeitlich zusammen?"
+        }
+      ]
+    },
+    {
+      "id": "02.04",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/02.04.md",
+      "proposals": [
+        {
+          "title": "Wake-Word-Detektion und Rearm",
+          "type": "sequenceDiagram",
+          "research_question": "Welche Schritte von Treffer über Admission bis Rearm sind belegt?"
+        }
+      ]
+    },
+    {
+      "id": "02.05",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/02.05.md",
+      "proposals": [
+        {
+          "title": "Realtime-/Final-Korrelation",
+          "type": "sequenceDiagram",
+          "research_question": "Wie werden vorläufige und finale Ergebnisse tatsächlich zugeordnet?"
+        }
+      ]
+    },
+    {
+      "id": "02.06",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/02.06.md",
+      "proposals": [
+        {
+          "title": "Engine-Auswahl",
+          "type": "flowchart",
+          "research_question": "Wie werden ausschließlich die zwei freigegebenen Engines ausgewählt?"
+        }
+      ]
+    },
+    {
+      "id": "02.07",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/02.07.md",
+      "proposals": [
+        {
+          "title": "Modell-Lifecycle",
+          "type": "stateDiagram-v2",
+          "research_question": "Welche Modellzustände und Übergänge sind implementiert?"
+        }
+      ]
+    },
+    {
+      "id": "02.08",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/02.08.md",
+      "proposals": [
+        {
+          "title": "Inference-Queues",
+          "type": "flowchart",
+          "research_question": "Wie werden Lanes, Worker und Sessions in der Inferenz koordiniert?"
+        }
+      ]
+    },
+    {
+      "id": "03.01",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/03.01.md",
+      "proposals": [
+        {
+          "title": "Konfigurationsebenen",
+          "type": "flowchart",
+          "research_question": "Welche Konfigurationsinstanzen existieren tatsächlich?"
+        }
+      ]
+    },
+    {
+      "id": "03.02",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/03.02.md",
+      "proposals": [
+        {
+          "title": "Setting-Scopes",
+          "type": "flowchart",
+          "research_question": "Welche Scopes gelten und wie beeinflussen sie sich?"
+        }
+      ]
+    },
+    {
+      "id": "03.05",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/03.05.md",
+      "proposals": [
+        {
+          "title": "Konfigurationspriorität",
+          "type": "flowchart",
+          "research_question": "Welche wirksame Prioritätsreihenfolge definiert der Code?"
+        }
+      ]
+    },
+    {
+      "id": "03.08",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/03.08.md",
+      "proposals": [
+        {
+          "title": "Settings-Patch",
+          "type": "sequenceDiagram",
+          "research_question": "Wie laufen Validierung, Anwendung, Revision und Quittierung?"
+        }
+      ]
+    },
+    {
+      "id": "03.09",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/03.09.md",
+      "proposals": [
+        {
+          "title": "Wirksamkeitszeitpunkt",
+          "type": "sequenceDiagram",
+          "research_question": "Wann greifen Änderungen und welche Grenzen sind relevant?"
+        }
+      ]
+    },
+    {
+      "id": "04.03",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/04.03.md",
+      "proposals": [
+        {
+          "title": "V2-Handshake",
+          "type": "sequenceDiagram",
+          "research_question": "Wie läuft der reale hello-Handshake ab?"
+        }
+      ]
+    },
+    {
+      "id": "04.04",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/04.04.md",
+      "proposals": [
+        {
+          "title": "Command und ACK",
+          "type": "sequenceDiagram",
+          "research_question": "Wie werden Kommando, Ack, Replay und Konflikt gehandhabt?"
+        }
+      ]
+    },
+    {
+      "id": "04.06",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/04.06.md",
+      "proposals": [
+        {
+          "title": "Eventzustellung",
+          "type": "sequenceDiagram",
+          "research_question": "Was ist hinsichtlich Reihenfolge und eventSeq garantiert?"
+        }
+      ]
+    },
+    {
+      "id": "04.07",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/04.07.md",
+      "proposals": [
+        {
+          "title": "Snapshot/Resync",
+          "type": "sequenceDiagram",
+          "research_question": "Wie wird der Zustand nach Lücken synchronisiert?"
+        }
+      ]
+    },
+    {
+      "id": "04.08",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/04.08.md",
+      "proposals": [
+        {
+          "title": "Reconnect",
+          "type": "sequenceDiagram",
+          "research_question": "Wie erfolgt der real implementierte Wiederanlauf?"
+        }
+      ]
+    },
+    {
+      "id": "04.09",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/04.09.md",
+      "proposals": [
+        {
+          "title": "Client-State-Reducer",
+          "type": "flowchart",
+          "research_question": "Welche State-Inputs und Aktualisierungsregeln gelten?"
+        }
+      ]
+    },
+    {
+      "id": "04.10",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/04.10.md",
+      "proposals": [
+        {
+          "title": "OpenAI-HTTP-Transkription",
+          "type": "sequenceDiagram",
+          "research_question": "Wie laufen Upload, Modellauflösung, ASR und Antwort ab?"
+        }
+      ]
+    },
+    {
+      "id": "05.01",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/05.01.md",
+      "proposals": [
+        {
+          "title": "Vertrauenszonen",
+          "type": "flowchart",
+          "research_question": "Welche Schnittstellen sind öffentlich und welche geschützt?"
+        }
+      ]
+    },
+    {
+      "id": "05.03",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/05.03.md",
+      "proposals": [
+        {
+          "title": "Admin-Gate",
+          "type": "flowchart",
+          "research_question": "Welche Admin-Requests passieren welche Prüfung?"
+        }
+      ]
+    },
+    {
+      "id": "05.05",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/05.05.md",
+      "proposals": [
+        {
+          "title": "Logtoken-Lebensdauer",
+          "type": "sequenceDiagram",
+          "research_question": "Wie werden Logrechte und Tokens ausgegeben und validiert?"
+        }
+      ]
+    },
+    {
+      "id": "05.07",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/05.07.md",
+      "proposals": [
+        {
+          "title": "Community/Pro-Entscheidung",
+          "type": "flowchart",
+          "research_question": "Wie wird der Kroko-Modellzugriff entschieden?"
+        }
+      ]
+    },
+    {
+      "id": "05.08",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/05.08.md",
+      "proposals": [
+        {
+          "title": "Native-Guard-Lifecycle",
+          "type": "stateDiagram-v2",
+          "research_question": "Welche Native-Lifecycle-Grenzen sind tatsächlich implementiert?"
+        }
+      ]
+    },
+    {
+      "id": "06.05",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/06.05.md",
+      "proposals": [
+        {
+          "title": "Container-Aufbau",
+          "type": "flowchart",
+          "research_question": "Wie hängen Image, Container, Netz und Volumes zusammen?"
+        }
+      ]
+    },
+    {
+      "id": "06.07",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/06.07.md",
+      "proposals": [
+        {
+          "title": "Serverstart und Shutdown",
+          "type": "sequenceDiagram",
+          "research_question": "Welche Start-/Stopphasen sind beobachtbar?"
+        }
+      ]
+    },
+    {
+      "id": "06.10",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/06.10.md",
+      "proposals": [
+        {
+          "title": "Monitoring-Datenfluss",
+          "type": "flowchart",
+          "research_question": "Woher kommen Metriken, Health-Daten und Logs?"
+        }
+      ]
+    },
+    {
+      "id": "07.08",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/07.08.md",
+      "proposals": [
+        {
+          "title": "Kroko-Buildkette",
+          "type": "flowchart",
+          "research_question": "Welche verifizierbaren Eingänge und Artefakte umfasst der Native-Build?"
+        }
+      ]
+    },
+    {
+      "id": "07.10",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/07.10.md",
+      "proposals": [
+        {
+          "title": "RC-Qualifikation",
+          "type": "flowchart",
+          "research_question": "Welche Gates bestehen auf dem Release-Candidate-Pfad?"
+        }
+      ]
+    },
+    {
+      "id": "07.11",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/07.11.md",
+      "proposals": [
+        {
+          "title": "Release-State-Machine",
+          "type": "stateDiagram-v2",
+          "research_question": "Welche Release-Zustände und Freigabegates sind implementiert?"
+        }
+      ]
+    },
+    {
+      "id": "08.05",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/08.05.md",
+      "proposals": [
+        {
+          "title": "Zustandsautomaten-Übersicht",
+          "type": "stateDiagram-v2",
+          "research_question": "Welche echten State-Machines gibt es?"
+        }
+      ]
+    },
+    {
+      "id": "08.06",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/08.06.md",
+      "proposals": [
+        {
+          "title": "Zeitlinien und Fristen",
+          "type": "sequenceDiagram",
+          "research_question": "Welche Timer beeinflussen welchen fachlichen Ablauf?"
+        }
+      ]
+    },
+    {
+      "id": "09.03",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/09.03.md",
+      "proposals": [
+        {
+          "title": "V1-/V2-Abgrenzung",
+          "type": "flowchart",
+          "research_question": "Welche Endpunkte und Vertragsgrenzen sind jeweils gültig?"
+        }
+      ]
+    },
+    {
+      "id": "09.04",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/09.04.md",
+      "proposals": [
+        {
+          "title": "Client-Migrationspfad",
+          "type": "flowchart",
+          "research_question": "Welche nachweisbaren Schritte sind für die Umstellung erforderlich?"
+        }
+      ]
+    },
+    {
+      "id": "09.06",
+      "status": "IDEA",
+      "note_path": "workflow/diagram-notes/09.06.md",
+      "proposals": [
+        {
+          "title": "End-to-End-Szenario",
+          "type": "sequenceDiagram",
+          "research_question": "Welcher vollständige Praxisablauf lässt sich sicher belegen?"
+        }
+      ]
+    }
+  ]
+}

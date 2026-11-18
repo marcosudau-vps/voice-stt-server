@@ -1,0 +1,220 @@
+{
+  "branch_note": "feat/v2-release-cleanup nicht verifizierbar (HEAD ohne Ref); nur Commit bindend.",
+  "chapter": "08.13",
+  "commit_verification": ".git/HEAD exakt Hash (detached, eine Zeile). Nur *.py/config/docker/setup/manifeste.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "Auftrag events.sqlite3 vs Code voicestt-events.sqlite3."
+    },
+    {
+      "id": "C2",
+      "thema": "/data vs /var/lib/voicestt."
+    },
+    {
+      "id": "C3",
+      "thema": "load wirft kaputtes JSON, _read schreibt {} still neu (ungetestet)."
+    }
+  ],
+  "correction_round": 2,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "data_root einziger Stamm: 6 logs-Pfade + config/runtime.json; ohne root relativ logs + runtime None.",
+      "beleg": "server.py:519-543,451",
+      "evidenz": "E1",
+      "gueltigkeit": "V2-FastAPI",
+      "id": "PS8-01"
+    },
+    {
+      "aussage": "7 abgeleitete Pfade total; API+YAML gesperrt; /api/logging nur 5, validate+YAML 7 (+tuning).",
+      "beleg": "server.py:293-301,9859-9862,10302",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "V2",
+      "id": "PS8-02"
+    },
+    {
+      "aussage": "Store sqlite timeout 30/check_same_thread False/WAL/NORMAL/eine Verbindung+RLock/Parent-mkdir.",
+      "beleg": "event_logging.py:441-495",
+      "evidenz": "E1",
+      "gueltigkeit": "nur Store an",
+      "id": "PS8-03"
+    },
+    {
+      "aussage": "events 14 Spalten; PK cursor, UNIQUE event_id, Zeit TEXT; 5 Kontext nullable.",
+      "beleg": "event_logging.py:452-471",
+      "evidenz": "E1",
+      "gueltigkeit": "Schema v1 kein Migration",
+      "id": "PS8-04"
+    },
+    {
+      "aussage": "6 Indizes idempotent; + UNIQUE-Autoindex + sqlite_sequence.",
+      "beleg": "event_logging.py:472-482",
+      "evidenz": "E1",
+      "gueltigkeit": "wie PS8-04",
+      "id": "PS8-05"
+    },
+    {
+      "aussage": "watermarks 3 Spalten (channel/session_id/cursor), PK (channel,session_id); Upsert MAX.",
+      "beleg": "event_logging.py:483-492,526-535",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "V2-Store",
+      "id": "PS8-06"
+    },
+    {
+      "aussage": "Cursor monoton MAX(MAX,seq)+1; nach Retention keine Wiederverwendung; Start latest.",
+      "beleg": "event_logging.py:543-548,591-607,720",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "V2-Store",
+      "id": "PS8-07"
+    },
+    {
+      "aussage": "Append 1 INSERT+commit, rollback Fehler; payload voll inkl. cursor; Store-Fehler return None (Abbruch); nur Spiegel bricht nicht ab (drop_counts file|stdout).",
+      "beleg": "event_logging.py:543-589,971-992",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "V2-Store",
+      "id": "PS8-08"
+    },
+    {
+      "aussage": "Retention pro Kanal opt-in (<=0 nie), nur Append, max 1x/Tag, DELETE timestamp<cutoff TEXT.",
+      "beleg": "event_logging.py:497-545,887-891",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "Default 0 unbegrenzt",
+      "id": "PS8-09"
+    },
+    {
+      "aussage": "JSONL 4 Kanaele root/YYYY-MM/DD.jsonl; Sink-Default max_bytes=0/backup=0, ServerSettings-Default 10 MiB/12; max_bytes>0 -> .N; backup ungenutzt.",
+      "beleg": "event_logging.py:314-379,765-865",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "Sink 0 vs Server 10 MiB/12",
+      "id": "PS8-10"
+    },
+    {
+      "aussage": "JSONL-Retention tagebasiert Dateien+leere Ordner, 1x/Tag, nur Schreiben.",
+      "beleg": "event_logging.py:381-412",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "Default 0 keine",
+      "id": "PS8-11"
+    },
+    {
+      "aussage": "JSONL open a/flush pro Zeile, kein fsync/Rename; letzte Zeile evtl. unvollstaendig, kein Repair.",
+      "beleg": "event_logging.py:379,414-425",
+      "evidenz": "E1",
+      "gueltigkeit": "alle 4",
+      "id": "PS8-12"
+    },
+    {
+      "aussage": "runtime.json 5 Keys + fremde; Allowlist 100-7 Namen (6 wirksam)=94; None als null.",
+      "beleg": "operations.py:401-469; server.py:7959-7969",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "nur mit data_root",
+      "id": "PS8-13"
+    },
+    {
+      "aussage": "Temp .uuid.tmp + replace unter RLock; Read im Lock; Fehler Original bleibt, Temp weg.",
+      "beleg": "operations.py:55,518-545",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "jeder Schreibvorgang",
+      "id": "PS8-14"
+    },
+    {
+      "aussage": "Start uebernimmmt ausser derived/Secrets dann post_init; load flach ok; load_control wirft ungueltig.",
+      "beleg": "server.py:8826-8842; operations.py:423-516",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "Start/Reload",
+      "id": "PS8-15"
+    },
+    {
+      "aussage": "Audio nur save=true: tag/HHMMSS_us_requestId+ext, write_bytes, keine Retention.",
+      "beleg": "operations.py:343-362",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "Default False",
+      "id": "PS8-16"
+    },
+    {
+      "aussage": "Modelle data/models/stt/*; .part->Groesse+sha256->replace; keine Eviction.",
+      "beleg": "stt_model_management.py:662-700,583-625",
+      "evidenz": "E1+E3",
+      "gueltigkeit": "Auto Default False",
+      "id": "PS8-17"
+    },
+    {
+      "aussage": "Wake paketgebunden, Manifest v2/rev2 len 25, sha+bytes je Artefakt, nie geschrieben.",
+      "beleg": "wakeword_catalog.py:89,863-876,804-816",
+      "evidenz": "E1+E2+E3",
+      "gueltigkeit": "Wake-Pfad",
+      "id": "PS8-18"
+    },
+    {
+      "aussage": "config.yaml nur lesend Version1/Secrets/derived verboten; CPU via enforce_cpu_model_policy; YAML schlaegt Env.",
+      "beleg": "server.py:10333-10391,10655,10537-10545",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "--config",
+      "id": "PS8-19"
+    },
+    {
+      "aussage": "Nicht persistiert: realtimesst.log (no_log_file), Lizenz in-memory, .env lesend; WAV nur Legacy.",
+      "beleg": "server.py:2830; license_state.py:29; setup.py:410-417",
+      "evidenz": "E1",
+      "gueltigkeit": "V2-Entries",
+      "id": "PS8-20"
+    },
+    {
+      "aussage": "Query cursor>after/until/channels/events/session/transcription/zeit, limit 1..1000, ORDER cursor; status oldest/latest.",
+      "beleg": "event_logging.py:642-690,1268-1288",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "V2-Store",
+      "id": "PS8-21"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "backup_count ohne Wirkung."
+    },
+    {
+      "id": "N2",
+      "thema": "Keine Retention/Eviction Audio/Modelle."
+    },
+    {
+      "id": "N3",
+      "thema": "Kein SQLite-Migration (nur CREATE IF NOT EXISTS)."
+    },
+    {
+      "id": "N4",
+      "thema": "Keine JSONL-Reparatur."
+    }
+  ],
+  "researcher_session": "ses_e34559e84ffejAvJ7uTKUhkLDG",
+  "solver_notes": [
+    "8 Schreiborte: SQLite + 4 JSONL + runtime + audio + 2 Modell (+tmp/part/wal-shm)",
+    "4 Assets lesend: wakeword/manifest+31/30, kroko/manifest+licenses, warmup.wav, _build_identity.json",
+    "SQLite 14/6 (+UNIQUE,seq); 2 Tabellen, watermarks 3 Spalten",
+    "JSONL 4/2 Formen",
+    "runtime 5 Keys/94 Settings",
+    "Modell 2 Wurzeln/1 part/1 replace (Bytes+SHA)",
+    "Wake 1/25/2/2",
+    "Retention 2/0; Defaults 0"
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Schema-Drift bestehender Tabelle unbehandelt."
+    },
+    {
+      "id": "U2",
+      "thema": "--config/VOICESTT_CONFIG im Deployment unbestimmbar."
+    },
+    {
+      "id": "U3",
+      "thema": "Retention ohne Schreiben nie (kein Timer)."
+    },
+    {
+      "id": "U4",
+      "thema": "Branch nicht verifizierbar."
+    }
+  ],
+  "writer_notes": "Graph PS8-01>02,03>04>05,07,08,10>11>12,13>14>15,16,17,19; 07+08>06>09; 18/21 seitlich; 20 Negativ. Nur Speicherform 06.x/08.11/08.12 referenzieren."
+}

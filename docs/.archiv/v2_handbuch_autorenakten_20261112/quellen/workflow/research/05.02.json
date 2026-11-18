@@ -1,0 +1,249 @@
+{
+  "branch_note": "Task-Registry-Branch feat/v2-release-cleanup im Klon NICHT als Ref verifizierbar (kein refs/heads, keine packed-refs). Belegt ausschliesslich Commit a8993c5c68042d996eab680d84a5b138a214bb5d.",
+  "chapter": "05.02",
+  "commit_verification": "Checkout C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src. .git/HEAD Zeile 1 exakt a8993c5c68042d996eab680d84a5b138a214bb5d (Detached HEAD). .git/logs/HEAD und .git/FETCH_HEAD vorhanden; .git/shallow vorhanden; kein .git/refs/heads, keine packed-refs, keine Remote-Refs.",
+  "conflicts": [
+    {
+      "id": "C2-1",
+      "thema": "Korrektur zu 05.01 U-1: request.client.host ist TCP-Peer; Repo-Proxy setzt kein X-Forwarded-For; Loopback nur vier Literale. Docker-Netz-Proxy erscheint als Bridge-Adresse -> 403 ohne Key. Bypass nur bei Host-Loopback-Zugriff. Deploymentsabhaengig."
+    },
+    {
+      "id": "C2-2",
+      "thema": "Zwei Expositionen: portable Compose ohne Host-IP (8010:8010), VPS-Compose 127.0.0.1:2000:8010. Beide Artefakte desselben Commits."
+    },
+    {
+      "id": "C2-3",
+      "thema": "nginx.conf historisch, per Test aus Compose ausgeschlossen; Location /config ohne App-Route; kein X-Forwarded-For."
+    },
+    {
+      "id": "C2-4",
+      "thema": "adminAuthRequired false bei fehlendem Key, obwohl Remote 403. Irrefuehrende Selbstauskunft."
+    },
+    {
+      "id": "C2-5",
+      "thema": "testclient im Produktions-Frozenset; direkter ASGI-Aufruf mit Fake-Client erhaelt Admin ohne Key."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "[Client] -->|TCP 8010| [uvicorn: host=settings.host, port=settings.port]",
+    "[uvicorn] -->|eine App| [HTTP-Routen + /ws/transcribe + /ws/v2 + /ws/logs + /v1/*]",
+    "[AdminGate] -->|client.host| [TCP-Peer]",
+    "[TCP-Peer] --in {127.0.0.1,::1,localhost,testclient}--> [Loopback-Zone]",
+    "[Host-Port 8010] --> [Container 8010] (portable Compose, ohne Host-IP)",
+    "[127.0.0.1:2000] --> [Container 8010] (VPS-Compose)"
+  ],
+  "facts": [
+    {
+      "aussage": "Default-Bind 0.0.0.0:8010 in ServerSettings (host str, port int). Kein 127.0.0.1-Default.",
+      "beleg": "api_fastapi_server/server.py Z. 405-406",
+      "evidenz": "A",
+      "gueltigkeit": "jede Instanziierung ohne host/port",
+      "id": "W2-01"
+    },
+    {
+      "aussage": "CLI-Defaults identisch; YAML kann host/port setzen, CLI gewinnt. YAML braucht version 1; Secrets/Unknown -> SystemExit.",
+      "beleg": "server.py parse_args Z. 10409-10410, load_yaml Z. 10333-10391, set_defaults Z. 10655",
+      "evidenz": "A",
+      "gueltigkeit": "Startkonfiguration",
+      "id": "W2-02"
+    },
+    {
+      "aussage": "Kein Bind-Env im Produktionspfad; VOICESTT_PORT nur Host-Port in Compose, intern fix 8010.",
+      "beleg": "Negativsuche VOICESTT_HOST/PORT in api_fastapi_server/; docker-compose.yml Z. 82",
+      "evidenz": "A",
+      "gueltigkeit": "Konfigurationsquellen",
+      "id": "W2-03"
+    },
+    {
+      "aussage": "uvicorn.run nur mit host/port/log_level/app-Objekt; kein ssl_*, kein proxy_headers, kein workers/reload.",
+      "beleg": "server.py Z. 10830-10835",
+      "evidenz": "A",
+      "gueltigkeit": "Transportart",
+      "id": "W2-04"
+    },
+    {
+      "aussage": "Keine Middleware: kein CORS/TrustedHost/ProxyHeaders/Redirect/Cookie/CSRF/Origin-Pruefung.",
+      "beleg": "server.py Z. 8868-8872; Suche add_middleware ohne Treffer",
+      "evidenz": "A",
+      "gueltigkeit": "gesamter Stack",
+      "id": "W2-05"
+    },
+    {
+      "aussage": "request.client.host einzige Client-Identitaet; keine Forwarded-Auswertung.",
+      "beleg": "security/admin.py Z. 40; security/logs.py Z. 74",
+      "evidenz": "A",
+      "gueltigkeit": "Admin-/Log-Gate",
+      "id": "W2-06"
+    },
+    {
+      "aussage": "Loopback-Menge exakt {127.0.0.1, ::1, localhost, testclient} inkl. Testartefakt.",
+      "beleg": "security/admin.py Z. 8; Tests Z. 50-54",
+      "evidenz": "A",
+      "gueltigkeit": "Loopback-Zone",
+      "id": "W2-07"
+    },
+    {
+      "aussage": "Mit Key entscheidet nur Key (401); ohne Key nur Loopback (sonst 403).",
+      "beleg": "security/admin.py Z. 24-46",
+      "evidenz": "A",
+      "gueltigkeit": "alle Admin-Routen",
+      "id": "W2-08"
+    },
+    {
+      "aussage": "Offen ohne Key: GET /, /health, /api/config (+adminAuthRequired), /api/metrics, /api/v2/info, settings-Leserouten, wake-words.",
+      "beleg": "server.py Z. 8874-8941, 9223-9294",
+      "evidenz": "A",
+      "gueltigkeit": "unauthentifizierte Oberflaeche",
+      "id": "W2-09"
+    },
+    {
+      "aussage": "/health immer 200; ready:false gueltig; kein Modellzwang.",
+      "beleg": "server.py Z. 8885-8905; Tests",
+      "evidenz": "A",
+      "gueltigkeit": "Liveness",
+      "id": "W2-10"
+    },
+    {
+      "aussage": "Ein Listener/Port fuer alles: HTTP/UI/OpenAI/beide WS; keine Trennung Admin/Transkription auf Transportebene.",
+      "beleg": "server.py Z. 9899-9910; openai_routes.py Z. 43, 67; WS Z. 9560, 9912, 10121",
+      "evidenz": "A",
+      "gueltigkeit": "Netztopologie",
+      "id": "W2-11"
+    },
+    {
+      "aussage": "Keine Transport-Auth an /ws/transcribe und /ws/v2; Handshake ist Protokoll-hello.",
+      "beleg": "server.py Z. 9912-9938, 10121-10146",
+      "evidenz": "A",
+      "gueltigkeit": "Audio-Transport",
+      "id": "W2-12"
+    },
+    {
+      "aussage": "host/port startup_only, kein Rebinding, nie persistiert; nicht in Settings-Registry.",
+      "beleg": "server.py Z. 256-285, 7835-7840, 7959-7968",
+      "evidenz": "A",
+      "gueltigkeit": "Laufzeit",
+      "id": "W2-13"
+    },
+    {
+      "aussage": "UI baut WS-URLs same-origin, nur https->wss; kein Backend-Host konfigurierbar.",
+      "beleg": "static/index.html Z. 1131-1138; server.py Z. 8883",
+      "evidenz": "A",
+      "gueltigkeit": "Browser-Client",
+      "id": "W2-14"
+    },
+    {
+      "aussage": "Docker-Image EXPOSE 8010, CMD --host 0.0.0.0 --port 8010, Health via 127.0.0.1:8010/health.",
+      "beleg": "Dockerfile Z. 86, 95-101",
+      "evidenz": "A",
+      "gueltigkeit": "Container-Start",
+      "id": "W2-15"
+    },
+    {
+      "aussage": "Portable Compose: ${VOICESTT_PORT:-8010}:8010 ohne Host-IP, intern 0.0.0.0, kein Proxy.",
+      "beleg": "docker-compose.yml Z. 43-55, 81-90",
+      "evidenz": "A",
+      "gueltigkeit": "Artefakt, keine Zusage",
+      "id": "W2-16"
+    },
+    {
+      "aussage": "VPS-Compose 127.0.0.1:2000:8010, externes Netz, TLS-Vorbau ausserhalb Repos.",
+      "beleg": "engineering/deployment/vps/docker-compose.yml Z. 47-50; stt-config.yaml Z. 5-7",
+      "evidenz": "A",
+      "gueltigkeit": "VPS-Pfad",
+      "id": "W2-17"
+    },
+    {
+      "aussage": "nginx.conf historisch, per Test aus Compose ausgeschlossen; kein X-Forwarded-For; /config ohne Route.",
+      "beleg": "engineering/deployment/docker/nginx.conf; test_production_docker_contract Z. 206-207",
+      "evidenz": "A",
+      "gueltigkeit": "Artefakt, nicht aktiv",
+      "id": "W2-18"
+    },
+    {
+      "aussage": "Tests binden nur 127.0.0.1/TestClient; 0.0.0.0 nicht testgedeckt.",
+      "beleg": "test_client_v2_identity.py Z. 67-68",
+      "evidenz": "A",
+      "gueltigkeit": "Testaussagekraft",
+      "id": "W2-19"
+    },
+    {
+      "aussage": "Compose-Generator setzt Host-Port als Env; Container-Port fix.",
+      "beleg": "engineering/tools/compose.py Z. 134",
+      "evidenz": "A",
+      "gueltigkeit": "Generierung",
+      "id": "W2-20"
+    },
+    {
+      "aussage": "Keine Firewall/Paketfilter-Implementierung im Repo.",
+      "beleg": "Negativsuche ufw/iptables/firewall ohne Treffer",
+      "evidenz": "A",
+      "gueltigkeit": "Netzgrenze",
+      "id": "W2-21"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N2-01",
+      "thema": "TLS/HTTPS im Serverprozess (kein ssl_*)"
+    },
+    {
+      "id": "N2-02",
+      "thema": "Proxy-Integration (kein proxy_headers, kein Forwarded)"
+    },
+    {
+      "id": "N2-03",
+      "thema": "TrustedHost/CORS/Origin/Redirect"
+    },
+    {
+      "id": "N2-04",
+      "thema": "Netzsegmentierung (ein Listener, kein Admin-Port)"
+    },
+    {
+      "id": "N2-05",
+      "thema": "Laufzeit-Rebinding (startup_only)"
+    },
+    {
+      "id": "N2-06",
+      "thema": "Firewall/Allowlist im Repo"
+    },
+    {
+      "id": "N2-07",
+      "thema": "Transport-Auth WS-Audio"
+    },
+    {
+      "id": "N2-08",
+      "thema": "Backend-Host in UI (nur same-origin)"
+    }
+  ],
+  "researcher_session": "ses_e4261f708ffeXildh3JgxC7NCv",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U2-01",
+      "thema": "Peer-IP bei Proxy (127.0.0.1 vs Bridge) deploymentspezifisch"
+    },
+    {
+      "id": "U2-02",
+      "thema": "uvicorn proxy_headers-Default (>=0.30)"
+    },
+    {
+      "id": "U2-03",
+      "thema": "Firewall-/Portfreigabe Host"
+    },
+    {
+      "id": "U2-04",
+      "thema": "0.0.0.0-Absicht unbelegt"
+    },
+    {
+      "id": "U2-05",
+      "thema": "/docs,/redoc,/openapi.json Default aktiv, ungetestet"
+    },
+    {
+      "id": "U2-06",
+      "thema": "Container-Port-Abweichung unbelegt"
+    }
+  ],
+  "writer_notes": "Nur Erreichbarkeit, keine Gate-Mechanik-Wiederholung. 05.01 U-1 nicht uebernehmen (C2-1). Keine Betriebszusage aus Compose/nginx. TLS/CORS/Firewall/Admin-Port nur als NICHT vorhanden. 0.0.0.0 immer mit Quelle."
+}

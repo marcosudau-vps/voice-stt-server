@@ -1,0 +1,264 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup im Klon NICHT verifizierbar: shallow, keine refs/heads, kein packed-refs, HEAD detached. Commit-Bindung belegt, Name nicht (U1-04).",
+  "chapter": "03.10",
+  "commit_verification": "Verifiziert am Checkout C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src: .git/HEAD Zeile 1 = a8993c5c68042d996eab680d84a5b138a214bb5d (Detached HEAD); .git/FETCH_HEAD derselbe SHA von https://github.com/marcosudau-vps/voice-stt-server; .git/logs/HEAD 'checkout: moving from main to FETCH_HEAD'; .git/shallow vorhanden.",
+  "correction_round": 0,
+  "diagram_edges": [
+    "D1-02: [data_root_path] --> ServerSettings.__post_init__ --> runtime_config_path = <root>/config/runtime.json",
+    "D1-02/D1-20: [runtime_config_path == None] -.kein Schreiben.-> [Persistenz aus]",
+    "D1-07: [runtime.json .settings] --> RuntimeConfigStore.load --> create_app --> setattr (Ausnahmen: 3 Secrets + 7 abgeleitete Pfade) --> [ServerSettings] --> __post_init__ --> enforce_cpu_model_policy",
+    "D1-08/D1-09: [runtime.json settingsControlOverlay + settingsRevision] --> load_control --> ServerSettingsState.__init__ (streng) --> server_effective()",
+    "D1-10/D1-11: [PATCH /api/config | PUT /api/language | switch_models] --> persist_settings --> RuntimeConfigStore.save (Allowlist, Redaktion) --> [runtime.json .settings]",
+    "D1-12/D1-17: [PATCH /api/v2/settings/server] --> ServerSettingsState.patch_server --> persist(next_overlay Vollkopie) --> save_settings_control --> [runtime.json Overlay + Revision]",
+    "D1-13: RuntimeConfigStore.save|save_settings_control --> _write_merged (Read unter RLock -> temp .tmp -> os.replace) --> [runtime.json]",
+    "D1-13: [Exception beim Schreiben] --> tmp löschen + re-raise --> [Original unverändert]",
+    "D1-14: [Thread A] --> _RUNTIME_CONFIG_WRITE_LOCK <-- [Thread B] (modulweit, auch über Instanzen)",
+    "D1-19: [persist wirft] --> internal_error/persistence_failed --> HTTP 500 (kein Commit, keine Revisionserhöhung)",
+    "D1-18: [SessionSettingsState] -.keine Kante.-> [runtime.json]",
+    "NICHT ZEICHNEN: [Client/Session] --> [runtime.json]; [Overlay] --> [.settings]; Cross-Prozess-Lock; Migrations-/Pruning-Schritt"
+  ],
+  "facts": [
+    {
+      "aussage": "Metafakt: geprüft genau Commit a8993c5c68042d996eab680d84a5b138a214bb5d; kein Branch-Ref im Klon.",
+      "beleg": ".git/HEAD Z. 1; .git/FETCH_HEAD Z. 1; .git/logs/HEAD Z. 1; keine refs/heads-Einträge; .git/shallow.",
+      "evidenz": "A",
+      "gueltigkeit": "gesamtes Kapitel 03.10",
+      "id": "D1-01"
+    },
+    {
+      "aussage": "Ort: runtime_config_path = field(init=False), gesetzt in __post_init__ auf <data_root_path>/config/runtime.json; ohne data_root_path (Default None, CLI os.getenv VOICESTT_DATA_ROOT) bleibt None → load/load_control/save/save_settings_control No-Ops.",
+      "beleg": "server.py Z. 451, Z. 514, Z. 519-532, CLI Z. 10537-10545; operations.py Z. 419-421, No-Ops Z. 424, 433-434, 457-458, 478-479, 520-521; Test Z. 161-165.",
+      "evidenz": "A",
+      "gueltigkeit": "Prozesskonfiguration/Dateiort; Abgrenzung K1-02/K1-06",
+      "id": "D1-02"
+    },
+    {
+      "aussage": "Deployment: Compose VOICESTT_DATA_ROOT=/var/lib/voicestt + Bind-Mount ${VOICESTT_DATA_PATH:-./data} → /var/lib/voicestt; Datei /var/lib/voicestt/config/runtime.json überlebt Neuerstellung; config/ erst bei erstem Schreiben angelegt.",
+      "beleg": "docker-compose.yml Z. 28, Z. 56-64; operations.py Z. 522 (mkdir parents exist_ok).",
+      "evidenz": "B",
+      "gueltigkeit": "Container-Deployment",
+      "id": "D1-03"
+    },
+    {
+      "aussage": "Koexistenzformat: ein JSON-Objekt: version (konstant 1), updatedAt (UTC-ISO-8601 ms, Z), settings (Legacy), settingsControlOverlay + settingsRevision; unbekannte Top-Level-Felder bleiben; json.dumps indent=2, ensure_ascii=False.",
+      "beleg": "operations.py Z. 401-412, Z. 415, 417, Z. 78-79, Z. 440-448, Z. 463-468, Z. 530-535; Tests Z. 39-63, Z. 157-173.",
+      "evidenz": "A",
+      "gueltigkeit": "Formatautorität 03.10",
+      "id": "D1-04"
+    },
+    {
+      "aussage": "version/updatedAt nur geschrieben, nie gelesen: keine Prüfung, keine Schema-Datei, kein Migrationszweig.",
+      "beleg": "Schreiben Z. 441-442, 464-465; Lesen Z. 426-430, 480-516, 547-555 nur settings/Overlay/Revision; Negativ-Grep updatedAt (nur Schreiben + fremdes Artefakt).",
+      "evidenz": "B",
+      "gueltigkeit": "gesamte Datei",
+      "id": "D1-05"
+    },
+    {
+      "aussage": "load(): fehlt Pfad/Datei → {}; sonst json.loads(read_text utf-8) ohne try (Fehler propagieren); payload.get('settings', payload) → verschachtelt UND flach; nicht-dict → ValueError.",
+      "beleg": "operations.py load Z. 423-430; Tests Z. 303-324 (verschachtelt), multi_user Z. 419-438 (flach), server_operations Z. 980-986.",
+      "evidenz": "A",
+      "gueltigkeit": "Start + reload; Nicht-Objekt ohne Test (B)",
+      "id": "D1-06"
+    },
+    {
+      "aussage": "create_app: persistierte Werte per setattr (nur hasattr), ausgenommen 7 abgeleitete Pfade + 3 Secrets; durch coerce_setting_value; danach __post_init__ + enforce_cpu_model_policy; jeder ValueError bricht Start ab (kein try). Unbekannte Namen still ignoriert (Gegensatz Overlay).",
+      "beleg": "server.py Z. 8816-8843 (8826-8842, 8840-8843); DERIVED Z. 293-301; coerce Z. 1219-1273; Tests Z. 244-252, Z. 311-324, multi_user Z. 426-438.",
+      "evidenz": "A",
+      "gueltigkeit": "Startzeit; Prioritäten = 03.05 P1-07",
+      "id": "D1-07"
+    },
+    {
+      "aussage": "load_control(): fehlt → ({}, 0); unlesbar/OSError → ValueError; Nicht-Objekt → ValueError; Overlay nicht-dict → ValueError; Revision bool/nicht-int → ValueError; negativ → ValueError. Gelesen mit errors='replace'.",
+      "beleg": "operations.py Z. 471-516 (Fehlertexte 485-513, errors='replace' 481-483); Tests Z. 229-270.",
+      "evidenz": "A",
+      "gueltigkeit": "Serverstart; Überlappung 03.08 R1-22",
+      "id": "D1-08"
+    },
+    {
+      "aussage": "Startvalidierung State (zweite Stufe): Revision kein bool/≥0; Overlay Objekt; jeder Key bekannt + has_server_default; kein secret; jeder Wert coerce; Cross-Field vs. defaults+loaded. Verstoß → ValueError. Danach Vollkopie aller server_default_keys.",
+      "beleg": "settings_control.py Z. 1174-1240 (1187-1231, 1232-1240); server_default_keys Z. 640-644; defaults_for_server_defaults Z. 656-661; Tests Z. 786-843, runtime_persistence Z. 292-301.",
+      "evidenz": "A",
+      "gueltigkeit": "Serverstart vor erstem Modell-Refresh",
+      "id": "D1-09"
+    },
+    {
+      "aussage": "save(): asdict/dict → redact_kroko_credentials(drop=True) entfernt Secrets (auch verschachtelt) → nur {name: values[name] für allowed_names sortiert} + version/updatedAt. settings-Sektion als Ganzes ersetzt (kein Key-Merge); außerhalb Allowlist verschwindet.",
+      "beleg": "operations.py save Z. 432-449; credential_redaction.py Z. 58-79 (drop = weglassen); Tests server_operations Z. 980-987, openai_compatible Z. 371-379, stt_model_management Z. 916-922.",
+      "evidenz": "A",
+      "gueltigkeit": "jede Legacy-Persistenz",
+      "id": "D1-10"
+    },
+    {
+      "aussage": "Allowlist = (ACTIVE | NEW_SESSION | STARTUP_ONLY) − {admin_api_key, data_root_path, openai_api_key, runtime_config_path, device, host, port}. STARTUP_ONLY mitgeschrieben. Aufrufer: update_settings (nur applied), switch_models (2×), PUT /api/language.",
+      "beleg": "server.py Z. 7959-7969; Mengen Z. 178-291; Aufrufer Z. 7947, 8184, 8244, 9134; Test Z. 371-379.",
+      "evidenz": "A",
+      "gueltigkeit": "Legacy-/Admin-Pfad; Sticky = 03.05 P1-22",
+      "id": "D1-11"
+    },
+    {
+      "aussage": "save_settings_control(): {version, updatedAt, settingsControlOverlay: dict(overlay or {}), settingsRevision: int(revision)}. Revision still normalisiert (bool→0, <0→0) – Gegensatz zu load_control (ValueError). Keine Redaktion (Schutz via Registry-Validierung). Legacy/unbekannt unangetastet.",
+      "beleg": "operations.py Z. 451-469 (Normalisierung 460-462); Tests Z. 39-63; Normalisierung ohne Test (B).",
+      "evidenz": "A",
+      "gueltigkeit": "jeder Server-Patch; Rand 03.08 R1-18/R1-26",
+      "id": "D1-12"
+    },
+    {
+      "aussage": "Atomar: mkdir parents → Temp .<name>.<uuid4hex>.tmp im selben Verzeichnis → unter Lock _read_payload Merge-Basis, payload.update Top-Level, schreiben → os.replace. Exception → Temp löschen, Original bleibt, re-raise. Kein fsync.",
+      "beleg": "operations.py Z. 518-545 (Kommentar 528-529, Cleanup 538-545); _read_payload Z. 547-555; Test Z. 272-289.",
+      "evidenz": "A",
+      "gueltigkeit": "beide Familien, jeder Schreibvorgang",
+      "id": "D1-13"
+    },
+    {
+      "aussage": "Modulweiter RLock _RUNTIME_CONFIG_WRITE_LOCK, von jeder Instanz geteilt → Threads serialisiert, auch über Instanzen; keine Sektion geht verloren.",
+      "beleg": "operations.py Z. 52-55, Z. 421; Tests Z. 111-155, Z. 176-218.",
+      "evidenz": "A",
+      "gueltigkeit": "ein Serverprozess",
+      "id": "D1-14"
+    },
+    {
+      "aussage": "Kein Cross-Prozess-Lock/CAS: kein Datei-Lock, keine Revisionsprüfung im Store; zwei Prozesse nicht serialisiert (last writer wins, Sektionsverlust möglich). Konkurrenz nur eine Ebene höher via baseSettingsRevision (409, nur Overlay, nur Prozess).",
+      "beleg": "operations.py Z. 52-55, 518-545 (nur RLock); Negativ-Grep fcntl/msvcrt/flock/fsync (nur kroko/artifacts.py); Revision settings_control.py Z. 1272-1288.",
+      "evidenz": "C",
+      "gueltigkeit": "Multi-Prozess/Volume (U1-01); Tests nur Threads",
+      "id": "D1-15"
+    },
+    {
+      "aussage": "Beidseitige Bewahrung: save() erhält Overlay/Revision/unbekannt; save_settings_control() erhält Legacy-Sektion/unbekannt; Merge Top-Level via _read_payload im Lock.",
+      "beleg": "operations.py Z. 518-537; save Z. 440-449; save_settings_control Z. 463-469; Tests Z. 39-63, 157-173.",
+      "evidenz": "A",
+      "gueltigkeit": "Datei-Koexistenz; Detail 03.05 P1-12",
+      "id": "D1-16"
+    },
+    {
+      "aussage": "Overlay-Vollkopie = Pinning: immer vollständiges Overlay aller server_default_keys (nicht Delta); Start überschreibt auch nie gepatchte Keys; spätere Code-Defaults unwirksam. Kein Migrations-/Reset-Pfad.",
+      "beleg": "settings_control.py Z. 1232-1240, patch_server Z. 1359-1369; operations.py Z. 451-469; Tests Z. 365-379, Z. 347-361.",
+      "evidenz": "B",
+      "gueltigkeit": "persistente Defaults; = 03.05 P1-11/U-02 (C1-01)",
+      "id": "D1-17"
+    },
+    {
+      "aussage": "Session nie persistiert: kein persist-Parameter, apply_patch ohne Store-Aufruf (Docstring). Nur Server-Overlay via persist-Callback.",
+      "beleg": "settings_control.py Z. 885-913, Z. 933-1166, Docstring Z. 938-941; __init__ Z. 1180; Test Z. 337-361.",
+      "evidenz": "A",
+      "gueltigkeit": "Domäne; K1-16, P1-10/N-05",
+      "id": "D1-18"
+    },
+    {
+      "aussage": "Persist-Fehler → internal_error, kein Halbcommit: Kopien → _persist in try/except → Fehler: accepted=False/internal_error/persistence_failed (Feld persistence), RAM+Revision unverändert. Retry gleiche Basis erfolgreich, lückenlos. REST → 500 ohne Exception-Text/Secrets.",
+      "beleg": "settings_control.py Z. 1355-1388 (1370-1385); CODE Z. 164; server.py Z. 9287-9292; Tests control_plane Z. 848-902, protocol_v2 Z. 1267-1297, 1299-1304.",
+      "evidenz": "A",
+      "gueltigkeit": "Admin-Patch; Mechanik = 03.08 R1-18 (Rand)",
+      "id": "D1-19"
+    },
+    {
+      "aussage": "path None: Patch 'gelingt', persistiert nicht. save_settings_control → None statt werfen; patch_server akzeptiert (nur Exception-Prüfung). Overlay+Revision nur RAM, nach Neustart verloren – ohne Fehlersignal.",
+      "beleg": "operations.py Z. 457-458, 520-521; settings_control.py Z. 1367-1385; löst 01.02 Z. 362 code-seitig.",
+      "evidenz": "A",
+      "gueltigkeit": "Betrieb ohne --data-root/VOICESTT_DATA_ROOT",
+      "id": "D1-20"
+    },
+    {
+      "aussage": "Kaputte Datei: Startabbruch ohne Selbstheilung (load: roher JSONDecodeError; load_control: deutscher ValueError; Datei bleibt); laufend tolerant: _read_payload → {} bei unlesbar; nächster Schreibvorgang ersetzt Dokument (kein .bak/Quarantäne).",
+      "beleg": "operations.py load Z. 426, load_control Z. 480-493, _read_payload Z. 547-555, _write_merged Z. 530-536.",
+      "evidenz": "A",
+      "gueltigkeit": "Start vs. Laufzeit; Überschreiben ohne Test (B) N1-03",
+      "id": "D1-21"
+    },
+    {
+      "aussage": "Zweiter Lesepfad nur auf Anforderung, kein Watcher: reload liest Legacy-Sektion (load), teilt model/runtime/skipped, update + ggf. switch, Antwort; Fehler →400. Kein Datei-Watcher; Overlay-Reload nur via Neustart.",
+      "beleg": "server.py reload_config Z. 9870-9892; Init Z. 6287-6293 (einziger load_control); Negativ-Grep watchdog/inotify.",
+      "evidenz": "B",
+      "gueltigkeit": "Admin; kein Reload-Test (analog 03.08 R1-25)",
+      "id": "D1-22"
+    },
+    {
+      "aussage": "Load/Save-Asymmetrie device/host/port: nie geschrieben (Allowlist), beim Laden nicht ausgenommen (nur 7 Pfade + 3 Secrets). Handgeschriebene Datei überschreibt beim Start; enforce_cpu_model_policy danach kann device != cpu ablehnen.",
+      "beleg": "server.py Z. 7959-7969 vs. Z. 8829-8838, Z. 8843; DERIVED Z. 293-301.",
+      "evidenz": "B",
+      "gueltigkeit": "Startzeit; = 03.05 P1-07/U-01; kein Test (C-Anteil)",
+      "id": "D1-23"
+    },
+    {
+      "aussage": "Flaches-Dokument-Ambiguität: load fällt auf payload zurück; nur via save_settings_control geschriebenes Flaches enthält Top-Level + version/updatedAt/Overlay/Revision; load liefert ganzes Dokument als 'settings' (unbekannt still verworfen); späterer save legt settings an – alte Top-Level dauerhaft ignoriert, nie entfernt.",
+      "beleg": "operations.py load Z. 427-430, _write_merged Z. 531; server.py Z. 8829-8832; multi_user Z. 426-432; Mischfall ohne Test.",
+      "evidenz": "C",
+      "gueltigkeit": "nie-durch-save-gegangene Dateien (C1-02)",
+      "id": "D1-24"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1-01",
+      "thema": "Kein Datei-/Cross-Prozess-Lock (nur RLock); OS-Locks nur in kroko/artifacts.py."
+    },
+    {
+      "id": "N1-02",
+      "thema": "Kein fsync/fdatasync vor os.replace (nur Sichtbarkeits-Atomik)."
+    },
+    {
+      "id": "N1-03",
+      "thema": "Kein Backup/Rotation/Quarantäne (.bak/Restore); stilles Überschreiben laufend (D1-21)."
+    },
+    {
+      "id": "N1-04",
+      "thema": "Keine Migration/Downgrade/Schema-Prüfung (D1-05); version konstant 1."
+    },
+    {
+      "id": "N1-05",
+      "thema": "Kein Pruning (Allowlist-Abfall/flach bleibt; D1-10, D1-24)."
+    },
+    {
+      "id": "N1-06",
+      "thema": "Kein Watcher/Hot-Reload; Overlay nur Neustart, Legacy nur reload (D1-22)."
+    },
+    {
+      "id": "N1-07",
+      "thema": "Keine JSON-Schema-Datei; Form nur Code."
+    },
+    {
+      "id": "N1-08",
+      "thema": "Keine CI-Definition für Tests (kein .github/workflows, kein pytest-Abschnitt)."
+    }
+  ],
+  "researcher_session": "ses_e43fb410affeVL1etezdQ91yK6",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1-01",
+      "thema": "Zwei Prozesse/Container auf Volume (Sektionsverlust möglich): ungetestet, unabgesichert (D1-15)."
+    },
+    {
+      "id": "U1-02",
+      "thema": "Pinning-Absicht unentscheidbar; kein Migrations-/Reset-Pfad (= 03.05 U-02; D1-17)."
+    },
+    {
+      "id": "U1-03",
+      "thema": "version/updatedAt für Externe zugesichert? Nicht belegt; rein schreibend (D1-05)."
+    },
+    {
+      "id": "U1-04",
+      "thema": "Branch nicht verifizierbar; nur Commit (D1-01)."
+    }
+  ],
+  "writer_notes": "Linie: (1) Ort – eine Datei unter <data_root>/config, ohne Wurzel keine Persistenz (D1-02/D1-03); (2) Form – ein Dokument/zwei Familien + unbekannt, version/updatedAt nur schreibend (D1-04/D1-05); (3) Laden – Legacy tolerant (fehlend/flach/unbekannt), Overlay fail-fast, State validiert zweit (D1-06..D1-09); (4) Speichern – RLock, Temp+os.replace, Allowlist+Redaktion, Overlay-Vollkopie (D1-10..D1-17); (5) Konflikte – nur Threads serialisiert, Cross-Prozess offen (D1-14/D1-15), Revision State, Session nie (D1-18), kein Pruning/Migration (N); (6) Fehler – persist-Wurf → 500 ohne Halbcommit (D1-19), kaputt → Startabbruch liegenlassend (D1-21), path None still (D1-20). Abgrenzung: Mechanik/Status 03.08 (Rand), Ebenen/Prioritäten 03.01/03.05 (Referenz), Secrets 03.11, Bereiche 03.04, Wirksamkeit 03.09. NICHT: Log-Retention/SQLite. Zahlen nur Zeilen. NOT_REQUESTED bestätigt; Edges Angebot.",
+  "conflicts": [
+    {
+      "id": "C1-01",
+      "thema": "Vollkopie vs. Delta: jeder Patch schreibt alle Keys; Code-Defaults später unwirksam (D1-17)."
+    },
+    {
+      "id": "C1-02",
+      "thema": "Zwei Lesefälle ohne Kennzeichen; Mischdateien → still ignorierte Top-Level (D1-24)."
+    },
+    {
+      "id": "C1-03",
+      "thema": "Normalisierung gegenläufig: save klemmt bool/negativ auf 0, load/State werfen ValueError (D1-08 vs D1-12)."
+    },
+    {
+      "id": "C1-04",
+      "thema": "Load/Save-Asymmetrie device/host/port (D1-23)."
+    }
+  ]
+}

@@ -1,0 +1,368 @@
+{
+  "branch_note": "feat/v2-release-cleanup aus .git/HEAD nicht verifizierbar (detached HEAD); nur Commit bindend",
+  "chapter": "09.06",
+  "commit_verification": ".git/HEAD enthaelt genau diesen Hash",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "Kein Widerspruch; Ack-vor-Event in SZ9-24 aufgeloest: Event zuerst."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [
+    "E1 Client->Endpoint: WebSocket verbinden [SZ9-05]",
+    "E2 Client->Connection: hello {versions:[2], trigger.manual=true} [SZ9-06]",
+    "E3 Connection->Session: admit_session(kanonische sessionId) [SZ9-07]",
+    "E4 Connection->Session: start_streaming() [SZ9-02]",
+    "E5 Connection->Client: hello.accepted {snapshot, logAccess} [SZ9-08]",
+    "E6 Client->Connection: activation.command {activate, source=manual} [SZ9-09]",
+    "E7 Connection->Session: handle_trigger_command [SZ9-10]",
+    "E8 Session->Controller: activate(manual, settings, policy) [SZ9-11]",
+    "E9 Session->Recorder: open_controlled_activation(id, generation) [SZ9-12]",
+    "E10 Session->Ledger: open_activation(id, sequence) [SZ9-12]",
+    "E11 Connection->Client: command.ack {applied, waiting_first_speech} [SZ9-13]",
+    "E12 Connection->Client: activation.started {waiting_first_speech} [SZ9-14]",
+    "E13 Client->Connection: Binaerframe pcm_s16le [SZ9-04]",
+    "E14 Session->Recorder: feed_audio(samples, 16000) [SZ9-15]",
+    "E15 Recorder->Session: on_recording_start (Gate offen + VAD) [SZ9-16]",
+    "E16 Session->Controller: recording_started -> segment_active [SZ9-17]",
+    "E17 Connection->Client: phase_changed dann segment.recording_started [SZ9-18]",
+    "E18 Recorder->Session: on_recording_stop -> followup_wait [SZ9-19]",
+    "E19 Connection->Client: segment.recording_ended, transcription.accepted [SZ9-19,SZ9-20]",
+    "E20 Connection->Client: transcription.completed {text} [SZ9-21]",
+    "E21 Session->Controller: finish -> closing_input (Gate-Close, Ledger) [SZ9-22,SZ9-25]",
+    "E22 Session->Client: input_closed DANN command.ack closing_input [SZ9-24,SZ9-26,SZ9-23]"
+  ],
+  "facts": [
+    {
+      "aussage": "Zwei WS-Endpunkte: v1 admitted aus Query + Server-hello; v2 admitted erst nach Client-hello.",
+      "beleg": "server.py:10002-10014,10121-10136",
+      "evidenz": "A",
+      "gueltigkeit": "v1+v2",
+      "id": "SZ9-01"
+    },
+    {
+      "aussage": "v2 kennt keinen start-Befehl; start_streaming() laeuft atomar bei der Admission.",
+      "beleg": "schema.py:50-57; connection.py:326-328",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "SZ9-02"
+    },
+    {
+      "aussage": "v1 lehnt Trigger ohne start ab (stream_not_started) und Audio ohne streaming.",
+      "beleg": "server.py:3675-3688,3015-3018",
+      "evidenz": "A",
+      "gueltigkeit": "v1",
+      "id": "SZ9-03"
+    },
+    {
+      "aussage": "Binaerframe = 4B-Laenge + JSON + pcm_s16le; nur pcm_s16le, Resampling auf 16 kHz.",
+      "beleg": "protocol.py:40-75; server.py:147,7653-7683",
+      "evidenz": "A",
+      "gueltigkeit": "v1+v2",
+      "id": "SZ9-04"
+    },
+    {
+      "aussage": "v2: accept, ProtocolV2Connection, Handshake-Timeout 10.0 s fuehrt zu Close 4408.",
+      "beleg": "server.py:10137-10169,10229-10239; schema.py:209",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "SZ9-05"
+    },
+    {
+      "aussage": "hello-Pflichtfelder + Versionsnegotiation; drei Refusal-Stufen mit 4400/4406/4409.",
+      "beleg": "handshake.py:83-178,201-247",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "SZ9-06"
+    },
+    {
+      "aussage": "admit_session mit kanonischer UUID; Limit ergibt 4409, unerwarteter Fehler 1011.",
+      "beleg": "connection.py:257-295; schema.py:214-233",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "SZ9-07"
+    },
+    {
+      "aussage": "hello.accepted traegt eingebetteten Snapshot (ohne type), logAccess, Serveridentitaet.",
+      "beleg": "connection.py:330-343; snapshot.py:36-89",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "SZ9-08"
+    },
+    {
+      "aussage": "v2-Envelope: kanonische commandId/sessionId, protocolVersion 2, activate nur source=manual.",
+      "beleg": "commands.py:90-167",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "SZ9-09"
+    },
+    {
+      "aussage": "activate laeuft durch Replay-Lookup vor Phasenmatrix; Domain-Reason wird auf frozen result gemappt.",
+      "beleg": "connection.py:373-390; server.py:3500-3572",
+      "evidenz": "A",
+      "gueltigkeit": "v1+v2",
+      "id": "SZ9-10"
+    },
+    {
+      "aussage": "activate nur bei idle; setzt waiting_first_speech, Identitaet/Sequenz, Deadline, version+1.",
+      "beleg": "activation.py:464-509",
+      "evidenz": "A",
+      "gueltigkeit": "kontrolliert",
+      "id": "SZ9-11"
+    },
+    {
+      "aussage": "Gate-Open und Ledger-Open erfolgen vor dem Ack; activation_started wird gesammelt publiziert.",
+      "beleg": "server.py:3929-3954",
+      "evidenz": "A",
+      "gueltigkeit": "kontrolliert",
+      "id": "SZ9-12"
+    },
+    {
+      "aussage": "command.ack: accepted nur bei applied/no_change; Felder inputPhase, stateVersion, settingsRevision.",
+      "beleg": "connection.py:620-652; schema.py:107-143",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "SZ9-13"
+    },
+    {
+      "aussage": "activation.started mit activationId/-Sequence, primarySource und waiting_first_speech.",
+      "beleg": "events.py:308-319; session.py:105-144",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "SZ9-14"
+    },
+    {
+      "aussage": "Binaeraudio: decode, ingest_audio_packet, recorder.feed_audio; vor hello.accepted Close 4400.",
+      "beleg": "connection.py:181-198; server.py:3011-3042",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "SZ9-15"
+    },
+    {
+      "aussage": "Aufnahme startet nur bei offenem Gate im Produktions-Worker und aktiver VAD.",
+      "beleg": "recording.py:351-373; activation_control.py:191",
+      "evidenz": "A",
+      "gueltigkeit": "kontrolliert",
+      "id": "SZ9-16"
+    },
+    {
+      "aussage": "on_recording_start ergibt segment_active, accept_segment und Timeline recording_started.",
+      "beleg": "server.py:5294-5439; activation.py:572-596",
+      "evidenz": "A",
+      "gueltigkeit": "kontrolliert",
+      "id": "SZ9-17"
+    },
+    {
+      "aussage": "v2 emittiert phase_changed(segment_active) vor segment.recording_started.",
+      "beleg": "events.py:170-192",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "SZ9-18"
+    },
+    {
+      "aussage": "on_recording_stop ergibt followup_wait und recording_ended mit reason + segmentSequence.",
+      "beleg": "server.py:5441-5513; activation.py:598-616",
+      "evidenz": "A",
+      "gueltigkeit": "v1+v2",
+      "id": "SZ9-19"
+    },
+    {
+      "aussage": "transcription.accepted (v1: transcription_started) kommt vor der finalen Inferenz.",
+      "beleg": "server.py:5534-5587; events.py:60",
+      "evidenz": "A",
+      "gueltigkeit": "v1+v2",
+      "id": "SZ9-20"
+    },
+    {
+      "aussage": "Final: resolve_completed, dann final + final_transcript, in v2 transcription.completed.",
+      "beleg": "server.py:4668-4898",
+      "evidenz": "A",
+      "gueltigkeit": "v1+v2",
+      "id": "SZ9-21"
+    },
+    {
+      "aussage": "finish setzt closing_input + CloseContext, armt Recovery-Deadline, version+1.",
+      "beleg": "activation.py:618-700",
+      "evidenz": "A",
+      "gueltigkeit": "beide",
+      "id": "SZ9-22"
+    },
+    {
+      "aussage": "finish-Ack meldet inputPhase=closing_input mit der Version des Closings-Eintritts.",
+      "beleg": "connection.py:452-479,718-740",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "SZ9-23"
+    },
+    {
+      "aussage": "Reihenfolge: activation.input_closed wird vor dem command.ack des finish gesendet.",
+      "beleg": "server.py:3564-3572; connection.py:383-450",
+      "evidenz": "B",
+      "gueltigkeit": "v1+v2",
+      "id": "SZ9-24"
+    },
+    {
+      "aussage": "Close-Order: Gate-Close, Flush, Ledger-Close, Reserve, input_closed auf idle, Publish.",
+      "beleg": "server.py:4053-4139",
+      "evidenz": "A",
+      "gueltigkeit": "beide",
+      "id": "SZ9-25"
+    },
+    {
+      "aussage": "input_closed: reason, causedByCommandId (nur finish/cancel), acceptedSegmentCount, exactly once.",
+      "beleg": "events.py:334-342; server.py:4010-4015",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "SZ9-26"
+    },
+    {
+      "aussage": "activation.completed entsteht nur ueber Ledger-Drain (completed/cancelled/failed).",
+      "beleg": "events.py:453-475; server.py:4553-4567",
+      "evidenz": "B",
+      "gueltigkeit": "v2, live nicht erzwungen",
+      "id": "SZ9-27"
+    },
+    {
+      "aussage": "Fuenf Phasen; Normalfolge idle, waiting_first_speech, segment_active, followup_wait, closing_input, idle.",
+      "beleg": "schema.py:85-98; activation.py:65-78",
+      "evidenz": "A",
+      "gueltigkeit": "beide",
+      "id": "SZ9-28"
+    },
+    {
+      "aussage": "Defaults 15/3/600/180/30/5 s, ueberschreibbar, pro Activation einmal gelatcht.",
+      "beleg": "activation.py:90-98; server.py:3350-3407",
+      "evidenz": "A",
+      "gueltigkeit": "Default",
+      "id": "SZ9-29"
+    },
+    {
+      "aussage": "Deadline-Ablauf fuehrt in closing_input (timed_out/watchdog), nie in eine Fehlerphase.",
+      "beleg": "activation.py:746-817",
+      "evidenz": "A",
+      "gueltigkeit": "beide",
+      "id": "SZ9-30"
+    },
+    {
+      "aussage": "v1-Folge: hello, start, trigger, trigger_ack, recording_started, recording_ended, final, finish.",
+      "beleg": "test_server_controlled_e2e.py:419-659",
+      "evidenz": "A",
+      "gueltigkeit": "v1",
+      "id": "SZ9-31"
+    },
+    {
+      "aussage": "Ohne Trigger-Flags bleibt v1 legacy; trigger ergibt controlled_activation_disabled.",
+      "beleg": "server.py:1153-1208",
+      "evidenz": "A",
+      "gueltigkeit": "v1",
+      "id": "SZ9-32"
+    },
+    {
+      "aussage": "Patch: Envelope, Revisionsvergleich, atomare Key-Validierung, danach revision+1.",
+      "beleg": "settings_control.py:933-1092",
+      "evidenz": "A",
+      "gueltigkeit": "v2-Session",
+      "id": "SZ9-33"
+    },
+    {
+      "aussage": "Ein Patch ergibt genau einen stateVersion-Sprung plus settings.changed je Policy-Gruppe.",
+      "beleg": "connection.py:505-582",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "SZ9-34"
+    },
+    {
+      "aussage": "next_activation-Werte wirken erst in der naechsten Activation (Latch).",
+      "beleg": "settings_control.py:1093-1145; server.py:3350",
+      "evidenz": "A",
+      "gueltigkeit": "beide",
+      "id": "SZ9-35"
+    },
+    {
+      "aussage": "Wake-Admission: kanonische IDs, atomare Katalogaufloesung, sonst ganze Auswahl abgelehnt.",
+      "beleg": "handshake.py:201-247; ports.py:119-147",
+      "evidenz": "A",
+      "gueltigkeit": "v2+Wake",
+      "id": "SZ9-36"
+    },
+    {
+      "aussage": "Wake-Detection ist Trigger wie jeder andere; Commit ist controller.activate(wake_word).",
+      "beleg": "server.py:2588-2660; wake_admission.py:248-312",
+      "evidenz": "A",
+      "gueltigkeit": "kontrolliert",
+      "id": "SZ9-37"
+    },
+    {
+      "aussage": "wakeword.detected einmal pro Aeuserung; Latch-Freigabe nur am input_closed.",
+      "beleg": "events.py:428-437; server.py:2699-2710",
+      "evidenz": "A",
+      "gueltigkeit": "kontrolliert",
+      "id": "SZ9-38"
+    },
+    {
+      "aussage": "Nach Wake-Activation identischer Segment-, Transkriptions- und Close-Pfad.",
+      "beleg": "test_server_controlled_e2e.py:525-547",
+      "evidenz": "A",
+      "gueltigkeit": "beide",
+      "id": "SZ9-39"
+    },
+    {
+      "aussage": "Zyklus-Invariante: stateVersion monoton, eventSeq lueckenlos, stateVersion = lastEventSeq+1.",
+      "beleg": "test_protocol_v2_state_version.py:616-672",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "SZ9-40"
+    },
+    {
+      "aussage": "Abgelehnte Commands beenden die v2-Session nicht; ohne kanonische commandId kein Ack.",
+      "beleg": "connection.py:347-369",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "SZ9-41"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Kein start-Befehl in v2; nur fuenf Command-Typen."
+    },
+    {
+      "id": "N2",
+      "thema": "Kein Wire-Event fuer Eintritt in closing_input, nur stateVersion-Sprung."
+    },
+    {
+      "id": "N3",
+      "thema": "Kein Zustand finalizing; genau fuenf Phasen."
+    },
+    {
+      "id": "N4",
+      "thema": "v2 ohne stop/clear/ping/metrics-Befehle."
+    }
+  ],
+  "researcher_session": "ses_e33e9a07effeDzPsACag1j3yjY",
+  "solver_notes": [
+    "Szenario A v2 manuell hello bis input_closed durch Tests belegt; B Settings-Patch; C Wake."
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Branch nicht durch HEAD belegt."
+    },
+    {
+      "id": "U2",
+      "thema": "v2-Sprache ohne Trigger: Gate gleicher Code, v2-Test fehlt."
+    },
+    {
+      "id": "U3",
+      "thema": "Scheduler-/Modell-Latenzen zwischen accepted und completed."
+    },
+    {
+      "id": "U4",
+      "thema": "activation.completed im Regelzyklus haengt vom Ledger-Drain ab."
+    }
+  ],
+  "writer_notes": "Nur Szenario A (v2 manuell) von hello bis input_closed durch Tests belegt. Diagramm exakt E1-E22, keine Zeitangaben. SZ9-24 beachten: input_closed vor finish-Ack. activation.completed weglassen. Nicht mit Settings/Wake mischen."
+}

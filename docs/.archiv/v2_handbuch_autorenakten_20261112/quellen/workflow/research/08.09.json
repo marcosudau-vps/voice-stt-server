@@ -1,0 +1,314 @@
+{
+  "branch_note": "feat/v2-release-cleanup nicht verifizierbar (HEAD ohne Ref); nur Commit bindend.",
+  "chapter": "08.09",
+  "commit_verification": ".git/HEAD exakt 40-stellige SHA (detached HEAD). Nur *.py.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "activation_trigger_required doppelt (Handshake gewinnt)."
+    },
+    {
+      "id": "C2",
+      "thema": "Zwei Fehlerstile v1 vs v2 (1011 gleiche Zahl andere Semantik)."
+    },
+    {
+      "id": "C3",
+      "thema": "Settings RESULT-Strings ohne Importbindung; Unbekannt faellt auf applied (latent)."
+    },
+    {
+      "id": "C4",
+      "thema": "Auftrag 1000-1015 vs implementiert 1000/1008/1011/1013 + 4400/4406/4408/4409."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "RESULT_CODES geschlossen 15 (No free additions); nur diese je auf Wire.",
+      "beleg": "schema.py:107-140",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "v2 ack nicht v1",
+      "id": "FE8-01"
+    },
+    {
+      "aussage": "accepted reine Projektion true nur applied/no_change; kein Verbindungsfehler.",
+      "beleg": "schema.py:143; commands.py:279-281; connection.py:642",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "alle v2-Acks",
+      "id": "FE8-02"
+    },
+    {
+      "aussage": "5 Close-Konstanten 4400/4406/4408/4409/1011; Timeout 10.0s injizierbar nur bis hello.",
+      "beleg": "schema.py:200-209",
+      "evidenz": "E1",
+      "gueltigkeit": "/ws/v2; 4408 nur Endpoint",
+      "id": "FE8-03"
+    },
+    {
+      "aussage": "Close wettlauf-idempotent: erster request_close gewinnt, finally erneut gelesen einmal gesendet.",
+      "beleg": "connection.py:140-152; server.py:10259-10281",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "einziger Pfad",
+      "id": "FE8-04"
+    },
+    {
+      "aussage": "4400 drei Ausloeser Text/Binaer/Envelope; ohne Nutzlast.",
+      "beleg": "connection.py:172-185,218-234; handshake.py:85-153",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "nur vor accepted",
+      "id": "FE8-05"
+    },
+    {
+      "aussage": "4406 nur Versionsmismatch, immer mit protocol.incompatible (Version/Commit/supported).",
+      "beleg": "handshake.py:70-73,155-165",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "SUPPORTED=(2,)",
+      "id": "FE8-06"
+    },
+    {
+      "aussage": "4408 Timeout ohne Nutzlast nur Endpoint; keine Session/Slot.",
+      "beleg": "server.py:10229-10239",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "nur vor accepted",
+      "id": "FE8-07"
+    },
+    {
+      "aussage": "4409 Ablehnung mit session.rejected + errors[] (invalid_requested/session_limit); keine Session.",
+      "beleg": "handshake.py:76-80; connection.py:236-305",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "nur Handshake",
+      "id": "FE8-08"
+    },
+    {
+      "aussage": "1011 einziger interner Close: terminale Recovery/Admission/Sendefehler/Endpoint; Reconnect belegt.",
+      "beleg": "connection.py:284-295,695-702; server.py:10180-10258",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "v2-Transport 4 Ausloeser",
+      "id": "FE8-09"
+    },
+    {
+      "aussage": "1000 reiner Fallback ohne Grund; Client-Disconnect nicht testbelegt.",
+      "beleg": "server.py:10265-10267",
+      "evidenz": "E1",
+      "gueltigkeit": "Schleifenende",
+      "id": "FE8-10"
+    },
+    {
+      "aussage": "26 Reasons -> 12 Codes als Daten; Unbekannt wirft UnmappedDomainReason (laut).",
+      "beleg": "commands.py:38-39,211-276; connection.py:408-421",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "AP-SRV-030-Befehle",
+      "id": "FE8-11"
+    },
+    {
+      "aussage": "10 Reasons nicht ack-faehig (Recorder/Timer); nur Event/Snapshot.",
+      "beleg": "commands.py:252-263",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "Negativliste",
+      "id": "FE8-12"
+    },
+    {
+      "aussage": "Phasen: locked (nicht idle)/not_active (idle)/invalid_phase (waiting)/closing_input (refresh)/no_change (finish-cancel Close).",
+      "beleg": "activation.py:464-570,638-673",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "nur activation.command",
+      "id": "FE8-13"
+    },
+    {
+      "aussage": "invalid_payload Sammelcode 10 Ursachen (extend/source bool); stale_session einziger Envelope-Identitaetsfehler.",
+      "beleg": "commands.py:90-203",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "v2-Envelope",
+      "id": "FE8-14"
+    },
+    {
+      "aussage": "Gleiche ID + gleicher Payload = Memo-Ack; anderer Payload = conflict ohne Wirkung (Erster bleibt).",
+      "beleg": "connection.py:423-450,594-661; commands.py:65-77",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "ein Cache/Session",
+      "id": "FE8-15"
+    },
+    {
+      "aussage": "suppressed Ack false + Diagnose-Event mit source; nie Close; kein stateVersion.",
+      "beleg": "commands.py:232-233; connection.py:448-449,663-677",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "activate gesperrt",
+      "id": "FE8-16"
+    },
+    {
+      "aussage": "audio_unavailable nur activate; set false selbst applied + Cancel-Barriere; Session bleibt.",
+      "beleg": "server.py:3690-3818; activation.py:702-720",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "Audio-Verlust",
+      "id": "FE8-17"
+    },
+    {
+      "aussage": "Settings 4 Wire + 13 Feldcodes errors[]; atomar keine Teilwirkung/Revision.",
+      "beleg": "settings_control.py:62-66,153-165,933-1027; connection.py:523-542",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "session + PATCH server",
+      "id": "FE8-18"
+    },
+    {
+      "aussage": "revision_conflict liefert aktuelle Revision (rebasen); einziger Code mit HTTP 409.",
+      "beleg": "settings_control.py:952-967,1273-1288; connection.py:625-647",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "beide Ebenen getrennt",
+      "id": "FE8-19"
+    },
+    {
+      "aussage": "Kein Result schliesst: abgelehnt per Ack; unbekannt/unparsebar unbeantwortet.",
+      "beleg": "connection.py:168-179,347-369",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "admittiert; Ausnahme Transport",
+      "id": "FE8-20"
+    },
+    {
+      "aussage": "PATCH server 409/422/500/200 + GET nur 200; Admin 401/403; 400-Zweig evtl. unerreichbar (U).",
+      "beleg": "server.py:9244-9292,9303-9318; security/admin.py:24-45",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "REST /api/v2/*",
+      "id": "FE8-21"
+    },
+    {
+      "aussage": "OpenAI eigene Huelle 401/404/409/413/400/500; nicht v2 errors[].",
+      "beleg": "security/openai.py:17-35; openai_routes.py:93-154,588-617",
+      "evidenz": "E1+E2",
+      "gueltigkeit": "/v1/transcriptions",
+      "id": "FE8-22"
+    },
+    {
+      "aussage": "v1 1008/1011/1013 + log.error; v2 erbt nicht.",
+      "beleg": "server.py:9560-9650,9740-9842,9912-9986",
+      "evidenz": "E1",
+      "gueltigkeit": "nur Legacy/Log",
+      "id": "FE8-23"
+    },
+    {
+      "aussage": "Client Retry/Backoff nicht im Repo (externer Client); nur Server-Freigabe belegt.",
+      "beleg": "tests/compatibility/test_client_v2_identity.py:28-47,131,197",
+      "evidenz": "E1",
+      "gueltigkeit": "Client nicht belegbar",
+      "id": "FE8-24"
+    },
+    {
+      "aussage": "Readiness Statusfelder /health 200 auch ok=false; kein Fehlercode.",
+      "beleg": "server.py:8874-8905",
+      "evidenz": "E1",
+      "gueltigkeit": "Monitoring",
+      "id": "FE8-25"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "L1",
+      "thema": "Client Reconnect/Backoff/Retry nicht im Repo (extern)."
+    },
+    {
+      "id": "L2",
+      "thema": "Kein Aggregat-Tupel 13 Settings-Codes."
+    },
+    {
+      "id": "L3",
+      "thema": "Schema ohne Fehlercode-Liste."
+    },
+    {
+      "id": "L5",
+      "thema": "HTTP-400 Nicht-Objekt evtl. unerreichbar (FastAPI dict)."
+    },
+    {
+      "id": "L8",
+      "thema": "Exhaustivitaet nur ActivationDecision, nicht Parser/Session-Reasons."
+    }
+  ],
+  "researcher_session": "ses_e349234ecffeSRM3R088iivFNV",
+  "solver_notes": [
+    {
+      "id": "S1",
+      "thema": "RESULTS 15",
+      "werte": "applied/no_change/locked/not_active/invalid_phase/closing/stale_session/stale_activation/conflict/invalid/suppressed/unavailable/revision_conflict/rejected/internal",
+      "zaehlung": 15
+    },
+    {
+      "id": "S2",
+      "thema": "ACCEPTED 2",
+      "werte": "applied/no_change",
+      "zaehlung": 2
+    },
+    {
+      "id": "S3",
+      "thema": "Close 8 (6 v2)",
+      "werte": "1000/1008/1011/1013/4400/4406/4408/4409 (v2: 4400/4406/4408/4409/1011/1000)",
+      "zaehlung": 8
+    },
+    {
+      "id": "S4",
+      "thema": "DOMAIN 26->12",
+      "werte": "6 applied/3 no_change/je 1 locked/not_active/invalid/closing/stale/conflict/unavailable/2 suppressed/5 invalid/3 internal",
+      "zaehlung": 26
+    },
+    {
+      "id": "S5",
+      "thema": "NON_COMMAND 10",
+      "werte": "recovery/followup/input_closed/not_closing/not_due/not_expirable/started/reset/stale_timer/warning",
+      "zaehlung": 10
+    },
+    {
+      "id": "S6",
+      "thema": "Settings 13",
+      "werte": "unknown/invalid_type/out_of_range/too_few/cross/wrong_scope/stale/read_only/invalid_payload/selection_required/unavailable/persistence/value_not_allowed",
+      "zaehlung": 13
+    },
+    {
+      "id": "S7",
+      "thema": "Handshake 8+1+2",
+      "werte": "8 Envelope/1 Version/2 Session",
+      "zaehlung": 11
+    },
+    {
+      "id": "S8",
+      "thema": "errors code 6",
+      "werte": "trigger_required/wake_unavailable/selection_required/selection_not_allowed/unavailable/limit",
+      "zaehlung": 6
+    },
+    {
+      "id": "S9",
+      "thema": "Wake reason 12",
+      "werte": "globally/artifact/pipeline/unloadable/integrity/runtime/not_canonical/unknown/backend/no_common/selection/catalog",
+      "zaehlung": 12
+    },
+    {
+      "id": "S10",
+      "thema": "HTTP 10",
+      "werte": "200/400/401/403/404/409/413/422/500/503",
+      "zaehlung": 10
+    },
+    {
+      "id": "S11",
+      "thema": "log.error 5",
+      "werte": "live_disabled/store_unavailable/not_authorized/invalid_cursor/invalid_request",
+      "zaehlung": 5
+    }
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "L4",
+      "thema": "1000 Client-Disconnect nicht testbelegt."
+    },
+    {
+      "id": "L6",
+      "thema": "Cursor-Codes 9641/9740/9758 nur Huelle."
+    },
+    {
+      "id": "L7",
+      "thema": "1000-1015 nur 1000/1008/1011/1013 vorhanden."
+    },
+    {
+      "id": "L9",
+      "thema": "Event-reasons keine geschlossene Menge."
+    }
+  ],
+  "writer_notes": "Sechs Raeume trennen: 15 Ack/8 Close (6 v2)/13 Settings/6+12 Handshake-Wake/10 HTTP/v1-Log. Grundregel kein Result schliesst. Client-Retry NOT_IMPLEMENTED. Keine Diagramme."
+}

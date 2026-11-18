@@ -1,0 +1,332 @@
+{
+  "branch_note": "Der Branch (feat/v2-release-cleanup) ist im Checkout nicht als Ref belegbar, weil .git/refs/ und packed-refs fehlen (Shallow-Fetch). Belegt ist ausschliesslich die Commit-Bindung a8993c5c68042d996eab680d84a5b138a214bb5d.",
+  "chapter": "04.04",
+  "commit_verification": "Detached HEAD im Checkout C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src: .git/HEAD enthaelt exakt a8993c5c68042d996eab680d84a5b138a214bb5d; .git/FETCH_HEAD nennt denselben SHA mit Herkunft https://github.com/marcosudau-vps/voice-stt-v2-src; Shallow-Clone (.git/shallow vorhanden), .git/refs/ und packed-refs fehlen im Checkout.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "accepted=true auch fuer no_change: 'angenommen' bedeutet nicht 'hat gewirkt'; nur result unterscheidet."
+    },
+    {
+      "id": "C2",
+      "thema": "15 Result-Codes vs. 26 gemappte Reasons: mehrere Reasons fallen zusammen; drei auf v2 unerreichbare Zustaende -> internal_error."
+    },
+    {
+      "id": "C3",
+      "thema": "Zwei Schluesselableitungen in einem Cache: additives Feld bei activation.command Replay, bei suppression/settings/snapshot Konflikt."
+    },
+    {
+      "id": "C4",
+      "thema": "Asymmetrie ungueltige commandId (voelliges Schweigen) vs. andere ungueltige Felder (invalid_payload-ack)."
+    },
+    {
+      "id": "C5",
+      "thema": "v1-Toleranz vs. v2-Strenge: source bei Controls in v1 ignoriert, in v2 invalid_payload."
+    },
+    {
+      "id": "C6",
+      "thema": "Replay-ack traegt bewusst alte stateVersion/settingsRevision; Vergleich mit Snapshot zeigt aeltere Version."
+    },
+    {
+      "id": "C7",
+      "thema": "Abgelehnte Aktivierung doppelt: ack trigger_suppressed + diagnostisches Event activation.trigger_suppressed (ohne Anstieg)."
+    },
+    {
+      "id": "C8",
+      "thema": "stale_session mit aktueller sessionId beantwortet; 'stale' bezieht sich auf Nutzlast, nicht Transport."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "Client -> /ws/v2 -> handle_text -> parse_command (Q1-01)",
+    "parse_command -> type unbekannt / kein Dict -> None -> keine ack, kein Effekt (Q1-01, Q1-18)",
+    "parse_command -> commandId nicht kanonisch -> keine ack (Q1-02, Q1-18)",
+    "parse_command -> protocolVersion != 2 -> invalid_payload (Q1-03)",
+    "parse_command -> sessionId nicht kanonisch -> invalid_payload (Q1-03)",
+    "parse_command -> sessionId fremd -> stale_session (Q1-03, Q1-06)",
+    "parse_command -> Typvalidator -> invalid_payload (Q1-04, Q1-05)",
+    "rejection -> _answer_cached -> ack accepted=false + Cache (Q1-06, Q1-16)",
+    "activation.command -> Domain handle_trigger_command (Q1-12, Q1-25)",
+    "trigger_suppression.set -> _apply_trigger_suppression (Q1-21)",
+    "audio_availability.set -> handle_audio_availability_command (Q1-22)",
+    "session_settings.patch -> settings_port.patch -> settings.changed -> ack (Q1-20, Q1-24)",
+    "session.snapshot.request -> ack applied -> snapshot (Q1-23, Q1-24)",
+    "Domain-ack -> map_domain_reason -> Result (Q1-10)",
+    "Reason ohne Mapping -> Log + internal_error (Q1-10, Q1-26)",
+    "Lookup MISS -> apply -> ack -> Store + Memo (Q1-11, Q1-14)",
+    "Lookup REPLAY -> Memo wertgleich, keine Ausfuehrung (Q1-14)",
+    "Lookup CONFLICT -> command_id_conflict, kein Effekt (Q1-15)",
+    "Envelope-Ablehnung -> v2_raw-Schluessel im Session-Cache (Q1-12, Q1-17)",
+    "v2_raw vs semantisch -> command_id_conflict (Q1-17)",
+    "applied + Event -> stateVersion nach Event in ack (Q1-19)",
+    "closing_input -> ack Eintrittsversion (Q1-19)",
+    "wirksam ohne Event -> stateVersion +1 (Q1-19, Q1-21, Q1-22)",
+    "refused trigger -> ack trigger_suppressed -> Event (Q1-24)",
+    "cancel -> Ledger-Lock -> Session-Lock -> Barriere -> ack (Q1-25)",
+    "Session-Close -> clear Cache (Q1-11, Q1-27)",
+    "Ausnahme ausser UnmappedDomainReason -> Close 1011 ohne ack (Q1-26)"
+  ],
+  "facts": [
+    {
+      "aussage": "Nach hello.accepted genau fuenf Kommandotypen (COMMAND_TYPES): activation.command, trigger_suppression.set, audio_availability.set, session_settings.patch, session.snapshot.request. parse_command None bei Nicht-Dict/fehlendem/nicht-String-type/unbekanntem type; _handle_command sendet keine ack, kein Effekt. Zweites hello wirkungslos. Unparsebares JSON nur geloggt/verworfen - kein Close, keine ack.",
+      "beleg": "schema.py:44-57; commands.py:90-103; connection.py:168-179, 347-354; tests e2e:533-544, 835-848",
+      "evidenz": "stark",
+      "gueltigkeit": "Kommando-Oberflaeche /ws/v2 nach Admission.",
+      "id": "Q1-01"
+    },
+    {
+      "aussage": "commandId einzige Replay-Identitaet, kanonische UUID (36, Bindestriche, lowercase). normalize_command_id validiert nur, schreibt nie um. Nicht kanonisch -> ParsedCommand command_id=None: keine ack, kein Slot, kein Close, kein Effekt; Client erhaelt gar keine Antwort.",
+      "beleg": "schema.py:212-244; commands.py:105-114; connection.py:355-357; tests contract:323-343; e2e:811-833",
+      "evidenz": "stark",
+      "gueltigkeit": "commandId v2; sessionId/activationId gleicher Begriff.",
+      "id": "Q1-02"
+    },
+    {
+      "aussage": "Envelope-Reihenfolge: (1) type bekannt, (2) commandId kanonisch, (3) protocolVersion echter int exakt 2 (bool/1 -> invalid_payload), (4) sessionId kanonisch (sonst invalid_payload), (5) fremde kanonische sessionId -> stale_session, (6) typ-spezifischer Validator (invalid_payload). Jede Ablehnung fertige rejection (Result-Code) mit typstabilem Freeze als Replay-Schluessel.",
+      "beleg": "commands.py:80-87, 90-138; schema.py:29-32; tests contract:345-358, 406-418; e2e:630-649, 850-860",
+      "evidenz": "stark",
+      "gueltigkeit": "alle fuenf Typen; Reihenfolge result-relevant.",
+      "id": "Q1-03"
+    },
+    {
+      "aussage": "activation.command: action in {activate, refresh, finish, cancel}; extend existiert nicht (invalid_payload). activate: source=='manual' erforderlich, kein activationId. refresh/finish/cancel: kanonische activationId erforderlich, source verboten. Verstoss -> invalid_payload, kein Wechsel/Close.",
+      "beleg": "commands.py:143-167; schema.py:60-80; tests contract:360-404; e2e:566-628; vectors:206-253",
+      "evidenz": "stark",
+      "gueltigkeit": "nur v2; v1-Toleranz unberuehrt.",
+      "id": "Q1-04"
+    },
+    {
+      "aussage": "Feldregeln Rest: trigger_suppression.set manual+wakeWord echte bool; audio_availability.set audioAvailable echte bool; session_settings.patch baseSettingsRevision int>=0 (kein bool), changes nichtleeres Dict; session.snapshot.request kein Validator. Unbekannte Zusatzfelder ungeprueft, aendern Verdikt nicht.",
+      "beleg": "commands.py:170-203; tests contract:439-483; e2e:1006-1015",
+      "evidenz": "stark",
+      "gueltigkeit": "Feldnamen case-sensitiv; Zusatzfelder additiv.",
+      "id": "Q1-05"
+    },
+    {
+      "aussage": "Abgelehnte Nachricht schliesst nie: genau eine ack accepted=false result invalid_payload/stale_session, Session nutzbar, Version/Phase unveraendert (stale_session traegt aktuelle sessionId).",
+      "beleg": "connection.py:359-360, 620-652; tests e2e:520-531, 566-577, 630-649; state_version:520-545",
+      "evidenz": "stark",
+      "gueltigkeit": "alle Envelope-Ablehnungen mit brauchbarer commandId.",
+      "id": "Q1-06"
+    },
+    {
+      "aussage": "command.ack Felder: type=command.ack, protocolVersion 2, sessionId (Verbindung), commandId, accepted, result, activationId, inputPhase, stateVersion, settingsRevision; nur Settings-Ablehnungen zusaetzlich errors[] ({field,code,message}). activationId/inputPhase aus Domain-ack oder Controller-Snapshot; inputPhase normiert auf fuenf Phasen, sonst idle.",
+      "beleg": "connection.py:620-652; schema.py:83-102; tests e2e:553-564, 993-1004",
+      "evidenz": "stark",
+      "gueltigkeit": "Feldmenge normativ, Reihenfolge nicht.",
+      "id": "Q1-07"
+    },
+    {
+      "aussage": "accepted=true nur fuer applied/no_change (ACCEPTED_RESULTS); andere 13 Codes accepted=false. Geschlossen 15 Werte: applied, no_change, activation_locked, not_active, invalid_phase, closing_input, stale_session, stale_activation, command_id_conflict, invalid_payload, trigger_suppressed, audio_unavailable, settings_revision_conflict, settings_rejected, internal_error. Test: result in RESULT_CODES, accepted==(result in ACCEPTED).",
+      "beleg": "schema.py:105-143; commands.py:279-281; tests contract:486-499; e2e:1017-1042",
+      "evidenz": "stark",
+      "gueltigkeit": "keine freien Erweiterungen.",
+      "id": "Q1-08"
+    },
+    {
+      "aussage": "Bedeutung der 15 Codes: applied wirksam; no_change No-op; activation_locked offen; not_active kein Lauf; invalid_phase falsche Phase; closing_input schliessend; stale_session fremde ID; stale_activation falsche activationId; command_id_conflict ID/Payload-Mix; invalid_payload Huelle/Feld; trigger_suppressed blockiert; audio_unavailable ohne Audio; settings_revision_conflict veraltet; settings_rejected fachlich; internal_error intern/nicht erreichbar.",
+      "beleg": "schema.py:105-143; tests e2e:553-698, 862-877, 941-960, 975-1004; state_version:585-607",
+      "evidenz": "stark",
+      "gueltigkeit": "Meldungen in errors[] nicht stabil.",
+      "id": "Q1-09"
+    },
+    {
+      "aussage": "Reason->Result erschoepfend (DOMAIN_REASON_RESULTS, 26): activated/refreshed/finished/cancelled/input_closing/applied->applied; no_change/already_idle/already_recording->no_change; je 1:1 activation_locked/not_active/invalid_phase/closing_input/stale_activation/command_id_conflict; audio_unavailable->audio_unavailable; trigger_disabled/trigger_suppressed->trigger_suppressed; invalid_payload/invalid_action/invalid_source/invalid_command_id/missing_command_id->invalid_payload; controlled_activation_disabled/session_closed/stream_not_started->internal_error. 10 NON_COMMAND_REASONS nie in ack. Unbekannt->UnmappedDomainReason->Log+internal_error. Vertragstest verlangt Vollstaendigkeit.",
+      "beleg": "commands.py:206-281; connection.py:408-422; tests contract:489-536",
+      "evidenz": "stark",
+      "gueltigkeit": "drei internal_error auf v2 nicht erreichbar.",
+      "id": "Q1-10"
+    },
+    {
+      "aussage": "Genau ein Replay-Cache pro Session: CommandReplayCache (RLock, commandId->(key,result)). Aufbau mit Session, kein Trimmen, nur Clear bei Close. store setdefault (erste gewinnt); lookup MISS/REPLAY/CONFLICT. v2 nutzt dieselbe Instanz via protocol_replay_lookup/store, kein zweiter Cache.",
+      "beleg": "activation_commands.py:284-329; server.py:2409, 2935-2937, 3472-3478; connection.py:16-19, 25-37",
+      "evidenz": "stark",
+      "gueltigkeit": "Lebensdauer=Session; Reconnect neue Session/leer.",
+      "id": "Q1-11"
+    },
+    {
+      "aussage": "Schluessel je Pfad: activation.command semantisch (activate+source bzw. control+action+activationId, source bei Controls ausgenommen, extend->refresh); audio_availability (audio_availability,bool); suppression/settings/snapshot + jede envelope-abgelehnte Nutzlast (protocol_v2_raw, Freeze ohne commandId). Additives Feld bei activation.command weiter Replay, bei layer-eigenen Konflikt.",
+      "beleg": "activation_commands.py:66-79, 151-165, 175-269; commands.py:65-77; connection.py:373-390, 483-503, 584-616; server.py:3760; tests e2e:725-742",
+      "evidenz": "stark",
+      "gueltigkeit": "Schluesselraeume teilen einen Cache.",
+      "id": "Q1-12"
+    },
+    {
+      "aussage": "freeze typstabil/hashbar: Dicts nach String-Key sortiert, list/tuple unterschieden, bool/int/float/str/None mit Typmarker, sonst (other,Typname). Nie repr/Adresse. v1+v2 gemeinsam via Import, kein Drift.",
+      "beleg": "activation_commands.py:116-148; commands.py:34, 65-77",
+      "evidenz": "stark",
+      "gueltigkeit": "Replay-Identitaet; keine Serialisierungsaussage.",
+      "id": "Q1-13"
+    },
+    {
+      "aussage": "Replay liefert erste ack exakt: Memo pro commandId (setdefault, Kopie), bei Replay Memo wortgleich inkl. alter stateVersion/settingsRevision. Keine Re-Ausfuehrung: nur ein activation.started/settings.changed, Snapshot-Version==ack-Version.",
+      "beleg": "connection.py:96-97, 427-447, 594-616, 654-661; tests e2e:700-723, 880-894; settings:290-305",
+      "evidenz": "stark",
+      "gueltigkeit": "Memo Verbindung, Cache Session; Memo nie ueberschrieben.",
+      "id": "Q1-14"
+    },
+    {
+      "aussage": "Gleiche commandId + abweichender Schluessel -> command_id_conflict accepted=false ohne Wirkung: kein Wechsel/Event/Eintrag/Memo. Ursprung autoritativ. Belegt activation (activate dann cancel gleiche Id, Phase bleibt), suppression (Version/Suppression gleich), settings (Wert erster).",
+      "beleg": "activation_commands.py:313-325; connection.py:423-426, 605-608; server.py:3539-3547, 3620-3628; tests e2e:744-773; state_version:547-583; settings:307-339; vectors:254-270",
+      "evidenz": "stark",
+      "gueltigkeit": "Konflikt kein Verbindungsfehler; nutzbar.",
+      "id": "Q1-15"
+    },
+    {
+      "aussage": "Envelope-abgelehnte Nutzlast mit brauchbarer commandId hat Replay-Identitaet: identisch erneut -> gleiche invalid_payload-ack; gleiche Id andere Nutzlast (z.B. source wake_word dann manual) -> command_id_conflict. Verbotener source bei Controls Teil des Schluessels.",
+      "beleg": "commands.py:19-28, 80-87; connection.py:359-360, 594-616; tests e2e:775-809; contract:431-437",
+      "evidenz": "stark",
+      "gueltigkeit": "nur kanonische commandId; ohne weder Replay noch Konflikt.",
+      "id": "Q1-16"
+    },
+    {
+      "aussage": "Beide Schluesselformen ein Cache pro commandId: erst envelope-abgelehnt (raw), dann gueltig gleiche Id -> command_id_conflict (Domain-Lookup sieht Rohschluessel). Genau eine Autoritaet; Test rejected_command_keeps_its_replay_identity belegt.",
+      "beleg": "connection.py:25-37, 594-616; server.py:3532-3547; tests e2e:793-806",
+      "evidenz": "stark",
+      "gueltigkeit": "commandId pro Session typuebergreifend eine Identitaet.",
+      "id": "Q1-17"
+    },
+    {
+      "aussage": "Genau-eine-ack nur fuer erkennbare Kommandos mit brauchbarer commandId. Ohne: unbekannter/fehlender type, Nicht-Dict, nicht-kanonische commandId, unparsebares JSON, zweites hello -> weder ack noch Event noch Close. Sonst: ein Kommando, eine ack, auch bei Ablehnung.",
+      "beleg": "commands.py:46-52, 90-114; connection.py:168-179, 347-357; tests e2e:533-544, 811-848",
+      "evidenz": "stark",
+      "gueltigkeit": "Asymmetrie bewusst; Client-Timeouts nicht spezifiziert.",
+      "id": "Q1-18"
+    },
+    {
+      "aussage": "stateVersion in ack: applied mit Event = Version nach Events; closing_input-Eintritt = Eintrittsversion (nicht Schliessung); wirksam ohne Event (audio/suppression) +1 in ack; No-op/Ablehnung/Konflikt unveraendert; Replay alte Memo-Version.",
+      "beleg": "connection.py:382-390, 397-406, 435-479, 483-501, 626-648; tests state_version:520-545, 547-607, 616-660",
+      "evidenz": "stark",
+      "gueltigkeit": "monoton pro Verbindung; Replay bewusst kleiner.",
+      "id": "Q1-19"
+    },
+    {
+      "aussage": "settings.patch unter _event_dispatch_lock: base+changes an Port; no_change->no_change wirkungslos; veraltet->settings_revision_conflict +errors; abgelehnt->settings_rejected +errors; Erfolg: Revision einmal gespiegelt, pro Policy-Gruppe settings.changed (erste traegt Sprung, alle gleiche Revision). ack neue (No-op alte) Revision.",
+      "beleg": "connection.py:505-542, 544-582; settings_control.py:826; tests e2e:975-1004; settings:290-339",
+      "evidenz": "stark",
+      "gueltigkeit": "nur Session-Settings; Server via HTTP (04.02).",
+      "id": "Q1-20"
+    },
+    {
+      "aussage": "suppression.set von Verbindung beantwortet: kein Controller->internal_error; unveraendert->no_change (accepted=true); Aenderung->applied + stateVersion +1 (Pflicht-Snapshotfelder, kein Event). Typ nicht in Reason-Tabelle, eigener Handler.",
+      "beleg": "connection.py:483-503; tests e2e:896-960; state_version:547-583",
+      "evidenz": "stark",
+      "gueltigkeit": "laufende Aktivierung nicht beendet.",
+      "id": "Q1-21"
+    },
+    {
+      "aussage": "audio_availability.set von Domain: applied bei Aenderung, no_change bei gleichem; available=false bricht offene Aktivierung via Publikationsbarriere wie cancel ab, Session/Ledger bleiben. availability-commandId nur Replay/ack-Identitaet, nie causedBy. Neu bei false -> audio_unavailable. Replay idempotent.",
+      "beleg": "server.py:3730-3821; connection.py:392-406; tests e2e:862-894, 1157-1170",
+      "evidenz": "stark",
+      "gueltigkeit": "Geraetequalitaet Client-Sache, nicht hier.",
+      "id": "Q1-22"
+    },
+    {
+      "aussage": "snapshot.request Lese-Kommando: applied-ack (bzw. replayt) + immer frischer snapshot danach. Wiederholter Resync gleiche Id: Memo-ack erneut + trotzdem neuer Snapshot (keine zweite Wirkung).",
+      "beleg": "connection.py:584-592; tests e2e:204-211; snapshot.py:82-89",
+      "evidenz": "stark",
+      "gueltigkeit": "Inhalt 04.03/04.07; hier Ausloesung/ack.",
+      "id": "Q1-23"
+    },
+    {
+      "aussage": "Leitungsreihenfolge (Codepfad): activation Events vor ack (Publisher vor Domain-Rueckgabe); settings.changed vor ack; refused trigger: diagnostisches trigger_suppressed-Event nach ack; snapshot nach ack. Eine Queue, genau ein Writer.",
+      "beleg": "server.py:3564-3572; connection.py:373-390, 408-450, 448-449, 541-542, 584-592, 620-652, 663-677, 103-152",
+      "evidenz": "mittel",
+      "gueltigkeit": "Codepfad; kein Test fuer jeden Typ.",
+      "id": "Q1-24"
+    },
+    {
+      "aussage": "cancel Annahmepfad: erst Ledger-Dispatch-Lock, dann Session-Lock, Controller/status/streaming pruefen, dann Replay-Cache. Vorbedingungen controlled_activation_disabled/session_closed/stream_not_started -> internal_error; auf v2 nicht erreichbar. Annahme setzt Cancel-Barriere vor ack-Speicherung; finish/cancel mit causedByCommandId.",
+      "beleg": "server.py:3529-3530, 3574-3663; commands.py:240-246; tests e2e:1125-1140",
+      "evidenz": "stark",
+      "gueltigkeit": "Domain Cancel-Pfad; ack normal.",
+      "id": "Q1-25"
+    },
+    {
+      "aussage": "Kommandopfad faengt nur UnmappedDomainReason (Log+internal_error). Jede andere Ausnahme aus parse/apply/send propagiert in Endpoint-Schleife -> generisch Close 1011 ohne ack. internal_error-Antwort nur fuer ungemappte Reasons, nicht generisch.",
+      "beleg": "connection.py:347-369, 408-422; server.py:10242-10258",
+      "evidenz": "mittel",
+      "gueltigkeit": "Codepfad; kein Test erzwingt Ausnahme.",
+      "id": "Q1-26"
+    },
+    {
+      "aussage": "Replay fluechtig/sitzungsgebunden: Cache mit Session, Clear nur bei Close; Memo in Verbindung. Reconnect neue sessionId/leerer Cache; alte Id+alte Session -> stale_session. Keine Persistenz/uebergreifende Idempotenz.",
+      "beleg": "server.py:2409, 2935-2937; connection.py:96-97, 200-214; tests e2e:630-649",
+      "evidenz": "stark",
+      "gueltigkeit": "Prozessspeicher; Neustart loescht Historie.",
+      "id": "Q1-27"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Keine Fehlerantwort fuer unbekannte Typen/fehlende/nicht-kanonische commandId/unparsebares JSON: Schweigen (kein ack/Error/Close)."
+    },
+    {
+      "id": "N2",
+      "thema": "Kein Negativ-/Progress-ack: nur command.ack mit Endergebnis, kein pending."
+    },
+    {
+      "id": "N3",
+      "thema": "Kein Kommando-Timeout/Retry/Deadline fuer acks; keine Zeitwerte."
+    },
+    {
+      "id": "N4",
+      "thema": "Keine Begrenzung/Eviction von Cache/Memo in Session (nur Clear bei Close)."
+    },
+    {
+      "id": "N5",
+      "thema": "Keine Persistenz/sitzungsuebergreifende Idempotenz; Reconnect neue Identitaet."
+    },
+    {
+      "id": "N6",
+      "thema": "Kein errors[] ausser Settings: andere Ablehnungen nur Result-Code."
+    },
+    {
+      "id": "N7",
+      "thema": "Kein Rate-Limit/Groessen-/Frequenzpruefung."
+    },
+    {
+      "id": "N8",
+      "thema": "Kein Ack-Typ je Kommando; v1-Formen nur intern."
+    },
+    {
+      "id": "N9",
+      "thema": "Keine Audit-/Log-Zeile pro Kommando v2; nur Fehler geloggt."
+    }
+  ],
+  "researcher_session": "ses_e43355728ffeEykTd5XssWOnFY",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Draht-Reihenfolge ack vs Events nur Codepfad; kein Test fuer alle Typen."
+    },
+    {
+      "id": "U2",
+      "thema": "Volle/blockierte Outbound-Queue: unbegrenzt, Backpressure/Latenz unspezifiziert."
+    },
+    {
+      "id": "U3",
+      "thema": "Speicherwachstum viele commandIds (Cache+Memo) ungemessen/unbegrenzt."
+    },
+    {
+      "id": "U4",
+      "thema": "Nebenlaeufigkeit: Empfang sequenziell, Domain parallel; ack-Versionen unter Rennen nur Settings getestet."
+    },
+    {
+      "id": "U5",
+      "thema": "Replay-cancel nach Wechsel: Vorbedingung vor Lookup, Replay koennte internal_error liefern; ungetestet/nicht erreichbar."
+    },
+    {
+      "id": "U6",
+      "thema": "command_id_conflict stateVersion unter Events ungetestet."
+    },
+    {
+      "id": "U7",
+      "thema": "Client-Timeout-Erwartung acks: kein Wert im Code."
+    }
+  ],
+  "writer_notes": "Aufbau aussen->innen: (1) Oberflaeche 5 Typen/stille Faelle, (2) commandId Identitaet, (3) Envelope-Reihenfolge, (4) Feldregeln, (5) ack-Anatomie+accepted+15 Codes, (6) Reason-Mapping 26+10, (7) Replay ein Cache/Schluessel/Memo, (8) Konflikt, (9) stateVersion, (10) Spezialkommandos, (11) Reihenfolge/Fehlerpfad. Zahlen: 2, 5 Typen, 5 Phasen, 4 Aktionen, 15 Codes, 26 Reasons, 10 NON_COMMAND, 36-Zeichen-UUID. Keine Timeouts/Cache-Groessen/Retry. Fallen: accepted!=wirksam (C1); internal_error kein Sammel (C2); additiv typabhaengig (C3); stille Id-Faelle (C4); v1/v2 (C5); Replay-Version alt (C6); trigger_suppressed doppelt (C7). Querverweise: 04.01, 04.03, 04.05, 02.01, 03.09/03.10."
+}

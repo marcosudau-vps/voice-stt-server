@@ -1,0 +1,290 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD); nur Commit bindend.",
+  "chapter": "05.11",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached); FETCH_HEAD derselbe SHA; shallow; kein refs/heads.",
+  "conflicts": [
+    {
+      "id": "C-1",
+      "thema": "forceCommunity persistiert Absicht, nicht Status (Korrektur zu 05.07)."
+    },
+    {
+      "id": "C-2",
+      "thema": "Start-Refresh vs never-startup-side-effect: Service ruft Policy im Konstruktor."
+    },
+    {
+      "id": "C-3",
+      "thema": "adminAuthRequired=false vs 403 Remote."
+    },
+    {
+      "id": "C-4",
+      "thema": "YAML-Fehlertext nennt Env-Datei, kein .env-Lader im Code."
+    },
+    {
+      "id": "C-5",
+      "thema": "404 mehrfach, disabled vor Auth."
+    },
+    {
+      "id": "C-6",
+      "thema": "Loopback nur HTTP, nie WS-Log."
+    },
+    {
+      "id": "C-7",
+      "thema": "Drei 401-Hüllen, kein errorCode."
+    },
+    {
+      "id": "C-8",
+      "thema": "Rate-Limit fehlt, Kapazitätslimits kein Ersatz."
+    },
+    {
+      "id": "C-9",
+      "thema": "forceCommunity live vs Pro-Wechsel Neustart."
+    },
+    {
+      "id": "C-10",
+      "thema": "enabled startup-only, Persistenz kann CLI überstimmen."
+    },
+    {
+      "id": "C-11",
+      "thema": "Admin-ENV beim CLI-Start snapshotet; ENV-live nur ohne Settings-Wert."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "[Operator] -->|ENV/CLI| [Admin-Key] --> [AdminGate]",
+    "[kein Key] --> [Peer Loopback? Admin : 403]",
+    "[Unauth] --> [/api/config|/api/metrics]",
+    "[Unauth] --> [/ws/transcribe|/ws/v2] kein Gate",
+    "[Session] --> [Token 64hex/24h]",
+    "[Session-Ende] -kein Revoke-> [Token]",
+    "[Neustart] --> [Map leer]",
+    "[ohne OpenAI-Key] --> [offen]",
+    "[mit Key] --> [Bearer exakt] --> [200|401+Audit]",
+    "[enabled=false] POST --> [404 vor Auth]; GET --> [200]",
+    "[Kroko] --1x5s--> [Server]; [Fehler] --> [CHECK_FAILED]",
+    "[PATCH force] --> [live invalidiert]",
+    "[Pro/Key-Wechsel] --> [neuer OS-Prozess]",
+    "[/health] --> [200] --> [ok/ready prüfen]",
+    "[kein 429] extern lösen",
+    "[kein TLS/CORS] extern lösen"
+  ],
+  "facts": [
+    {
+      "aussage": "Admin-Key vor Zugriff außerhalb lokaler Maschine setzen; ohne Key entscheidet nur TCP-Peer; CLI-Default snapshotet ENV.",
+      "beleg": "security/admin.py Z.15-16, 18-22, 24-46; server.py Z.10521, 10768; Tests 34-63",
+      "evidenz": "A",
+      "gueltigkeit": "alle 21 Admin-Routen",
+      "id": "R5-01"
+    },
+    {
+      "aussage": "Keys nur ENV/CLI/Settings; YAML top-level SystemExit; keine Persistenz/Ladung/Ausgabe; PATCH startup_only/400; leer falsy, whitespace truthy; nested Kroko-YAML ungeprüft.",
+      "beleg": "server.py Z.10301, 10360-10370, 7959-7969, 8827-8839, 545-551, 7835-7840, 8934-8937; Tests",
+      "evidenz": "A/B",
+      "gueltigkeit": "Key-Beschaffung",
+      "id": "R5-02"
+    },
+    {
+      "aussage": "Loopback = nur request.client.host; kein Forwarded/proxy_headers; Peer deploymentspezifisch; Header nicht korrigierbar.",
+      "beleg": "security/admin.py Z.8, 40-41; server.py Z.10830-10835; Negativsuche forwarded/proxy; Tests 50-54",
+      "evidenz": "A/U",
+      "gueltigkeit": "Admin-HTTP/Logs ohne Key",
+      "id": "R5-03"
+    },
+    {
+      "aussage": "GET /api/config|/api/metrics offen (public_dict ohne Keys, Limits, Capabilities, startupErrors); adminAuthRequired=false != offen.",
+      "beleg": "server.py Z.8907-8916, 8939-8941, 545-553, 7685-7700, 8629-8645; admin.py Z.41-45",
+      "evidenz": "A",
+      "gueltigkeit": "offene Lesefläche",
+      "id": "R5-04"
+    },
+    {
+      "aussage": "WS-Audio ohne Transport-Auth (Query-Protokoll/accept+Handshake); Port erreichbar = Session/Audio möglich; Limits = Kapazität, nicht Identität.",
+      "beleg": "server.py Z.9912-9938, 10121-10147, 7702-7711",
+      "evidenz": "A",
+      "gueltigkeit": "beide WS-Audio",
+      "id": "R5-05"
+    },
+    {
+      "aussage": "Token 64 Hex, exakt 86400 s, <= ungültig; prozessintern RLock; Neustart leert; Session-Ende ohne Wirkung; Bindung = ID.",
+      "beleg": "security/logs.py Z.9, 16-59; service.py Z.13-19; server.py Z.6249; Tests 97-106",
+      "evidenz": "A/B",
+      "gueltigkeit": "Logs",
+      "id": "R5-06"
+    },
+    {
+      "aussage": "OpenAI ohne Key offen ohne Audit; mit Key exakt Bearer + 401 invalid_api_key + Auth + Audit; wirkt nur /v1.",
+      "beleg": "security/openai.py Z.14-35; server.py Z.10519-10520, 10766-10768; Tests 66-94",
+      "evidenz": "A",
+      "gueltigkeit": "/v1/*",
+      "id": "R5-07"
+    },
+    {
+      "aussage": "enabled startup-only (CLI/YAML); PATCH ablehnt; Persistenz kann CLI überstimmen (C); POST disabled 404 vor Auth, GET 200.",
+      "beleg": "server.py Z.506, 10519, 10766, 10305, 256-285, 7835-7840, 7959-7969, 8827-8839; openai_routes.py Z.43-103",
+      "evidenz": "A/C",
+      "gueltigkeit": "Freigabeschalter",
+      "id": "R5-08"
+    },
+    {
+      "aussage": "Kroko explizit modellgebunden, ein connect+recv 5s, kein Retry; Start/Service kann synchron prüfen; force/leer ohne Netz; fremd -> model_scope_mismatch.",
+      "beleg": "security/kroko.py Z.25-69, 146-172; license_api.py Z.31-88; server.py Z.6301-6709; Tests",
+      "evidenz": "A",
+      "gueltigkeit": "Kroko-OnPrem (kein Endpoint-Auth)",
+      "id": "R5-09"
+    },
+    {
+      "aussage": "401 = fehlend/falsch bei Key; 403 = kein Key + remote (nur Admin); Log immer 401; OpenAI 401 invalid_api_key; Hüllen verschieden.",
+      "beleg": "security/admin.py Z.32-45; security/logs.py Z.67-81; server.py Z.9467-9472; security/openai.py Z.31-35",
+      "evidenz": "A",
+      "gueltigkeit": "HTTP",
+      "id": "R5-10"
+    },
+    {
+      "aussage": "404 nicht verallgemeinern: POST disabled code null vor Auth; GET weiter 200; Framework-404; model_not_found nach Auth.",
+      "beleg": "openai_routes.py Z.43-103; openai_compat.py Z.160-161; server.py Z.8425-8478, 8868-8872",
+      "evidenz": "A",
+      "gueltigkeit": "HTTP",
+      "id": "R5-11"
+    },
+    {
+      "aussage": "/health immer 200; ok = metrics.ok AND logging_ready; ready Event; startupErrors/eventStore beachten.",
+      "beleg": "server.py Z.8885-8905, 7685-7700, 2173-2178; Tests 111-120",
+      "evidenz": "A",
+      "gueltigkeit": "GET /health",
+      "id": "R5-12"
+    },
+    {
+      "aussage": "Kein 429/Retry-After/Lockout; Limits = Last, nicht Identität; extern lösen.",
+      "beleg": "Negativsuche 429/rate/lockout/slowapi; admin.py Z.24-46; openai.py Z.17-35; server.py Z.7702-7711",
+      "evidenz": "B/A",
+      "gueltigkeit": "alle Flächen",
+      "id": "R5-13"
+    },
+    {
+      "aussage": "Kein TLS/CORS/TrustedHost/Redirect/Origin im Code; Default 0.0.0.0:8010; extern lösen.",
+      "beleg": "server.py Z.405-406, 8868-8872, 10830-10835; Negativsuche",
+      "evidenz": "A",
+      "gueltigkeit": "Transport/Netz",
+      "id": "R5-14"
+    },
+    {
+      "aussage": "forceCommunity live/serverweit/persistent (Absicht); invalidiert Grant synchron; Reconcile Daemon; Session ohne Einfluss; Neustart lädt Overlay.",
+      "beleg": "settings_control.py Z.89-93, 591-608, 1355-1381; server.py Z.6282-6293, 6386-6396, 6711-6720, 9264-9280",
+      "evidenz": "A",
+      "gueltigkeit": "Kroko-Policy",
+      "id": "R5-15"
+    },
+    {
+      "aussage": "Pro-Modell/Key-Wechsel braucht neuen OS-Prozess; release nur Lease; active != läuft; Community-Ausweg setzt Kontext nicht zurück; kein Reset/exec.",
+      "beleg": "native_guard.py Z.1-31, 46-266; Negativsuche exec/relaunch",
+      "evidenz": "A/B",
+      "gueltigkeit": "nativer Kontext",
+      "id": "R5-16"
+    },
+    {
+      "aussage": "Kroko-Key: recognizer.key > options.key > 4 ENV > ''; leer unterdrückt ENV; keine Persistenz/Netz/Log.",
+      "beleg": "kroko/credentials.py Z.13-47; Tests 23-47",
+      "evidenz": "A",
+      "gueltigkeit": "Engine+Gate",
+      "id": "R5-17"
+    },
+    {
+      "aussage": "Ein Admin-Key = alle 21 Routen; keine Rollen/Scopes; Mechanismen nicht austauschbar (einzige Ausnahme WS-Log accessToken).",
+      "beleg": "server.py Z.8918-9872; service.py Z.1-5; logs.py Z.83-93",
+      "evidenz": "A/B",
+      "gueltigkeit": "Trennung",
+      "id": "R5-18"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N5-01",
+      "thema": "Kein Rate-Limit/Lockout/429."
+    },
+    {
+      "id": "N5-02",
+      "thema": "Kein TLS/HTTPS."
+    },
+    {
+      "id": "N5-03",
+      "thema": "Kein CORS/TrustedHost/Redirect/Origin."
+    },
+    {
+      "id": "N5-04",
+      "thema": "Keine Transport-Auth WS-Audio."
+    },
+    {
+      "id": "N5-05",
+      "thema": "Kein Revoke/Logout/Refresh."
+    },
+    {
+      "id": "N5-06",
+      "thema": "Keine Rollen/Scopes/Read-only-Admin."
+    },
+    {
+      "id": "N5-07",
+      "thema": "Kein .env-Lader."
+    },
+    {
+      "id": "N5-08",
+      "thema": "Kein Auth-Proxy/Firewall/Segmentierung."
+    },
+    {
+      "id": "N5-09",
+      "thema": "Kein API-Reset/Auto-Neustart nativ."
+    },
+    {
+      "id": "N5-10",
+      "thema": "Kein Key-Hashing."
+    },
+    {
+      "id": "N5-11",
+      "thema": "Kein openaiAuthRequired-Signal."
+    }
+  ],
+  "researcher_session": "ses_e3e986875ffempBjkPEZn4nhFy",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U5-01",
+      "thema": "Peer-IP hinter Proxy deploymentspezifisch."
+    },
+    {
+      "id": "U5-02",
+      "thema": "uvicorn proxy_headers version."
+    },
+    {
+      "id": "U5-03",
+      "thema": ".env-Ladung außerhalb Repos."
+    },
+    {
+      "id": "U5-04",
+      "thema": "Sticky ungetestet."
+    },
+    {
+      "id": "U5-05",
+      "thema": "Start-Refresh Blockdauer konfigurationsabhängig."
+    },
+    {
+      "id": "U5-06",
+      "thema": "nicht-ASCII-Key TypeError."
+    },
+    {
+      "id": "U5-07",
+      "thema": "Proxy-Authorization-Weitergabe."
+    },
+    {
+      "id": "U5-08",
+      "thema": "force-Persistenz Neustart-Test fehlt."
+    },
+    {
+      "id": "U5-09",
+      "thema": "externe TLS/CORS/Rate-Limit nicht verifizierbar."
+    },
+    {
+      "id": "U5-10",
+      "thema": "404-disabled ungetestet."
+    }
+  ],
+  "writer_notes": "18 Regeln mit Codebeleg, keine Best-Practices. Mechanik nur verweisen."
+}

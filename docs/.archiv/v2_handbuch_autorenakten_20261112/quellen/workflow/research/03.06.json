@@ -1,0 +1,305 @@
+{
+  "branch_note": "Checkout detached auf FETCH_HEAD; .git/refs/heads/feat/... existiert nicht, packed-refs fehlt. Branch feat/v2-release-cleanup lokal NICHT als Ref belegbar; Commit-Bindung belegt.",
+  "chapter": "03.06",
+  "commit_verification": ".git/HEAD = a8993c5c68042d996eab680d84a5b138a214bb5d; .git/FETCH_HEAD derselbe SHA von https://github.com/marcosudau-vps/voice-stt-server; .git/logs/HEAD: checkout moving from main to FETCH_HEAD; .git/shallow vorhanden.",
+  "correction_round": 1,
+  "diagram_edges": [
+    "CLI/YAML/Env -> ServerSettings -> VoiceSTTService",
+    "runtime.json -> create_app -> Settings ueberschreibt CLI (nur persistierte Keys)",
+    "PATCH /api/config -> update_settings -> {active_sessions | new_sessions | startup_only | model_refresh | unknown}",
+    "SettingsRegistry -> ServerSettingsState.overlay -> SessionSettingsState (nur neue Session)",
+    "patch_server -> prepare -> persist(settingsControlOverlay/settingsRevision) -> commit",
+    "PATCH /api/v2/settings/server -> AdminGate -> ServerSettingsState -> Neustart-Restore",
+    "ServerSettings.host/port -> uvicorn.run (nur main)",
+    "YAML/CLI device -> enforce_cpu_model_policy -> device=cpu",
+    "AdminGate -> alle Verwaltungsrouten",
+    "Model-Alias -> Lane (final|realtime) -> Scheduler-Queue",
+    "WS-Paket -> decode_audio_packet -> max_audio_packet_bytes -> Recorder",
+    "Engine-Name -> enforce_supported_engines -> Engine-Factory",
+    "Modelle -> model_size_rank -> Policy-Gate (Start/Switch)",
+    "zwei Kroko-Lanes -> enforce_kroko_single_identity -> gemeinsame native Instanz",
+    "Idle-Timer -> unload_models -> naechster Job -> Lazy-Reload",
+    "stt_*_settings -> OperatorIntent -> Refresh -> ModelSnapshot",
+    "engine_options -> resolved_engine_options -> Engine (je Lane)",
+    "Settings -> EventHub.configure -> {audit, performance, transcription, system} + SQLite-Eventstore",
+    "realtime_log_detail -> Event-Erzeugung vor dem Hub -> Sink",
+    "transcript_log_mode -> sanitize_event_value -> Sink/DB",
+    "log_level -> Root-/Uvicorn-Logger",
+    "event_store_enabled -> log_live_enabled -> /api/logs/events",
+    "admit_session -> SessionStore.reserve -> max_sessions -> session_limit_reached",
+    "Recorder-Start -> try_activate_speaker -> max_active_speakers -> Session-Warnung",
+    "Audio -> Sample-Zaehler -> force_finalize(max_audio_queue_seconds) -> trim(max_final_queue_depth)",
+    "InferenceJob -> globale Queue(max_global_depth) -> coalesce|reject|stale(max_realtime_age_ms)",
+    "Settings -> neuer Recorder (audio_queue_size, pre_recording_buffer_duration)",
+    "ServerSettings.wake* -> neuer Session-Recorder (v1)",
+    "Serverdefault(wakeWord.inferenceBackend/globalDisabledIds) -> Admission -> Katalog/Availability -> Session",
+    "PATCH kroko.forceCommunity -> Policy-Lock -> Grant-Invalidierung -> Scheduler-Reconcile"
+  ],
+  "facts": [
+    {
+      "aussage": "ServerSettings ist die einzige Server-/Prozess-Autoritaet (Dataclass, Felder + Defaults + abgeleitete Pfade).",
+      "beleg": "server.py:403-517, :519-543 __post_init__, :545-556 public_dict/wake_word_enabled",
+      "evidenz": "stark",
+      "gueltigkeit": "Server-Ebene, prozessweit, beide Transporte und HTTP",
+      "id": "G1-01"
+    },
+    {
+      "aussage": "Startpraezedenz: Code-Default < YAML < CLI; danach persistierte Laufzeitwerte aus runtime.json darueber (erneut validiert). BASE_TUNING_DEFAULTS (8 Keys) + nur Profil custom.",
+      "beleg": "server.py:10394-10656, :10333-10391, :8827-8843; Tests test_fastapi_server_protocol.py:151-160, 182-194, 244-252; multi_user:419-438",
+      "evidenz": "stark",
+      "gueltigkeit": "nur Start; host/port/device/data_root_path/Secrets nicht persistiert",
+      "id": "G1-02"
+    },
+    {
+      "aussage": "Drei Laufzeit-Aenderungsklassen + model_refresh: active_sessions, new_sessions, startup_only; update_settings mit startup_only/unknown/invalid_value und appliesTo.",
+      "beleg": "server.py:178-221, :223-254, :256-285, :287-291, :1211-1216, :7826-7957; Test :576-591",
+      "evidenz": "stark",
+      "gueltigkeit": "PATCH /api/config, PUT /api/logging; host/port in keiner Klasse",
+      "id": "G1-03"
+    },
+    {
+      "aussage": "Registry: 16 Keys mit Serverdefault (13 Session + 3 Server: inferenceBackend, globalDisabledIds, forceCommunity). Serverdefault nur fuer neue Sessions, nie rueckwirkend.",
+      "beleg": "settings_control.py:278-609, :640-661, :1233-1240; Tests test_settings_control_plane.py:52-70, 90-96, 347",
+      "evidenz": "stark",
+      "gueltigkeit": "selection/runtimeSuppression.* ohne Serverdefault",
+      "id": "G1-04"
+    },
+    {
+      "aussage": "Overlay + eigene settingsRevision in runtime.json, atomar, ohne Legacy-Sektion zu ueberschreiben; patch_server = prepare→persist→commit; Laden vor erstem Modell-Refresh.",
+      "beleg": "operations.py:414-417, :451-516; settings_control.py:1355-1405; server.py:6283-6293; Tests runtime_persistence:66-77, 157-173, 229-257",
+      "evidenz": "stark",
+      "gueltigkeit": "nur Serverdefaults; ungültige Keys → Startabbruch",
+      "id": "G1-05"
+    },
+    {
+      "aussage": "Drei API-Oberflaechen: Registry-Lesen/Patch (v2), Legacy-Config/Logging, validate/reload. Admin-Gate ohne Key nur lokal.",
+      "beleg": "server.py:9235-9292, :8907-8937, :9383-9430, :9849-9868, :9870-9892; security/admin.py:24-46",
+      "evidenz": "stark",
+      "gueltigkeit": "Admin-Gate lokal-only ohne Key",
+      "id": "G1-06"
+    },
+    {
+      "aussage": "host/port nur in main() via uvicorn.run; create_app bindet nichts; aus Persistenz ausgenommen.",
+      "beleg": "server.py:405-406, :10409-10410, :10830-10835, :7964-7968",
+      "evidenz": "stark",
+      "gueltigkeit": "nur Prozessstart (N-1 Embedding)",
+      "id": "G1-07"
+    },
+    {
+      "aussage": "CPU-Only: device=cpu erzwungen, compute_type=int8, tuning_profile nur custom; YAML device!=cpu → SystemExit.",
+      "beleg": "server.py:417-418, 407, :10453, :10379-10380, :8704-8707, :8767; Tests :167-180, 182-190, 254-260",
+      "evidenz": "stark",
+      "gueltigkeit": "Start + Modellwechsel (8074)",
+      "id": "G1-08"
+    },
+    {
+      "aussage": "admin_api_key: Header/Bearer, compare_digest; ohne Key lokal erlaubt, remote 403; STARTUP_ONLY, nie persistiert/oeffentlich.",
+      "beleg": "security/admin.py:1-46; server.py:508, :10521, :551, :7915; Test openai_compatible:325-329",
+      "evidenz": "stark",
+      "gueltigkeit": "prozessweit",
+      "id": "G1-09"
+    },
+    {
+      "aussage": "OpenAI-API: enabled→404 wenn aus; Key→401 (Fallback VOICESTT_API_KEY); Limit max+1 Bytes →413; Aliasse→Lane (main→final), ValueError/404.",
+      "beleg": "server.py:506-513, :10519-10526, :8455-8484; openai_routes.py:93-103, :147-154; security/openai.py:10-35",
+      "evidenz": "stark",
+      "gueltigkeit": "STARTUP_ONLY; Secrets nie persistiert",
+      "id": "G1-10"
+    },
+    {
+      "aussage": "max_audio_packet_bytes (512 KiB) + feste Metadaten-Grenze 64 KiB; Ueberschreitung → AudioPacketError/Metadaten-Ablehnung; beide Transporte.",
+      "beleg": "server.py:449, :7653-7655; protocol.py:7, 61-62; connection.py:186-190; server.py:3011-3012",
+      "evidenz": "stark",
+      "gueltigkeit": "ACTIVE, pro Paket",
+      "id": "G1-11"
+    },
+    {
+      "aussage": "Genau zwei Engines (faster_whisper, kroko_onnx); enforce_supported_engines vor Import; /api/config/validate 400 mit Liste.",
+      "beleg": "server.py:412-413, :8744-8761; Tests :300-304, :262-278",
+      "evidenz": "stark",
+      "gueltigkeit": "STARTUP_ONLY; Wechsel nur via models/active",
+      "id": "G1-12"
+    },
+    {
+      "aussage": "Modellrichtlinie: Rangklassifizierung (kroko 2, large-v3-turbo 3, large 4, medium 3, small 2, base/tiny 1); max 2|1 Medium, rank>3 abgelehnt; gleiche Engine+Modell → use_main erzwungen; zwei Kroko-Modelle → ValueError.",
+      "beleg": "server.py:499-502, 447, :8711-8741, :8764-8801; kroko_runtime.py:54-73; Test openai_compatible:210-231",
+      "evidenz": "stark",
+      "gueltigkeit": "Start/Wechsel/Lifecycle-PATCH; allow_two ACTIVE",
+      "id": "G1-13"
+    },
+    {
+      "aussage": "Warmup (nur wenn true) + Idle-Worker (alle min(30,timeout/4)s → unload idle_timeout) + Status; Lazy-Reload bei Bedarf.",
+      "beleg": "server.py:498-500, :2101-2108, :7599-7639; Test openai_compatible:382-396",
+      "evidenz": "stark",
+      "gueltigkeit": "warmup STARTUP_ONLY; Idle ACTIVE",
+      "id": "G1-14",
+      "wirkung": "SharedEngineWorker._warmup ueberspringt bei model_warmup=false (2101-2108); Idle-Worker pollt alle min(30.0, max(0.1, timeout/4.0)) Sekunden (timeout selbst max(0.1, ...)) und ruft unload_models(reason=idle_timeout) (7623-7639); danach Lazy-Reload (7599-7621)."
+    },
+    {
+      "aussage": "stt_auto_download/engine_settings/model_settings = Absicht, erst bei Refresh wirksam; Patch setzt nur model_refresh_required.",
+      "beleg": "stt_model_management.py:173-236, :258-269, :666-686; server.py:287-291, :503-505, :7893-7894, :7956",
+      "evidenz": "stark",
+      "gueltigkeit": "ACTIVE mit appliesTo=model_refresh (N-2: Patch allein provisioniert nichts)",
+      "id": "G1-15"
+    },
+    {
+      "aussage": "Engine-Optionen lane-spezifisch (Lane→andere Lane→stt_engine_settings), nicht oeffentlich; koennen Kroko-Keys enthalten (Redaction).",
+      "beleg": "server.py:414-415, :1276-1305, :545-553; protocol.py:20-23, 26-37; Test :315-325",
+      "evidenz": "stark",
+      "gueltigkeit": "STARTUP_ONLY",
+      "id": "G1-16"
+    },
+    {
+      "aussage": "Vier Logkanaele + SQLite-Eventstore aus data_root; Hub konfiguriert je enabled Kanal; save_audio_files archiviert; audit/configure bei Logging-Keys.",
+      "beleg": "server.py:450-484, :519-527, :7936-7942; event_logging.py:697-893; operations.py:343-362; Test openai_compatible:348-379",
+      "evidenz": "stark",
+      "gueltigkeit": "ACTIVE; event_store STARTUP_ONLY; Pfade abgeleitet/gesperrt",
+      "id": "G1-17"
+    },
+    {
+      "aussage": "transcript_log_mode filtert Transkripte (none/final/Kanal); realtime_log_detail steuert Erzeugung vor Hub. Synchronisation der beiden Transcript-Keys in update_settings.",
+      "beleg": "event_logging.py:118-186, :144-155; server.py:455-456, 480, :5205-5237, :7895-7904; openai_routes.py:262, 284; Test multi_user:893-931",
+      "evidenz": "stark",
+      "gueltigkeit": "ACTIVE-Runtime",
+      "id": "G1-18"
+    },
+    {
+      "aussage": "log_level prozessweit (Root/Uvicorn), runtime-aenderbar, resolve_log_level.",
+      "beleg": "server.py:450, :1219-1221, :7943-7944, :10816-10834; event_logging.py:276-302",
+      "evidenz": "stark",
+      "gueltigkeit": "ACTIVE, prozessweit",
+      "id": "G1-19"
+    },
+    {
+      "aussage": "log_live_enabled ist ACTIVE (PATCH-faehig mit invalid_dependency-Guard), event_store_enabled ist STARTUP_ONLY; beide werden persistiert. __post_init__ wirft bei log_live ohne event_store; PATCH lehnt zusaetzlich mit invalid_dependency ab; persistierter Widerspruch bricht Start ab.",
+      "beleg": "server.py:481, 484, :540-543, :7865-7877, :8827-8843; Test multi_user:401-438",
+      "evidenz": "stark",
+      "gueltigkeit": "event_store STARTUP_ONLY; log_live ACTIVE; beide persistiert (C-3)",
+      "id": "G1-20",
+      "wirkung": "Widerspruch -> __post_init__ wirft; PATCH -> invalid_dependency (update_settings Z. 7857-7877); persistierter Widerspruch -> Startabbruch. log_live ACTIVE mit appliesTo=active_sessions.",
+      "review_fix": "2026-11-08 R1-F2: Akte korrigiert (vorher faelschlich beide STARTUP_ONLY); Code: ACTIVE enthaelt log_live_enabled (server.py:181), STARTUP_ONLY nur event_store_enabled (:284)."
+    },
+    {
+      "aussage": "max_sessions=4: Sessions+Reservierungen vs. Limit; admit reserviert vor Bau; v2 session_limit_reached; Zähler in metrics.",
+      "beleg": "server.py:487, :6133-6237, :7349-7350; connection.py:247-252; Tests multi_user:950-957, protocol:327-351",
+      "evidenz": "stark",
+      "gueltigkeit": "ACTIVE; Reservierungen blockieren Slots",
+      "id": "G1-21"
+    },
+    {
+      "aussage": "max_active_speakers=4: nur neue Sprecher verworfen + Warnung; bestehende bleiben.",
+      "beleg": "server.py:488, :6201-6208, :5314-5327; Test multi_user:934-948",
+      "evidenz": "stark",
+      "gueltigkeit": "ACTIVE, pro Aufnahmeversuch",
+      "id": "G1-22"
+    },
+    {
+      "aussage": "max_audio_queue_seconds_per_session erzwingt die Finalisierung langer Aufnahmen; max_final_queue_depth_per_session begrenzt danach die finale Warteschlange.",
+      "beleg": "server.py:489, 492, :6000-6109, :1783-1785",
+      "evidenz": "stark",
+      "gueltigkeit": "ersteres NEW_SESSION, letzteres ACTIVE",
+      "id": "G1-23"
+    },
+    {
+      "aussage": "max_global_inference_queue_depth=64 (final-Ablehnung); max_realtime_queue_age_ms=1500 (deadline, stale-Drop); realtime-Coalescing bei vorhandenem Job.",
+      "beleg": "server.py:491, 493, :1771-1818, :8298-8302; Tests protocol:630-677",
+      "evidenz": "stark",
+      "gueltigkeit": "ACTIVE, pro Job",
+      "id": "G1-24"
+    },
+    {
+      "aussage": "audio_queue_size=128 + pre_recording_buffer_duration=0.75 → Recorder-Dict neuer Sessions; Pre-Roll in Segment-Timeline.",
+      "beleg": "server.py:448, 490, :2775-2834, :1460-1476",
+      "evidenz": "stark",
+      "gueltigkeit": "NEW_SESSION",
+      "id": "G1-25"
+    },
+    {
+      "aussage": "Vier Felder ohne Consumer: realtime_degradation_threshold_ms, realtime_min/max_audio_seconds, vad_energy_threshold. Validiert/persistiert/veröffentlicht, nie durchgesetzt; nicht im Recorder-Dict.",
+      "beleg": "server.py:217, 239-240, 244, :494-497, :7702-7711, :2751-2834; Repo-Grep nur Deklaration/Validierung/Persistenz/Anzeige",
+      "evidenz": "stark",
+      "gueltigkeit": "N-3: nicht als Grenze dokumentieren",
+      "id": "G1-26"
+    },
+    {
+      "aussage": "Legacy-Wake-Felder (v1): wakeword_backend/wake_words/sensitivity=0.5/framework=onnx/Timings; wake_word_enabled()=Backend∧Wörter; --wake-words erzwingt openwakeword; Recorder-Dict + capabilities; NEW_SESSION.",
+      "beleg": "server.py:438-446, :555-556, :10473-10481, :10734-10737, :2799-2806, :7716-7737, :9138-9194; Test protocol:353-378",
+      "evidenz": "stark",
+      "gueltigkeit": "v1-Pfad (C-4 zweiter Backend-Knopf)",
+      "id": "G1-27"
+    },
+    {
+      "aussage": "Registry-Server-Keys inferenceBackend (auto/onnx/tflite, NEXT_SESSION) + globalDisabledIds ([]): je Admission gelesen; gemeinsames gesundes Backend nötig; Disable-Liste → Katalog-Verfügbarkeit; Patch → apply_wake_word_global_disable; catalogRevision ≠ settingsRevision.",
+      "beleg": "settings_control.py:93, 99, :558-590; server.py:7183-7212, :7256-7264, :9281-9286; ports.py:149-157; wakeword_catalog.py:542-609, :1320-1332; Tests c3:519-601, control_plane:90-96",
+      "evidenz": "stark",
+      "gueltigkeit": "nur v2-Admission; bestehende unverändert",
+      "id": "G1-28"
+    },
+    {
+      "aussage": "kroko.forceCommunity einziger Lizenz-Key: Community erzwungen, Pro-Nachweis synchron invalidiert, kein Netzcheck, pro_enabled immer false; Patch unter Policy-Lock + apply_kroko_force_change; nur Absicht persistiert.",
+      "beleg": "settings_control.py:93, :591-608; server.py:6386-6396, :6711-6776, :9259-9280; security/kroko.py:95-145; license_state.py:42-107; Tests pr15:313-340, selective:142-148, native:122-123",
+      "evidenz": "stark",
+      "gueltigkeit": "APPLY_LIVE, prozessweit; blockiert neue Pro-Jobs",
+      "id": "G1-29"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-1",
+      "thema": "host/port nur in main() (uvicorn.run); eingebettetes create_app bindet nichts."
+    },
+    {
+      "id": "N-2",
+      "thema": "stt_*-Felder setzen nur Refresh-Bedarf; kein Refresh ohne models/refresh bzw. Reconcile."
+    },
+    {
+      "id": "N-3",
+      "thema": "Vier Felder ohne Consumer (G1-26): validiert/persistiert/veröffentlicht, nie durchgesetzt."
+    }
+  ],
+  "researcher_session": "ses_e45ff0015ffe9eIDbjFuTscYz3",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-1",
+      "thema": "VOICESTT_OPENWAKEWORD_MODEL_ROOT: in vps-compose vorhanden, in keinem *.py gelesen – Wirkung außerhalb Python unbekannt."
+    },
+    {
+      "id": "U-2",
+      "thema": "Ob Clients ungenutzte limits_dict-Grenzen als echte Limits interpretieren: Repo sagt nein, Client unbekannt."
+    }
+  ],
+  "writer_notes": "Struktur: (1) Ebenen+Präzedenz G1-01..G1-06, (2) Netz/Prozess G1-07..G1-11, (3) Engine/Modell G1-12..G1-16, (4) Logging G1-17..G1-20, (5) Limits G1-21..G1-26, (6) Wake/Guard G1-27..G1-28, (7) Kroko-Lizenz G1-29; Warnkästen N-3 (deklariert≠wirksam) und C-1 (Datei>CLI). Abgrenzung: keine Session-Key-Semantik (03.07), keine Typregeln (03.04), keine Namenstabellen (03.03). Konsistenz 03.01/03.02/02.07/02.08. Defaults aus zitierten Zeilen, nie raten.",
+  "conflicts": [
+    {
+      "id": "C-0",
+      "thema": "Branch-Ref lokal nicht vorhanden (detached FETCH_HEAD, shallow); nur Commit belegt."
+    },
+    {
+      "id": "C-1",
+      "thema": "Persistierte runtime.json schlaegt beim Start auch explizite CLI-Flags (8827-8839)."
+    },
+    {
+      "id": "C-2",
+      "thema": "Zwei Default-Familien Aktivierungs-Timings: v1 Sekunden (activation.py) vs. v2 Millisekunden (Registry); nur v2 nutzt Registry."
+    },
+    {
+      "id": "C-3",
+      "thema": "live ACTIVE + store STARTUP_ONLY, beide persistiert; Widerspruch bricht Start ab (korrigiert R2)."
+    },
+    {
+      "id": "C-4",
+      "thema": "Zwei Wake-Backend-Knoepfe: openwakeword_inference_framework (v1, onnx) vs. wakeWord.inferenceBackend (v2, auto)."
+    },
+    {
+      "id": "C-5",
+      "thema": "language STARTUP_ONLY, aber PUT /api/language schreibt direkt (zweiter Pfad)."
+    },
+    {
+      "id": "C-6",
+      "thema": "Code-Defaults vs. Deployment-Defaults (config.yaml) trennen: max_sessions 4/8, warmup true/false, wake_words leer/hey_jarvis."
+    }
+  ],
+  "review_notes": "2026-11-08 R1 (4 Findings): G1-20 Aktenfehler (log_live ACTIVE statt STARTUP_ONLY) korrigiert."
+}

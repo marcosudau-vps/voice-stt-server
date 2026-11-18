@@ -1,0 +1,409 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (kein ref); nur Commit bindend.",
+  "chapter": "09.01",
+  "commit_verification": ".git/HEAD direkt a8993c5c68042d996eab680d84a5b138a214bb5d (detached). Nur *.py.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "settings_control.RESULT_* vs schema.RESULT_* nur stringgleich; quer verglichen."
+    },
+    {
+      "id": "C2",
+      "thema": "state+phase identisch doppelt; INACTIVE=IDLE Alias keine 6. Phase."
+    },
+    {
+      "id": "C3",
+      "thema": "activationId-Format pfadabhaengig hex vs kanonisch."
+    },
+    {
+      "id": "C4",
+      "thema": "not_closing_input nie Wire-Code."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "Angenommene Vordergrund-Einheit mit Id/Sequence/Source, genau einer Phase.",
+      "beleg": "activation.py:191,464-509",
+      "evidenz": "A",
+      "gueltigkeit": "Dom+Wire",
+      "id": "GL9-01"
+    },
+    {
+      "aussage": "Genau 5 Phasen idle/waiting/segment/followup/closing; finalizing keine.",
+      "beleg": "schema.py:85-102",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-02"
+    },
+    {
+      "aussage": "Einzige Annahme-Phase; Snapshot null/false; nicht Session/Transkriptionsende.",
+      "beleg": "schema.py:85;activation.py:478;snapshot.py:101",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-03"
+    },
+    {
+      "aussage": "Initial-Fenster mit Deadline; refresh invalid_phase.",
+      "beleg": "activation.py:497,538",
+      "evidenz": "A",
+      "gueltigkeit": "Domaene",
+      "id": "GL9-04"
+    },
+    {
+      "aussage": "Aufzeichnung mit Watchdog; refresh max; VAD kein Reset.",
+      "beleg": "activation.py:549,572",
+      "evidenz": "A",
+      "gueltigkeit": "Domaene",
+      "id": "GL9-05"
+    },
+    {
+      "aussage": "Nachfragefenster; refresh now+followup nie kumulativ; offen ohne Aufnahme.",
+      "beleg": "activation.py:598,563",
+      "evidenz": "A",
+      "gueltigkeit": "Domaene",
+      "id": "GL9-06"
+    },
+    {
+      "aussage": "Close-Barriere mit Context+Recovery; nur input_closed nach idle.",
+      "beleg": "activation.py:678,722,800",
+      "evidenz": "A",
+      "gueltigkeit": "Dom+Wire",
+      "id": "GL9-07"
+    },
+    {
+      "aussage": "Kanonische UUID v2; kompakt/Gross abgewiesen.",
+      "beleg": "schema.py:219;server.py:2341,2440",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-08"
+    },
+    {
+      "aussage": "Monoton pro Session nur bei Admission; generation nur Alias.",
+      "beleg": "activation.py:245,493,405",
+      "evidenz": "A",
+      "gueltigkeit": "Dom+Wire",
+      "id": "GL9-09"
+    },
+    {
+      "aussage": "Revision nur wirksame Timer-Aenderung; Token vollstaendig sonst stale.",
+      "beleg": "activation.py:127,366,746",
+      "evidenz": "A",
+      "gueltigkeit": "Domaene",
+      "id": "GL9-10"
+    },
+    {
+      "aussage": "4 Arten initial/followup/watchdog/recovery; monoton nie wall-clock.",
+      "beleg": "activation.py:84-88,24-42",
+      "evidenz": "A/B",
+      "gueltigkeit": "Domaene",
+      "id": "GL9-11"
+    },
+    {
+      "aussage": "Schutzfrist mit Warnung; Ablauf schliesst ganz, kein Folgefenster.",
+      "beleg": "activation.py:588,787;settings_control.py:73,136",
+      "evidenz": "A",
+      "gueltigkeit": "Domaene",
+      "id": "GL9-12"
+    },
+    {
+      "aussage": "Unveraenderliche Close-Identitaet reason/cause/requestedBy; null bei Timer/Geraet.",
+      "beleg": "activation.py:154,430,859",
+      "evidenz": "A",
+      "gueltigkeit": "Dom+Snapshot",
+      "id": "GL9-13"
+    },
+    {
+      "aussage": "Abgeschlossener Close genau einmal; causedBy nur finish/cancel.",
+      "beleg": "schema.py:150;events.py:57,334",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-14"
+    },
+    {
+      "aussage": "Einzige Antwort mit ID; 15 Codes geschlossen; accepted nur applied/no_change.",
+      "beleg": "schema.py:107-143;connection.py:620",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-15"
+    },
+    {
+      "aussage": "Client-UUID validiert nie umgeschrieben; ohne sie kein Slot/Ack.",
+      "beleg": "schema.py:236;commands.py:105",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-16"
+    },
+    {
+      "aussage": "MISS/REPLAY/CONFLICT je ID; Replay Original ohne Wirkung, Conflict ohne Effekt.",
+      "beleg": "activation_commands.py:284,295;connection.py:594",
+      "evidenz": "A",
+      "gueltigkeit": "v1+v2",
+      "id": "GL9-17"
+    },
+    {
+      "aussage": "configured/suppressed/effective; nur naechste Admission, keine laufende.",
+      "beleg": "activation.py:316,337;snapshot.py:168",
+      "evidenz": "A",
+      "gueltigkeit": "Dom+Wire",
+      "id": "GL9-18"
+    },
+    {
+      "aussage": "manual/wake_word gleichrangig; Client nur manual; source auf Control verboten.",
+      "beleg": "schema.py:72-80;commands.py:143",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-19"
+    },
+    {
+      "aussage": "Vor accepted keine Domaene; Close 4400/4406/4408/4409/1011, Timeout 10s, keine ID.",
+      "beleg": "handshake.py:83,181;schema.py:202",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-20"
+    },
+    {
+      "aussage": "Admission einmal Katalog; snapshot reine Projektion, pending nur inputClosed.",
+      "beleg": "handshake.py:201;snapshot.py:36,142",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-21"
+    },
+    {
+      "aussage": "Sichtbare Aenderungen, nicht Controller.version; No-op zaehlt nicht.",
+      "beleg": "session.py:17,86;connection.py:452",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-22"
+    },
+    {
+      "aussage": "Frische eventId, monotone eventSeq; logical_key Retry = gleiches Event.",
+      "beleg": "session.py:105;events.py:285",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-23"
+    },
+    {
+      "aussage": "18 Namen; Legacy projiziert, Rest verworfen; kein transcription.cancelled.",
+      "beleg": "schema.py:148-187;events.py:54",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-24"
+    },
+    {
+      "aussage": "watchdog/suppressed/interim erhoehen stateVersion nicht.",
+      "beleg": "schema.py:189;session.py:118",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-25"
+    },
+    {
+      "aussage": "Zwei Stroeme Session vs Server; kein gemeinsamer Zaehler.",
+      "beleg": "settings_control.py:875,1171;session.py:72",
+      "evidenz": "A",
+      "gueltigkeit": "v2+Server",
+      "id": "GL9-26"
+    },
+    {
+      "aussage": "4 Policies; Gruppenreihenfolge, erste zaehlt.",
+      "beleg": "settings_control.py:51-60;connection.py:544",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-27"
+    },
+    {
+      "aussage": "Policy einmal gelatcht bei Admission; spaeter wirkungslos.",
+      "beleg": "activation.py:171,272;settings_control.py:1093",
+      "evidenz": "A",
+      "gueltigkeit": "Domaene",
+      "id": "GL9-28"
+    },
+    {
+      "aussage": "requested Wunsch, effective naechste Sicht; divergent bis Rebuild.",
+      "beleg": "settings_control.py:924,1145;snapshot.py:75",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-29"
+    },
+    {
+      "aussage": "Einzig persistenter Settings-Teil; Start streng (Revision/Scope/keine Secrets).",
+      "beleg": "settings_control.py:1174-1231;operations.py:401",
+      "evidenz": "A",
+      "gueltigkeit": "Server",
+      "id": "GL9-30"
+    },
+    {
+      "aussage": "Einheit mit segmentId/Sequence einer Activation; v1 int v2 UUID.",
+      "beleg": "server.py:1308;segment_ledger.py:46,68",
+      "evidenz": "A",
+      "gueltigkeit": "v1+v2",
+      "id": "GL9-31"
+    },
+    {
+      "aussage": "Segmente 4, Activations 3 (kein discarded).",
+      "beleg": "segment_ledger.py:15-16,355",
+      "evidenz": "A",
+      "gueltigkeit": "Domaene",
+      "id": "GL9-32"
+    },
+    {
+      "aussage": "Hintergrund nach Input-Close; Ledger Reihenfolge; keine Phase.",
+      "beleg": "segment_ledger.py:490,512;snapshot.py:142",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-33"
+    },
+    {
+      "aussage": "Cancel-Barriere neutralisiert spaeteren Text als cancelled; kein input_closed.",
+      "beleg": "segment_ledger.py:171;server.py:3574",
+      "evidenz": "A",
+      "gueltigkeit": "Domaene",
+      "id": "GL9-34"
+    },
+    {
+      "aussage": "Katalog Revision, kanonische id, Backend-Health; ein Backend je Auswahl.",
+      "beleg": "wakeword_catalog.py:250,265,326,444",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-35"
+    },
+    {
+      "aussage": "Nullpunkt Trailing Edge; release = Nullpunkt-preRoll geklemmt.",
+      "beleg": "wake_audio_boundary.py:54,67,113",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-36"
+    },
+    {
+      "aussage": "Qualifikation bei minFrames, Finalisierung darunter; erster gewinnt.",
+      "beleg": "wake_detection.py:101,186,268,314",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-37"
+    },
+    {
+      "aussage": "Latch nach Admission; genau ein detected; Freigabe bei activation_closed.",
+      "beleg": "wake_admission.py:137,248;server.py:5891",
+      "evidenz": "A",
+      "gueltigkeit": "v2",
+      "id": "GL9-38"
+    },
+    {
+      "aussage": "Nur faster_whisper/kroko_onnx, Default faster_whisper (kanonisch, kein fw-Alias); keine Aliasse, cpu hart.",
+      "beleg": "factory.py:16-22,59",
+      "evidenz": "A",
+      "gueltigkeit": "Produkt",
+      "id": "GL9-39"
+    },
+    {
+      "aussage": "DISCOVERED/VALIDATED/LOAD_VERIFIED/MINIMUM_READY/NOT_READY final+realtime.",
+      "beleg": "stt_model_management.py:27-35,332",
+      "evidenz": "A",
+      "gueltigkeit": "Server",
+      "id": "GL9-40"
+    },
+    {
+      "aussage": "Nur final/realtime; realtime max 1/Session, coalesced/stale Zaehler.",
+      "beleg": "server.py:1618,1771,1898",
+      "evidenz": "A",
+      "gueltigkeit": "Server",
+      "id": "GL9-41"
+    },
+    {
+      "aussage": "low-memory vs balanced; Init serialisiert.",
+      "beleg": "server.py:2111,2190,2012",
+      "evidenz": "A",
+      "gueltigkeit": "Server",
+      "id": "GL9-42"
+    },
+    {
+      "aussage": "4 Kanaele; transcript_mode none/final/full.",
+      "beleg": "event_logging.py:116,765,900",
+      "evidenz": "A",
+      "gueltigkeit": "Server",
+      "id": "GL9-43"
+    },
+    {
+      "aussage": "SQLite-first append; cursor+Watermark; Zustand Schreib+Lese.",
+      "beleg": "event_logging.py:438,543,1099,1268",
+      "evidenz": "A",
+      "gueltigkeit": "Server",
+      "id": "GL9-44"
+    },
+    {
+      "aussage": "/api/metrics Sessions/Scheduler/Modelle/limits; Latenzen count/avg/max/p50/p95 Fenster 256.",
+      "beleg": "server.py:7685,7702,1580,8939",
+      "evidenz": "A",
+      "gueltigkeit": "Server",
+      "id": "GL9-45"
+    },
+    {
+      "aussage": "4 Mechanismen Admin/Bearer/LogToken/Kroko; nicht austauschbar.",
+      "beleg": "security/service.py:1-36",
+      "evidenz": "A",
+      "gueltigkeit": "Server",
+      "id": "GL9-46"
+    },
+    {
+      "aussage": "GET /v1/models + POST /v1/audio/transcriptions; Formate json/text/srt/verbose/vtt/diarized.",
+      "beleg": "openai_routes.py:43,67;openai_compat.py:9-13",
+      "evidenz": "A",
+      "gueltigkeit": "Server",
+      "id": "GL9-47"
+    },
+    {
+      "aussage": "4B LE + JSON max 64 KiB + PCM; nur pcm_s16le, Mono/Resample.",
+      "beleg": "protocol.py:7,52;server.py:7653;connection.py:181",
+      "evidenz": "A",
+      "gueltigkeit": "v1+v2",
+      "id": "GL9-48"
+    },
+    {
+      "aussage": "Aufnahme- vs Wake-Pre-Roll verschiedene Begriffe.",
+      "beleg": "preroll.py:38;server.py:1460;wake_audio_boundary.py:28",
+      "evidenz": "A",
+      "gueltigkeit": "v1+v2",
+      "id": "GL9-49"
+    },
+    {
+      "aussage": "Interim optional stable/unstable/consensus; kein Pflichtschema/Guete.",
+      "beleg": "events.py:357-391;realtime_text_stabilizer.py:15",
+      "evidenz": "A/B",
+      "gueltigkeit": "v2",
+      "id": "GL9-50"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "timerRevision-Warnpfad bewusst (Version nicht Revision)."
+    },
+    {
+      "id": "N2",
+      "thema": "Kein kanonisches BEGINN-Close-Event; Marken synthetisch."
+    }
+  ],
+  "researcher_session": "ses_e3433261dffeete3QmL3CTFKEu",
+  "solver_notes": [
+    "50 Begriffe GL9-01..50; Beziehungen Session1-1Controller, Activation1-n Segmente, nur input_closed nach idle, commandId Memo/Replay, Segment Interim-Terminal, detected 1-1, Patch 1-n.",
+    "Evidenz nur *.py; keine docs/README/Legacy-STT/Drafts als Beleg."
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "EVIDENCE_BLOCKED nur Prosa, kein Enum."
+    },
+    {
+      "id": "U2",
+      "thema": "Kein v2-Metrik-Zaehler auffindbar."
+    },
+    {
+      "id": "U3",
+      "thema": "Kein BEGINN-Close-Event; Marken synthetisch."
+    }
+  ],
+  "writer_notes": "Glossar 50 Begriffe; Beziehungen belegen nicht erfinden; zwei Pre-Rolls/Result-Vokabulare/phase-state trennen."
+}

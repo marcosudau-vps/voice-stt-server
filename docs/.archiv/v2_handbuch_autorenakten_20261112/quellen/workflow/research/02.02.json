@@ -1,0 +1,290 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup lokal NICHT als Ref nachweisbar (shallow/detached, refs/heads leer). Commit verifiziert. .git/HEAD enthaelt Hash (kein ref-Eintrag).",
+  "chapter": "02.02",
+  "commit_verification": ".git/HEAD = a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "correction_round": 0,
+  "diagram_edges": [
+    "E-A2-01 V1-Client -> /ws/transcribe | Text start vor Binaeraudio [A2-03]",
+    "E-A2-02 V2-Client -> /ws/v2 | Binaeraudio erst nach hello.accepted [A2-02]",
+    "E-A2-03 WS-Route -> decode_audio_packet | 4B-Laenge + JSON + PCM [A2-01/02/03]",
+    "E-A2-04 decode -> ingest_audio_packet/Validierung | AudioPacket [A2-03/04]",
+    "E-A2-05 Validierung -> Downmix | int16, Kanaele 1..8 [A2-04/05]",
+    "E-A2-06 Downmix -> Resample 16 kHz | resample_poly/Fallback [A2-05]",
+    "E-A2-07 Resample -> feed_audio-Chunker | int16 mono 16 kHz [A2-05/07]",
+    "E-A2-08 Chunker -> Restpuffer | <1024 Byte bleibt liegen [A2-07]",
+    "E-A2-09 Chunker -> audio_queue | 1024 Byte = 32 ms [A2-07]",
+    "E-A2-10 audio_queue -> Recording-Worker | get(timeout=0.01) [A2-08]",
+    "E-A2-11 Overflow -> Drop aeltester Chunks | Limit 128 [A2-08]",
+    "E-A2-12 Worker(idle) -> Pre-Roll-Ring | 23 Frames/736 ms [A2-10]",
+    "E-A2-13 Worker -> WebRTC-VAD | 10-ms-Unterframes [A2-12]",
+    "E-A2-14 WebRTC -> Silero-Thread | bestaetigende zweite Stufe [A2-13]",
+    "E-A2-15 WebRTC+Silero -> is_voice_active | UND, 1-s-Nachlauf [A2-14]",
+    "E-A2-16 is_voice_active + Gate -> start() | Aufnahme beginnt [A2-14]",
+    "E-A2-17 Pre-Roll-Ring -> frames | volle 736 ms (Trim aus) [A2-11]",
+    "E-A2-18 Wake-Hit -> WakeAudioBoundary | Nullpunkt - preRollMs, geklemmt [A2-17]",
+    "E-A2-19 Boundary -> Frame-Trim | Samples vor release_sample weg [A2-17]",
+    "E-A2-20 Aufnahme -> Early-Final | 0,2 s Stille, aktueller Frame-Stand [A2-16]",
+    "E-A2-21 Aufnahme -> stop() | 0,55 s Stille / 0,16 s Bestaetigung [A2-15]",
+    "E-A2-22 stop() -> recorded_audio_queue | Frames + segment_context [A2-18]",
+    "E-A2-23 Queue -> set_audio_from_frames | int16 -> float32/32768 [A2-18]",
+    "E-A2-24 Frames -> Realtime-Executor | Snapshot, min. 50 ms, alle 20 ms [A2-19]",
+    "E-A2-25 Executor -> Scheduler | Randknoten 02.05/02.08 [A2-20]",
+    "E-A2-26 Client -> AudioAvailability | V1/v2-Befehl [A2-21/22]",
+    "E-A2-27 Availability=false -> Activation-Close | audio_unavailable [A2-23]",
+    "E-A2-28 Availability=false -> blockiert activate/wake | audio_unavailable [A2-23]",
+    "E-A2-29 Availability -> Snapshot | audioAvailable, ein stateVersion [A2-22]",
+    "E-A2-30 HTTP-Upload -> Decode 16 kHz float32 | 25 MiB, ein Batch [A2-26]"
+  ],
+  "facts": [
+    {
+      "aussage": "Audioframe = pack(<I, len) + UTF-8-JSON + Rohaudio. Metadaten >64KiB abgelehnt (encode+decode). Nicht-binaer/fehlende/unvollstaendige/ungueltiges-JSON/Nicht-Objekt -> AudioPacketError.",
+      "beleg": "protocol.py MAX_METADATA_BYTES Z.7, encode/decode Z.40-75",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "A2-01"
+    },
+    {
+      "aussage": "V2: handle_binary prueft zuerst accepted; vor hello -> request_close(4400) + False, keine Session/Recorder. Danach decode -> ingest; Fehler nur geloggt, Verbindung offen.",
+      "beleg": "protocol_v2/connection.py handle_binary Z.181-198; schema.py CLOSE_INVALID_HANDSHAKE=4400 Z.202",
+      "evidenz": "CODE+TEST (e2e :488-500, :436-449)",
+      "gueltigkeit": "V2",
+      "id": "A2-02"
+    },
+    {
+      "aussage": "V1: bytes via decode -> ingest. AudioPacketError -> {error,audio_packet}; sonst {error,audio}; Ablehnung -> {warning}. Kein Close. stop beendet via streaming-Pruefung.",
+      "beleg": "server.py websocket_loop Z.10022-10105",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1",
+      "id": "A2-03"
+    },
+    {
+      "aussage": "Reihenfolge: (1) Nutzlast <= max_audio_packet_bytes (512*1024); (2) sampleRate positiv int (kein bool); (3) channels Default 1, positiv, <=8; (4) format Default pcm_s16le, NUR pcm_s16le; (5) Vielfaches channels*2; (6) frames positiv+exakt. KEINE sampleRate-Obergrenze. Nur PCM-Nutzlast geprueft.",
+      "beleg": "server.py packet_to_server_samples Z.7653-7683; protocol.py require_positive_int Z.78-82",
+      "evidenz": "CODE+TEST (protocol :593-628)",
+      "gueltigkeit": "V1+V2",
+      "id": "A2-04"
+    },
+    {
+      "aussage": "np.frombuffer int16; channels>1 Mittelwert + int16-Cast (unvollstaendiger Rest verworfen). Dann resample_int16(rate,16000): gleich/leer -> Kopie; sonst scipy resample_poly (ganzzahliges up/down via gcd), Fallback np.interp, Clip [-32768,32767].",
+      "beleg": "server.py 7677-7683, resample_int16 8682-8701; SERVER_SAMPLE_RATE=16000 Z.147",
+      "evidenz": "CODE+TEST (48kHz ok :593-603)",
+      "gueltigkeit": "V1+V2",
+      "id": "A2-05"
+    },
+    {
+      "aussage": "Konvertierung 0 Samples (Nutzlast < Kanalrahmen) -> ingest (True,None): kein Recorder/Fehler/Zaehler.",
+      "beleg": "server.py ingest_audio_packet Z.3011-3014",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "A2-06"
+    },
+    {
+      "aussage": "bytearray-Puffer; 2D-Mittelwert; resample nur Rate!=16000; int16-Bytes; buf_size=2*buffer_size=1024 Byte = 512 Samples = 32 ms. Nur volle Chunks in audio_queue, Rest bleibt. Rest <32ms bei stop/flush NICHT nachgeschoben (kein Flush dieses Puffers).",
+      "beleg": "manual_audio_input.py feed_audio Z.9-34; audio_recorder Z.82-83,702-710; kein Flush recording_buffers Z.112-133",
+      "evidenz": "CODE+TEST (fixtures :105-143, 1536->3 Chunks)",
+      "gueltigkeit": "V1+V2 (Server liefert 16k)",
+      "id": "A2-07"
+    },
+    {
+      "aussage": "Ein Konsument: get(timeout=0.01), Sample-Zaehler +=len//2, on_recorded_chunk, bei handle_buffer_overflow Abbau bis allowed_latency_limit (aelteste zuerst). Server: allowed_latency_limit=audio_queue_size=128. 128*32ms ~= 4.096s. audioQueueSize = Eingangs-Chunk-Puffer, KEIN Segmentdauer-Limit.",
+      "beleg": "recording.py run_recording_worker Z.163-209; server.py 2816-2817, Z.448; initialization.py 189-191",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2 Server-Sessions",
+      "id": "A2-08"
+    },
+    {
+      "aussage": "Server-Sessions use_microphone=False; PyAudio-Leser nur bei True. Mikrofonpfad: mono paInt16, chunk 1024 Frames, 16kHz-Versuch sonst hoechste (bzw 48000 ohne Geraet), Testlesen, Resampling, 1024-Byte-Chunks, eigener Prozess mp.Queue, Teilpuffer-Flush beim Ende.",
+      "beleg": "server.py _create_recorder 2751-2753; audio_input_worker.py 14-333; initialization.py _start_audio_reader 475-497",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "Library/Standalone, NICHT Server-Session",
+      "id": "A2-09"
+    },
+    {
+      "aussage": "Ring deque maxlen=int((rate//buffer)*duration). 16000/512 + Default 0.75s -> int(31*0.75)=23 Frames = 736ms (nicht 750ms). Paralleles Metadaten-Deque (Samples, RMS, WebRTC/Silero-Flags). Fuellung wenn idle oder Stille-begonnen.",
+      "beleg": "initialization.py _initialize_recording_buffers Z.646-652; voice_activity.py 258-266,311-326; server.py pre_recording_buffer_duration 0.75 Z.490",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "A2-10"
+    },
+    {
+      "aussage": "Ohne trim_config[enabled] ALLE Ring-Frames, keine Auswahl. Server setzt Schluessel nicht; recorder.pre_recording_buffer_trim_config={} -> enabled False. Selektor (min_silence 200ms, guard 160ms, max_gap 80ms, min_included 600ms, RMS min(silence_rms, floor*2.5+25)) inaktiv; kein zweiter VAD-Lauf.",
+      "beleg": "voice_activity.py 250-255,278-308; preroll.py 16-21,55-206; initialization.py 117-118; Server-Config 2751-2841 ohne Schluessel",
+      "evidenz": "CODE+TEST (preroll_integration :36-64 nur explizit aktiv)",
+      "gueltigkeit": "Library-Feature; NICHT Server-Default",
+      "id": "A2-11"
+    },
+    {
+      "aussage": "32-ms-Chunk in 10-ms-Frames (160 Samples=320 Byte bei 16k). Normal: EIN Speech-Frame -> True + last_webrtc_speech_time; sonst Reset. all_frames_must_be_true=True -> alle noetig. Rate!=16000 vorher resample_poly.",
+      "beleg": "voice_activity.py is_webrtc_speech Z.163-218",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "A2-12"
+    },
+    {
+      "aussage": "Nur bei WebRTC-Speech und nicht-laufendem Silero startet check_voice_activity Thread (is_silero_speech). WebRTC-inaktiv->aktiv resettet Silero. Entscheidung vad_prob > (1-silero_sensitivity); Server 0.05 -> >0.95. Generation+Lock gegen veraltete Threads; reset_silero_vad_state.",
+      "beleg": "voice_activity.py 33-42,45-71,111-160,221-249,399-409; server.py silero_sensitivity 0.05 Z.429",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "A2-13"
+    },
+    {
+      "aussage": "is_voice_active = (webrtc aktiv ODER now-last<=1.0s) UND silero aktiv. Worker: erst Gate, dann VAD; nur dann start(), Pre-Roll uebernehmen, Puffer leeren. Controlled: Gate allein massgeblich (Phasen/Timer 02.03).",
+      "beleg": "voice_activity.py 399-409; recording.py 351-389; activation_control.py 191-226",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2 (Policy/Session)",
+      "id": "A2-14"
+    },
+    {
+      "aussage": "Bei stop_recording_on_voice_deactivity: Silero nur bei silero_deactivity_detection=True, sonst WebRTC (Server setzt Flag nicht -> WebRTC; Library-Default False). Stille erst nach 0.16s Bestaetigung; speech_end nur wenn Dauer > min_length (Server 0.2s); Stopp bei Stille >= post_speech (Server 0.55s). Dann on_vad_stop, stop(), Turn-Callbacks.",
+      "beleg": "recording.py 454-580; Defaults audio_recorder Z.73-75,84; Server Z.426-428",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "A2-15"
+    },
+    {
+      "aussage": "early_transcription_on_silence>0 (Server 0.2s) + Frames + Stille + allowed_to_early_transcribe -> aktuelle Frames float32 als Finalauftrag (use_prompt True); Flag False bis neue Speech/perform_final. perform_final sendet nur bei transcribe_count==0, wartet sonst. Vollrest NICHT erneut; Final aus Frame-Stand VOR Ende. Test: Uebermittlung waehrend is_recording True.",
+      "beleg": "recording.py 502-520,537; transcription_api perform_final 87-107; transcription submit 202-241",
+      "evidenz": "CODE+TEST (slow_final_audio_gap :152-213)",
+      "gueltigkeit": "V1+V2",
+      "id": "A2-16"
+    },
+    {
+      "aussage": "Akzeptierter Wake-Hit: operational_zero_point_sample = Trailing Edge (letzter Frame >= Schwelle). release = max(history_start, zero_point - preRollSamples); history_start aus real gehaltener Historie (audio_buffer+frames). preRollMs Session-Setting Default 0, next_activation, KEINE receptive-Obergrenze. Nur WakeAudioBoundary -> Trim (trim_frames_to_boundary); sonst Legacy-Fixschnitt sample_rate*wake_word_buffer_duration (Default 0.1s).",
+      "beleg": "wake_audio_boundary.py 67-174; recording.py 60-121,404-432; wake_detection _build_hit 462-484; settings_control 473-498; server.py 445",
+      "evidenz": "CODE+TEST (boundary :49-70; recording_path :284-321: 10ms->160 Samples; 5000ms geclampt)",
+      "gueltigkeit": "V2 (Boundary) / Legacy",
+      "id": "A2-17"
+    },
+    {
+      "aussage": "stop_recording: Frames deepcopy + backdate_* + segment_context -> recorded_audio_queue; frames=[]; stabilize.finalize ohne Finaltext; Events+Callback. set_audio_from_frames: join -> int16 -> float32/32768; backdate_stop schneidet, backdate_resume int16 in 2048-Byte-Frames (1024 Samples=64ms). Kontext unveraenderlich.",
+      "beleg": "lifecycle.py stop_recording 85-139; recording_buffers.py 19-65,68-92",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "A2-18"
+    },
+    {
+      "aussage": "Realtime-Worker: ID/Kontext vor Snapshot einfrieren, Frames kopieren (optional Lock), bei Aenderung verwerfen. join -> ungerades Byte weg -> int16; <50ms Skip; /32768 float32. KEIN erneutes Resampling (Recorder 16k). Server realtime_processing_pause=0.02 (Library 0.2). awaiting_speech_end pausiert.",
+      "beleg": "realtime.py 96-201,687-741,1019-1037; server.py 431",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "A2-19"
+    },
+    {
+      "aussage": "Zwei Executoren (final/realtime). transcribe->transcribe_with_context; final ohne Kontext laedt current_transcription_context; service.transcribe_for_recorder. Audio+Kontext an Scheduler; Ledger/Queue 02.05/02.08.",
+      "beleg": "server.py 2273-2305,2831-2840",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "A2-20"
+    },
+    {
+      "aussage": "V1 {type:audio_availability,commandId,audioAvailable}: commandId nicht-leer String Pflicht; fehlt -> missing_command_id, falscher Typ -> invalid_command_id, Nicht-Bool -> invalid_payload. Gleiche ID+Payload -> REPLAY-Ack; gleiche ID anderer Payload -> command_id_conflict. Ack: audio_availability_ack + commandId/accepted/reason(applied/no_change)/audioAvailable/activationId/phase/sessionId.",
+      "beleg": "server.py handle_audio_availability_command, _audio_availability_ack 3730-3833",
+      "evidenz": "CODE+TEST (command_timer_e2e :934-938; boundary :72)",
+      "gueltigkeit": "V1",
+      "id": "A2-21"
+    },
+    {
+      "aussage": "V2 audio_availability.set: audioAvailable bool validiert, gleiche Domain-Methode. KEIN Availability-Event im Katalog; trotzdem sichtbar (audioAvailable Snapshot-Pflicht) -> Connection erhoeht stateVersion genau einmal (visible_without_event=True); Replay/no_change nichts. Bei gleichzeitigem Close: Ack mit Version des closing_input-Eintritts.",
+      "beleg": "commands.py _validate_audio_availability 177-180; connection.py 392-406,452-479; snapshot.py 74; schema.py 46",
+      "evidenz": "CODE+TEST (state_version :225-337; e2e :880-894)",
+      "gueltigkeit": "V2",
+      "id": "A2-22"
+    },
+    {
+      "aussage": "_audio_available startet True. False -> offene Activation via activation.audio_unavailable() mit Close-Plan abbrechen (Input-Close, Ledger cancelled), cancel_requested, Wake-Reset - beendet NICHT Streaming/Session, blockiert NICHT Annahme. Neue activate -> audio_unavailable-Ablehnung; Wake nicht geoeffnet. True nur Flag. Fail-closed: Flag False + technisches Ende. Nach False->True weiter nutzbar, Wake wieder moeglich.",
+      "beleg": "server.py Init 2412, Trigger-Gate 3691-3699, Wake-Gate 2612/5792, Handler 3799-3820, fail_closed 4246-4256; ingest ohne Pruefung 3011-3042",
+      "evidenz": "CODE+TEST (e2e :862-878; state_version :292-337; wakeword_session_e2e :322-357)",
+      "gueltigkeit": "V1+V2",
+      "id": "A2-23"
+    },
+    {
+      "aussage": "max_audio_queue_seconds_per_session (Default 30.0s) begrenzt KUMULIERTE aufgenommene Samples; erreicht -> flush + Zwangsfinal + Warnung. max_final_queue_depth (Default 8) begrenzt wartende Finals; Ueberstand am aeltesten verworfen, Ledger discarded/recorded_audio_queue_trimmed. Trennen von audio_queue_size=128 (Eingang).",
+      "beleg": "server.py 6011-6049,6061-6130; Defaults 448,489,492",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "A2-24"
+    },
+    {
+      "aussage": "Engine-Uebergabe nur int16->float32 (/32768), keine Pegelregelung. Optional normalize_audio (Default False): Skalierung Peak 0.95. Faster-Whisper vad_filter (Server-Default True) = ENGINE-INTERNER VAD, unabhaengig WebRTC/Silero.",
+      "beleg": "base.py _normalize_audio 146-159; faster_whisper_engine transcribe 68-83; server.py Defaults 423-424, Uebergabe 2224-2225",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2+OpenAI",
+      "id": "A2-25"
+    },
+    {
+      "aussage": "POST /v1/audio/transcriptions: file Pflicht, Dateiname-Check, max openai_max_file_bytes+1 (Default 25MiB), sonst 413. decode_audio_float32 via faster-whisper sampling_rate=16000 mono float32; duration=len/16000. Ein Batch via gleichen Scheduler/Engine-Pfad, ohne Recorder-VAD.",
+      "beleg": "openai_routes.py 67-161; server.py decode_audio_float32 8671-8679, Default 513, Router-Bindung 9905-9907",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "OpenAI-Route",
+      "id": "A2-26"
+    }
+  ],
+  "investigated_sources": [
+    "protocol.py (Codec)",
+    "server.py (Validierung, Session, Recorder-Bau, Limits)",
+    "protocol_v2/{connection,commands,schema,snapshot} (V2-Audio/-Availability)",
+    "core/{manual_audio_input,audio_input_worker,initialization,recording,recording_buffers,voice_activity,preroll,lifecycle,activation_control,realtime,realtime_text_stabilizer,wake_audio_boundary,transcription,transcription_api} (Recorder-Pipeline)",
+    "transcription_engines/{base,faster_whisper_engine,factory} (Normalisierung, Engine-VAD)",
+    "openai_routes.py (Batch)",
+    "Tests (audio_fixtures, preroll_integration, wake_audio_boundary, recording_path, slow_final_gap, e2e, contract, state_version, boundary, protocol, command_timer_e2e, wakeword_session_e2e)",
+    "pytest.ini, setup.py, requirements, contracts/protocol-v2-vectors.json"
+  ],
+  "not_implemented": [
+    {
+      "id": "N-A2-01",
+      "thema": "Kein start/stop in V2 (Audio atomar mit hello.accepted)"
+    },
+    {
+      "id": "N-A2-02",
+      "thema": "Keine serverseitige Geraeteerkennung (audioAvailable = Client-bool, DEVICE-01/02)"
+    },
+    {
+      "id": "N-A2-03",
+      "thema": "Kein Availability-Event V2 (nur stateVersion+S133napshot)"
+    },
+    {
+      "id": "N-A2-04",
+      "thema": "Pre-Roll-Trim Server inaktiv (Feature vorhanden, Schluessel nicht gesetzt)"
+    },
+    {
+      "id": "N-A2-05",
+      "thema": "Kein Flush Sub-32ms-Restpuffer (nur Mikrofon-Worker flusht)"
+    },
+    {
+      "id": "N-A2-06",
+      "thema": "Keine AGC/Rauschunterdrueckung/Gain-Stufe (nur int16 + optionale Peak-Norm)"
+    }
+  ],
+  "researcher_session": "ses_e46b8efe8ffeV1JiL4gK5OTJ",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-A2-01",
+      "thema": "Reale Client-Raten/Chunkgroessen (Server akzeptiert jede positive Rate; D-N-05)"
+    },
+    {
+      "id": "U-A2-02",
+      "thema": "Clientverhalten nach audioAvailable=false (Server naehme weiter an)"
+    },
+    {
+      "id": "U-A2-03",
+      "thema": "Kalibrierung Silero-Sensitivitaet + preRollMs (pending WW-19, EVIDENCE_BLOCKED)"
+    },
+    {
+      "id": "U-A2-04",
+      "thema": "Begruendung silero_sensitivity 0.05 (gesetzt, nicht belegt)"
+    },
+    {
+      "id": "U-A2-05",
+      "thema": "Branch-Identitaet (detached FETCH_HEAD; refs/heads leer)"
+    }
+  ],
+  "writer_notes": [
+    "Gate nur Randknoten; Phasen/Timer/closing_input 02.03. Queue/Ledger 02.05/02.08.",
+    "D-19 heikel: Zeitpunkt + Nicht-Wiederholung; Test + Guard gedeckt.",
+    "Zahlen: 512/32ms/1024B; 512KiB; 128 Chunks (~4.096s); 30s; 8; 23F/736ms; VAD 10/32ms; Stille 0.16/0.55/0.2s.",
+    "Pre-Roll-Selektor NICHT als Server-Stufe; Engine-vad_filter dritte Stufe (nicht mit WebRTC/Silero verschmelzen)."
+  ],
+  "conflicts_note": "Auftrags-C-A2-01..05 wurden NICHT als eigene IDs vergeben; Spannungen sind durch Fakten/N/U abgedeckt: C-A2-01 PreRoll-Meldung vs real (A2-10); C-A2-02 Queue-Namen (A2-08 vs A2-24); C-A2-03 Sensitivitaets-Semantik (A2-13); C-A2-04 Verfuegbarkeit vs Transport (A2-23); C-A2-05 kein Widerspruch zu 01.04 (writer_notes). Writer zitiert korrekterweise keine C-IDs."
+}

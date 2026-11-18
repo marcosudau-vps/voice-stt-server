@@ -1,0 +1,256 @@
+{
+  "branch_note": "Registry nennt feat/v2-release-cleanup; aus .git/HEAD nicht ableitbar, daher nicht verifiziert. Bindend ist nur der Commit a8993c5c68042d996eab680d84a5b138a214bb5d.",
+  "chapter": "06.02",
+  "commit_verification": ".git/HEAD enthält exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached HEAD, keine Ref-Zeile) - Commit bestätigt.",
+  "conflicts": [
+    {
+      "id": "C6-05",
+      "thema": "docker-compose.yml verlangt dist/kroko/*.whl, Dockerfile kopiert sie nicht: Compose-Kommentar Z.8-12 und .dockerignore Z.22-26 nennen beide, tatsächlich nur COPY dist/voicestt/*.whl (Dockerfile Z.23); Test verbietet COPY dist/kroko (test_production_docker_contract.py Z.48-51). Kroko-Bytes stecken im gemergten Wheel (K6-06). Kommentar überholt; Code/Test gewinnen."
+    },
+    {
+      "id": "C6-06",
+      "thema": "Compose-Default KROKO_VARIANT=free vs Produktionsbuild nur pro: compose Z.19 free-Default, Dockerfile Z.47 ARG=pro, build_production.py Z.57,121-127 SUPPORTED_VARIANTS=(pro,). Nur OCI-Label, kein Laufzeitschalter; keine Free-Image-Variante."
+    },
+    {
+      "id": "C6-07",
+      "thema": "VOICESTT_CPU_ONLY=1 gesetzt, aber von keiner Python-Stelle gelesen (nur Dockerfile:64, compose:24, vps-compose:26; kein os.getenv). Reines Deklarations-Env, kein Schalter (konsistent B6-10). CPU-Garantie aus K6-12/K6-13/K6-15."
+    },
+    {
+      "id": "C6-08",
+      "thema": "Zwei Implementierungen CPU-Vertrag: cpu_only.py Z.92-127 (Distributionen, Requires-Dist markerbewusst, Tensorprobe) vs Dockerfile Z.39-40 (cuda/hip + pip-list-grep). Image-Prüfung schwächer, nicht gekoppelt; Test sichert nur Textfragmente. Divergenzrisiko."
+    },
+    {
+      "id": "C6-09",
+      "thema": "INSTALL_GUIDE (setup.py Z.91-169) nur für variantenlose Legacy-Distribution (Z.342-343), nennt nur voicestt. Public-Wheel ohne Installationsleitfaden. Public-Wege aus Code/Compose belegen."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "setup.py Variante (env|geerbt|keine) -> Distributionsname (voice-stt-server | voicestt) [K6-01..K6-03]",
+    "Basis-Wheel (py3-none-any) + Kroko-Wheel cp312-<platform> -> Merge byte-genau -> impures Produkt-Wheel (Root-Is-Purelib false) [K6-06, K6-07]",
+    "Produkt-Wheel -> voice_stt_server/_embedded_kroko.json -> installierte Distribution entscheidet Runtime [K6-08]",
+    "Produkt-Wheel + dist/voicestt/ -> Dockerfile builder -> runtime (ubuntu24.04, uid10001, :8010) [K6-04, K6-20]",
+    "cpu_only.py install-torch -> cpu-constraints.txt -> alle späteren pip install [K6-12, K6-14]",
+    "PyPI / GHCR / Docker Hub -> pip install | docker compose up [K6-24, K6-19]"
+  ],
+  "facts": [
+    {
+      "aussage": "Genau ein öffentlicher Distributionsname, hart auf genau eine Variante geschlossen.",
+      "beleg": "setup.py PUBLIC_DISTRIBUTION_NAMES={\"pro\":\"voice-stt-server\"} (Z.33-35); resolve_distribution_variant() nur Schlüssel dieser Menge, sonst SystemExit (Z.58-66); Duplikat engineering/tools/build_distribution.py Z.40-42; Guard-Test tests/unit/test_build_distribution.py Z.72-80.",
+      "evidenz": "A",
+      "gueltigkeit": "Packaging-Ebene, beide Build-Pfade",
+      "id": "K6-01"
+    },
+    {
+      "aussage": "Variantenauflösung: Env hat Vorrang, sonst geerbte Build-Identität, im Source-Checkout immer Legacy.",
+      "beleg": "setup.py resolve_distribution_variant() Z.46-67; VoiceSTT/_build_identity.py load_build_identity() Z.196-207 (None im Source-Checkout, Z.199); sdist-Neubau erbt Namen aus VoiceSTT/_build_identity.json (build_identity_support.py capture_identity() Z.23-30).",
+      "evidenz": "A",
+      "gueltigkeit": "Build aus Repo vs Build aus sdist",
+      "id": "K6-02"
+    },
+    {
+      "aussage": "Legacy voicestt ist Default ohne Variante, kein zweites Produkt.",
+      "beleg": "setup.py LEGACY_DISTRIBUTION_NAME=\"voicestt\" Z.32, Auswahl Z.70-75, Kommentar Z.29-30; description Z.350-355, python_requires >=3.11 Z.43/378-380, install_requires=base_requirements Z.382-384.",
+      "evidenz": "A",
+      "gueltigkeit": "Dev-/Quellbaum-Builds (vgl. B6-02)",
+      "id": "K6-03"
+    },
+    {
+      "aussage": "Verzeichnisname und Distributionsname entkoppelt: dist/voicestt/ enthält voice_stt_server-*.whl.",
+      "beleg": "build_production.py run() product_dir=dist/voicestt Z.725, build_distribution dorthin Z.728-734; Dateiname aus escaped_name(distribution) Z.285-289; Dockerfile COPY dist/voicestt/*.whl Z.23.",
+      "evidenz": "A",
+      "gueltigkeit": "Build-/Image-Pipeline; historischer Pfadname",
+      "id": "K6-04"
+    },
+    {
+      "aussage": "Ein Produkt pro Interpreter: zwei Produktdistributionen gleichzeitig sind ein Fehler.",
+      "beleg": "VoiceSTT/_build_identity.py installed_distribution() Z.62-109, IdentityError multiple product distributions Z.107-108; PRODUCT_DISTRIBUTIONS Z.19 (voice-stt-server-pro nur toleriert, nicht erzeugt).",
+      "evidenz": "A",
+      "gueltigkeit": "Laufzeit, jede Installation",
+      "id": "K6-05"
+    },
+    {
+      "aussage": "Native-Runtime wird byte-genau eingebettet, nicht kompiliert, nicht separat installiert.",
+      "beleg": "build_distribution.py Docstring Z.1-7 merged byte for byte without compilation; merge_kroko_runtime() Z.340-348, Kollisionsausschluss Z.300-306; Aufruf build_production.run() Z.724-734 nach resolve_kroko_wheel Z.717-723.",
+      "evidenz": "A",
+      "gueltigkeit": "Public-Build",
+      "id": "K6-06"
+    },
+    {
+      "aussage": "Ergebnis impures plattform-/interpretergebundenes Wheel; Tag aus Kroko-Wheel.",
+      "beleg": "build_distribution.py Zielname aus kroko_tags Z.280-289; _rewrite_wheel_metadata Root-Is-Purelib false + ein Tag Z.431-440; Tests Z.151-171 (linux_x86_64/win_amd64); artifacts.py wheel_platform_tag_matches_target() Z.270-302.",
+      "evidenz": "A",
+      "gueltigkeit": "Public-Wheel (Details B6-03/B6-04)",
+      "id": "K6-07"
+    },
+    {
+      "aussage": "Installierte Distribution entscheidet über Runtime, nicht Lizenzschlüssel.",
+      "beleg": "build_embedded_manifest() Z.201-238 runtimeSelectedBy installed-distribution, licenseKeyIsRuntimeCredentialOnly True Z.236-237; Ablage voice_stt_server/_embedded_kroko.json Z.45-47/383-386; gelesen _embedded.py Z.14/44 und artifacts.py verify_installed_runtime() Z.1051-1104.",
+      "evidenz": "A",
+      "gueltigkeit": "Public-Wheel; Dev nur Fallback",
+      "id": "K6-08"
+    },
+    {
+      "aussage": "Kroko-.dist-info nicht mitgeliefert; Lizenz-/NOTICE-Texte schon.",
+      "beleg": "kroko_payload_names() schließt .dist-info aus Z.187-198, Begründung Z.49-55; Lizenzen unter dist-info/licenses bzw. licenses/KROKO-ORIGINAL Z.350-373; verify_bundled_notices Bytes/SHA-256 vs sources.json Z.241-255.",
+      "evidenz": "A",
+      "gueltigkeit": "Redistribution beim Merge",
+      "id": "K6-09"
+    },
+    {
+      "aussage": "Python-Anforderung an eingebettete Runtime gekoppelt, nicht frei wählbar.",
+      "beleg": "setup.py PUBLIC_PYTHON_REQUIRES >=3.12,<3.13 Z.37-43, angewendet Z.378-380; buildinputs.py Z.31/551 cp312 + Zielfamilien.",
+      "evidenz": "A",
+      "gueltigkeit": "Public-Build (Ref B6-01/02/03)",
+      "id": "K6-10"
+    },
+    {
+      "aussage": "Ausgeliefert nur Linux und Windows, jeweils nativ qualifiziert.",
+      "beleg": "release_candidate.py --platform linux/windows/all default linux Z.506-507; Windows Cross-Build + Nativ-Nachqualifizierung windows-latest (test_release_workflows.py Z.71-79/398-412); kein macOS/darwin.",
+      "evidenz": "A",
+      "gueltigkeit": "Release; nur Abwesenheit im Werkzeug (vgl. N6-06/N6-07)",
+      "id": "K6-11"
+    },
+    {
+      "aussage": "CPU-Vertrag einmal implementiert, von Installationspfaden importiert.",
+      "beleg": "engineering/tools/cpu_only.py Z.1-27/40/92-145; Fassade tools/cpu_only.py Z.1-16; verwendet ci.yml Z.104/111/177/185 und qualify_build_identity.py Z.27/210-213. ps1/Dockerfile rufen Werkzeug nicht auf.",
+      "evidenz": "A",
+      "gueltigkeit": "CI/Qualifizierung/Dev-Setup",
+      "id": "K6-12"
+    },
+    {
+      "aussage": "Image prüft CPU-Only mit zweiter inline-duplizierter Implementierung.",
+      "beleg": "Dockerfile Z.30 torch CPU-Index, Z.31-33 cpu-constraints.txt+PIP_CONSTRAINT, Z.39-40 inline torch.version.cuda/hip + pip-list-grep; kein cpu_only.py-Aufruf; Test nur Textform (test_cpu_only_contract.py Z.123).",
+      "evidenz": "A",
+      "gueltigkeit": "Image-Bau; Divergenzrisiko C6-08",
+      "id": "K6-13"
+    },
+    {
+      "aussage": "Prüf-Semantik schließt CUDA-Wheels auch ohne GPU korrekt aus.",
+      "beleg": "cpu_only.py gpu_runtime_distributions Regex Z.43-52; gpu_requirements_of markerbewusst Z.59-89; torch.cuda.is_available False kein Beweis Z.20-21; CPU-Tensorprobe Z.109.",
+      "evidenz": "A",
+      "gueltigkeit": "alle CPU-Prüfpfade (Ref B6-15/B6-16)",
+      "id": "K6-14"
+    },
+    {
+      "aussage": "Laufzeit (Bibliothekspfad) korrigiert GPU geräuschvoll auf CPU statt Abbruch.",
+      "beleg": "VoiceSTT/core/initialization.py Z.437-444 warning + hart cpu/gpu_device_index 0, kein Abbruch. Server/CLI brechen ab: CLI choices cpu server.py Z.10453, YAML SystemExit Z.10379-10380, Policy Z.8764-8767, Factory Z.64-65.",
+      "evidenz": "A",
+      "gueltigkeit": "AudioToTextRecorder-Direktnutzung (Ref B6-11..14)",
+      "id": "K6-15"
+    },
+    {
+      "aussage": "Public-Pfad installiert vollständig; Wake-Backends bleiben Extra.",
+      "beleg": "setup.py public_install_requires Z.319-336/382-384 (Begründung Z.319-324), tflite-Begründung Wake-Extra Z.326-330; extras Z.280-317.",
+      "evidenz": "A",
+      "gueltigkeit": "Public-Paket (Ref B6-29/B6-17)",
+      "id": "K6-16"
+    },
+    {
+      "aussage": "Ein CLI-Name kanonisch, drei Aliase, einer Dev-Werkzeug.",
+      "beleg": "setup.py entry_points Z.409-424: voice-stt-server kanonisch, stt-server/stt-server-legacy/stt Aliase, stt-install-kroko nur Dev (Z.419-422); Guard-Test test_engineering_path_contract.py Z.123-145.",
+      "evidenz": "A",
+      "gueltigkeit": "beide Varianten",
+      "id": "K6-17"
+    },
+    {
+      "aussage": "Gleiche Importfläche Public/Legacy; Unterschied nur Name/Deps/python_requires.",
+      "beleg": "setup.py find_packages nicht variantenabhängig Z.359-373; voice_stt_server/__init__.py lazy Recorder/version/embedded Z.10-49, kein torch/PyAudio beim Import Z.29-35.",
+      "evidenz": "A",
+      "gueltigkeit": "beide Varianten",
+      "id": "K6-18"
+    },
+    {
+      "aussage": "Genau zwei Installationswege in den Betrieb: pip/venv und Container aus vorgebautem Wheel.",
+      "beleg": "pip/venv: install_windows_cpu.ps1 Z.5-11, activate_venv_install_reqs.ps1 Z.82-91; Container: Dockerfile Z.21-40 + docker-compose.yml Z.13-20. Kein Self-Update/Service-Installer/Paket-Repo.",
+      "evidenz": "A",
+      "gueltigkeit": "Repo-Stand (Ref B6-28/B6-19)",
+      "id": "K6-19"
+    },
+    {
+      "aussage": "Container baut weder Wheel noch Native, installiert nicht editable.",
+      "beleg": "Dockerfile nur requirements + dist/voicestt/*.whl Z.22-23, installiert ${VOICESTT_WHEEL}[extras] Z.32-34; Tests: kein pip install -e Z.38-40, kein AS kroko-builder/install_kroko Z.43-45, COPY dist/kroko verboten Z.48-51, kein --from=kroko-builder Z.156-157.",
+      "evidenz": "A",
+      "gueltigkeit": "Image-Bau (Ref B6-19)",
+      "id": "K6-20"
+    },
+    {
+      "aussage": "Builder-/Dev-Werkzeuge außerhalb Produktimage, separat digest-gepinnt.",
+      "beleg": "build/kroko-builder.Dockerfile FROM python:3.12-slim-bookworm@sha256:7824... Z.27, pip/setuptools/wheel Z.41-42, ENTRYPOINT install_kroko Z.56; nur aus build_production.py Z.275-296 (never referenced by Dockerfile Z.284-285); Host: git + Docker-Server preflight Z.159-174.",
+      "evidenz": "A",
+      "gueltigkeit": "Release-/Image-Bau (Ref B6-27)",
+      "id": "K6-21"
+    },
+    {
+      "aussage": "CPU-only auch im Native-Build via CMake erzwungen.",
+      "beleg": "install_kroko.py SHERPA_ONNX_CMAKE_ARGS mit SHERPA_ONNX_ENABLE_GPU=OFF (PORTAUDIO=OFF, WEBSOCKET=ON, TTS=OFF, DIARIZATION=OFF, BINARY=OFF); Tests test_install_kroko_cpu.py Z.67-84.",
+      "evidenz": "A",
+      "gueltigkeit": "nur stt-install-kroko --build (Dev)",
+      "id": "K6-22"
+    },
+    {
+      "aussage": "Image erbt Repo-config.yaml nicht; Konfiguration aus CLI/Env.",
+      "beleg": "Dockerfile kopiert config.yaml nicht (nur Z.22-23); CMD Host/Port/Device/Compute/Engine Z.99-102; --config Default nur VOICESTT_CONFIG server.py Z.10396-10399; Repo-config mit Betreiberpfaden Z.145-170 nicht portabel; compose portabel (Tests Z.191-208).",
+      "evidenz": "A",
+      "gueltigkeit": "Container vs Repo-Datei",
+      "id": "K6-23"
+    },
+    {
+      "aussage": "Auslieferungskanal PyPI + Container-Registries, kein Installer.",
+      "beleg": "release-publish.yml pypi-Job Z.102-172 (Publish Z.150-152), Registries GHCR+Docker Hub Z.180-236; ci.yml veröffentlicht nichts Z.9-12, baut nur Dev-Distribution Z.75-76.",
+      "evidenz": "A",
+      "gueltigkeit": "Release",
+      "id": "K6-24"
+    },
+    {
+      "aussage": "sdist eigenständig baubar und produktfrei.",
+      "beleg": "MANIFEST.in include VERSION/build_identity_support/wakeword_resources Z.5-16, prune engineering/examples Z.27-30, Ausschluss Kopie/bak/tmp Z.24-26; Test include-existiert Z.268-273; setup.py Backup-Filter Z.205-221.",
+      "evidenz": "A",
+      "gueltigkeit": "sdist/Quellverteilung",
+      "id": "K6-25"
+    },
+    {
+      "aussage": "Eingebettete Installationsanleitung nur Legacy (pip install voicestt).",
+      "beleg": "setup.py INSTALL_GUIDE Z.91-169 nur ohne Variante Z.342-343, nur voicestt-Aufrufe Z.100/104/108/112-113/136; Public-Wheel ohne diesen Text.",
+      "evidenz": "A",
+      "gueltigkeit": "Legacy-Metadaten; Nicht-Quelle Public",
+      "id": "K6-26"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N6-11",
+      "thema": "Kein Build-Layer-Guard Produktname-nur-mit-Runtime (Env-pro ohne Merge behauptet krokoVariant pro; Prüfung nur Release-Gate qualify_build_identity.py Z.35-56)."
+    },
+    {
+      "id": "N6-12",
+      "thema": "Kein Plattform-/Architektur-Guard zur Laufzeit/im Paket (kein sys.platform-Zweig; nur python_requires + Wheel-Tag). Ergänzt N6-04/N6-05."
+    },
+    {
+      "id": "N6-13",
+      "thema": "Keine Ressourcen-/Mindestanforderungen (keine Kern/RAM/Disk/Thread-Prüfung; OMP_NUM_THREADS nur Default-Env). Verweis N6-01..N6-03/C6-02."
+    },
+    {
+      "id": "N6-14",
+      "thema": "Kein automatischer Modell-Download beim Installieren (Dockerfile OFFLINE-Flags Z.65-67; Beschaffung kein Installationsschritt, Verweis B6-30)."
+    }
+  ],
+  "researcher_session": "ses_e3e66533effeJtG87W1xXCj0ac",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U6-01",
+      "thema": "build_voicestt_wheel() ungenutzt im Orchestrierungslauf (Z.233-267 vs run() Z.724-734); externe Nutzung unbelegt."
+    },
+    {
+      "id": "U6-02",
+      "thema": "Zweck des Namens voice-stt-server-pro (nur toleriert, nicht erzeugt) – Migration unbelegt."
+    },
+    {
+      "id": "U6-03",
+      "thema": "Ob PyPI zwei Plattform-Wheels derselben Version trägt – Upload-Semantik außerhalb geprüften Codes."
+    }
+  ],
+  "writer_notes": "Ein Produkt (K6-01..K6-05, kein zweites Produkt pro); Native eingebettet byte-genau, Distribution entscheidet (K6-06..K6-10); CPU-only vier Ebenen, Recorder warnt statt Abbruch, ENV kein Schalter (K6-12..K6-15/C6-07); Wege pip/venv + Container-ohne-Bau (K6-19..K6-21); kein Guard/keine Mindestzahlen/kein Download (N6-11..N6-14); Pfad-Falle dist/voicestt (K6-04); kein Diagramm."
+}

@@ -1,0 +1,304 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD). Nur Commit bindend.",
+  "chapter": "07.11",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached). Quellen: release-publish.yml, release.py, engineering/release/*.py, test_release_*.py.",
+  "conflicts": [
+    {
+      "id": "K1",
+      "thema": "'Free und Pro' in Kommentaren/Testnamen vs Code VARIANTS=('pro',) (nur 1 Distribution)."
+    },
+    {
+      "id": "K2",
+      "thema": "Workflow-Kommentar verweist docs/release-process.md (keine Wahrheit; nur env-Name/Secrets belegbar)."
+    },
+    {
+      "id": "K3",
+      "thema": "Preflight-State release_state/<v>.json vs Workflow workspace/release-state.json (sieht sich nicht)."
+    },
+    {
+      "id": "K4",
+      "thema": "Kein HEAD==sourceCommit Cross-Check im Workflow (preflight ohne --commit; Tag korrekt auf sourceCommit)."
+    },
+    {
+      "id": "K5",
+      "thema": "git push als GitError statt ReleaseError (Traceback, Exit !=0 bleibt)."
+    },
+    {
+      "id": "K6",
+      "thema": "FIRST_PUBLIC_ARTIFACT_STATE toter Code (TAGGED-Barriere traegt; keine Kante)."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [
+    "E1 PREPARED->TAGGED git_tag tag/--until TAGGED",
+    "E2 TAGGED->PYPI_PUBLISHED pypi pypi/--until PYPI_PUBLISHED",
+    "E3 PYPI_PUBLISHED->DOCKERHUB_PUBLISHED dockerhub registries/--until EXTERNAL_VERIFIED",
+    "E4 DOCKERHUB_PUBLISHED->GHCR_PUBLISHED ghcr registries",
+    "E5 GHCR_PUBLISHED->EXTERNAL_VERIFIED external_verification registries",
+    "E6 EXTERNAL_VERIFIED->ALIASES_PUBLISHED aliases finalize/--until COMPLETE",
+    "E7 ALIASES_PUBLISHED->GITHUB_RELEASED github_release finalize",
+    "E8 GITHUB_RELEASED->FINAL_VERIFIED final_verification finalize",
+    "E9 FINAL_VERIFIED->COMPLETE complete finalize"
+  ],
+  "facts": [
+    {
+      "aussage": "Nur workflow_dispatch mit required candidate_run_id + version; kein push/tag/schedule/PR-target.",
+      "beleg": "release-publish.yml:26-34; test_release_workflows:142-146,256-260",
+      "evidenz": "A",
+      "gueltigkeit": "gesamter Publish",
+      "id": "PB7-01"
+    },
+    {
+      "aussage": "Workflow-Rechte leer {}; jedes Recht pro Job optiert.",
+      "beleg": "release-publish.yml:36; test_release_workflows:185-187",
+      "evidenz": "A",
+      "gueltigkeit": "Workflow-Ebene",
+      "id": "PB7-02"
+    },
+    {
+      "aussage": "Least-Privilege: tag actions+contents:write; pypi +id-token (einzig, kein packages); registries +packages (kein contents:write); finalize beide; alle actions:read + contents.",
+      "beleg": "release-publish.yml:58-60,107-111,184-187,248-251; test_release_workflows:189-239",
+      "evidenz": "A",
+      "gueltigkeit": "je Job",
+      "id": "PB7-03"
+    },
+    {
+      "aussage": "Alle 4 Jobs environment release; CI/RC keine; Reviewer/Wartezeit UNKNOWN (Settings).",
+      "beleg": "release-publish.yml:57,106,183,246; test_release_workflows:243-254",
+      "evidenz": "A/U1",
+      "gueltigkeit": "je Publish-Job",
+      "id": "PB7-04"
+    },
+    {
+      "aussage": "Concurrency release-publish-<version> kein Abbruch; Candidate-Gruppe anders (kein Cross-Schutz).",
+      "beleg": "release-publish.yml:38-42; test_release_workflows:155-164",
+      "evidenz": "A",
+      "gueltigkeit": "nur Publish",
+      "id": "PB7-05"
+    },
+    {
+      "aussage": "Kette tag->pypi->registries->finalize needs; Namen nennen Bereich PREPARED->TAGGED->PYPI->EXTERNAL->COMPLETE.",
+      "beleg": "release-publish.yml:104,181,245,55,103,180,244; test_release_workflows:311-317",
+      "evidenz": "A",
+      "gueltigkeit": "Struktur (Reihenfolge via Boundary)",
+      "id": "PB7-06"
+    },
+    {
+      "aussage": "Candidate per download-artifact run-id+GITHUB_TOKEN merge-multiple in CANDIDATE_DIR; State artefaktweise ohne run-id (Neu-Dispatch PREPARED).",
+      "beleg": "release-publish.yml:47,71-76,93-97,120-129,170-174,197-206,234-238,263-272,296-300",
+      "evidenz": "A",
+      "gueltigkeit": "alle Jobs",
+      "id": "PB7-07"
+    },
+    {
+      "aussage": "Gate1: preflight --manifest --version --require-qualified vor Advance to TAGGED.",
+      "beleg": "release-publish.yml:77-92; cli:70-94,461-464; test_release_workflows:443-456",
+      "evidenz": "A",
+      "gueltigkeit": "tag-Job zuerst",
+      "id": "PB7-08"
+    },
+    {
+      "aussage": "Preflight: VERSION/Notes/sauber/Commit/Tree/lokal-Tag/Manifest/Version/QUALIFIED+evidence/Redistribution/Pfade/State (fail); Tools/Creds/Manifest-Pfad WARN.",
+      "beleg": "preflight.py:60-349; cli:456-462",
+      "evidenz": "A",
+      "gueltigkeit": "echt + CLI (require_qualified True)",
+      "id": "PB7-09"
+    },
+    {
+      "aussage": "Gate2: publish --until TAGGED --yes ohne --trusted-publishing (Twine-Pfad ungenutzt).",
+      "beleg": "release-publish.yml:84-92",
+      "evidenz": "B",
+      "gueltigkeit": "tag-Job",
+      "id": "PB7-10"
+    },
+    {
+      "aussage": "STATE_ORDER exakt 10 PREPARED..COMPLETE; STATE_INDEX einzige Ordnung.",
+      "beleg": "state.py:41-57; test_release_state:39-54",
+      "evidenz": "A",
+      "gueltigkeit": "einzige Autoritaet",
+      "id": "PB7-11"
+    },
+    {
+      "aussage": "advance monoton: gleich=idempotent ohne History; +1 mit updatedAt+Append; sonst OrderError.",
+      "beleg": "state.py:240-262; test_release_state:79-104",
+      "evidenz": "A",
+      "gueltigkeit": "jeder Schritt",
+      "id": "PB7-12"
+    },
+    {
+      "aussage": "Graph 9 Steps 1:1 zu ORDER (Asserts); Kinds PUBLISH/VERIFY_ONLY/LOCAL; complete ohne Adapter.",
+      "beleg": "engine.py:45-89; test_release_engine:99-129",
+      "evidenz": "A",
+      "gueltigkeit": "dry-run+publish",
+      "id": "PB7-13"
+    },
+    {
+      "aussage": "FIRST_PUBLIC_ARTIFACT_STATE=PYPI_PUBLISHED definiert/exportiert, nirgends referenziert (kein Gate).",
+      "beleg": "state.py:56,345; Repo-Suche 2 Treffer",
+      "evidenz": "B",
+      "gueltigkeit": "Semantik, reales Gate TAGGED",
+      "id": "PB7-14"
+    },
+    {
+      "aussage": "4 Barrieren: Tag nur PREPARED; Public ab TAGGED; Aliase ab EXTERNAL; Release ab ALIASES (auch ausserhalb Engine).",
+      "beleg": "state.py:265-327; adapters Aufrufe; test_release_state:107-140",
+      "evidenz": "A",
+      "gueltigkeit": "alle Adapter",
+      "id": "PB7-15"
+    },
+    {
+      "aussage": "Version/Identitaet fail-closed (Version/Commit/Tree/Dist/Images/Candidate; korrupt=StateError; atomar tmp+replace; Secret-Check).",
+      "beleg": "state.py:164-237; rc_manifest:332-375; test_release_state:143-278",
+      "evidenz": "A",
+      "gueltigkeit": "lokaler State, keine Git-Authority",
+      "id": "PB7-16"
+    },
+    {
+      "aussage": "plan_from verkuerzt nur (Filter <=stop_after); unbekannt ValueError; ueberschritten leer; 4 Boundaries erreichen COMPLETE.",
+      "beleg": "engine.py:92-109; test_release_engine:132-171",
+      "evidenz": "A",
+      "gueltigkeit": "publish/dry-run",
+      "id": "PB7-17"
+    },
+    {
+      "aussage": "4 Boundaries TAGGED/PYPI/EXTERNAL/COMPLETE testfixiert + ORDER; publish ohne choices, dry-run mit.",
+      "beleg": "release-publish.yml:92,169,233,294; test_release_workflows:319-335; cli:476-479,564-570",
+      "evidenz": "A",
+      "gueltigkeit": "Workflow (+dry-run Parser)",
+      "id": "PB7-18"
+    },
+    {
+      "aussage": "REAL-Gates vor erstem Schritt: Redistribution VERIFIED+Revision+evidence (kein Override), QUALIFIED, evidence vorhanden/nicht none, sourceCommit/Tree gleich; Dry akzeptiert NOT_QUALIFIED.",
+      "beleg": "engine.py:192-215; config:188-194; test_release_engine:320-359",
+      "evidenz": "A",
+      "gueltigkeit": "jeder echte publish",
+      "id": "PB7-19"
+    },
+    {
+      "aussage": "Fail-closed: Conflict=>CONFLICT Abbruch beide; Unavailable=>UNKNOWN (REAL Abbruch, DRY weiter); ABSENT+REAL publish+re-verify nur MATCH advance+persist sonst unverified Abbruch; MATCH advance ohne Write resumed; VERIFY_ONLY nicht-MATCH REAL Abbruch DRY pending.",
+      "beleg": "engine.py:220-294; errors:29-46; test_release_engine:174-285",
+      "evidenz": "A",
+      "gueltigkeit": "alle ausser complete",
+      "id": "PB7-20"
+    },
+    {
+      "aussage": "PyPI exakt Dateinamen+SHA via JSON (MATCH alle, PARTIAL=>ABSENT; fremd/Mismatch Conflict; Netz Unavailable); trusted verweigert Fallback; twine --non-interactive --skip-existing; VARIANTS (pro,) 1 Distribution +2 Wheels.",
+      "beleg": "adapters:115-213; remote_checks:42-189; rc_manifest:28; test_release_adapters:49-112",
+      "evidenz": "A",
+      "gueltigkeit": "pypi-Schritt",
+      "id": "PB7-21"
+    },
+    {
+      "aussage": "Precheck staging: precheck-pypi --manifest --dist-dir --stage-dir upload; upload_pro aus upload/pro; Action nur upload_pro true packages-dir upload/pro skip-existing; nur absent pro kopiert + lokal sha (Mismatch/fehlend ManifestError); ABSENT stage MATCH skip CONFLICT/UNKNOWN STOP.",
+      "beleg": "release-publish.yml:131-155; cli:403-445; remote_checks:110-189",
+      "evidenz": "A/C",
+      "gueltigkeit": "pypi-Job (Exit via pipefail)",
+      "id": "PB7-22"
+    },
+    {
+      "aussage": "Registries reine Digest-Promotion ohne Build: DockerHub staging digest-gepinnt privat via imagetools create --tag version; GHCR dockerhub@digest nie Staging; verify Remote-Digest=manifest sonst Conflict; fehlend/unconfig Unavailable.",
+      "beleg": "adapters:224-355; remote_checks:218-293; test_release_adapters:114-203",
+      "evidenz": "A",
+      "gueltigkeit": "registries (+finalize Logins)",
+      "id": "PB7-23"
+    },
+    {
+      "aussage": "Aliase beweglich hart: Pre-Release keine; 0.x.y 0.x+latest (kein 0); >=1 major.minor+major+latest; beide Roots je Variante; verify MATCH alle Digest sonst ABSENT; publish skippt korrekte; leer MATCH.",
+      "beleg": "adapters:363-437; aliases:68-96; remote_checks:296-319; test_release_adapters:206-258",
+      "evidenz": "A",
+      "gueltigkeit": "finalize (braucht EXTERNAL)",
+      "id": "PB7-24"
+    },
+    {
+      "aussage": "Git-Tag erster Schritt v<version>; verify MATCH nur Remote-Tag auf sourceCommit; lokal/remote fremd Conflict; unerreichbar Unavailable; publish annotiert+push nie force; lokal korrekt ohne Remote = Input.",
+      "beleg": "adapters:445-501; gitinfo:85-144; aliases:94-96; test_release_adapters:260-297",
+      "evidenz": "A",
+      "gueltigkeit": "tag-Job",
+      "id": "PB7-25"
+    },
+    {
+      "aussage": "GitHub Release letzter Marker: gh view tag/name/isDraft; not found/404 ABSENT; Bindung falsch Conflict; sonst MATCH; create --title --notes/--generate-notes nach Gate; Token via gh/Umgebung (GH_TOKEN finalize).",
+      "beleg": "adapters:509-572; config:77; release-publish.yml:284-285; test_release_adapters:299-325",
+      "evidenz": "A",
+      "gueltigkeit": "finalize",
+      "id": "PB7-26"
+    },
+    {
+      "aussage": "Aggregate read-only: external pypi+dockerhub+ghcr; final +aliases+tag+release; publish immer ReleaseError.",
+      "beleg": "adapters:580-654; test_release_adapters:327-361",
+      "evidenz": "A",
+      "gueltigkeit": "Schritte 5/8",
+      "id": "PB7-27"
+    },
+    {
+      "aussage": "Credentials: GHCR ghcr.io actor+GITHUB_TOKEN; DockerHub vars USERNAME+secrets TOKEN; GH_TOKEN finalize; kein PYPI/KROKO; Adapter erben Tool-Session.",
+      "beleg": "release-publish.yml:48,208-285; config:56-145; test_release_workflows:338-378",
+      "evidenz": "A/U2",
+      "gueltigkeit": "Workflow (Existenz UNKNOWN)",
+      "id": "PB7-28"
+    },
+    {
+      "aussage": "CLI: ohne --manifest/--yes Usage; Version/Manifest ungleich, !QUALIFIED, fehlend evidence => FAILED; dann require_qualified Preflight, Adapter, Engine until; stoppedEarly Exit1; release.py nur Delegation.",
+      "beleg": "cli:289-400; release.py:31-34; test_release_cli:152-213",
+      "evidenz": "A",
+      "gueltigkeit": "jeder publish (auch lokal)",
+      "id": "PB7-29"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Rollback/Yank/Unpublish (nur Docstring-Wort; Conflict nie auto)."
+    },
+    {
+      "id": "N2",
+      "thema": "Delete-Capability (bewusst nicht; kein imagetools/manifest rm)."
+    },
+    {
+      "id": "N3",
+      "thema": "Reviewer-Durchsetzung (nur env-Attribut; GitHub-Settings)."
+    },
+    {
+      "id": "N4",
+      "thema": "Resume ueber Runs (Download ohne run-id; nur verify MATCH resumed)."
+    },
+    {
+      "id": "N5",
+      "thema": "Retry/Notify/Timeout (keine Steps)."
+    },
+    {
+      "id": "N6",
+      "thema": "publish --until ohne choices (erst plan_from ValueError, kein ReleaseError)."
+    }
+  ],
+  "researcher_session": "ses_e370447e5ffeloFjWciPIWEMZ5",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "release env Reviewer/Zahl/Timer/Branches/self-review."
+    },
+    {
+      "id": "U2",
+      "thema": "DOCKERHUB_USERNAME/TOKEN + GITHUB_TOKEN Scope (nur Referenzen)."
+    },
+    {
+      "id": "U3",
+      "thema": "PyPI Trusted-Publisher (nur OIDC gesendet, Gegenseite unbekannt)."
+    },
+    {
+      "id": "U4",
+      "thema": "Branch-Protection/Required Checks."
+    },
+    {
+      "id": "U5",
+      "thema": "Dispatch-Ref (jeder Ref waehlbar; checkout Dispatch-Ref)."
+    },
+    {
+      "id": "U6",
+      "thema": "VOICESTT_RELEASE_* Overrides (Fallback DOCKERHUB/ghcr-owner)."
+    }
+  ],
+  "writer_notes": "Aufwaerts 07.09/07.10 QUALIFIED rc-manifest+Artefakte/Candidate-Run; 07.07/07.08 Merge/Identitaeten/Staging. Abwaerts Betrieb/Verifikation auf COMPLETE/final_verification/History. Querschnitt Secrets/Credentials, Gates, Settings (nur U). Diagramm stateDiagram 10 Knoten 9 Kanten E1-E9 + NOTE (Selbst/X->X, Gate1, REAL-Gates, CONFLICT/UNKNOWN Abbruch, kein Rueck/Ueberspringen) + NICHT (Reviewer/Retry/Rollback/Zahlen/Free-Pro/FIRST_PUBLIC)."
+}

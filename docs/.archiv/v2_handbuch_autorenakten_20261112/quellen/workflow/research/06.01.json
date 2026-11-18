@@ -1,0 +1,294 @@
+{
+  "branch_note": "Registry nennt feat/v2-release-cleanup; Branch im Checkout nicht verifizierbar. Bindend nur Commit a8993c5c68042d996eab680d84a5b138a214bb5d.",
+  "chapter": "06.01",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached).",
+  "conflicts": [
+    {
+      "id": "C6-01",
+      "thema": "VPS-Compose passt nicht zum Dockerfile (target cpu, KROKO_VARIANT, Health ready+ok). Nur Betriebsartefakt."
+    },
+    {
+      "id": "C6-02",
+      "thema": "VPS-Ressourcenwerte keine Produktanforderung."
+    },
+    {
+      "id": "C6-03",
+      "thema": "README --device cuda widerspricht Code; Code gewinnt."
+    },
+    {
+      "id": "C6-04",
+      "thema": "Zwei Python-Anforderungen variantenabhängig, kein Widerspruch."
+    }
+  ],
+  "correction_round": 2,
+  "diagram_edges": [
+    "Host Linux x86_64 -> apt portaudio19-dev python3.12",
+    "Host Windows amd64 -> vorgebaute Wheels",
+    "CPython 3.12 -> cp312-Tags",
+    "CPU-Index torch -> device=cpu",
+    "dist/*.whl -> Docker-Build -> ubuntu24.04 uid10001 :8010",
+    "DATA_ROOT -> logs/config/models",
+    "Kroko bytes 71-156MB -> Disk",
+    "zwei Modelle -> Memory-Policy"
+  ],
+  "facts": [
+    {
+      "aussage": "Public-Distribution voice-stt-server verlangt CPython >=3.12,<3.13.",
+      "beleg": "setup.py:42, 378-380; Variante setup.py:31-35,71-75",
+      "evidenz": "A",
+      "gueltigkeit": "Public-Build (Variante pro)",
+      "id": "B6-01"
+    },
+    {
+      "aussage": "Legacy-Dev voicestt verlangt Python >=3.11.",
+      "beleg": "setup.py:43, 378-380; ci.yml:75-76",
+      "evidenz": "A",
+      "gueltigkeit": "Dev-Build ohne Variante",
+      "id": "B6-02"
+    },
+    {
+      "aussage": "cp312-Begrenzung aus Kroko-Native-Runtime (linux_x86_64, win_amd64).",
+      "beleg": "setup.py:37-41; rc_manifest.py:30-32; qualify_build_identity.py:264-270",
+      "evidenz": "A/C",
+      "gueltigkeit": "Release/Qualifizierung",
+      "id": "B6-03"
+    },
+    {
+      "aussage": "Public-Wheel plattformgebunden impure (Root-Is-Purelib false, Tag von Kroko).",
+      "beleg": "build_distribution.py:416-440; cli.py:112-137",
+      "evidenz": "B",
+      "gueltigkeit": "Public-Build",
+      "id": "B6-04"
+    },
+    {
+      "aussage": "CI ubuntu-24.04 + windows-latest, Python 3.12.",
+      "beleg": "ci.yml:36-37,44-45,49-51",
+      "evidenz": "A",
+      "gueltigkeit": "Korrektheits-/Packaging-CI",
+      "id": "B6-05"
+    },
+    {
+      "aussage": "Linux braucht portaudio19-dev (Build) bzw libportaudio2 (Runtime); Windows vorgebaute Wheels.",
+      "beleg": "ci.yml:63-67; Dockerfile:13-15,70-71",
+      "evidenz": "A",
+      "gueltigkeit": "Linux",
+      "id": "B6-06"
+    },
+    {
+      "aussage": "Image ubuntu:24.04 Digest-gepinnt, Python 3.12, beide Stages gleicher Digest.",
+      "beleg": "Dockerfile:7,43; build_production.py:38-52; Tests 54-88",
+      "evidenz": "A",
+      "gueltigkeit": "Produktionsimage linux/amd64",
+      "id": "B6-07"
+    },
+    {
+      "aussage": "Container Nicht-root voicestt uid/gid 10001, /var/lib/voicestt, EXPOSE 8010.",
+      "beleg": "Dockerfile:73-86; Tests 119-121",
+      "evidenz": "A",
+      "gueltigkeit": "Produktionsimage",
+      "id": "B6-08"
+    },
+    {
+      "aussage": "Image ENV CPU_ONLY/OFFLINE/HF/TRANSFORMERS/DATA_ROOT; Compose spiegelt.",
+      "beleg": "Dockerfile:59-68; docker-compose.yml:24-28",
+      "evidenz": "B",
+      "gueltigkeit": "Container-Pfad",
+      "id": "B6-09"
+    },
+    {
+      "aussage": "VOICESTT_CPU_ONLY ungelesen (nur Text-Assertion); OFFLINE wird gelesen.",
+      "beleg": "Grep ohne Treffer; Tests 119-127; model_resolver.py:12,23-30",
+      "evidenz": "N",
+      "gueltigkeit": "Python-Pfad",
+      "id": "B6-10"
+    },
+    {
+      "aussage": "CLI --device nur cpu; Defaults host 0.0.0.0 port 8010 compute int8.",
+      "beleg": "server.py:10409,10410,10452,10453",
+      "evidenz": "A",
+      "gueltigkeit": "V2-Server",
+      "id": "B6-11"
+    },
+    {
+      "aussage": "YAML device != cpu -> SystemExit.",
+      "beleg": "server.py:10379-10380; Tests 167-180",
+      "evidenz": "A",
+      "gueltigkeit": "Startkonfiguration",
+      "id": "B6-12"
+    },
+    {
+      "aussage": "enforce_cpu_model_policy setzt device=cpu + Prüfungen.",
+      "beleg": "server.py:8764-8769; Tests",
+      "evidenz": "A",
+      "gueltigkeit": "Start/Validierung",
+      "id": "B6-13"
+    },
+    {
+      "aussage": "Factory überschreibt GPU auf cpu/0 vor Import.",
+      "beleg": "factory.py:59-69; Tests 74-86",
+      "evidenz": "A",
+      "gueltigkeit": "beide Engines",
+      "id": "B6-14"
+    },
+    {
+      "aussage": "CPU-Only-Vertrag: Torch CPU-Index+Pin, GPU-Runtimes verboten; alle Pfade verdrahtet.",
+      "beleg": "cpu_only.py:40,43-47,92-145; ci.yml:104-185; Dockerfile:28-40; ps1:9-11; Tests 105-127",
+      "evidenz": "A",
+      "gueltigkeit": "alle Installationspfade",
+      "id": "B6-15"
+    },
+    {
+      "aussage": "torch ungepinnt; CPU via Index+Constraint.",
+      "beleg": "requirements.txt:10; setup.py:232-242; cpu_only.py:3-21",
+      "evidenz": "A/C",
+      "gueltigkeit": "Core",
+      "id": "B6-16"
+    },
+    {
+      "aussage": "Gepinnte Deps (PyAudio/faster-whisper/av/pvporcupine/webrtcvad/scipy/numpy/websockets/soundfile/openwakeword/silero/tzdata; fastapi/uvicorn/multipart/sse/httpx/PyYAML).",
+      "beleg": "requirements.txt:1-17; setup.py:261-269; server.py:479",
+      "evidenz": "A",
+      "gueltigkeit": "Laufzeit",
+      "id": "B6-17"
+    },
+    {
+      "aussage": "Build-System setuptools>=68/wheel/packaging>=24; Metadaten aus setup.py.",
+      "beleg": "pyproject.toml:1-3; setup.py:345-425",
+      "evidenz": "A",
+      "gueltigkeit": "pip/build",
+      "id": "B6-18"
+    },
+    {
+      "aussage": "Image baut kein Wheel; dist/voicestt/*.whl Voraussetzung, einziges Artefakt.",
+      "beleg": "Dockerfile:22-34; compose:8-12; Tests 38-51",
+      "evidenz": "A",
+      "gueltigkeit": "Image-Bau",
+      "id": "B6-19"
+    },
+    {
+      "aussage": "CMD cpu/int8/local_files_only; Compose identisch.",
+      "beleg": "Dockerfile:98-102; compose:43-55",
+      "evidenz": "A",
+      "gueltigkeit": "Container-Start",
+      "id": "B6-20"
+    },
+    {
+      "aussage": "/health immer 200; ready nur JSON; Health prüft Liveness.",
+      "beleg": "server.py:8885-8905; Dockerfile:95-96; compose:83-90; Tests 141-188",
+      "evidenz": "A",
+      "gueltigkeit": "Produktion/Compose",
+      "id": "B6-21"
+    },
+    {
+      "aussage": "Ein uvicorn-Prozess, kein workers-Parameter.",
+      "beleg": "server.py:10813-10835",
+      "evidenz": "A",
+      "gueltigkeit": "jeder Start",
+      "id": "B6-22"
+    },
+    {
+      "aussage": "Modell-Speicherrichtlinie Klassen-Heuristik (max 2 Medium, large abgelehnt), kein Mess-RAM.",
+      "beleg": "server.py:501-502,10508-10517,8711-8801,7617-7619",
+      "evidenz": "A",
+      "gueltigkeit": "zwei Modelle + Policy an",
+      "id": "B6-23"
+    },
+    {
+      "aussage": "Speichertelemetrie Windows/Linux nur protokolliert, nie Abweisung.",
+      "beleg": "operations.py:58-124; server.py:4873...; Tests 961-969",
+      "evidenz": "A",
+      "gueltigkeit": "Linux/Windows",
+      "id": "B6-24"
+    },
+    {
+      "aussage": "OMP_NUM_THREADS default 4; Silero intra 2 inter 1.",
+      "beleg": "compose:38; silero_vad.py:437,443-444",
+      "evidenz": "B",
+      "gueltigkeit": "Container/VAD",
+      "id": "B6-25"
+    },
+    {
+      "aussage": "Kroko bytes 71-156MB je Datei (12 Einträge + sha256); Faster-Whisper unbekannt.",
+      "beleg": "models.json bytes/sha256; setup.py:388-395",
+      "evidenz": "A/UNKNOWN",
+      "gueltigkeit": "Kroko-Dateien",
+      "id": "B6-26"
+    },
+    {
+      "aussage": "Kroko-Builder nur Win/Linux; Win = 3.12 x64 amd64 + Docker Desktop Linux-Engine.",
+      "beleg": "install_kroko.py:1393-1437,1793-1800",
+      "evidenz": "A",
+      "gueltigkeit": "nur --build",
+      "id": "B6-27"
+    },
+    {
+      "aussage": "Windows-Dev venv py -3.12 + CPU-Torch + editable Extras.",
+      "beleg": "install_windows_cpu.ps1:5-14",
+      "evidenz": "B",
+      "gueltigkeit": "Dev-Setup (kein Prod)",
+      "id": "B6-28"
+    },
+    {
+      "aussage": "Wake-Backend Extra wegen tflite-Wheels; Image entfernt Requires-Dist.",
+      "beleg": "setup.py:326-330; Dockerfile:35-37",
+      "evidenz": "B/C",
+      "gueltigkeit": "pip/Image",
+      "id": "B6-29"
+    },
+    {
+      "aussage": "Offline-Auflösung Env-gesteuert; Defaults unter data_root/models/stt/*.",
+      "beleg": "model_resolver.py:10-30; stt_model_management.py:662-686",
+      "evidenz": "A",
+      "gueltigkeit": "Discovery ohne Netz",
+      "id": "B6-30"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N6-01",
+      "thema": "Kein Mindest-RAM definiert/geprüft."
+    },
+    {
+      "id": "N6-02",
+      "thema": "Keine Kern-/Thread-Prüfung."
+    },
+    {
+      "id": "N6-03",
+      "thema": "Keine Disk-Prüfung."
+    },
+    {
+      "id": "N6-04",
+      "thema": "Kein Laufzeit-Python-Guard."
+    },
+    {
+      "id": "N6-05",
+      "thema": "Kein Plattform-Guard beim Start."
+    },
+    {
+      "id": "N6-09",
+      "thema": "GPU bewusst ausgeschlossen."
+    },
+    {
+      "id": "N6-10",
+      "thema": "Keine Ressourcenlimits im öffentlichen Compose."
+    }
+  ],
+  "researcher_session": "ses_e3e832107ffeCLhRSeI765gJYs",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "N6-06",
+      "thema": "macOS nicht ausgeliefert."
+    },
+    {
+      "id": "N6-07",
+      "thema": "ARM/aarch64 unbelegt."
+    },
+    {
+      "id": "N6-08",
+      "thema": "Faster-Whisper-Größen unbekannt."
+    }
+  ],
+  "writer_notes": "Python an Variante binden; VOICESTT_CPU_ONLY nicht als Schalter; keine Mindestzahlen; VPS-Compose nicht als Produktquelle; ps1 Dev-only; Health = Liveness."
+}

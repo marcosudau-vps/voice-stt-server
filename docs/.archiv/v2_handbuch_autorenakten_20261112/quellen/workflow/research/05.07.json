@@ -1,0 +1,232 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup im Klon NICHT verifizierbar; nur Commit bindend.",
+  "chapter": "05.07",
+  "commit_verification": "Checkout C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src. .git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached); FETCH_HEAD derselbe SHA; shallow, kein refs/heads.",
+  "conflicts": [
+    {
+      "id": "C-1",
+      "thema": "Code-String model_scope_mismatch, nicht scope_mismatch."
+    },
+    {
+      "id": "C-2",
+      "thema": "Timeout 5,0 s doppelt definiert; keine gemeinsame Konstante."
+    },
+    {
+      "id": "C-3",
+      "thema": "Key im WS-Pfad; nie geloggt/zurückgegeben, Fehler nicht durchgereicht."
+    },
+    {
+      "id": "C-4",
+      "thema": "_background_inflight nur gepflegt, nie ausgewertet."
+    },
+    {
+      "id": "C-5",
+      "thema": "auth=ADMIN nur Metadatum; Durchsetzung am Admin-Gate."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "[KrokoLicenseGate] -keine Endpoint-Auth-> [AdminGate]",
+    "[prepare/check] --leer/force--> [community/no_key|force_community] kein Netz",
+    "[Gate] --1 connect+1 recv 5,0s--> [Lizenzserver]",
+    "[Antwort falsch] --> [CHECK_FAILED/...]",
+    "[fremde uuid] --> [CHECK_FAILED/model_scope_mismatch]",
+    "[bind geändert] --> [generation+1 NOT_CHECKED]",
+    "[apply alt] --> [stale_generation]",
+    "[VALID] --ablauf--> [proof_expired]",
+    "[current_decision] --> {pro|checking|community...}",
+    "[PATCH force] --> [bind force] --> [invalidiert]",
+    "[POST refresh] --admin--> [to_thread] (+pro->models)",
+    "[frischer Proof] --> [kein zweiter WS]"
+  ],
+  "facts": [
+    {
+      "aussage": "Gate keine Endpoint-Auth; vier Mechanismen nicht austauschbar; kein Entitlement fremder IDs/Loader.",
+      "beleg": "security/service.py Z.1-19; security/kroko.py Z.1-9",
+      "evidenz": "A",
+      "gueltigkeit": "gesamte Domäne",
+      "id": "K5-01"
+    },
+    {
+      "aussage": "Bau/Entscheidung ohne Netz; Start NOT_CHECKED, Generation 0, Reason no_key.",
+      "beleg": "security/kroko.py Z.30-37; license_state.py Z.30-40; Tests 428-440, 133-141",
+      "evidenz": "A",
+      "gueltigkeit": "Init",
+      "id": "K5-02"
+    },
+    {
+      "aussage": "Expliziter modellgebundener Check mit effektivem Key; leer/force -> NOT_CHECKED ohne Netz; prepare plan=None wenn berechtigt/in Prüfung/ohne Key/force.",
+      "beleg": "security/kroko.py Z.41-52, 146-166; credentials.py Z.21-47; Tests 134-156, 137-141",
+      "evidenz": "A",
+      "gueltigkeit": "jeder Check",
+      "id": "K5-03"
+    },
+    {
+      "aussage": "Effektiver Key = recognizer.key (auch leer, unterdrückt ENV) > options.key > ENV KROKO_API_KEY/KROKO_ONNX_KEY/VOICESTT_KROKO_ONNX_KEY/KROKO_KEY > ''.",
+      "beleg": "credentials.py Z.13-47; Tests 23-47",
+      "evidenz": "A",
+      "gueltigkeit": "Gate+Engine identisch",
+      "id": "K5-04"
+    },
+    {
+      "aussage": "Request wss://license.kroko.ai/ws/v1/{key}/{model}; ein connect+recv; Exception -> CHECK_FAILED ohne Text; close im finally.",
+      "beleg": "license_api.py Z.54-88; Tests 64-80, 101-113",
+      "evidenz": "A",
+      "gueltigkeit": "Transport",
+      "id": "K5-05"
+    },
+    {
+      "aussage": "Timeout 5,0 s, ein Versuch, kein Retry; ungültig -> invalid_request; einziger Import im Gate.",
+      "beleg": "security/kroko.py Z.25-27, 42, 168, 203; server.py Z.6379; license_api.py Z.47-53, 62; Tests 79, 120",
+      "evidenz": "A/B",
+      "gueltigkeit": "jeder Roundtrip",
+      "id": "K5-06"
+    },
+    {
+      "aussage": "Fail-closed typstreng: allowed exakt bool, error ''/'no', remaining/offline int>0 (True verworfen); sonst invalid_reply/invalid_freshness; VALID age=min(...,60).",
+      "beleg": "license_api.py Z.64-80, 19-28; Tests 83-98",
+      "evidenz": "A",
+      "gueltigkeit": "jede Antwort",
+      "id": "K5-07"
+    },
+    {
+      "aussage": "Doppelte 60-s-Obergrenze (API + State); Ablauf bei jeder Abfrage (monotonic, injizierbar) -> proof_expired.",
+      "beleg": "license_api.py Z.79; license_state.py Z.82-107; Tests 273-282, 64-80, 124-139",
+      "evidenz": "A",
+      "gueltigkeit": "max 60 s",
+      "id": "K5-08"
+    },
+    {
+      "aussage": "Fremde model_uuid -> CHECK_FAILED/model_scope_mismatch, nie publiziert; apply nur gleiche UUID + LicenseCheckResult.",
+      "beleg": "security/kroko.py Z.54-63; license_state.py Z.78-81; Tests 152-163",
+      "evidenz": "A",
+      "gueltigkeit": "Modellbindung",
+      "id": "K5-09"
+    },
+    {
+      "aussage": "Generationen: bind-Änderung -> +1 NOT_CHECKED; begin -> +1 CHECKING; apply nur token==Generation + CHECKING, sonst stale_generation ohne Publikation.",
+      "beleg": "license_state.py Z.42-81; security/kroko.py Z.64-68; Tests 196-207, 229-270",
+      "evidenz": "A",
+      "gueltigkeit": "Stale-Grenze",
+      "id": "K5-10"
+    },
+    {
+      "aussage": "Worker bindet nie alte Absicht (nur Aufrufer synchron unter Lock); trägt Token/uuid/key; on_result sieht aktuellen Zustand; Callback-Fehler geschluckt.",
+      "beleg": "security/kroko.py Z.1-16, 54-58, 168-239; Tests 269-321",
+      "evidenz": "A",
+      "gueltigkeit": "async",
+      "id": "K5-11"
+    },
+    {
+      "aussage": "current_decision 5 Ausgänge fest: pro/license_valid; checking/check_in_progress; community/no_key; community/force_community; community/reasonCode+check_required; immer model_uuid+snapshot.",
+      "beleg": "security/kroko.py Z.73-120; Tests 158-193, 279-280, 632",
+      "evidenz": "A",
+      "gueltigkeit": "jede Abfrage",
+      "id": "K5-12"
+    },
+    {
+      "aussage": "forceCommunity serverweit, default false, APPLY_LIVE, nicht geheim; nur Community, keine Prüfung, keine Pro-Freigabe, invalidiert bestehende; nie persistiert.",
+      "beleg": "settings_control.py Z.89-93, 591-608; Tests 400-423",
+      "evidenz": "A",
+      "gueltigkeit": "Settings",
+      "id": "K5-13"
+    },
+    {
+      "aussage": "Effektives Force nur aus server_effective (nie Session); Fehler -> false (keine Freigabe/Sperre).",
+      "beleg": "server.py Z.6386-6396, 6513-6523, 6555-6556, 6828",
+      "evidenz": "A",
+      "gueltigkeit": "Betreiberabsicht",
+      "id": "K5-14"
+    },
+    {
+      "aussage": "POST /api/kroko/license/refresh: Admin zuerst; Nicht-Dict->{}; timeout float Default 5,0, Fehler 400, Bound (0,60] sonst 400; to_thread Policy; pro->to_thread models (409); Antwort decisions/management/license/runtime.",
+      "beleg": "server.py Z.8979-9027, 6581-6709; keine /api/kroko-Tests",
+      "evidenz": "A/B",
+      "gueltigkeit": "einzige HTTP-Schnittstelle",
+      "id": "K5-15"
+    },
+    {
+      "aussage": "Service-Pfad bindet Intent synchron unter Lock, bestimmt Ziel; ohne Ziel bind+community (no_key/force/pro_not_local/no_pro_target); mit Ziel restart_conflict/native/netz-vorbereitet; danach Generation+1; Exception -> community/policy_error.",
+      "beleg": "server.py Z.6581-6709, 6415-6470; Tests 324-343, 675-693",
+      "evidenz": "A",
+      "gueltigkeit": "Policy",
+      "id": "K5-16"
+    },
+    {
+      "aussage": "Frischer Proof verhindert Doppel-Check (prepare None, run False); nachgeschaltete models-Runde kein zweiter WS.",
+      "beleg": "security/kroko.py Z.158-172; server.py Z.7071-7079; Tests 158-173",
+      "evidenz": "A",
+      "gueltigkeit": "Steady-State",
+      "id": "K5-17"
+    },
+    {
+      "aussage": "Force-Patch sperrt synchron (Lock, sofort invalidieren) vor Return; Reconcile als Daemon; Revocation lehnt nächsten Pro-Job ab.",
+      "beleg": "server.py Z.9245-9292, 6711-6720, 6501-6530; Tests 348-414",
+      "evidenz": "A",
+      "gueltigkeit": "Sperrgrenze",
+      "id": "K5-18"
+    },
+    {
+      "aussage": "Snapshot modellbezogen ohne Key (status/generation/scope/proEnabled/modelUuid/keyPresent/forceCommunity/reasonCode); proEnabled nicht global; Key nur HMAC-SHA256 mit flüchtigem Secret.",
+      "beleg": "license_state.py Z.109-128, 20-26; Tests 285-292, 135-136",
+      "evidenz": "A",
+      "gueltigkeit": "Projektion",
+      "id": "K5-19"
+    },
+    {
+      "aussage": "Status prozessflüchtig, keine Persistenz; nach Neustart NOT_CHECKED, neu prüfen.",
+      "beleg": "license_state.py Z.1-6; settings_control.py Z.89-92; security/kroko.py Z.32",
+      "evidenz": "B",
+      "gueltigkeit": "Lebensdauer",
+      "id": "K5-20"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-1",
+      "thema": "Kein Retry/Backoff (bewusst)"
+    },
+    {
+      "id": "N-2",
+      "thema": "Kein Widerruf/Push; Ende nur Ablauf/Wechsel/Prüfung"
+    },
+    {
+      "id": "N-3",
+      "thema": "Keine Persistenz (bewusst)"
+    },
+    {
+      "id": "N-4",
+      "thema": "Route ungetestet (Bound/400/to_thread/management)"
+    },
+    {
+      "id": "N-5",
+      "thema": "Keine Endpoint-Auth/fremde Freigabe (bewusst)"
+    },
+    {
+      "id": "N-6",
+      "thema": "Keine In-Flight-Dedup (nur gepflegt)"
+    }
+  ],
+  "researcher_session": "ses_e4211d30bffeboS3Bg446kbyN0",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-1",
+      "thema": "Provider-Semantik nicht Vertrag"
+    },
+    {
+      "id": "U-2",
+      "thema": "Bestrafung paralleler Verbindungen unbelegt"
+    },
+    {
+      "id": "U-3",
+      "thema": "DNS/TLS-Klassen nicht klassifiziert"
+    },
+    {
+      "id": "U-4",
+      "thema": "Branch nicht verifizierbar"
+    }
+  ],
+  "writer_notes": "Sicherheitsgrenze, nicht Admin-Kapitel. Exakte Strings, keine Retries/Backoffs/Header/Persistenz erfinden. Zeitachse bind->begin->Netz->apply; 60-s-Obergrenze; Modellbindung/Generationen; forceCommunity kein Auth-Schalter; Admin-Recheck mit Bound."
+}

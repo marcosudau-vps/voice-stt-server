@@ -1,0 +1,278 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (keine Refs, shallow). Nur Commit a8993c5c68042d996eab680d84a5b138a214bb5d bindend.",
+  "chapter": "06.12",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached); FETCH_HEAD/shallow gleicher SHA.",
+  "conflicts": [
+    {
+      "id": "C6-01",
+      "thema": "CUDA-Befund nur via cpu_only/Build-Log, nicht Serverlauf (still-Überschreibung + Recorder-Warnung)."
+    },
+    {
+      "id": "C6-02",
+      "thema": "Compose nennt dist/voicestt + dist/kroko; Dockerfile nur dist/voicestt (Test verbietet COPY dist/kroko); Produkt-Wheel zählt."
+    },
+    {
+      "id": "C6-03",
+      "thema": "CLI --device cuda still→cpu vs YAML SystemExit (gleiches Fehlverhalten, ungleiche Reaktion)."
+    },
+    {
+      "id": "C6-04",
+      "thema": "Container grün (200) ≠ Inferenzbereit; sttReady/startupErrors separat (F6-26)."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [
+    "Start/Install -> Torch-CPU-Check (F6-01) -> dist/Wheel (F6-02) -> YAML (F6-03) -> Prozess",
+    "Prozess -> Pakete (F6-04) -> App",
+    "App -> Session (use_microphone False; F6-07)",
+    "Session -> AudioQueue 128 (F6-08) -> VAD/Recorder",
+    "Session -> 30s (F6-09) -> ForceFinalize -> flush -> Warnung|still",
+    "Final-Lane -> recorded_queue 8 (F6-10) -> Trim -> discarded",
+    "Modell -> lokal? nein -> TranscriptionEngineError (F6-12)",
+    "Modell -> Provisioning? nein -> blocked_ineligible (F6-13)",
+    "Provisioning -> Lock/Temp/Verify/SHA -> atomar (F6-14)",
+    "Settings -> CPU-Policy/Kroko-Identität -> ValueError (F6-15/16)",
+    "Worker-Init -> load_error -> worker.failed -> startupErrors -> ok:false (F6-17/26)",
+    "Admin -> 401/403/frei (F6-19); OpenAI -> offen/401/404 (F6-20)",
+    "hello -> Token -> /api/logs 200/401, /ws/logs 1008/1011 (F6-21/22)",
+    "Submit -> Queue accepted|voll->overloaded->500 (F6-23)",
+    "realtime -> coalesced|stale Zähler (F6-24)",
+    "Worker -> ok|Exception->failedJobs->terminal (F6-25)",
+    "admit -> None -> 1013 session_limit (F6-27)"
+  ],
+  "facts": [
+    {
+      "aussage": "CUDA-statt-CPU: Build bricht (Exit 1); Laufzeit erkennt nicht (setzt cpu still, nur Recorder-Warnung). Prüfung cpu_only check (Exit 1+JSON); Behebung CPU-Index + Constraint; is_available=False kein Beweis.",
+      "beleg": "Dockerfile Z.28-40; cpu_only.py Z.20-21/40-162; server.py Z.8704-8707/8767; initialization.py Z.437-443.",
+      "evidenz": "A",
+      "gueltigkeit": "CPU-Produkt (C6-01)",
+      "id": "F6-01"
+    },
+    {
+      "aussage": "dist/ fehlt: COPY scheitert (lstat/BuildError eine Wheel); Prüfung genau eine dist/voicestt/*.whl + --dist-dir=root/dist; Behebung build_production.py pro|all oder VOICESTT_IMAGE ohne --build.",
+      "beleg": "Dockerfile Z.23; compose Z.8-12; build_production.py Z.459-529.",
+      "evidenz": "A",
+      "gueltigkeit": "Production-Image (C6-02)",
+      "id": "F6-02"
+    },
+    {
+      "aussage": "YAML-Fehler alle SystemExit deutsch: fehlt/PyYAML/Syntax/Objekt/version≠1/kein-settings/Secrets (admin/openai→Env)/abgeleitet/unbekannt/Typ/Device≠cpu/Profil. Prüfung version 1 + settings + ServerSettings-Felder; CLI>YAML.",
+      "beleg": "server.py Z.10301-10302/10333-10391/10406-10407.",
+      "evidenz": "A",
+      "gueltigkeit": "CLI-Start (nicht create_app)",
+      "id": "F6-03"
+    },
+    {
+      "aussage": "Pakete fehlen: FastAPI→RuntimeError requirements-Hinweis; uvicorn→RuntimeError; faster-whisper→TranscriptionEngineError Install-Hinweis; PyAudio→ModuleNotFoundError (Worker: Funktions-Import); Nachinstaller y/n→exit 1.",
+      "beleg": "server.py Z.8804-8813/10822-10828; faster_whisper_engine.py Z.20-28; audio_input.py Z.7; worker Z.38; install_packages.py Z.29-55.",
+      "evidenz": "A",
+      "gueltigkeit": "Produkt (4 nur Mikrofon)",
+      "id": "F6-04"
+    },
+    {
+      "aussage": "Python: Public exakt 3.12 (Resolver-Ablehnung sonst); Kroko-Builder prüft (Klartext 3.12 x64). Prüfung python --version 3.12.x; Container python3.12. Legacy ≥3.11.",
+      "beleg": "setup.py Z.37-43/378-380; Dockerfile Z.14/18/98; install_kroko.py Z.1393-1414.",
+      "evidenz": "A",
+      "gueltigkeit": "Public (Legacy abweichend)",
+      "id": "F6-05"
+    },
+    {
+      "aussage": "VAD-Backend fehlt: Sammelfehler listet Versuche; Modell-fehlt-Hinweis; falsche Rate/Chunk-Hinweis; CUDA→CPU-only-Hinweis. Auto ONNX-ifless→ONNX→PyTorch-CPU.",
+      "beleg": "silero_vad.py Z.105-128/196-231.",
+      "evidenz": "A",
+      "gueltigkeit": "Recorder/VAD",
+      "id": "F6-06"
+    },
+    {
+      "aussage": "Kein Gerät/PyAudio: No input/working devices; Retry-Loop 3s (kein Abbruch); Setup-Fail → Exception; Overflow nur Warnung; Reinit-Fail → Exiting. Prüfung Logs/Geräteindex. Server öffnet kein Mikro (use_microphone False) → Server-Fehler = Client-Thema.",
+      "beleg": "audio_input_worker.py Z.108-325; server.py Z.2753.",
+      "evidenz": "A",
+      "gueltigkeit": "nur Mikrofonbetrieb",
+      "id": "F6-07"
+    },
+    {
+      "aussage": "Kein Sample-Trim: 128 = Queue-Limit; Rückstau → älteste Chunks weg + Warnung (while qsize>limit get). Prüfung size vs 128 (Test 7); Behebung --audio-queue-size/ Ursache. Senken = mehr Verwurf.",
+      "beleg": "recording.py Z.191-210; server.py Z.448/2816-2817; Tests L1208-1222.",
+      "evidenz": "B",
+      "gueltigkeit": "Server+Recorder",
+      "id": "F6-08"
+    },
+    {
+      "aussage": "30s-Grenze: ForceFinalize + Warnung + forcedFinalizations (Schwelle×Rate, ≤0 aus). Falle: flush False (keine Frames/|<50|) → kein Warnung/Zähler, count=0 (still/leer). Zweig: chunk-callback vs enforce (nur ohne callback).",
+      "beleg": "server.py Z.489/6011-6085; recording_buffers.py Z.112-133; Tests L1235-1264.",
+      "evidenz": "B",
+      "gueltigkeit": "Session",
+      "id": "F6-09"
+    },
+    {
+      "aussage": "recorded-Trim >8: Warnung + droppedRecordedSegments/finalRejected; Ledger discarded/recorded_audio_queue_trimmed. Prüfung metrics + pendingSegmentCount 0. Behebung Limit+/Entlastung.",
+      "beleg": "server.py Z.492/6087-6130; Tests.",
+      "evidenz": "B",
+      "gueltigkeit": "final Lane",
+      "id": "F6-10"
+    },
+    {
+      "aussage": "Wake-Schnitt nur bei WakeAudioBoundary (isinstance, release_sample; Debug-Zeile) sonst Legacy-Dauer; Pre-Roll nur wenn enabled (min_silence 200/guard 160/max_gap 80/min_included 600). Erste-Silbe-fehlt → Buffer-Dauern prüfen (pre 0.75s/wake), nicht Trim deaktivieren.",
+      "beleg": "wake_audio_boundary.py Z.142-174; recording.py Z.404-450; voice_activity.py Z.250-308; server.py Z.490/2815.",
+      "evidenz": "A",
+      "gueltigkeit": "Wake-Recorder",
+      "id": "F6-11"
+    },
+    {
+      "aussage": "Cold Start ohne Modell: Engine darf nicht downloaden (Offline-Meldung + Checked-Pfade faster/kroko). Prüfung /health sttReady + diagnostics (configured_default_missing + Scope); Behebung POST /api/models/refresh nach Freigabe oder mounts; OFFLINE-Schalter hart. sttReady=false ≠ ok=false.",
+      "beleg": "model_resolver.py Z.23-155; faster_whisper L47-63; Dockerfile Z.65-67/101-102; server.py Z.8901; stt_model_management L976-987; Tests L893-895.",
+      "evidenz": "B",
+      "gueltigkeit": "beide Engines",
+      "id": "F6-12"
+    },
+    {
+      "aussage": "Whisper nie provisionierbar (LOCAL_ONLY_UNPINNED); Kroko nur redistributable+source+sha+bytes → Diagnose blocked_ineligible (+calls []). Prüfung authority/provisioningAllowed/rightsStatus/lastRefreshDiagnostics. Behebung Whisper lokal (config.json+model.bin).",
+      "beleg": "stt_model_management.py Z.346-483/1253-1264; Tests.",
+      "evidenz": "B",
+      "gueltigkeit": "Rechte-Gate (Code)",
+      "id": "F6-13"
+    },
+    {
+      "aussage": "Provisionierung: Lock/Ziel; vorhandene verifizierte wiederverwendet; .part immer weg; bytes+SHA; Fehler PermissionError/OSError/ValueError(Identität/Inhalt). Tests: kein Rest/Alt-bleibt/einmal-bei-parallel. Behebung Ursprung/Revision/Rechte/Platz; keine halben Dateien.",
+      "beleg": "stt_model_management.py Z.40-43/546-625; Tests L505-554.",
+      "evidenz": "B",
+      "gueltigkeit": "provisionierbare Produkte",
+      "id": "F6-14"
+    },
+    {
+      "aussage": "Kroko ein Modell/Prozess: 4 Codes (concurrent kein Neustart/Freigabe; pro-Wechsel Neustart; key-Wechsel Neustart; pro-ohne-key Key-setzen). Settings-Vorab ValueError zwei Modelle; Status krokoRuntime/krokoLicense + Guard (liveNative/active/confirmed/uuid, ohne Key/Pfad); Community nie Pro-blockiert. Wechsel: unify/use_main oder unload (belegt→Ablehnungstext), Pro/Key→Neustart.",
+      "beleg": "native_guard.py Z.28-252; kroko_runtime.py Z.54-73; server.py Z.6975-6981/7029-7042.",
+      "evidenz": "A",
+      "gueltigkeit": "nur kroko_onnx",
+      "id": "F6-15"
+    },
+    {
+      "aussage": "Policy vor Engine-Import: ValueError lange deutsch-Meldung; Ränge large 4/medium+turbo-Familie 3/small 2/base-tiny 1/kroko 2; Ablehnung max>3 oder medium-Anzahl>Limit (2/1); unbekannte Engine→Unsupported-Meldung. Prüfung POST /api/config/validate 400 valid:false. Behebung use-main/kleinere/Policy-aus-bewusst.",
+      "beleg": "server.py Z.8711-8801/8843/9858-9868; factory.py Z.39-47.",
+      "evidenz": "A",
+      "gueltigkeit": "Start+Validierung",
+      "id": "F6-16"
+    },
+    {
+      "aussage": "startupErrors: load_error→worker.failed+append; /health ok:false/ready-evtl-true + Liste; Log Init-Fehler. Prüfung /health ok/startupErrors/scheduler-workers + /api/metrics; Ursache error-Text. Behebung Ursache + POST /api/models/load/Neustart; healthy false bis load_error weg. ready≠Gesundheit.",
+      "beleg": "server.py Z.1942-2029/2161-2178/8543-8545/7699/8903/9075-9081/10019-10020.",
+      "evidenz": "A",
+      "gueltigkeit": "Server (beide Lanes)",
+      "id": "F6-17"
+    },
+    {
+      "aussage": "Refresh: 409 {error redigiert}; Klartext letzter-guter-Stand/no-candidate. Prüfung /api/models/management refreshRequired + lastRefreshDiagnostics; minimumReady bleibt alt. Behebung Ursache (variant/license/blocked/failed) → erneut.",
+      "beleg": "server.py Z.7029-7047/7065-7110/8966-8977; stt_model_management Z.810-903.",
+      "evidenz": "A",
+      "gueltigkeit": "Admin-Pfad",
+      "id": "F6-18"
+    },
+    {
+      "aussage": "Admin: Key+falsch/fehlend→401+Auth; kein Key+remote→403 (Remote-deaktiviert); kein Key+Loopback/testclient→frei. Präzedenz X-VoiceSTT>Bearer>X-Admin (falsch dort 401 trotz Bearer). Prüfung /api/config adminAuthRequired; Key live/ Rotation sofort.",
+      "beleg": "admin.py Z.8-46; service.py Z.21-25; server.py Z.8915; Tests.",
+      "evidenz": "B",
+      "gueltigkeit": "alle Admin-Routen",
+      "id": "F6-19"
+    },
+    {
+      "aussage": "OpenAI: kein Key→offen (200 ohne Auth; Nachweis fehlendes Setting); falsch→401 invalid_api_key+Auth+Audit authentication.failed+transcription.rejected; aus→404 deaktiviert+rejected api_disabled. Prüfung curl/Audit/Body-ohne-Key.",
+      "beleg": "openai.py Z.14-35; server.py Z.506-507/9894-9897; openai_routes.py Z.93-115/588-617; Tests Z.66-94.",
+      "evidenz": "B",
+      "gueltigkeit": "/v1/*",
+      "id": "F6-20"
+    },
+    {
+      "aussage": "Log-Token 24h/sitzungsgebunden/nur-hello: /api/logs ohne Scope→401; fremde Session→None; Ablauf→None+Löschung (Sweep>1024); Admin/Loopback-HTTP→admin-alle; WS-kein-Loopback-Admin; /ws/logs falsch→not_authorized+1008, live-aus→log_live_disabled+1008, Store-weg→unavailable+1011. Behebung Token-aus-hello selbe Sitzung (X-VoiceSTT-Log-Token/subscribe); kein Nachhol-Endpunkt.",
+      "beleg": "logs.py Z.9-93; server.py Z.7772-7809/9467-9472/9560-9602/10001-10014; Tests Z.97-130.",
+      "evidenz": "B",
+      "gueltigkeit": "alle Log-Flächen",
+      "id": "F6-21"
+    },
+    {
+      "aussage": "Store weg: ok:false + degraded + lastErrorType; Logs 503; Control event_store_unavailable. Read heilt Write nicht; nur Append→ready. Prüfung /health eventStore. Behebung Pfad/Rechte sqlite; live-aus entkoppelt (Verdeckung).",
+      "beleg": "event_logging.py Z.1100-1292; server.py Z.526/8889-8905/9487-9526.",
+      "evidenz": "A",
+      "gueltigkeit": "live-an (Kontrollfläche)",
+      "id": "F6-22"
+    },
+    {
+      "aussage": "Queue-voll→overloaded (nur reason~voll) + queue.limit_reached (lane/IDs); HTTP 500 transcription_failed (RuntimeError). Prüfung /api/metrics queued/rejectedJobs/perSession + limits 8/64. Behebung Limits+/Entlastung; final nie coalesced.",
+      "beleg": "server.py Z.1771-1818/1898-1915/7458-7526/7702-7711/8362-8413; openai_routes.py Z.613-617.",
+      "evidenz": "A",
+      "gueltigkeit": "beide Lanes (fragil deutsch)",
+      "id": "F6-23"
+    },
+    {
+      "aussage": "Realtime unsichtbar: neu ersetzt alt (coalesced), zu alt → stale (1500ms, kein Rechnen). Nur Zähler (coalescedRealtime/staleRealtimeDropped + Session) kein Client-Fehler. Prüfung Queues/Session-Zähler. Behebung age+/Entlastung/use_main prüfen. Tests Coalescing/Stale.",
+      "beleg": "server.py Z.1799-1874/1912-1913/2125-2129/3050-3124/8298-8302; Tests L630-677.",
+      "evidenz": "B",
+      "gueltigkeit": "Realtime (final nie)",
+      "id": "F6-24"
+    },
+    {
+      "aussage": "Worker-Exception: failedJobs++/error/Log; Event final_transcript_failed; HTTP 500; einmal terminal (kein zweites Terminal, pending 0); Ursache error-Text (Engine/Audio/Speicher). Prüfung workers.failedJobs + transcription-Channel. Behebung error auswerten; kein Retry (neu senden).",
+      "beleg": "server.py Z.2042-2064/3080-3091/6044-6111/8613-8627; Tests L742-799.",
+      "evidenz": "B",
+      "gueltigkeit": "beide Lanes",
+      "id": "F6-25"
+    },
+    {
+      "aussage": "ok:false genau 3 Ursachen: ready-nicht-gesetzt (Start/Ready-Block), Scheduler-ungesund (load_error), live-an+Store-nicht-ready. Prüfung ready→workers.healthy→eventStore.available + startupErrors. sttReady-false allein ≠ ok-false; Docker-Health nur 200.",
+      "beleg": "server.py Z.2173-2178/7285-8545/7685-7700/8885-8905; Dockerfile Z.88-96; compose Z.83-90; Tests L893-895.",
+      "evidenz": "B",
+      "gueltigkeit": "Kontrollfläche",
+      "id": "F6-26"
+    },
+    {
+      "aussage": "Admission: reserve-fehl → WS-error admission + limits + Close 1013 + Audit session_limit/reason; Speaker-Limit separat (try_activate false, kein Close). Prüfung /api/config limits + /api/metrics rejected/pending. Behebung Limits+/schließen.",
+      "beleg": "server.py Z.6201-6234/7702-7711/7349-7350/9970-9986.",
+      "evidenz": "A",
+      "gueltigkeit": "WS-Admission (nicht HTTP)",
+      "id": "F6-27"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N6-01",
+      "thema": "128-Sample-Trim existiert nicht (nur Queue-Limit 128 u.a. 128x-Vorkommen)."
+    },
+    {
+      "id": "N6-02",
+      "thema": "degradation_threshold nur deklariert/exportiert, keine QoS-Logik."
+    },
+    {
+      "id": "N6-03",
+      "thema": "min/max_audio_seconds nur Settings/CLI, kein Server-Konsument."
+    },
+    {
+      "id": "N6-04",
+      "thema": "Kein Log-Token-Nachhol-Endpunkt (nur hello)."
+    },
+    {
+      "id": "N6-05",
+      "thema": "Kein Inferenz-Retry/Requeue; kein Faster-Whisper-Auto-Download."
+    }
+  ],
+  "researcher_session": "ses_e3da40847ffePjJxtqP11gtanr",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U6-01",
+      "thema": "Branch (shallow, bindend Commit)."
+    },
+    {
+      "id": "U6-02",
+      "thema": "Recorder-Nutzung min/max-Felder unbelegt."
+    },
+    {
+      "id": "U6-03",
+      "thema": "lstat-Meldung nur Docstring-beobachtet, kein Test."
+    },
+    {
+      "id": "U6-04",
+      "thema": "Windows-PortAudio-Fehlerformen unspezifiziert."
+    }
+  ],
+  "writer_notes": "Nicht duplizieren: Queues/Coalescing/Session/Ledger/Wake/Handshake/Lizenz (nur Prüfschritt). Vorausgesetzt: FairInference, Kroko-Codes, Health, 30s/Trim. Kein Widerspruch Tests/Code. Offen N/U: keine Heilversprechen/Timeouts. 27 Fakten, je Klasse ≥3 Symptom→Prüfung→Behebung. NOT_REQUESTED, edges Bauplan."
+}

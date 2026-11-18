@@ -1,0 +1,396 @@
+{
+  "branch_note": "feat/v2-release-cleanup nicht verifizierbar (HEAD detached); nur Commit gilt.",
+  "chapter": "08.05",
+  "commit_verification": ".git/HEAD enthaelt Commit-Hash direkt (detached HEAD) -> Commit bindend bestaetigt.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "OPEN_WINDOW_PHASES (3) vs OPEN_INPUT_PHASES (4): Name aehnlich, Bedeutung verschieden."
+    },
+    {
+      "id": "C2",
+      "thema": "INACTIVE (Domain-Alias idle) vs Recorder inactive: gleiches Wort, zwei Maschinen."
+    },
+    {
+      "id": "C3",
+      "thema": "5 Foreground-Phasen vs 5 wakeWord.state-Labels nicht ueberlagern."
+    },
+    {
+      "id": "C4",
+      "thema": "refresh in closing_input accepted=false/closing_input, finish/cancel accepted=true/no_change, beide ohne Wechsel."
+    },
+    {
+      "id": "C5",
+      "thema": "27 offene Domain-Reasons vs 15 geschlossene Wire-Codes nie gleichsetzen."
+    },
+    {
+      "id": "C6",
+      "thema": "4 Segment-Terminals vs 3 Aktivierungs-Terminals (discarded nur Segment)."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [
+    "A Activation: idle->waiting_first_speech [ZS8-04]; waiting|followup->segment_active [ZS8-05]; segment_active->followup_wait [ZS8-06]; Nicht-Idle->closing_input via finish/cancel [ZS8-07], audio_unavailable [ZS8-08], Timeouts [ZS8-09]; closing_input->idle via input_closed [ZS8-10]; reset->idle [ZS8-11]; kein finalizing [ZS8-01/02]",
+    "B Gate: closed->open(id,generation) [ZS8-17]; open->open (No-op/replace neuerer) [ZS8-17]; open->closed (close/abort) [ZS8-17]; closed|open->shutdown [ZS8-17]",
+    "C Recorder: inactive->listening|wakeword [ZS8-16]; wakeword->listening|inactive [ZS8-16]; listening->recording [ZS8-16/17]; recording->transcribing [ZS8-16]; transcribing->recording|inactive [ZS8-16]; X->X No-op [ZS8-15]",
+    "D Ledger-Segmente: pending/draining->completed|discarded|cancelled|failed, ohne Rueckweg [ZS8-18]",
+    "E Ledger-Aktivierungen: kein Record->open [ZS8-19]; open->input_closed [ZS8-19]; input_closed->completed|cancelled|failed (terminal+drained, failed>cancelled>completed) [ZS8-19]",
+    "F Wake: unlatched->latched via accept [ZS8-20]; latched->unlatched via release/new_generation [ZS8-20]; veraltet/Latch => inert [ZS8-20/21]",
+    "G Modell: DISCOVERED->VALIDATED [ZS8-22]; DISCOVERED->DISCOVERED bei Problemen [ZS8-22]; VALIDATED->LOAD_VERIFIED|VALIDATED [ZS8-22]; refresh neu [ZS8-22]",
+    "H Lizenz: NOT_CHECKED->CHECKING (nur Key, ohne force) [ZS8-24]; CHECKING->VALID|INVALID|CHECK_FAILED [ZS8-24]; VALID->CHECK_FAILED Ablauf [ZS8-24]; bind->NOT_CHECKED [ZS8-24]",
+    "I Verbindung: pre_hello->accepted [ZS8-25]; pre_hello->closed (4400/4406/4408/4409) [ZS8-25]; accepted->closed [ZS8-25]; Binaer vor Accept->4400 [ZS8-25]",
+    "J Session-Registry (Vorbehalt): unbekannt->reserved->active->removed [ZS8-26]"
+  ],
+  "facts": [
+    {
+      "aussage": "Controller startet _phase=IDLE; genau 5 Phasen; INACTIVE Alias auf IDLE, kein 6. Wert.",
+      "beleg": "activation.py:65-73,256",
+      "evidenz": "A",
+      "gueltigkeit": "Domain, 1/Session",
+      "id": "ZS8-01"
+    },
+    {
+      "aussage": "schema.INPUT_PHASES spiegelt 5 Phasen; unbekannte Phase klemmt auf idle.",
+      "beleg": "schema.py:85-102; snapshot.py:97-99",
+      "evidenz": "A",
+      "gueltigkeit": "v2-Wire",
+      "id": "ZS8-02"
+    },
+    {
+      "aussage": "OPEN_WINDOW 3 (ohne closing) vs OPEN_INPUT 4; closeRequested = phase==closing_input.",
+      "beleg": "activation.py:75-78; schema.py:100-102; snapshot.py:122",
+      "evidenz": "A",
+      "gueltigkeit": "Domain vs Wire",
+      "id": "ZS8-03"
+    },
+    {
+      "aussage": "activate: Guards source/IDLE/enabled/id-None; dann waiting_first_speech, seq+1, version+1, initial-Timer.",
+      "beleg": "activation.py:464-509",
+      "evidenz": "A",
+      "gueltigkeit": "Domain",
+      "id": "ZS8-04"
+    },
+    {
+      "aussage": "recording_started: waiting|followup -> segment_active; in segment_active already_recording ohne Watchdog-Reset.",
+      "beleg": "activation.py:572-596",
+      "evidenz": "A",
+      "gueltigkeit": "Domain",
+      "id": "ZS8-05"
+    },
+    {
+      "aussage": "recording_ended: segment_active -> followup_wait; in closing accepted input_closing ohne Wechsel; sonst not_active.",
+      "beleg": "activation.py:598-616",
+      "evidenz": "A",
+      "gueltigkeit": "Domain",
+      "id": "ZS8-06"
+    },
+    {
+      "aussage": "finish/cancel -> closing_input via CloseContext (finished/cancelled); dort idempotent no_change; Guards invalid/not_active/stale.",
+      "beleg": "activation.py:618-700",
+      "evidenz": "A",
+      "gueltigkeit": "Domain, quellneutral",
+      "id": "ZS8-07"
+    },
+    {
+      "aussage": "audio_unavailable: jede Nicht-Idle-Phase -> closing_input (cancelled/audio_unavailable), nicht korreliert; IDLE not_active.",
+      "beleg": "activation.py:702-720",
+      "evidenz": "A",
+      "gueltigkeit": "Domain",
+      "id": "ZS8-08"
+    },
+    {
+      "aussage": "tick: Token (6 Felder) exakt sonst stale_timer; Warning ohne Wechsel; recovery bleibt closing, Timeouts schliessen.",
+      "beleg": "activation.py:127-143,746-817",
+      "evidenz": "A",
+      "gueltigkeit": "Domain, monoton",
+      "id": "ZS8-09"
+    },
+    {
+      "aussage": "closing_input -> idle nur via input_closed mit passender id+sequence; Mismatch stale ohne Touch.",
+      "beleg": "activation.py:722-742",
+      "evidenz": "A",
+      "gueltigkeit": "Domain",
+      "id": "ZS8-10"
+    },
+    {
+      "aussage": "reset: IDLE already_idle, sonst clear -> idle; sequence bleibt (nur Aufnahme erhoeht).",
+      "beleg": "activation.py:819-866",
+      "evidenz": "A",
+      "gueltigkeit": "Domain",
+      "id": "ZS8-11"
+    },
+    {
+      "aussage": "sequence nur Aufnahme; version nur effektiv; timerRevision nur Timer-Setzen/Loeschen; token je Segmentstart.",
+      "beleg": "activation.py:245-263,356-384,493,586",
+      "evidenz": "A",
+      "gueltigkeit": "Domain",
+      "id": "ZS8-12"
+    },
+    {
+      "aussage": "27 Decision-Reasons: 23 Literale + finished/cancelled/timed_out/watchdog_timeout via Variable; str kein Enum.",
+      "beleg": "activation.py:146-151,620,631,790-798",
+      "evidenz": "B",
+      "gueltigkeit": "Domain-intern",
+      "id": "ZS8-13"
+    },
+    {
+      "aussage": "DOMAIN 26 -> 15 Codes, NON_COMMAND 10; timed_out + watchdog_timeout in keiner Tabelle (Testregex blind).",
+      "beleg": "commands.py:211-263; test_protocol_v2_contract.py:505-536",
+      "evidenz": "B",
+      "gueltigkeit": "v2-Ack",
+      "id": "ZS8-14"
+    },
+    {
+      "aussage": "set_recorder_state: 5 Zustaende, No-op bei Gleichheit; Alt/New-Callbacks + Spinner je Zustand.",
+      "beleg": "state.py:24-71",
+      "evidenz": "A",
+      "gueltigkeit": "Recorder",
+      "id": "ZS8-15"
+    },
+    {
+      "aussage": "Recorder-Zustaende an 3 Orten: Worker-Herleitung, lifecycle, transcription_api (transcribing->recording|inactive).",
+      "beleg": "recording.py:270-285; lifecycle.py:37,147,222,257; transcription_api.py:52,62-69",
+      "evidenz": "B",
+      "gueltigkeit": "Recorder",
+      "id": "ZS8-16"
+    },
+    {
+      "aussage": "Gate closed|open(id,generation)|shutdown; Guards controlled/Monotonie/Ownership/replace; shutdown sperrt.",
+      "beleg": "activation_control.py:70-217",
+      "evidenz": "A",
+      "gueltigkeit": "Recorder",
+      "id": "ZS8-17"
+    },
+    {
+      "aussage": "Ledger-Segment pending/draining -> completed (Drain), discarded (leer), cancelled (Barriere), failed; completed verweigert.",
+      "beleg": "segment_ledger.py:113-118,316-373,490-510",
+      "evidenz": "A",
+      "gueltigkeit": "pro Session",
+      "id": "ZS8-18"
+    },
+    {
+      "aussage": "Ledger-Aktivierung open -> input_closed -> terminal (alle Segmente terminal+drained; failed>cancelled>completed).",
+      "beleg": "segment_ledger.py:121-130,512-553",
+      "evidenz": "A",
+      "gueltigkeit": "pro Session",
+      "id": "ZS8-19"
+    },
+    {
+      "aussage": "Wake-Latch binaer: accept setzt latched(id), process dann nichts; release/new_generation loesen; Generation Stale-Kriterium.",
+      "beleg": "wake_detection.py:558,614-633,650-675,704-759",
+      "evidenz": "B",
+      "gueltigkeit": "pro Session",
+      "id": "ZS8-20"
+    },
+    {
+      "aussage": "LogicalWakeEvent delivered/attempts, Mint exactly-once je id; falsche Generation/Latch verwirft Hit.",
+      "beleg": "wake_admission.py:108-204,248-312",
+      "evidenz": "B",
+      "gueltigkeit": "pro Session",
+      "id": "ZS8-21"
+    },
+    {
+      "aussage": "Modell DISCOVERED->VALIDATED->LOAD_VERIFIED; Probe-Fehler bleibt VALIDATED+problems; refresh baut neu.",
+      "beleg": "stt_model_management.py:27-31,477-489,529-541,925-959",
+      "evidenz": "B",
+      "gueltigkeit": "Modellverwaltung",
+      "id": "ZS8-22"
+    },
+    {
+      "aussage": "Readyness MINIMUM|NOT_READY + optional complete|provisioning|errors => 4 oeffentlich (ready_complete, ready_optional_*, not_ready).",
+      "beleg": "stt_model_management.py:305-340",
+      "evidenz": "A",
+      "gueltigkeit": "Admin/Health",
+      "id": "ZS8-23"
+    },
+    {
+      "aussage": "Kroko NOT_CHECKED->CHECKING->VALID|INVALID|CHECK_FAILED; apply nur Token+uuid; VALID->CHECK_FAILED bei Ablauf.",
+      "beleg": "license_state.py:29-107",
+      "evidenz": "A",
+      "gueltigkeit": "modellgebunden",
+      "id": "ZS8-24"
+    },
+    {
+      "aussage": "Verbindung implizit pre_hello/accepted/closed; Binaer vor Accept 4400; Codes 4400/4406/4408/4409/1011.",
+      "beleg": "connection.py:56-198; schema.py:202-209",
+      "evidenz": "B",
+      "gueltigkeit": "v2-Transport",
+      "id": "ZS8-25"
+    },
+    {
+      "aussage": "SessionStore unbekannt->reserved->active->removed; kein Phasen-Enum, kein sessionState im Snapshot.",
+      "beleg": "server.py:6133-6238; snapshot.py:60-78",
+      "evidenz": "B",
+      "gueltigkeit": "Registry",
+      "id": "ZS8-26"
+    },
+    {
+      "aussage": "Scheduler Lanes main/realtime (shared bei use_main), final-Deque + 1 realtime-Slot; Drops coalesced/stale/cancelled; kein Job-Status.",
+      "beleg": "server.py:1756-1940,2111-2204",
+      "evidenz": "B",
+      "gueltigkeit": "Inferenz",
+      "id": "ZS8-27"
+    },
+    {
+      "aussage": "v1 wakeWord.state 5 Labels ohne Validierung (waiting, wait_ended, detected_waiting, timeout, recording).",
+      "beleg": "server.py:1410-1496",
+      "evidenz": "B",
+      "gueltigkeit": "v1-Telemetrie",
+      "id": "ZS8-28"
+    },
+    {
+      "aussage": "shutdown_recorder idempotent (is_shut_down vor Abbau); kein Rueckweg.",
+      "beleg": "shutdown.py:12-30",
+      "evidenz": "B",
+      "gueltigkeit": "Recorder-Ende",
+      "id": "ZS8-29"
+    },
+    {
+      "aussage": "Vor recording_started vergleicht Server Gate-Token (id,generation) mit Aktivierung; Mismatch keine Aufnahme.",
+      "beleg": "server.py:5335-5357",
+      "evidenz": "B",
+      "gueltigkeit": "Recorder-Controller",
+      "id": "ZS8-30"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Kein Session-Phasen-Enum, kein sessionState im Snapshot."
+    },
+    {
+      "id": "N2",
+      "thema": "Keine Phase finalizing/completed; finale Transkription keine Phase."
+    },
+    {
+      "id": "N3",
+      "thema": "Kein Job-Status/keine Job-Maschine, nur Slots + Drops."
+    },
+    {
+      "id": "N4",
+      "thema": "Keine zentrale Uebergangstabelle/Guards Recorder (5 implizit)."
+    },
+    {
+      "id": "N5",
+      "thema": "Keine Validierung wakeWord.state-Folgen (v1)."
+    }
+  ],
+  "researcher_session": "ses_e36a1c5f2ffeDm64ecTujb9nnX",
+  "solver_notes": [
+    {
+      "id": "S1",
+      "thema": "Foreground-Phasen 5",
+      "werte": "idle, waiting_first_speech, segment_active, followup_wait, closing_input",
+      "zaehlung": 5
+    },
+    {
+      "id": "S2",
+      "thema": "Wire-Tupel 5",
+      "werte": "INPUT_PHASES identisch",
+      "zaehlung": 5
+    },
+    {
+      "id": "S3",
+      "thema": "offen 3 und 4",
+      "werte": "WINDOW 3 ohne closing; INPUT 4 mit",
+      "zaehlung": "3/4"
+    },
+    {
+      "id": "S4",
+      "thema": "Deadlines 4",
+      "werte": "initial 15.0, followup 3.0, watchdog 600/180/30, recovery 5.0",
+      "zaehlung": 4
+    },
+    {
+      "id": "S5",
+      "thema": "Aktionen/Quellen 4/3/2",
+      "werte": "activate/refresh/finish/cancel; manual/wake_word",
+      "zaehlung": "4/3/2"
+    },
+    {
+      "id": "S6",
+      "thema": "Results 15/2",
+      "werte": "15 Codes, accepted applied/no_change",
+      "zaehlung": "15/2"
+    },
+    {
+      "id": "S7",
+      "thema": "Projektion 26+10",
+      "werte": "DOMAIN 26, NON_COMMAND 10",
+      "zaehlung": "26+10"
+    },
+    {
+      "id": "S8",
+      "thema": "Recorder 5",
+      "werte": "inactive/wakeword/listening/recording/transcribing",
+      "zaehlung": 5
+    },
+    {
+      "id": "S9",
+      "thema": "Gate-Policies 2",
+      "werte": "legacy/controlled",
+      "zaehlung": 2
+    },
+    {
+      "id": "S10",
+      "thema": "Ledger-Terminals 4/3",
+      "werte": "Segmente 4, Aktivierungen 3",
+      "zaehlung": "4/3"
+    },
+    {
+      "id": "S11",
+      "thema": "Kroko 5",
+      "werte": "NOT_CHECKED/CHECKING/VALID/INVALID/CHECK_FAILED",
+      "zaehlung": 5
+    },
+    {
+      "id": "S12",
+      "thema": "Modell 3+2+3",
+      "werte": "DISCOVERED/VALIDATED/LOAD_VERIFIED; ready 2; optional 3",
+      "zaehlung": "3/2/3"
+    },
+    {
+      "id": "S13",
+      "thema": "Verbindung 3+5",
+      "werte": "pre_hello/accepted/closed; 4400/4406/4408/4409/1011; 10.0s",
+      "zaehlung": "3/5"
+    },
+    {
+      "id": "S14",
+      "thema": "Scheduler 2/2/3",
+      "werte": "Lanes main/realtime; kinds final/realtime; Drops 3",
+      "zaehlung": "2/2/3"
+    },
+    {
+      "id": "S15",
+      "thema": "wakeWord.state 5",
+      "werte": "waiting/wait_ended/detected_waiting/timeout/recording",
+      "zaehlung": 5
+    }
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Branch nicht verifizierbar (detached HEAD)."
+    },
+    {
+      "id": "U2",
+      "thema": "Ob recover_closing version bewusst nicht erhoeht, unentscheidbar."
+    },
+    {
+      "id": "U3",
+      "thema": "Ob timed_out/watchdog_timeout absichtlich fehlt, unentscheidbar."
+    },
+    {
+      "id": "U4",
+      "thema": "Ob LOAD_VERIFIED ueber refresh gilt, unspezifiziert."
+    },
+    {
+      "id": "U5",
+      "thema": "Reale Timeout-Werte Installation 05.x; hier nur Defaults."
+    }
+  ],
+  "writer_notes": "Autoritaet activation.py vor schema.py. Events/stateVersion 08.01; Timer/Ack 02.x/04.x; Settings-Latch 05.x; Drain 04.x; Provisionierung/Lizenz-Routing 07.x. Activation stateDiagram (5 Zustaende), Gate eigenes Diagramm; Scheduler/Session nur Spur/Tabelle. Jede Kante ZS-ID, keine erfundenen Phasen."
+}

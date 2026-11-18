@@ -1,0 +1,307 @@
+{
+  "branch_note": "Branch nicht verifizierbar; HEAD ohne Ref, kein git-Aufruf.",
+  "chapter": "08.08",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (1 Zeile).",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "vad_filter True (V2) vs Legacy-CLI False."
+    },
+    {
+      "id": "C2",
+      "thema": "batch_size 0 (Library) vs 16 (Server)."
+    },
+    {
+      "id": "C3",
+      "thema": "Gemeinsame Settings wirken bei kroko nicht."
+    },
+    {
+      "id": "C4",
+      "thema": "Leer: Streaming ignoriert, Sync wirft."
+    },
+    {
+      "id": "C5",
+      "thema": "Gemischte Fehlerklassen Kroko."
+    },
+    {
+      "id": "C6",
+      "thema": "Guard prozessweit erst beim Laden."
+    }
+  ],
+  "correction_round": 2,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "Registry 2 Engines; Default faster_whisper; Normalisierung lower/- zu _/None->Default; sorted.",
+      "beleg": "factory.py:16-29,72-76",
+      "evidenz": "E1",
+      "gueltigkeit": "Produktpfad",
+      "id": "EN8-01"
+    },
+    {
+      "aussage": "Factory zwingt device cpu + gpu 0 vor Check/Import; GPU-Felder wirkungslos.",
+      "beleg": "factory.py:63-69",
+      "evidenz": "E1",
+      "gueltigkeit": "beide Engines/Lanes",
+      "id": "EN8-02"
+    },
+    {
+      "aussage": "enforce_supported_engines prueft beide Felder, ValueError/400 vor Import.",
+      "beleg": "api_fastapi_server/server.py:8744-8761; factory.py:39-47",
+      "evidenz": "E1",
+      "gueltigkeit": "Start/Config-API",
+      "id": "EN8-03"
+    },
+    {
+      "aussage": "Config 12 Felder; compute default, device cpu, beam 5, batch 0, vad True, normalize False.",
+      "beleg": "base.py:31-48",
+      "evidenz": "E2",
+      "gueltigkeit": "gemeinsamer Vertrag",
+      "id": "EN8-04"
+    },
+    {
+      "aussage": "Basis streaming False, warmup en/no-prompt, Streaming wirft, normalize wirft None/leer Peak 0.95.",
+      "beleg": "base.py:111-167",
+      "evidenz": "E1",
+      "gueltigkeit": "beide",
+      "id": "EN8-05"
+    },
+    {
+      "aussage": "FW: WhisperModel + cpu_threads/num_workers; batch>0 BatchedPipeline.",
+      "beleg": "faster_whisper_engine.py:40-66",
+      "evidenz": "E2",
+      "gueltigkeit": "nur fw",
+      "id": "EN8-06"
+    },
+    {
+      "aussage": "FW transcribe 5 Kwargs + batch nur >0; suppress_tokens Server nie gesetzt.",
+      "beleg": "faster_whisper_engine.py:68-83",
+      "evidenz": "E2",
+      "gueltigkeit": "nur fw",
+      "id": "EN8-07"
+    },
+    {
+      "aussage": "FW with_options prompt/temperature 0.0/threshold/granularities/callback; vad nur bei Filter.",
+      "beleg": "faster_whisper_engine.py:85-105",
+      "evidenz": "E1",
+      "gueltigkeit": "nur fw",
+      "id": "EN8-08"
+    },
+    {
+      "aussage": "FW Ergebnis text verbunden; details duration/duration_after_vad/segments 11 (id/seek/start/end/text/tokens/temperature/avg_logprob/compression_ratio/no_speech_prob/words)/worte 4 (word/start/end/probability).",
+      "beleg": "faster_whisper_engine.py:107-151",
+      "evidenz": "E2",
+      "gueltigkeit": "nur fw",
+      "id": "EN8-09"
+    },
+    {
+      "aussage": "FW kein Streaming: False, kein Session; Aufruf TranscriptionEngineError.",
+      "beleg": "faster_whisper_engine.py:33-151; base.py:117,138-144",
+      "evidenz": "E1",
+      "gueltigkeit": "Realtime-Gate",
+      "id": "EN8-10"
+    },
+    {
+      "aussage": "FW Fehler Paket-Hinweis + Modell nicht aufloesbar (Offline-Prefix).",
+      "beleg": "faster_whisper_engine.py:16-30; model_resolver.py:102-109",
+      "evidenz": "E1",
+      "gueltigkeit": "nur fw",
+      "id": "EN8-11"
+    },
+    {
+      "aussage": "Kroko engine kroko_onnx streaming True, Backend injizierbar, close delegiert.",
+      "beleg": "kroko_onnx_engine.py:591-637",
+      "evidenz": "E1",
+      "gueltigkeit": "nur kroko",
+      "id": "EN8-12"
+    },
+    {
+      "aussage": "Backend-Reihenfolge options/numpy/Pfad/rate 16000/tail/suppress/Lease/Recognizer/confirm.",
+      "beleg": "kroko_onnx_engine.py:321-347,349-360",
+      "evidenz": "E1",
+      "gueltigkeit": "nur kroko nativ",
+      "id": "EN8-13"
+    },
+    {
+      "aussage": "16 Kwargs Defaults (threads 1/cpu/16000/80/greedy/4/1.5/2.4/1.2/20.0); recognizer-Dict ueberschreibt.",
+      "beleg": "kroko_onnx_engine.py:430-493",
+      "evidenz": "E1",
+      "gueltigkeit": "nur kroko",
+      "id": "EN8-14"
+    },
+    {
+      "aussage": "provider nur cpu; anders CPU-only-Fehler; config.device ignoriert.",
+      "beleg": "kroko_onnx_engine.py:220-230",
+      "evidenz": "E1",
+      "gueltigkeit": "nur kroko",
+      "id": "EN8-15"
+    },
+    {
+      "aussage": "Key recognizer.key (auch leer) > options.key > Env 4 > ''.",
+      "beleg": "kroko/credentials.py:13-47",
+      "evidenz": "E2",
+      "gueltigkeit": "nur kroko",
+      "id": "EN8-16"
+    },
+    {
+      "aussage": "Bindung strikt lokal; kein urlopen/hf in Engine/Resolver; Alias-/Wurzelordnung; Offline nur Text.",
+      "beleg": "model_resolver.py:66-155",
+      "evidenz": "E1",
+      "gueltigkeit": "beide",
+      "id": "EN8-17"
+    },
+    {
+      "aussage": "Tail default max(0.66,chunk*0.02+0.1); Option tail/finalization/auto.",
+      "beleg": "kroko_onnx_engine.py:273-313",
+      "evidenz": "E1",
+      "gueltigkeit": "nur kroko",
+      "id": "EN8-18"
+    },
+    {
+      "aussage": "Sync float32/accept/Padding/input_finished/Decode/Sprache Arg|Datei.",
+      "beleg": "kroko_onnx_engine.py:495-588",
+      "evidenz": "E1",
+      "gueltigkeit": "nur kroko",
+      "id": "EN8-19"
+    },
+    {
+      "aussage": "Session reset/accept/decode/result/finish/close; Guards; leer still; finish idempotent.",
+      "beleg": "kroko_onnx_engine.py:640-750",
+      "evidenz": "E1",
+      "gueltigkeit": "nur kroko",
+      "id": "EN8-20"
+    },
+    {
+      "aussage": "Kroko details leer, prob 1.0/0.0, Sprache Kroko-XX; keine Wort-Details.",
+      "beleg": "kroko_onnx_engine.py:620-637,264-270",
+      "evidenz": "E1",
+      "gueltigkeit": "nur kroko",
+      "id": "EN8-21"
+    },
+    {
+      "aussage": "Guard 1 Instanz/Prozess, Pro/Key-Bindung, 4 Codes, Lease/weakref.",
+      "beleg": "kroko_onnx_engine.py:349-364; native_guard.py:46-201",
+      "evidenz": "E1",
+      "gueltigkeit": "nur kroko nativ",
+      "id": "EN8-22"
+    },
+    {
+      "aussage": "Kroko Fehler numpy/Paket/OnlineRecognizer/from_transducer/Decode/Optionstypen.",
+      "beleg": "kroko_onnx_engine.py:54-89,481-549",
+      "evidenz": "E2",
+      "gueltigkeit": "nur kroko",
+      "id": "EN8-23"
+    },
+    {
+      "aussage": "CPU-Policy nur cpu; Raenge kroko 2/large-turbo 3/large 4/medium 3/small 2/base-tiny 1; max>3 ab.",
+      "beleg": "api_fastapi_server/server.py:8704-8799",
+      "evidenz": "E2",
+      "gueltigkeit": "Server",
+      "id": "EN8-24"
+    },
+    {
+      "aussage": "Optionen Lane-eigen, dann andere Lane gleicher Engine, dann stt_settings; Defaults int8/beam 5-3/batch 16.",
+      "beleg": "api_fastapi_server/server.py:1276-1305,409-437,2206-2270",
+      "evidenz": "E2",
+      "gueltigkeit": "Server",
+      "id": "EN8-25"
+    },
+    {
+      "aussage": "stop ruft close (nur Kroko); unload->stop->close + gc.",
+      "beleg": "api_fastapi_server/server.py:1981-1996,2156-2159,7544-7568",
+      "evidenz": "E2",
+      "gueltigkeit": "Server",
+      "id": "EN8-26"
+    },
+    {
+      "aussage": "4 Namen suppress_native_output (primaer)/suppress_output/quiet/silent; Env + FD 1-2 unter Lock; Default aus.",
+      "beleg": "kroko_onnx_engine.py:92-195",
+      "evidenz": "E1",
+      "gueltigkeit": "nur kroko",
+      "id": "EN8-27"
+    },
+    {
+      "aussage": "Kroko ignoriert beam/prompt/suppress/batch/vad; nur decoding/max_paths.",
+      "beleg": "kroko_onnx_engine.py (0 Treffer)",
+      "evidenz": "E2",
+      "gueltigkeit": "nur kroko",
+      "id": "EN8-28"
+    },
+    {
+      "aussage": "Extras fw (+av) + kroko-builder (hf); kein kroko-onnx-Extra; Pins fw 1.2.1/av/numpy.",
+      "beleg": "setup.py:244-288; requirements.txt:3-16",
+      "evidenz": "E1",
+      "gueltigkeit": "Distribution",
+      "id": "EN8-29"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Keine Timeout/Retry-Parameter beider Engines."
+    },
+    {
+      "id": "N2",
+      "thema": "Kein Schema/Whitelist engine_options; freies Dict."
+    },
+    {
+      "id": "N3",
+      "thema": "suppress_tokens nie gesetzt (tot)."
+    },
+    {
+      "id": "N4",
+      "thema": "with_options nur fw; Kroko transcribe."
+    },
+    {
+      "id": "N5",
+      "thema": "close nur stop/unload; kein atexit."
+    },
+    {
+      "id": "N6",
+      "thema": "Toter Kroko-Fallbackblock unerreichbar."
+    }
+  ],
+  "researcher_session": "ses_e34a53ab6ffehPCsHAgqSgSbHr",
+  "solver_notes": [
+    "S1 2 Keys [faster_whisper,kroko_onnx]",
+    "S2 Default faster_whisper",
+    "S3 Pfade .faster_whisper_engine/FasterWhisperEngine, .kroko_onnx_engine/KrokoOnnxEngine",
+    "S4 2 Module *_engine*.py",
+    "S5 6 Module startfaehig",
+    "S6 12 Config-Felder",
+    "S7 16 Recognizer-Kwargs",
+    "S8 24 Kroko-Optionen +2 Aliasse/1 ignoriert",
+    "S9 10 fw-Optionen",
+    "S10 6 Session-Methoden + init",
+    "S11 supportedEngines [fw,kroko]",
+    "S12 PUBLIC_MODELS 4",
+    "S13 26 Altnamen abgelehnt",
+    "S14 5 Drafts/7 entfernt",
+    "S15 Ablehnungstext Unsupported..."
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Branch/Ref."
+    },
+    {
+      "id": "U2",
+      "thema": "Native from_transducer-Semantik."
+    },
+    {
+      "id": "U3",
+      "thema": "cpu_threads/num_workers-Wirkung."
+    },
+    {
+      "id": "U4",
+      "thema": "compute_type ausser int8."
+    },
+    {
+      "id": "U5",
+      "thema": "Realtime-Praezedenz Beispielwert null."
+    }
+  ],
+  "writer_notes": "Nur referenzieren 02.x/04.x/05.x/08.07. Kern: 2 Engines, Default fw, CPU-Zwang, fw block 10 Optionen, kroko streaming 16 Kwargs/24 Optionen, lokal ohne Download, C1-C6/N1-N6 Grenzen. Keine Diagramme."
+}

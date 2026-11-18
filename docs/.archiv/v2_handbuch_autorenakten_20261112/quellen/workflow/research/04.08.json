@@ -1,0 +1,245 @@
+{
+  "branch_note": "Kein Branch-Ref vorhanden: HEAD detached auf Commit, refs/heads und refs/tags leer; 'main' nur Reflog-Eintrag. Kein zweiter Vergleichsstand; Aussagen nur fuer diesen Commit. Pfade relativ zum Checkout.",
+  "chapter": "04.08",
+  "commit_verification": "Verifiziert am Checkout C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src: .git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached). .git/FETCH_HEAD dieselbe SHA von https://github.com/marcosudau-vps/voice-stt-server. .git/shallow genau diese SHA. Reflog: moving from main to FETCH_HEAD. refs leer.",
+  "conflicts": [
+    {
+      "id": "CF-01",
+      "thema": "'Reconnect'-Test ist V1; belegt Teardown-Garantie, nicht V2-Wire. Nicht als V2-Nachrichtenfolge zitieren."
+    },
+    {
+      "id": "CF-02",
+      "thema": "clientRunId klingt nach Wiedererkennung, ist funktionslos (nur Validierung). Kein Resume-Schluessel."
+    },
+    {
+      "id": "CF-03",
+      "thema": "Snapshot in hello.accepted eingebettet ohne inneres type; kein session.snapshot-Objekt."
+    },
+    {
+      "id": "CF-04",
+      "thema": "logAccess Bootstrap pro Verbindung, kein Fortsetzungs-Token; pro Admission neu."
+    },
+    {
+      "id": "CF-05",
+      "thema": "Luecken erkennt nur Client; Server keine Luecke/Deltas. Nach Reconnect alte Sequenz gegenstandslos."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "D1: Client -> Server: WS GET /ws/v2, neue Verbindung ohne sessionId [T1-01, T1-03]",
+    "D2: Client -> Server: hello erstes Textframe (clientRunId Pflicht, keine Resume-Felder) [T1-03, T1-04]",
+    "D3: Server -> Client: hello.accepted neue sessionId, Snapshot, logAccess [T1-02, T1-06, T1-20]",
+    "D4: Server: admit_session neue Session aus Defaults + hello [T1-01, T1-07]",
+    "D5: Server: start_streaming atomar mit Acceptance [T1-06]",
+    "D6: Client -> Server: Audio erst nach accepted; davor 4400 ohne Nachricht [T1-16, T1-18]",
+    "D7: Verlust -> finally: Observer loesen, remove_session [T1-09]",
+    "D8: remove_session -> close(): Reset session_closed [T1-10, T1-11]",
+    "D9: close() -> cancel_all(session_closed) [T1-10, T1-11]",
+    "D10: close() -> Replay-Cache leeren [T1-12]",
+    "D11: neue Session -> Version 0 / seq 0 Baseline [T1-13]",
+    "D12: Kommando alte sessionId -> ack stale_session [T1-15]",
+    "D13: snapshot.request -> snapshot (Resync neue Session) [T1-14]",
+    "D14: 1011 terminal -> Cleanup -> neuer Handshake ok [T1-18, T1-19]",
+    "D15: Slot-Freigabe finally -> naechste Admission [T1-19]",
+    "D16: Settings-Patch alt nicht uebernommen; neu bei Defaults [T1-07]",
+    "D17: /ws/logs afterCursor -> Replay/gap (nur Log, Kontrast) [T1-20]"
+  ],
+  "facts": [
+    {
+      "aussage": "/ws/v2-Verbindung = genau eine Session: pro WebSocket ein ProtocolV2Connection; Session erst durch hello. Jede Verbindung neue Session/neue sessionId; nie Wiederverwendung. Nicht im ConnectionManager.",
+      "beleg": "server.py:10121-10146; connection.py:218-282; server.py:6137-6165; server.py:10133-10135",
+      "evidenz": "stark (Code)",
+      "gueltigkeit": "V2; nicht V1.",
+      "id": "T1-01"
+    },
+    {
+      "aussage": "sessionId serverseitig frische kanonische UUID bei Admission (new_canonical_id), im hello nicht setzbar. Einziger Registry-Schluessel. Reconnect immer andere sessionId.",
+      "beleg": "connection.py:276-282; schema.py:214-216; server.py:6142-6151; tests terminal_recovery:234-238; client_v2_identity:196-200",
+      "evidenz": "stark (Code+Test)",
+      "gueltigkeit": "V2, jede Admission.",
+      "id": "T1-02"
+    },
+    {
+      "aussage": "hello ohne Fortsetzung: kein sessionId/lastEventSeq/Cursor. Nur Identitaet (Version/Commit/RunId/Versionsliste), requestedSession (manual/wakeWord/Ids), runtimeSuppression. Wiederanlauf nur neue Session.",
+      "beleg": "handshake.py:30-41, 83-178; schema.py:50-57 (5 Kommandos, kein Resume)",
+      "evidenz": "stark (Code)",
+      "gueltigkeit": "V2-Handshake.",
+      "id": "T1-03"
+    },
+    {
+      "aussage": "clientRunId Pflicht kanonische UUID, nur validiert in ParsedHello abgelegt. Sonst nirgends: kein Speichern/Vergleich/Registry. Gleiche/neue RunId aendert nichts.",
+      "beleg": "handshake.py:111-116, 167-177; Volltextsuche nur handshake.py",
+      "evidenz": "stark (Code, Einzelvorkommen)",
+      "gueltigkeit": "gesamtes Repo.",
+      "id": "T1-04"
+    },
+    {
+      "aussage": "clientId optional (Query/Header), normalisiert, nur Metadatum (Session/Audit/Logs). Registry nur sessionId; gleiche clientId = unabhaengige Sessions.",
+      "beleg": "server.py:10138-10146, 1362, 6142-6151; Metadatum z.B. 10283-10288",
+      "evidenz": "stark (Code)",
+      "gueltigkeit": "V2; keine Dedup-Funktion.",
+      "id": "T1-05"
+    },
+    {
+      "aussage": "Wiederanlauf-Zustand = hello.accepted: neue sessionId, Version/Commit, eingebetteter Snapshot (ohne type), logAccess. Keine Uebertragung alter Session; Snapshot nur neue Session. Audio atomar mit Acceptance (start_streaming).",
+      "beleg": "connection.py:307-343 (326-328, 330-343); snapshot.py:82-89",
+      "evidenz": "stark (Code)",
+      "gueltigkeit": "nur hello.accepted; spaetere mit type.",
+      "id": "T1-06"
+    },
+    {
+      "aussage": "Settings je Admission neu aus Server-Defaults + hello-Request (Wake-Auswahl). Patch alt nicht uebernommen; Revision sessionspezifisch neu. Test: neu sieht Default, bestehende nicht umgeschrieben.",
+      "beleg": "server.py:7335-7341, 3182-3196; ports.py:50-53; tests settings_control_plane:340-361",
+      "evidenz": "stark (Code+Test)",
+      "gueltigkeit": "pro Session; Defaults Ausgang.",
+      "id": "T1-07"
+    },
+    {
+      "aussage": "runtimeSuppression je Admission aus hello an Controller, kein persistierter Zustand. Nach Reconnect nur neues hello wirksam; Weglassen = neues hello (Test beide false).",
+      "beleg": "connection.py:319-324; handshake.py:144-153",
+      "evidenz": "stark (Code)",
+      "gueltigkeit": "V2, pro Admission.",
+      "id": "T1-08"
+    },
+    {
+      "aussage": "Ende (Disconnect/Close/Fehler): Endpoint-finally: close_session loest Observer, dann remove_session (Registry + close). Teardown-Events (z.B. activation_closed) erreichen sterbenden Socket nicht.",
+      "beleg": "connection.py:200-214; server.py:10259-10288, 7372-7375",
+      "evidenz": "stark (Code)",
+      "gueltigkeit": "V2; Observer vor Close.",
+      "id": "T1-09"
+    },
+    {
+      "aussage": "close() Reconnect-Barriere: Reset session_closed (nie alte Activation wiederbeleben), cancel_all Ledger session_closed, Scheduler/Recorder-Cancel, Speaker-Deaktivierung, Recorder-Shutdown, Replay-Cache leeren. Alte Activation nicht fortsetzbar.",
+      "beleg": "server.py:2891-2948 (2907-2908, 2914-2927, 2935-2937); segment_ledger.py:375-419; server.py:8505-8515",
+      "evidenz": "stark (Code); Test nur V1 controlled_e2e:1476-1500",
+      "gueltigkeit": "geteilter Teardown, auch V2.",
+      "id": "T1-10"
+    },
+    {
+      "aussage": "Laufende Activation/nicht-gedraente Transkriptionen ueberleben nicht: Ledger cancelled session_closed, prepared_text verworfen. Audio live vom Client (use_microphone False); kein Puffer fuers Loch.",
+      "beleg": "server.py:2753, 2914-2927, 8505-8515; segment_ledger.py:391-410; connection.py:181-198",
+      "evidenz": "stark (Code)",
+      "gueltigkeit": "pro Session; V2-Audio.",
+      "id": "T1-11"
+    },
+    {
+      "aussage": "commandId-Idempotenz sessiongebunden: Cache gehoert Session, close() leert (session scoped). Nach Reconnect Kommando neu; alter Konflikt unmöglich.",
+      "beleg": "server.py:2935-2937; connection.py:594-616; Bezug 04.04/04.07",
+      "evidenz": "stark (Code)",
+      "gueltigkeit": "Session-Lebensdauer.",
+      "id": "T1-12"
+    },
+    {
+      "aussage": "Zaehler neu pro Verbindung: State mit Version 0/seq 0, leeres Minted-Register; accepted-Snapshot Baseline. Alte seq/Version bedeutungslos.",
+      "beleg": "connection.py:312-317; session.py:48-53; snapshot.py:36-79",
+      "evidenz": "stark (Code); Startwerte nicht getestet (UN-01)",
+      "gueltigkeit": "pro Verbindung/Session.",
+      "id": "T1-13"
+    },
+    {
+      "aussage": "Kein Historie/Replay-Puffer: Minted nur Retry-Identitaet, keine Nachlieferung. Resync nur Vollsnapshot auf Request; nach Reconnect nur neue Session.",
+      "beleg": "session.py:51-53, 105-150; connection.py:584-592; Bezug 04.07 NI",
+      "evidenz": "stark (Code)",
+      "gueltigkeit": "V2-Stream.",
+      "id": "T1-14"
+    },
+    {
+      "aussage": "Fremde/alte kanonische sessionId -> ack stale_session (false, wirkungslos, kein Close). hello nach accepted still ignoriert; keine Re-Aushandlung am Socket.",
+      "beleg": "commands.py:120-126, 90-103; connection.py:347-369; schema.py:50-57",
+      "evidenz": "stark (Code)",
+      "gueltigkeit": "V2.",
+      "id": "T1-15"
+    },
+    {
+      "aussage": "Vor accepted Audio verboten: Binaerframe -> 4400 ohne JSON (Test messages==[]). Nach Reconnect sofort Audio = Verlust ohne Meldung.",
+      "beleg": "connection.py:181-185; tests e2e:436-449, 488-500",
+      "evidenz": "stark (Code+Test)",
+      "gueltigkeit": "V2, nur vor Acceptance.",
+      "id": "T1-16"
+    },
+    {
+      "aussage": "Handshake-Timeout 10,0 s (Default, Connection konfigurierbar), danach 4408. Danach kein Timeout, kein ping/pong (5 Kommandos); halboffen nicht beendet.",
+      "beleg": "schema.py:208-209, 50-57; connection.py:74-78; server.py:10229-10247, 10195-10228",
+      "evidenz": "stark (Code)",
+      "gueltigkeit": "V2; Transport-Keepalive nicht Code (UN-02).",
+      "id": "T1-17"
+    },
+    {
+      "aussage": "Closes: 4400 hello/erstes Frame/Audio-vorher; 4406 kein Stand (mit incompatible); 4408 Timeout; 4409 rejected (invalid/limit); 1011 intern/terminal; 1000 Fallback. Kein Resync/Ablauf-Code.",
+      "beleg": "schema.py:200-206; handshake.py:8-21; connection.py:230-305, 695-702; server.py:10259-10281; tests e2e:463-518",
+      "evidenz": "stark (Code+Test); 1000 nur Code",
+      "gueltigkeit": "V2.",
+      "id": "T1-18"
+    },
+    {
+      "aussage": "Slot erst bei Cleanup frei, nicht TCP-Abbau: Registry weg im finally; Test wartet bis 10s bis alte ID weg, dann neu mit anderer ID. Ueber Limit (max 4) 4409 limit_reached; zu frueh Reconnect abweisbar.",
+      "beleg": "server.py:487, 6142-6151, 6178-6183; connection.py:247-252; tests terminal_recovery:225-248",
+      "evidenz": "stark (Code+Freigabe-Test); Limit nur Code",
+      "gueltigkeit": "pro Server; max_sessions konfigurierbar.",
+      "id": "T1-19"
+    },
+    {
+      "aussage": "Nur Logkanal wiederanlauffaehig: /ws/logs afterCursor, bei Retention log.gap; logAccess pro Admission neu, Token sessiongebunden fluechtig 24h. Kein V2-Pendant.",
+      "beleg": "server.py:7772-7806, 9617-9682; security/logs.py:9, 24-59",
+      "evidenz": "stark (Code)",
+      "gueltigkeit": "Logkanal, nicht Session.",
+      "id": "T1-20"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "NI-01",
+      "thema": "Kein Resume/Reattach: hello ohne sessionId/lastEventSeq/Cursor; keine Fortsetzungsnachricht."
+    },
+    {
+      "id": "NI-02",
+      "thema": "Keine Historie/Replay-Puffer; Resync nur Vollsnapshot."
+    },
+    {
+      "id": "NI-03",
+      "thema": "Keine Reconnect-Erkennung: RunId nur validiert, clientId Metadatum; keine Korrelation."
+    },
+    {
+      "id": "NI-04",
+      "thema": "Kein Reconnect/Retry/Backoff/Going-away/Retry-after serverseitig."
+    },
+    {
+      "id": "NI-05",
+      "thema": "Keine Persistenz ueber Ende/Neustart: Activation/Ledger/Cache/Settings/Zaehler sessiongebunden."
+    },
+    {
+      "id": "NI-06",
+      "thema": "Kein Keepalive/Ping, kein Idle-Timeout nach accepted."
+    },
+    {
+      "id": "NI-07",
+      "thema": "Kein Resync-/Ablauf-Close-Code; Set 4400/4406/4408/4409/1011 + 1000."
+    }
+  ],
+  "researcher_session": "ses_e42e64bb4ffeKeP21LhKL1vH3a",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "UN-01",
+      "thema": "Startwerte Snapshot 0/0 nicht getestet; nur Initialisierung."
+    },
+    {
+      "id": "UN-02",
+      "thema": "Halboffen-Erkennung ASGI-Keepalive; kein ping gesetzt, Defaults nicht Code."
+    },
+    {
+      "id": "UN-03",
+      "thema": "Einziger 'reconnect'-Test V1; V2 kein E2E 'alte Activation nicht wiederbelebt', nur Pfad+Handshake."
+    },
+    {
+      "id": "UN-04",
+      "thema": "Slot-Freigabe bei ASGI-Cancellation nicht getestet."
+    },
+    {
+      "id": "UN-05",
+      "thema": "Schneller Reconnect nahe max_sessions ungetestet."
+    }
+  ],
+  "writer_notes": "Kern: Reconnect = Neustart + Resync, kein Wiedereinstieg; einziger Transfer eingebetteter Snapshot. Ablauf: WS -> hello (RunId Pflicht, kein Resume) -> accepted (neu ID/Snapshot/logAccess) -> Audio/Commands. Verloren: Activation (Reset), Segmente (cancel_all), Patches, Suppression (nur neues hello), Idempotenz, Zaehler. Keine Politik/Backoff/Resume/Keepalive (NI). Zahlen: 10,0s/4408; max 4; Token 24h. Diagramme: Roundtrip (D1-D6), Teardown (D7-D10), Identitaet/Zaehler (D11/D12/D16), Slot (D14/D15), Log-Kontrast (D17). Keine Pfeile 'wiederhergestellt'/'Luecke'/'Delta'. 'Reconnect-Test' V1 (CF-01). RunId keine Identitaet (CF-02). Vor accepted Audio -> 4400 ohne Meldung (T1-16) als Falle."
+}

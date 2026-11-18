@@ -1,0 +1,259 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (keine Refs). Nur Commit a8993c5c68042d996eab680d84a5b138a214bb5d bindend.",
+  "chapter": "06.14",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached); FETCH_HEAD gleicher SHA.",
+  "conflicts": [
+    {
+      "id": "C6-01",
+      "thema": "Kaputte runtime.json = Startabbruch (kein Repair/Ignore); nur fehlende Sektionen defaulten [V6-10]."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [
+    "data_root -> logs/* (4 Kanäle Monat/Tag) [V6-01/05]",
+    "data_root -> sqlite (+wal/shm) [V6-01/03/04]",
+    "data_root -> audio (Tag-Ordner) [V6-01/11]",
+    "data_root -> runtime.json (settings+overlay+revision) [V6-01/08]",
+    "data_root -> models/stt/* [V6-13]",
+    "compose/image -> data_root (Bind/Volume) [V6-02]",
+    "emit -> sqlite commit; Spiegel optional [V6-03/19]",
+    "append/write -> Retention (lazy/Tag) [V6-07]",
+    "backup_count -/-> kein Effekt [V6-06]",
+    "SIGTERM -> Lifespan -> stop -> events.close -> sqlite.close [V6-18]",
+    "runtime_json invalid -> startup_fail [V6-10]",
+    "restore alt -> cursor_ahead -> Client-Reset [V6-21]",
+    "restore -> chown 10001 [V6-22]",
+    "release -> Build-Tar (nicht Daten) [V6-24]",
+    "kein Produkt-Backup/Restore/Export [V6-20]"
+  ],
+  "facts": [
+    {
+      "aussage": "Eine Wurzel, alle Pfade: logs/{audit,performance,transcription,system}, voicestt-events.sqlite3, audio, config/runtime.json; derived, nicht einzeln konfigurierbar.",
+      "beleg": "server.py Z.293-301/519-532.",
+      "evidenz": "A",
+      "gueltigkeit": "V2 (nicht Legacy)",
+      "id": "V6-01"
+    },
+    {
+      "aussage": "Wurzel aus --data-root/ENV; Container /var/lib/voicestt + Volume + chown; Compose-Bind ./data; VPS /data + ro-Mounts.",
+      "beleg": "server.py Z.10537-10545; Dockerfile Z.68/76-84; compose Z.60-64; vps Z.42-46/90.",
+      "evidenz": "A+C",
+      "gueltigkeit": "Container/VPS",
+      "id": "V6-02"
+    },
+    {
+      "aussage": "Kanonisch = SQLite (WAL/NORMAL, events+watermarks, 6 Indizes); emit zuerst append+commit, Spiegel optional; Fehler → None/degraded.",
+      "beleg": "event_logging.py Z.438-589/928-990; Tests.",
+      "evidenz": "A+B",
+      "gueltigkeit": "Store an (Default)",
+      "id": "V6-03"
+    },
+    {
+      "aussage": "Kein Checkpoint/VACUUM/Integrität/ALTER/user_version; Hot-Copy nur mit -wal/-shm; Korrektheit undefiniert (U).",
+      "beleg": "Grep: nur PRAGMA WAL/NORMAL Z.450-451.",
+      "evidenz": "D+A",
+      "gueltigkeit": "Repo",
+      "id": "V6-04"
+    },
+    {
+      "aussage": "JSONL <kanal>/<YYYY-MM>/<YYYY-MM-DD>[.n].jsonl (TZ Europe/Berlin); Flush/Zeile; max_bytes-Rollover.",
+      "beleg": "event_logging.py Z.314-436/769-869; Tests.",
+      "evidenz": "A+B",
+      "gueltigkeit": "je Kanal",
+      "id": "V6-05"
+    },
+    {
+      "aussage": "backup_count nur gespeichert, nie gelesen; nur retention_days löscht.",
+      "beleg": "event_logging.py Z.322/328/381-412; server.py Z.458-477.",
+      "evidenz": "A+D",
+      "gueltigkeit": "alle Kanäle",
+      "id": "V6-06"
+    },
+    {
+      "aussage": "Retention opt-in (0=unbegrenzt), lazy beim Schreiben, 1×/Tag; JSONL älter-cutoff (offene ausgenommen, rmdir leer); SQLite UTC-Tag + Watermarks→DELETE; ohne Traffic keine Alterung.",
+      "beleg": "event_logging.py Z.381-412/497-545; server.py Z.459-478; Tests.",
+      "evidenz": "A+B",
+      "gueltigkeit": "beide Stores",
+      "id": "V6-07"
+    },
+    {
+      "aussage": "runtime.json: version/updatedAt/settings + Overlay/Revision + Fremdes; Read-Modify-Write unter Lock + os.replace; Fehler→Original; ohne data_root None/{}.",
+      "beleg": "operations.py Z.401-540; Tests.",
+      "evidenz": "A+B",
+      "gueltigkeit": "nur mit Wurzel",
+      "id": "V6-08"
+    },
+    {
+      "aussage": "Persistiert: ACTIVE/NEW/STARTUP minus Secrets/Pfade/device/host/port; Kroko-drop; Start übernimmt minus derived/Secrets + post_init; Engine-Options nicht im Set.",
+      "beleg": "server.py Z.7959-7969/8827-8842; operations.py Z.439; Tests.",
+      "evidenz": "A+B",
+      "gueltigkeit": "V2",
+      "id": "V6-09"
+    },
+    {
+      "aussage": "Ungültige runtime.json → ValueError/Startabbruch (nur fehlend→leer); Overlay strikt (Typ/Revision/Key/Secret/Bundle).",
+      "beleg": "operations.py Z.471-516; settings_control.py Z.1171-1240; server.py Z.6287; Tests.",
+      "evidenz": "A+B",
+      "gueltigkeit": "Start",
+      "id": "V6-10"
+    },
+    {
+      "aussage": "Audio nur save_audio_files (False) + nur HTTP-Uploads: Tag-Ordner + <zeit>_<reqId><suffix> + resolve; keine Löschung.",
+      "beleg": "operations.py Z.343-362; openai_routes.py Z.155-190; server.py Z.485; Tests.",
+      "evidenz": "A+B",
+      "gueltigkeit": "OpenAI-Pfad",
+      "id": "V6-11"
+    },
+    {
+      "aussage": "archivedAudio = absoluter Pfad; Restore-unter-neu → stale Pfade; kein Rewrite (nur Retention-DELETE).",
+      "beleg": "operations.py Z.362; openai_routes Z.190; Sanitizer Z.116-186; Grep Migration 0.",
+      "evidenz": "A+D",
+      "gueltigkeit": "Audit-Events",
+      "id": "V6-12"
+    },
+    {
+      "aussage": "Modelle unter data_root (custom/ENV→Default dedup; provisioning-Ziele); Image nur leere Ordner.",
+      "beleg": "server.py Z.6295-6300; stt_model_management Z.662-700; compose Z.57-59; Tests.",
+      "evidenz": "A+C+B",
+      "gueltigkeit": "faster/kroko",
+      "id": "V6-13"
+    },
+    {
+      "aussage": "Nur autorisierte wiederbeschaffbar (Kroko redistributable+Quelle+sha+bytes; faster LOCAL_ONLY_UNPINNED); .part→Verify(bytes/sha)→replace→finally-unlink; Discovery skippt .*-/.part/.staging (+snapshots).",
+      "beleg": "stt_model_management Z.64-72/343-625/411-424/511-513; Tests.",
+      "evidenz": "A+B",
+      "gueltigkeit": "Provisionierung/Discovery",
+      "id": "V6-14"
+    },
+    {
+      "aussage": "ro-Mounts (/models/*, /config) = Deployment (reproduziert); Image nur leere Modellordner; Datenwurzel-Backup deckt sie nicht ab.",
+      "beleg": "compose Z.65-79; vps Z.42-45; Dockerfile Z.76-78.",
+      "evidenz": "A+C",
+      "gueltigkeit": "Container",
+      "id": "V6-15"
+    },
+    {
+      "aussage": "Nicht sichern: .dockerignore schliesst data/logs/caches/venv/build aus; /opt/venv Image; Kroko-Artefakte OS-Cache/Temp; Lizenz flüchtig.",
+      "beleg": ".dockerignore Z.1-21; Dockerfile Z.18-84; artifacts.py Z.136-163; license_state.py.",
+      "evidenz": "A+C+D",
+      "gueltigkeit": "Build/Betrieb",
+      "id": "V6-16"
+    },
+    {
+      "aussage": "Lizenz/Ledger nur RAM (bind/begin/apply); nach Restore neu prüfen/aufbauen.",
+      "beleg": "license_state.py Z.1-80; segment_ledger.py.",
+      "evidenz": "A",
+      "gueltigkeit": "Pro/Ledger",
+      "id": "V6-17"
+    },
+    {
+      "aussage": "Konsistenz nur via Stopp: SIGTERM→Lifespan-finally→stop (Sessions/Scheduler/audit-perf/stopping/close); flush+joins-5s+Sinks+SQLite; kein HTTP-Shutdown; Timeout = uvicorn (U).",
+      "beleg": "server.py Z.7304-7323/8852-8866/10830-10835; event_logging Z.1298-1319.",
+      "evidenz": "A",
+      "gueltigkeit": "Prozess",
+      "id": "V6-18"
+    },
+    {
+      "aussage": "JSONL nicht autoritativ: Eviction/Deaktivierung → Lücken/Fehlen; nur SQLite vollständig; Restore-nur-JSONL unzureichend.",
+      "beleg": "event_logging Z.189-253/856-1079; Tests.",
+      "evidenz": "A+B",
+      "gueltigkeit": "Kanäle",
+      "id": "V6-19"
+    },
+    {
+      "aussage": "Kein Backup/Restore/Export/Clear/Migration: nur lesende Log-Routen (limit≤1000), DELETE nur Retention, kein VACUUM, kein ALTER/user_version; Verfahren = Kopie/Snapshot.",
+      "beleg": "server.py Z.9539-9560; event_logging Z.452-676; Grep FileResponse/Export/ALTER 0.",
+      "evidenz": "D",
+      "gueltigkeit": "Produkt",
+      "id": "V6-20"
+    },
+    {
+      "aussage": "Restore-alt → cursor_ahead + Close 1008 (kein Auto-Reset); Retention → gap retention.",
+      "beleg": "server.py Z.9617-9682; Tests.",
+      "evidenz": "A+B",
+      "gueltigkeit": "/ws/logs",
+      "id": "V6-21"
+    },
+    {
+      "aussage": "Restore braucht 10001-Rechte (chown); sonst mkdir/write/connect-Fehler.",
+      "beleg": "Dockerfile Z.70-84; operations.py Z.522; event_logging Z.443.",
+      "evidenz": "A+C",
+      "gueltigkeit": "Container",
+      "id": "V6-22"
+    },
+    {
+      "aussage": "Store-aus → nur Spiegel (kein Replay/Historie); live-an + Store-aus = ValueError.",
+      "beleg": "event_logging Z.712-720/1099-1108; server.py Z.540-543; Tests.",
+      "evidenz": "A+B",
+      "gueltigkeit": "Logging-Konfig",
+      "id": "V6-23"
+    },
+    {
+      "aussage": "VPS-Release sichert Build-Area-Tar + runtime.json-tmp, NICHT Datenwurzel; Rollback ≠ Daten-Rollback.",
+      "beleg": "release-voice-stt.sh Z.22-357; compose Z.46.",
+      "evidenz": "A+C",
+      "gueltigkeit": "VPS (keine Produktgarantie)",
+      "id": "V6-24"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N6-01",
+      "thema": "Kein Checkpoint/VACUUM/Integrität [V6-04]."
+    },
+    {
+      "id": "N6-02",
+      "thema": "backup_count wirkungslos [V6-06]."
+    },
+    {
+      "id": "N6-03",
+      "thema": "Kein Audio-Cleanup [V6-11]."
+    },
+    {
+      "id": "N6-04",
+      "thema": "Keine Lizenzpersistenz [V6-17]."
+    },
+    {
+      "id": "N6-05",
+      "thema": "Kein Shutdown-Flush-Endpunkt [V6-18]."
+    },
+    {
+      "id": "N6-06",
+      "thema": "Kein Backup/Restore/Export/Clear/Migration [V6-20]."
+    },
+    {
+      "id": "N6-07",
+      "thema": "Kein Daten-Backup im Release-Skript [V6-24]."
+    }
+  ],
+  "researcher_session": "ses_e3d827f17ffeh5fTWzzb5QJXcH",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U6-01",
+      "thema": "Hot-Copy-Korrektheit (kein Vertrag) [V6-04]."
+    },
+    {
+      "id": "U6-02",
+      "thema": "Schema-Downgrade [V6-20]."
+    },
+    {
+      "id": "U6-03",
+      "thema": "Graceful-Shutdown-Timeout [V6-18]."
+    },
+    {
+      "id": "U6-04",
+      "thema": ".part-Reste-Bereinigung [V6-14]."
+    },
+    {
+      "id": "U6-05",
+      "thema": "Branch (nur Commit)."
+    },
+    {
+      "id": "U6-06",
+      "thema": "backup-keep/ignore.md unreferenziert."
+    }
+  ],
+  "writer_notes": "Matrix: Event-DB primär/opt-in-lazy; JSONL sekundär/lückenanfällig; runtime.json Settings+Overlay; Audio Beleg/kein-Cleanup; Modelle optional; ro-Inputs/Caches/venv/Image/RAM nein. Verfahren: graceful stoppen → Wurzel kopieren (inkl wal/shm) → 10001 erhalten → Cursor verwerfen. Kein RPO für Hot-Copy. Abgrenzung: 06.08/09 Mechanik (nur Was/Wo); 03.06/10 Format/Revision (nur Eigenschaft); 06.04/11 Provisionierung (nur Wert); 06.02/12 Compose/Build/Release (nur Lage). Brief null → NOT_REQUESTED."
+}

@@ -1,0 +1,236 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup NICHT verifizierbar (detached HEAD); nur Commit bindend.",
+  "chapter": "05.09",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached). Quellen nur *.py + Tests; keine docs/README/Legacy-STT. Diagrammbrief fehlt -> NOT_REQUESTED. Notiz Vorlage ohne Wünsche.",
+  "conflicts": [
+    {
+      "id": "D9-C1",
+      "thema": "Zwei Redaktionsvokabulare (credential vs Event-Hub); kein einheitlicher Filter."
+    },
+    {
+      "id": "D9-C2",
+      "thema": "openwakeword_model_paths je Kanal unterschiedlich sichtbar."
+    },
+    {
+      "id": "D9-C3",
+      "thema": "Secrets auch Settings/CLI, nicht nur ENV; kein .env-Lader."
+    },
+    {
+      "id": "D9-C4",
+      "thema": "YAML-Sperre nur top-level; nested Engine-Keys nicht geprüft (entschärft via Ausgabe/Persistenz)."
+    },
+    {
+      "id": "D9-C5",
+      "thema": "secretsExposed Literal; secret-Zweig unerreichbar."
+    },
+    {
+      "id": "D9-C6",
+      "thema": "Ausschluss = Allowlist, nicht drop."
+    },
+    {
+      "id": "D9-C7",
+      "thema": "stt_engine_settings bleibt teilweise öffentlich."
+    },
+    {
+      "id": "D9-C8",
+      "thema": "Drei Vokabulare nicht verschmelzen."
+    },
+    {
+      "id": "D9-C9",
+      "thema": "Kein Widerspruch zu 05.01/V1-16; hier präzisiert."
+    }
+  ],
+  "correction_round": 2,
+  "diagram_edges": [
+    "YAML --load--> SystemExit (kein Weiterreichen)",
+    "YAML --engine-options(dict)--> Settings (ungeprüft im RAM)",
+    "ENV --> Gates; Settings --> Gates (Vorrang)",
+    "options.recognizer.key --> effective_recognizer_key --> Recognizer",
+    "Settings --public_dict(drop+pop)--> HTTP/WS",
+    "Settings --public_session_settings(+pop paths)--> WS hello/ready",
+    "Settings --persist(allowlist)--> save --redact(drop)--> runtime.json",
+    "runtime.json --load(skip secrets)--> Settings",
+    "PATCH --reject(startup_only)--> Client",
+    "Registry --schema--> /api/v2/settings/schema (false)",
+    "Events --emit--> sanitize --> Store|JSONL|Stdout|Subscriber",
+    "transcript_log_mode --> sanitize --> Text/Drop",
+    "String --> _sanitize_string --> Senke",
+    "Audio --save_audio_files--> logs/audio"
+  ],
+  "facts": [
+    {
+      "aussage": "Redaktion credential-fokussiert: redact_kroko_credentials (Struktur) + redact_secret_text (Text); erkannt apikey/kroko*-Varianten + key in OPTION_CONTEXT.",
+      "beleg": "credential_redaction.py Z.1, 10-55",
+      "evidenz": "A",
+      "gueltigkeit": "alle Redaktionsaufrufer",
+      "id": "D9-01"
+    },
+    {
+      "aussage": "public_dict drop=True rekursiv + pop 5 Felder (resolved Modelle, Engine-Options, beide Keys) + wake_word_enabled-Ableitung; keine Engine-Payloads/Keys.",
+      "beleg": "server.py Z.545-553; Tests 315-325",
+      "evidenz": "A",
+      "gueltigkeit": "jede Settings-Ausgabe",
+      "id": "D9-02"
+    },
+    {
+      "aussage": "Session-Sicht entfernt zusätzlich openwakeword_model_paths; Server-Sicht (/api/config) liefert ihn.",
+      "beleg": "server.py Z.979-982, 7816, 10006, 3168, 4621-4622; GET /api/config Z.8907-8916",
+      "evidenz": "A",
+      "gueltigkeit": "WS/hello vs Server-Sicht",
+      "id": "D9-03"
+    },
+    {
+      "aussage": "Text-Redaktion mit realen ENV-Werten längensortiert -> [REDACTED] + Label-Regex key:/=; nackt nur bei exaktem Wert.",
+      "beleg": "credential_redaction.py Z.124-138, 34-37",
+      "evidenz": "A",
+      "gueltigkeit": "Diagnose/Fehlertexte",
+      "id": "D9-04"
+    },
+    {
+      "aussage": "STT-Fehler/Änderungsberichte redigiert (Werte aus Engine-Options gesammelt; Berichte als [REDACTED] statt fehlend).",
+      "beleg": "server.py Z.7049-7063, 8149-8246, 7945-7946; stt_model_management.py Z.75-77",
+      "evidenz": "A",
+      "gueltigkeit": "Admin-Antworten/Audit",
+      "id": "D9-05"
+    },
+    {
+      "aussage": "YAML-Sperre admin/openai via SystemExit (normalisiert, kein Log/Fallback) + weitere SystemExit-Fälle.",
+      "beleg": "server.py Z.10301-10302, 10333-10391; Tests 167-180",
+      "evidenz": "A",
+      "gueltigkeit": "Startpfad",
+      "id": "D9-06"
+    },
+    {
+      "aussage": "YAML Engine-Options frei ohne Credential-Prüfung; nested Kroko-Key nicht abgewiesen (nur Top-Level gesperrt).",
+      "beleg": "server.py Z.392-398, 1263-1266, 10360-10378; Tests 145-160",
+      "evidenz": "A",
+      "gueltigkeit": "Startkonfiguration",
+      "id": "D9-07"
+    },
+    {
+      "aussage": "Persistenz-Allowlist minus 7 Felder + drop-Redaktion in save (wirksam für stt_engine_settings); atomar os.replace unter Lock.",
+      "beleg": "server.py Z.7959-7969, 218-220; operations.py Z.432-449, 518-545; Tests 371-379",
+      "evidenz": "A",
+      "gueltigkeit": "runtime.json",
+      "id": "D9-08"
+    },
+    {
+      "aussage": "Reload/Start mit Namensausschluss (admin/openai/data_root/derived); Reload meldet Rest als skipped; manipuliertes Secret würde nicht übernommen (B).",
+      "beleg": "server.py Z.8826-8843, 9870-9892",
+      "evidenz": "A/B",
+      "gueltigkeit": "Start/Reload (admin-geschützt)",
+      "id": "D9-09"
+    },
+    {
+      "aussage": "Schema secretsExposed:false Literal; server_public secret-Zweig (Metadaten/redacted, doppelt gesperrt) derzeit unerreichbar (kein secret=True in Registry).",
+      "beleg": "server.py Z.9223-9242; settings_control.py Z.1407-1444, 1309-1317, 1210-1216, 646-648, 278-609; Tests 759-766, 402-420",
+      "evidenz": "A",
+      "gueltigkeit": "Settings-Domäne",
+      "id": "D9-10"
+    },
+    {
+      "aussage": "Event-Hub filtert Secrets/Audio/Query/Transkripte rekursiv vor jeder Senke (entfernt, nicht maskiert) auf allen Kanälen + message.",
+      "beleg": "event_logging.py Z.31-186, 916-969, 1340-1355; operations.py Z.327-352; Tests 471-544",
+      "evidenz": "A",
+      "gueltigkeit": "Logs/Store/API",
+      "id": "D9-11"
+    },
+    {
+      "aussage": "Transkripte nach Modus none/final/full (Fallback final wenn request_log_transcripts sonst none); final nur transcription.completed; performance immer verworfen; kein Inhalt anonymisiert.",
+      "beleg": "event_logging.py Z.144-155, 870-883; server.py Z.455-456, 1229-1234, 7895-7902, 10774-10777; Tests 518, 524-542",
+      "evidenz": "A",
+      "gueltigkeit": "Transkript-Logging",
+      "id": "D9-12"
+    },
+    {
+      "aussage": "String-Sanitierung: Bearer->[REDACTED]; Label key:/=->[REDACTED]; URL-Query verworfen bei URL-Form.",
+      "beleg": "event_logging.py Z.79-113, 184-185; Tests 497/517",
+      "evidenz": "A",
+      "gueltigkeit": "alle String-Felder",
+      "id": "D9-13"
+    },
+    {
+      "aussage": "Quellen Settings-vor-ENV; CLI-Flags + programmatisch zulässig; kein .env-Lader (nur examples).",
+      "beleg": "security/admin.py Z.15-46; security/openai.py Z.14-35; server.py Z.10520-10521, 10767-10768",
+      "evidenz": "A",
+      "gueltigkeit": "Admin-/OpenAI-Gate",
+      "id": "D9-14"
+    },
+    {
+      "aussage": "Kroko-Auflösung recognizer.key > options.key > 4 ENV-Namen > ''; leerer Nested-Key unterdrückt ENV; kein Persistieren/Loggen/Netz.",
+      "beleg": "kroko/credentials.py Z.1-47; Tests 25-47",
+      "evidenz": "A",
+      "gueltigkeit": "Engine-Optionen",
+      "id": "D9-15"
+    },
+    {
+      "aussage": "Kein Laufzeit-Schreibpfad (STARTUP_ONLY/unknown, kein Echo); Änderung nur Neustart/ENV.",
+      "beleg": "server.py Z.257, 7834-7846, 7965; Tests 327-329, 379",
+      "evidenz": "A",
+      "gueltigkeit": "Admin-API",
+      "id": "D9-16"
+    },
+    {
+      "aussage": "Dateiebene ohne Schutz im Code: Rohaudio bei save_audio_files; Rechte geerbt; keine Verschlüsselung/ACL/chmod/Redaktion; Pfade logs/*/config/runtime.json.",
+      "beleg": "operations.py Z.343-362, 518-545; server.py Z.520-532",
+      "evidenz": "B",
+      "gueltigkeit": "Dateisystem",
+      "id": "D9-17"
+    },
+    {
+      "aussage": "Release-/Build-Redaktion separat (Feldnamen+Muster, keine Env-Keys in Metadaten/Wheel); Domäne 07.12, hier nur Grenze.",
+      "beleg": "engineering/release/redaction.py Z.1-49; Tests 59-66, 780-806, 188/260/472",
+      "evidenz": "A",
+      "gueltigkeit": "Release/Build",
+      "id": "D9-18"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Kein Test manipuliertes Secret in runtime.json."
+    },
+    {
+      "id": "N2",
+      "thema": "Kein Test Schlüsselabwesenheit GET /api/config."
+    },
+    {
+      "id": "N3",
+      "thema": "Keine Transkript-Anonymisierung."
+    },
+    {
+      "id": "N4",
+      "thema": "Keine Verschlüsselung/ACL/chmod DateiEbene."
+    },
+    {
+      "id": "N5",
+      "thema": "Keine Laufzeit-Rotation."
+    },
+    {
+      "id": "N6",
+      "thema": "Keine Deployment-Härtung im Code."
+    }
+  ],
+  "researcher_session": "ses_e3ec5186cffeK1YYbhrJX1pUEz",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "uvicorn Access-Log Query/Header UNKNOWN."
+    },
+    {
+      "id": "U2",
+      "thema": "Dateirechte/Backup außerhalb Repos."
+    },
+    {
+      "id": "U3",
+      "thema": "Rotation/Verteilung außerhalb Repos."
+    },
+    {
+      "id": "U4",
+      "thema": "Offenlegung Pfade/Topologie unbelegt."
+    }
+  ],
+  "writer_notes": "V2 verhindert Keys in Antworten/Logs/Dateien; verschlüsselt/anonymisiert aber nichts. Vier Schichten: Quellen, Ausgabe, Persistenz, Logs. 'entfernt' vs 'maskiert', 'Ausschluss' vs 'Redaktion' trennen."
+}

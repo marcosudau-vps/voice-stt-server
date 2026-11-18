@@ -1,0 +1,265 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup im Klon nicht verifizierbar; nur Commit bindend.",
+  "chapter": "05.08",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d; Klon detached/shallow.",
+  "conflicts": [
+    {
+      "id": "C-1",
+      "thema": "ident kann Pfad sein trotz no-key-Docstring; Serverpfad kaum erreichbar."
+    },
+    {
+      "id": "C-2",
+      "thema": "licenseEntitled modellbezogen, Name suggeriert global; proEnabled nie global lesen."
+    },
+    {
+      "id": "C-3",
+      "thema": "restartRequired auch ohne Pro-Wunsch/bei Force möglich; ungetestet."
+    },
+    {
+      "id": "C-4",
+      "thema": "Konflikt beim Modellwechsel = RuntimeError-Zweig 500, restartRequired nicht maschinenlesbar."
+    },
+    {
+      "id": "C-5",
+      "thema": "Branch nicht verifizierbar."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "[Header-UUID+tier] --> [evaluate]",
+    "[evaluate live] --> [concurrent_native_identity]",
+    "[evaluate ProA vs ProB] --> [pro_identity_change_requires_restart]",
+    "[evaluate Pro ohne Key] --> [pro_requires_key]",
+    "[evaluate Key-Wechsel] --> [key_context_change_requires_restart]",
+    "[acquire Pro] --> [sticky] --> [confirm] --> [confirmed]",
+    "[acquire fail] --> [active=true, confirmed=false]",
+    "[nativ bestätigt] --> [Policy pro/native_license_context, kein Provider-Call]",
+    "[Restart-Konflikt] --> [community + restart_required]",
+    "[Pro->Community] --> [Kontext bleibt]",
+    "[force=true] --> [native aus, Guard bleibt]",
+    "[Unload] --> [nur Lease weg]",
+    "[Prozessende] --> [Guard weg]"
+  ],
+  "facts": [
+    {
+      "aussage": "Prozessweiter Singleton, kein Handle/Netz/Log/Key (nur prozesslokaler HMAC); setzt Grenzen des 1.12.9-Pro-Builds in Pre-Load-Entscheidung um.",
+      "beleg": "native_guard.py Z.1-31, 262-266; keine logging/Netz-Imports",
+      "evidenz": "A",
+      "gueltigkeit": "Prozess-Lebensdauer",
+      "id": "G8-01"
+    },
+    {
+      "aussage": "Vier Codes: concurrent_native_identity, pro_identity_change_requires_restart, key_context_change_requires_restart, pro_requires_key; nur letzte zwei RESTART, nur diese restart_required True.",
+      "beleg": "native_guard.py Z.46-52, 76-83, 54-73; Tests 730-751",
+      "evidenz": "A",
+      "gueltigkeit": "Codes",
+      "id": "G8-02"
+    },
+    {
+      "aussage": "Identität = tier aus Header free-Flag + ident Header-UUID klein else normcase-Pfad; nur erste 65536 Bytes; tier None nicht Pro.",
+      "beleg": "native_guard.py Z.86-112; models.py Z.458-511",
+      "evidenz": "A",
+      "gueltigkeit": "Datei-/Header-Identität offline",
+      "id": "G8-03"
+    },
+    {
+      "aussage": "evaluate Reihenfolge: lebender Lease -> concurrent (außer ignore_live); Pro abweichend -> identity_restart; Pro ohne Key -> pro_requires_key; Key-Revision abweichend -> key_restart; sonst None. Community nie blockiert.",
+      "beleg": "native_guard.py Z.136-161; Tests 730-751",
+      "evidenz": "A",
+      "gueltigkeit": "alle Pfade",
+      "id": "G8-04"
+    },
+    {
+      "aussage": "restart_conflict = evaluate(ignore_live=True) nur restart-Fälle; Kandidatenbewertung auch bei laufender Instanz, Load scheitert weiter am Lease.",
+      "beleg": "native_guard.py Z.163-172; Tests 747-748",
+      "evidenz": "A",
+      "gueltigkeit": "Status/Policy/Switch",
+      "id": "G8-05"
+    },
+    {
+      "aussage": "acquire vergibt Lease und setzt bei Pro SOFORT Identität+Revision (sticky, unabhängig vom Load-Ausgang); Fehlschlag bindet konservativ, beweist keine Lizenz.",
+      "beleg": "native_guard.py Z.186-200; Tests 937-965",
+      "evidenz": "A",
+      "gueltigkeit": "Pro-Identität/Key-Kontext",
+      "id": "G8-06"
+    },
+    {
+      "aussage": "confirm_loaded nur bei Pro-Lease, erst NACH Recognizer-Erzeugung; Community nie Pro; bei Exception release.",
+      "beleg": "native_guard.py Z.202-212; kroko_onnx_engine.py Z.316-347; Tests 918-965",
+      "evidenz": "A",
+      "gueltigkeit": "Ladepfad",
+      "id": "G8-07"
+    },
+    {
+      "aussage": "native_license_confirmed nur bei _pro_confirmed AND Key-Revision nichtleer AND ident==gebunden (ci) AND Revision==gebunden; überlebt release.",
+      "beleg": "native_guard.py Z.214-236; Tests 918-934",
+      "evidenz": "A",
+      "gueltigkeit": "Kontext-Beweis",
+      "id": "G8-08"
+    },
+    {
+      "aussage": "Nur Prozessende setzt zurück; kein Reset (reset_for_tests test-only); Release leert nur Lease; Neustart = neuer OS-Prozess.",
+      "beleg": "native_guard.py Z.232-259; conftest.py Z.1-16; kein exec/relaunch; Tests 711-721, 896-915",
+      "evidenz": "A",
+      "gueltigkeit": "Neustart-Semantik",
+      "id": "G8-09"
+    },
+    {
+      "aussage": "status geheimnisfrei: liveNativeInstances, nativeProContextActive (=ident is not None, nicht läuft), confirmed, modelUuid (=ident).",
+      "beleg": "native_guard.py Z.244-252; server.py Z.6453, 6825, 6855; Tests 749-751",
+      "evidenz": "A",
+      "gueltigkeit": "Statusprojektion",
+      "id": "G8-10"
+    },
+    {
+      "aussage": "Service-Property = process_guard(); Service/Engine/Status teilen Instanz; kein zweiter Guard.",
+      "beleg": "server.py Z.97-102, 6381-6384; engine Z.19, 347, 353-364",
+      "evidenz": "A",
+      "gueltigkeit": "Server/Engine",
+      "id": "G8-11"
+    },
+    {
+      "aussage": "Entitlement-Hook: Nicht-Kroko True not_kroko; fehlende UUID False no_license_uuid; force False force_community; sonst proof ODER native; dann restart_conflict zuerst; sonst True license_valid/native_license_context; unbekannt reasonCode; Exception policy_error.",
+      "beleg": "server.py Z.6295-6300, 6532-6579; stt_model_management.py Z.1130-1151; Tests 675-693, 880-893",
+      "evidenz": "A",
+      "gueltigkeit": "Admission/Snapshot",
+      "id": "G8-12"
+    },
+    {
+      "aussage": "Kein Doppel-Check bei nativem Kontext: nach Restart-Check und wenn nicht force und native bestätigt -> pro/native_license_context + bind_intent, kein prepare/run/Netz.",
+      "beleg": "server.py Z.6641-6659; security/kroko.py Z.138-144; Tests 856-877",
+      "evidenz": "A",
+      "gueltigkeit": "Policy mit nativem Kontext",
+      "id": "G8-13"
+    },
+    {
+      "aussage": "Restart-Konflikt: community + model_uuid + reason + check_required False + restart_required True; kein Grant (auch bei force, da vorher geprüft).",
+      "beleg": "server.py Z.6626-6640; Tests 675-693",
+      "evidenz": "A",
+      "gueltigkeit": "Policy",
+      "id": "G8-14"
+    },
+    {
+      "aussage": "kroko_runtime_status: licenseEntitled = proof OR native; Source provider vor native; ModelUuid aus Gate; native-Felder aus Guard; restartRequired/Reason (erstes kommerzielles Modell sonst key_context); activeProPresent; proAdmissionRevoked; modelRefreshPending/lastReconcile.",
+      "beleg": "server.py Z.6778-6864; Tests 407-414, 856-877",
+      "evidenz": "A",
+      "gueltigkeit": "Admin-API-Projektion",
+      "id": "G8-15"
+    },
+    {
+      "aussage": "native_entitled = gebundene UUID AND nicht force AND native bestätigt; force hebt Quelle auf ohne Guard zu löschen.",
+      "beleg": "server.py Z.6823-6834; Tests 880-893, 391-414",
+      "evidenz": "A",
+      "gueltigkeit": "Status unter Force",
+      "id": "G8-16"
+    },
+    {
+      "aussage": "Vorprüfungen vor nativem Laden: Scheduler-Preflight >1 Identität/zwei Lanes ohne use_main -> concurrent; Probe-Preflight evaluate; Switch-assert restart-only; Reuse live-Instanz statt Zweit-Load.",
+      "beleg": "server.py Z.6868-7018, 7266-7273; Tests 495-708, 407-438",
+      "evidenz": "A",
+      "gueltigkeit": "Wechsel/Probe/Scheduler",
+      "id": "G8-17"
+    },
+    {
+      "aussage": "Settings kennt Einzelidentität: zwei Kroko-Modelle ValueError, zwei Lanes desselben use_main-Zwang.",
+      "beleg": "kroko_runtime.py Z.20-73; server.py Z.8764-8775; Tests 495-514",
+      "evidenz": "A",
+      "gueltigkeit": "Normalisierung",
+      "id": "G8-18"
+    },
+    {
+      "aussage": "Engine letzte Linie: Lease nur echter nativer Recognizer (kein Test-Double); Fehler -> release; Erfolg -> confirm; weakref.finalize/close gibt frei.",
+      "beleg": "kroko_onnx_engine.py Z.334-370, Z.9; Tests 791-851",
+      "evidenz": "A",
+      "gueltigkeit": "Konstruktion/Zerstörung",
+      "id": "G8-19"
+    },
+    {
+      "aussage": "Community nach Pro erlaubt, setzt Kontext NICHT zurück; Status meldet weiter aktiv.",
+      "beleg": "native_guard.py Z.28-30; engine Tests 819-831; server.py Z.6855; Tests 819-831, 391-414",
+      "evidenz": "A",
+      "gueltigkeit": "Pro->Community",
+      "id": "G8-20"
+    },
+    {
+      "aussage": "Einziger Kroko-Settings-Schlüssel forceCommunity (SCOPE_SERVER/AUTH_ADMIN/TYPE_BOOL/APPLY_LIVE/Default False); Key kein Setting sondern Engine-Option/ENV.",
+      "beleg": "settings_control.py Z.89-93, 591-608; credentials.py Z.21-47; server.py Z.6386-6396; Tests 402-422, 810-813",
+      "evidenz": "A",
+      "gueltigkeit": "Konfigurationsgrenze",
+      "id": "G8-21"
+    },
+    {
+      "aussage": "Force-Patch synchron unter Lock + sofort invalidieren + Reconcile-Daemon; Submit prüft Revocation+Generation unter Lock; Guard unverändert.",
+      "beleg": "server.py Z.9264-9280, 6711-6720, 7458-7496, 6672; Tests 322-395, 391-414",
+      "evidenz": "A",
+      "gueltigkeit": "Force/Submit",
+      "id": "G8-22"
+    },
+    {
+      "aussage": "Zielwahl respektiert Kontext: mit nativer Pro-Identität nur diese UUID, sonst pro_model_not_local ohne Prüfung.",
+      "beleg": "server.py Z.6452-6470",
+      "evidenz": "B",
+      "gueltigkeit": "Zielwahl",
+      "id": "G8-23"
+    },
+    {
+      "aussage": "Exposition: /api/models/management + /models krokoRuntime admin-geschützt; POST refresh admin mit runtime/decisions/license/management; v2-Schema ohne Kroko-Felder; GET settings public ohne Secrets/Guard.",
+      "beleg": "server.py Z.8943-9027, 7029-7042; schema.py ohne Treffer; settings_control.py Z.1407-1444",
+      "evidenz": "A",
+      "gueltigkeit": "HTTP (Legacy-Admin, nicht v2)",
+      "id": "G8-24"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-1",
+      "thema": "Kein Auto-Neustart/Supervisor; kein exec/relaunch."
+    },
+    {
+      "id": "N-2",
+      "thema": "Kein Reset-Endpunkt; reset_for_tests test-only."
+    },
+    {
+      "id": "N-3",
+      "thema": "Keine Persistenz (bewusst)."
+    },
+    {
+      "id": "N-4",
+      "thema": "Kein Netz/Log/Key-Speichern im Guard."
+    },
+    {
+      "id": "N-5",
+      "thema": "Kein Community-Guard; None nicht Pro."
+    },
+    {
+      "id": "N-6",
+      "thema": "Keine v2-Felder restart/license."
+    },
+    {
+      "id": "N-7",
+      "thema": "Keine CI-Definition; pytest testpaths=tests/unit; native opt-in Skip."
+    }
+  ],
+  "researcher_session": "ses_e4203aa0cffe9st0msJaTr7mXw",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-1",
+      "thema": "Provider lehnt Zusatzprüfung ab – beobachtet, offline kein Vertrag."
+    },
+    {
+      "id": "U-2",
+      "thema": "Build-Version 1.12.9 nicht ableitbar."
+    },
+    {
+      "id": "U-3",
+      "thema": "HTTP-Status/Format Restart-Konflikt ungetestet."
+    },
+    {
+      "id": "U-4",
+      "thema": "Branch nicht verifizierbar."
+    }
+  ],
+  "writer_notes": "Grenze, kein Tutorial. Guard bewertet VOR nativem Aufruf, bindet sticky, nur neuer OS-Prozess löscht. active != läuft. Kein Doppel-Check = kein Gate-Aufruf. RestartRequired kein Kommando."
+}

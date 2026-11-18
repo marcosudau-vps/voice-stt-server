@@ -1,0 +1,213 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD). Nur Commit bindend.",
+  "chapter": "07.09",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached). Workflows ci/release-candidate/release-publish (194/463/300 Z) + cpu_only/release_candidate/qualify/state/engine + Tests + pytest.ini/setup.py/pyproject.",
+  "conflicts": [
+    {
+      "id": "K1",
+      "thema": "Auftrag Jobs vs 1 Job build-and-test + 3 Schrittbloecke (72-82/84-168/170-194) [CI7-05-08]."
+    },
+    {
+      "id": "K2",
+      "thema": "3.12 env keine Matrix-Achse; Matrix nur os [CI7-05]."
+    },
+    {
+      "id": "K3",
+      "thema": "CPU-Pruefung bestaetigt testfixiert 2x install-torch 2x check [CI7-09/10]."
+    },
+    {
+      "id": "K4",
+      "thema": "Publish nur Gates bestaetigt (4 Jobs, {}, release, 4 Boundaries) [CI7-15]."
+    },
+    {
+      "id": "K5",
+      "thema": "NOT_REQUESTED; notes nur Platzhalter; edges []."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "Inventar genau 3 Workflows (ci/RC/publish); vierte bricht Test; YAML-Dict parsbar.",
+      "beleg": "test_release_workflows:57-67; .github/workflows/ Listing",
+      "evidenz": "B",
+      "gueltigkeit": "repo-weit",
+      "id": "CI7-01"
+    },
+    {
+      "aussage": "CI-Trigger PR alle, push main/feat/**/work/**, dispatch; kein Tag/schedule; exakt [pull_request,push,workflow_dispatch].",
+      "beleg": "ci.yml:19-26; test_release_workflows:137-140",
+      "evidenz": "B",
+      "gueltigkeit": "CI",
+      "id": "CI7-02"
+    },
+    {
+      "aussage": "Least Privilege contents read Workflow + jeder Job exakt; kein Publish moeglich.",
+      "beleg": "ci.yml:28-30,47-48; test_release_workflows:168-174",
+      "evidenz": "B",
+      "gueltigkeit": "CI",
+      "id": "CI7-03"
+    },
+    {
+      "aussage": "SHA-Pinning alle uses @40hex + Versionskommentar; checkout v4.2.2, setup-python v5.3.0 (+ RC/Publish Pins).",
+      "beleg": "test_release_workflows:34,264-282; ci:54,59; RC/Publish SHAs",
+      "evidenz": "B",
+      "gueltigkeit": "alle 3 Workflows",
+      "id": "CI7-04"
+    },
+    {
+      "aussage": "Genau 1 Job build-and-test, Matrix nur os [ubuntu-24.04,windows-latest], fail-fast false, shell bash, PY3.12 env (setup.py public >=3.12,<3.13).",
+      "beleg": "ci.yml:36-51,58-61; setup.py:42; pyproject kein requires-python",
+      "evidenz": "A",
+      "gueltigkeit": "CI",
+      "id": "CI7-05"
+    },
+    {
+      "aussage": "Block1: pip build twine wheel, build --outdir dist, ls, twine check; kein upload.",
+      "beleg": "ci.yml:69-82; test_release_workflows:286-292",
+      "evidenz": "A+B",
+      "gueltigkeit": "CI",
+      "id": "CI7-06"
+    },
+    {
+      "aussage": "Block2 Smoke: venv, WHEEL=head -n1, Constraint install-torch, PIP_CONSTRAINT install [recommended,server], pip check + cpu check, Identitaet ausserhalb Checkout, 5 Scripts, 3 Assets + wakeword_models.",
+      "beleg": "ci.yml:87-168",
+      "evidenz": "A",
+      "gueltigkeit": "CI",
+      "id": "CI7-07"
+    },
+    {
+      "aussage": "Block3 Dev: pip upgrade, install-torch Constraint, editable + dev-Reqs mit Constraint, pip/cpu check, pytest unit+compat, packaging, diff --check (nur Worktree).",
+      "beleg": "ci.yml:170-194; pytest.ini:1-3",
+      "evidenz": "A",
+      "gueltigkeit": "CI (Verfahren 07.06)",
+      "id": "CI7-08"
+    },
+    {
+      "aussage": "cpu_only stdlib: Index cpu, GPU-Re, Marker, check (GPU/cuda/hip/Requires/Tensor 6, Report), install torch==version, CLI Exit 0/1; is_available kein Beweis.",
+      "beleg": "cpu_only.py:20-162",
+      "evidenz": "A",
+      "gueltigkeit": "alle Pfade",
+      "id": "CI7-09"
+    },
+    {
+      "aussage": "Verdrahtung testfixiert 2x install-torch 2x check + Constraint-Zeilen; RC nur via qualify --install.",
+      "beleg": "ci:104,111,177,185; cpu_only_contract:105-127; qualify:27,191-213",
+      "evidenz": "B",
+      "gueltigkeit": "CI+RC-Quali",
+      "id": "CI7-10"
+    },
+    {
+      "aussage": "RC nur dispatch (+optional context), contents read, Concurrency sha kein Abbruch; Jobs linux->build-win->win->candidate.",
+      "beleg": "RC:28-44,53-309; test_release_workflows:142-183,398-407",
+      "evidenz": "B",
+      "gueltigkeit": "RC",
+      "id": "CI7-11"
+    },
+    {
+      "aussage": "Fingerprint-Cache variantengetrennt kroko-pro-<fp> Pfad .../pro; Win ohne Store-Arg (store-unabhaengig).",
+      "beleg": "RC:108-122,209-221; test_release_workflows:409-424; release_candidate:296,524-528",
+      "evidenz": "B+A",
+      "gueltigkeit": "RC",
+      "id": "CI7-12"
+    },
+    {
+      "aussage": "RC-Quali: clean-Tree Gate, Quellidentitaet HEAD/tree/VERSION, --install je Plattform, Reihenfolge fixiert, Manifest NOT_QUALIFIED->validate->qualify->validate->SHA-Inventar QUALIFIED.",
+      "beleg": "RC:91-149,223-285,341-447; test_release_workflows:94-110,426-428",
+      "evidenz": "B",
+      "gueltigkeit": "RC",
+      "id": "CI7-13"
+    },
+    {
+      "aussage": "RC schreibt nichts Oeffentliches: kein Tag + staging@sha256, Wheel-Smoke >=2 variant/embedded/Engines/kein engineering, --push-staging GITHUB_TOKEN, Retention 1/90 error.",
+      "beleg": "RC:366-463; test_release_workflows:294-308",
+      "evidenz": "B",
+      "gueltigkeit": "RC",
+      "id": "CI7-14"
+    },
+    {
+      "aussage": "Publish 4 Gates tag->pypi->registries->finalize needs, env release, {} + Rechte (id-token pypi, contents tag/finalize, packages registries/finalize, actions read alle), Boundaries TAGGED/PYPI/EXTERNAL/COMPLETE (STATE_ORDER 10, FIRST PYPI), preflight --require-qualified, precheck/Trusted Publish skip-existing, fail-closed, Concurrency version, nur GITHUB_TOKEN/DOCKERHUB (kein PYPI/KROKO/echo).",
+      "beleg": "release-publish:26-300; state:41-56; cli:456-462; remote_checks:24,49; engine:235-279; test_release_workflows:185-378,443-468",
+      "evidenz": "B",
+      "gueltigkeit": "Publish",
+      "id": "CI7-15"
+    },
+    {
+      "aussage": "Vertragstests deklarieren Gates G40-G50 + kein Operator-Pfad; pruefen PR/publish/Secrets/Pinning/Privilege/GHCR/Docker/PyPI/Quali/Kroko-Key + Concurrency/Pfade/pipefail/runner.",
+      "beleg": "test_release_workflows:1-468",
+      "evidenz": "A",
+      "gueltigkeit": "alle Workflows (statisch, keine Laufzeit)",
+      "id": "CI7-16"
+    },
+    {
+      "aussage": "Nicht abgesichert/nicht implementiert: kein timeout, kein cache/upload in CI, kein schedule/PR-target/Tag, keine Security-Workflows (Inventar fix 3), kein Docker/Lint/Type/Coverage in CI, extras_matrix ungenutzt, Matrix/Version/Schritte ungetestet, Protection/Reviewer UNKNOWN.",
+      "beleg": "Greps .github/tests; ci.yml; inventar:58-62",
+      "evidenz": "A",
+      "gueltigkeit": "Repo",
+      "id": "CI7-17"
+    },
+    {
+      "aussage": "CI baut Dev-Wheel, beweist Install/Import/Assets/Scripts + CPU 2x + Tests; kein Kroko-Pro/OCI/Push/Tag/Secret (0 secrets.).",
+      "beleg": "ci.yml voll; test_release_workflows:286-292",
+      "evidenz": "B",
+      "gueltigkeit": "CI",
+      "id": "CI7-18"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "NI-01",
+      "thema": "Kein timeout-minutes (alle Workflows)."
+    },
+    {
+      "id": "NI-02",
+      "thema": "Kein cache/upload in ci (nur RC/Publish)."
+    },
+    {
+      "id": "NI-03",
+      "thema": "Kein schedule/PR-target/Tag-Trigger."
+    },
+    {
+      "id": "NI-04",
+      "thema": "Keine Security-Workflows (Inventar fix 3)."
+    },
+    {
+      "id": "NI-05",
+      "thema": "Kein Docker in ci."
+    },
+    {
+      "id": "NI-06",
+      "thema": "Kein Lint/Type/Coverage in ci."
+    },
+    {
+      "id": "NI-07",
+      "thema": "extras_matrix ungenutzt (kein CI-Gate)."
+    }
+  ],
+  "researcher_session": "ses_e37368fd4ffeyDP49a02WMDws2",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-01",
+      "thema": "Matrix/Version/Schritte ungetestet (ungesichert)."
+    },
+    {
+      "id": "U-02",
+      "thema": "Branch-Protection/Required-Checks nicht im Repo."
+    },
+    {
+      "id": "U-03",
+      "thema": "release-Env Reviewer nur Name, Zahl UNKNOWN."
+    },
+    {
+      "id": "U-04",
+      "thema": "Secrets/Vars nur Referenzen, Existenz UNKNOWN."
+    },
+    {
+      "id": "U-05",
+      "thema": "dist genau 1 Wheel ungesichert (head -n1)."
+    }
+  ],
+  "writer_notes": "Nur Ablauf/Gates (nicht Verfahren 07.06, Merge 07.07, Build 07.08). Zahlen: Matrix ubuntu/windows fail-fast false PY3.12, 5 Scripts, 3 Assets+wakeword, Retention 1/90, 4 Boundaries, 10 States. Fallen: windows-latest beweglich, diff-check nur Worktree, release-Reviewer UNKNOWN, RC cpu nur via qualify, Verbote Textmuster."
+}

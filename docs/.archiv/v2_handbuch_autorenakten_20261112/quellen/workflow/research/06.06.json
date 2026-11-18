@@ -1,0 +1,289 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached). Nur Commit a8993c5c68042d996eab680d84a5b138a214bb5d bindend.",
+  "chapter": "06.06",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d; nur *.py/Manifests/Tests/Docker/Compose als Evidenz.",
+  "conflicts": [
+    {
+      "id": "C6-01",
+      "thema": "Ohne data_root stille CWD-Fallbacks + runtime None: Betriebsrisiko, kein Default-Verzeichnis [E6-03]."
+    },
+    {
+      "id": "C6-02",
+      "thema": "data_root ENV-vs-YAML-Kollision (set_defaults überschreibt Default) ohne Validierung/Log [E6-04]."
+    },
+    {
+      "id": "C6-03",
+      "thema": "YAML-Fehlertext verweist Env-Datei, aber kein .env-Lader (nur Beispiele); .env vs voicestt.env inkonsistent [E6-06/E6-07]."
+    },
+    {
+      "id": "C6-04",
+      "thema": "OpenAI ohne Key offen: Sicherheitsentscheidung, kennzeichnen [E6-09]."
+    },
+    {
+      "id": "C6-05",
+      "thema": "stt_auto_download beschafft Default-Realtime-Modell nicht (kein Produkt eligibel) [E6-11/E6-12]."
+    },
+    {
+      "id": "C6-06",
+      "thema": "VOICESTT_OPENWAKEWORD_MODEL_ROOT toter Pfad (nur VPS-Compose, 0 Code-Treffer) [E6-14]."
+    },
+    {
+      "id": "C6-07",
+      "thema": "ready ≠ Modell-Signal (finally gesetzt); nur sttReady/sttModels zählen; Docker-Health nur 200 [E6-17]."
+    },
+    {
+      "id": "C6-08",
+      "thema": "KROKO_ALLOW_DOWNLOAD zweite unabhängige Sperre, beide folgenlos [E6-23]."
+    },
+    {
+      "id": "C6-09",
+      "thema": "HOCH: config.yaml /data vs Image /var/lib/voicestt (kein COPY/CMD-config): YAML=Bare-Metal/VPS, Container=ENV/CMD trennen [E6-24]."
+    },
+    {
+      "id": "C6-10",
+      "thema": "VPS-Compose veraltet (target cpu inexistent, ready+ok-Health vs Liveness) [E6-25]."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [
+    "CLI/ENV --data-root/VOICESTT_DATA_ROOT -> data_root_path [E6-04]",
+    "data_root -> logs/*, sqlite, config/runtime.json (7 Pfade, expanduser, kein mkdir) [E6-02]",
+    "data_root -> models/stt/fasterwhisper|kroko_asr Default-Root [E6-14]",
+    "custom_paths/Legacy-ENV -> Discovery -> Kandidaten [E6-14]",
+    "Snapshot -> _resolved (nur minimumReady) -> Scheduler [E6-18]",
+    "runtime.json -> Settings-Overlay beim Start [E6-19]",
+    "metrics -> /health ok/ready/sttReady [E6-17]",
+    "Docker-HEALTHCHECK -> /health nur 200 [E6-15/E6-17]"
+  ],
+  "facts": [
+    {
+      "aussage": "ServerSettings Default-Autorität: 0.0.0.0/8010/custom/small/Kroko-DE-...-001.data/de/faster_whisper/kroko_onnx/int8/cpu/auto-download-aus/event-live-an.",
+      "beleg": "server.py Z.403-543; Tests Z.155/182-189.",
+      "evidenz": "A",
+      "gueltigkeit": "alle Wege (CLI>YAML>Env)",
+      "id": "E6-01"
+    },
+    {
+      "aussage": "data_root leitet exakt 7 Pfade ab (4 logs-Dirs, sqlite, audio, runtime.json); expanduser, kein resolve/mkdir; nie separat setzbar.",
+      "beleg": "server.py Z.293-301/519-532; Tests Z.161-165; startup_only.",
+      "evidenz": "A",
+      "gueltigkeit": "alle Wege (Details 03.x)",
+      "id": "E6-02"
+    },
+    {
+      "aussage": "Ohne data_root: relative logs/ (CWD), runtime None (kein Schreiben), Modelle ./data/models/stt.",
+      "beleg": "server.py Z.520-531/6295-6296; operations.py Z.432-434/451-458; kein None-Test.",
+      "evidenz": "B",
+      "gueltigkeit": "Bare-Metal ohne --data-root/ENV",
+      "id": "E6-03"
+    },
+    {
+      "aussage": "Präzedenz CLI>YAML>ENV; YAML-data_root überschreibt ENV-Default still (erlaubt, nicht derived).",
+      "beleg": "server.py Z.10396-10408/10537-10545/10655; Test nur YAML>CLI Z.151-155.",
+      "evidenz": "B",
+      "gueltigkeit": "jeder Start mit --config",
+      "id": "E6-04"
+    },
+    {
+      "aussage": "Keine eifrige Anlage: kein mkdir in server.py; logs/sqlite bei create_app (EventHub), Monatsordner bei erstem Event, config/ bei erstem Schreiben; models/stt nie durch Server.",
+      "beleg": "event_logging.py Z.340-343/441-443; operations.py Z.522; server.py Z.6313; Tests Persistenz/Contract.",
+      "evidenz": "A",
+      "gueltigkeit": "alle Wege",
+      "id": "E6-05"
+    },
+    {
+      "aussage": "YAML optional (--config/VOICESTT_CONFIG); Exits: fehlend/version≠1/kein settings-Objekt/Secrets/abgeleitet+tuning_description/Device≠cpu/Profil/unbekannt/Wert.",
+      "beleg": "server.py Z.10301-10391; Tests Z.167-180.",
+      "evidenz": "A",
+      "gueltigkeit": "Start (nicht Container)",
+      "id": "E6-06"
+    },
+    {
+      "aussage": "Kein .env-Lader im Server (nur Beispiele); ENV via Prozessmanager; Compose env_file voicestt.env optional.",
+      "beleg": "Grep dotenv nur Beispiele; requirements Z.1-6 ohne dotenv; compose Z.40-42; config Z.4; vps Z.21-23.",
+      "evidenz": "A",
+      "gueltigkeit": "Serverprozess",
+      "id": "E6-07"
+    },
+    {
+      "aussage": "Admin-Key CLI/ENV (Header-Vorrang x-voicestt>Bearer>x-admin); ohne Key nur Loopback/testclient, sonst 403; startup_only, nie persistiert/PATCH-rejected.",
+      "beleg": "server.py Z.257/7835-7840/7965/10521; admin.py Z.15-46; Tests Z.34-63; compose Z.37.",
+      "evidenz": "A",
+      "gueltigkeit": "alle Wege (Mechanik 05.09)",
+      "id": "E6-08"
+    },
+    {
+      "aussage": "OpenAI-Key optional (CLI None/ENV); ohne Key offen ohne Auth; falsch → 401 + authentication.failed invalid_api_key.",
+      "beleg": "server.py Z.10520; openai.py Z.14-35; compose Z.36; Tests Z.66-94.",
+      "evidenz": "A",
+      "gueltigkeit": "/v1 wenn enabled",
+      "id": "E6-09"
+    },
+    {
+      "aussage": "Kroko-Key: recognizer.key (leer unterdrückt ENV) > options.key > 4 ENV (KROKO_API_KEY/KROKO_ONNX_KEY/VOICESTT_KROKO_ONNX_KEY/KROKO_KEY) > ''; Lizenz-Eingabe, nur expliziter Check, kein Startup-Netz; Timeout 5s.",
+      "beleg": "kroko/credentials.py Z.13-47; kroko.py Z.27-52; Tests Z.133-144.",
+      "evidenz": "A",
+      "gueltigkeit": "kroko_onnx (Mechanik 05.x)",
+      "id": "E6-10"
+    },
+    {
+      "aussage": "stt_auto_download dreistufig (global/Engine/Modell), überall Default False.",
+      "beleg": "server.py Z.503/10435-10441; config.yaml Z.25-36; stt_model_management.py Z.259-269/7893-7894; Tests Z.229-248/925-934.",
+      "evidenz": "A",
+      "gueltigkeit": "Model-Management",
+      "id": "E6-11"
+    },
+    {
+      "aussage": "Alle Shipped-Produkte nicht auto-provisionierbar (faster LOCAL_ONLY_UNPINNED; Kroko nur ALLOWED, Manifest POLICY_REQUIRED/PROHIBITED) → PermissionError; Erstbeschaffung manuell.",
+      "beleg": "stt_model_management.py Z.343-405/546-588; kroko/models.py Z.134-140; models.json Z.36-143; Tests Z.251-259/557.",
+      "evidenz": "A",
+      "gueltigkeit": "Free+Pro (Variante steuert Runtime, nicht Redistribution)",
+      "id": "E6-12"
+    },
+    {
+      "aussage": "Provisionierung falls autorisiert: urlopen, Writability-Probe, .part, Source-Check, bytes+sha256, os.replace unter Lock.",
+      "beleg": "stt_model_management.py Z.546-625; Tests Z.201-226/505-531.",
+      "evidenz": "A",
+      "gueltigkeit": "nur Grant+eligibel",
+      "id": "E6-13"
+    },
+    {
+      "aussage": "Discovery-Reihenfolge: custom_paths/Legacy-Optionen → Legacy-ENV → Default-Root (dedup); provisioning_target zuerst; faster config.json+model.bin (snapshots ok, .part ignoriert); Kroko .data direkt/*.data.",
+      "beleg": "stt_model_management.py Z.195-215/411-424/494-527/662-700; compose Z.34-35/69-80; Tests Z.102-198.",
+      "evidenz": "A",
+      "gueltigkeit": "beide Engines (+ Docker-Mounts)",
+      "id": "E6-14"
+    },
+    {
+      "aussage": "Docker-Erststart: /var/lib/voicestt (ENV), 10001/nologin, Modellordner vorab, USER/WORKDIR/VOLUME, EXPOSE 8010, ENTRYPOINT+CMD cpu/int8/local_files_only, Offline-ENV.",
+      "beleg": "Dockerfile Z.43-102; Tests Z.119-121/177-178.",
+      "evidenz": "A",
+      "gueltigkeit": "nur Image (Wege 06.02-05)",
+      "id": "E6-15"
+    },
+    {
+      "aussage": "Compose: ein Service, portable Defaults (image/Variante-free/restart/init/env_file-optional), Daten-Bind rw + Modell-Mounts ro, Port 8010, Liveness-Health.",
+      "beleg": "compose Z.13-90; Tests Z.52-60/170-203.",
+      "evidenz": "A",
+      "gueltigkeit": "öffentlicher Weg",
+      "id": "E6-16"
+    },
+    {
+      "aussage": "/health immer 200 mit ok/ready/Sessions/Scheduler/Modelle/sttReady/sttModels/startupErrors/eventStore; ready nach wait_ready, ok=ready+healthy+logging_ready; Worker-ready auch bei load_error (finally), healthy dann False; sttReady aus minimumReady.",
+      "beleg": "server.py Z.7685-7703/8521-8523/8885-8905; worker Z.2024-2030; scheduler Z.2173-2178; Tests Z.893-903/111-118; quali Z.108-154.",
+      "evidenz": "A",
+      "gueltigkeit": "alle Wege",
+      "id": "E6-17"
+    },
+    {
+      "aussage": "Cold Start ohne Modell gültig+administrierbar: Snapshot leer (minimum_ready false), Scheduler/Worker laufen, Fehler → startup_errors+/health; kein Fallback/Download-Rettung.",
+      "beleg": "server.py Z.6304-6306/6363-6365/7275-7302/8629-8645/7703; quali Z.108-154; Tests Z.816-903.",
+      "evidenz": "A",
+      "gueltigkeit": "Erststart ohne Dateien",
+      "id": "E6-18"
+    },
+    {
+      "aussage": "runtime.json: Laden beim Start (Ausnahmen derived/Secrets), Schreiben nur Änderung (Overlay/Revision, Lock+Temp+replace); Erststart existiert nicht.",
+      "beleg": "operations.py Z.401-545; server.py Z.6282-6306/8827-8842/7959-7969; Tests Z.39-292; nur mit data_root.",
+      "evidenz": "A",
+      "gueltigkeit": "nur data_root gesetzt (Hoheit 03.x)",
+      "id": "E6-19"
+    },
+    {
+      "aussage": "CPU-Zwang + Speicherpolitik ab Einrichtung: device cpu (CLI/YAML/Enforcement), Engines/Profil/Identity/2-Medium-ohne-Large; Aufrufe Start/Settings/Modell.",
+      "beleg": "server.py Z.8764-8801/8843/8074/9067/9865/10453/10379-10380; Tests.",
+      "evidenz": "A",
+      "gueltigkeit": "alle Wege (kein GPU-Pfad)",
+      "id": "E6-20"
+    },
+    {
+      "aussage": "Kein Seed/Bootstrap/Keygen/Nutzer-DB (nur events-Tabelle); ohne Key Admin-Loopback, OpenAI offen; Erststart erzeugt nichts.",
+      "beleg": "Grep 0 Treffer (bootstrap/seed/admin/keygen/first_run); event_logging.py Z.452-471; Tests Z.50-54/125-130.",
+      "evidenz": "B/C",
+      "gueltigkeit": "V2",
+      "id": "E6-21"
+    },
+    {
+      "aussage": "Offline-Auflösung local_files_only > offline_models > VOICESTT_OFFLINE_MODELS; faster direkter Pfad→model_root→ENV→download_root (+Aliase); Container immer offline; Bare-Metal-Default False (Download unbelegt).",
+      "beleg": "model_resolver.py Z.23-90; Dockerfile Z.64-67/99-102; compose Z.24-27/52-55; Tests Z.937-952.",
+      "evidenz": "A",
+      "gueltigkeit": "Engine-Auflösung",
+      "id": "E6-22"
+    },
+    {
+      "aussage": "Default-Realtime-Modell Manifest-gepinnt (kroko-de-community-64-l, 155839333 B, sha256, POLICY_REQUIRED, free-Runtime); Pro-auf-Free hart abgelehnt; KROKO_ALLOW_DOWNLOAD (False) + VERIFY_HASH zweite Sperren.",
+      "beleg": "models.json Z.28-44; kroko/models.py Z.43-92; Tests Z.81-83/224-245.",
+      "evidenz": "A",
+      "gueltigkeit": "Free+Pro (Manifest gepinnt)",
+      "id": "E6-23"
+    },
+    {
+      "aussage": "HOCH: config.yaml /data vs Image /var/lib/voicestt (kein COPY/CMD-config); YAML wirkt nur gemountet+--config/ENV, dann Pfad-Bruch.",
+      "beleg": "config.yaml Z.99-102; Dockerfile Z.21-23/68/83/98-102; compose Z.60-64; Tests Z.25-39.",
+      "evidenz": "A",
+      "gueltigkeit": "YAML-im-Container",
+      "id": "E6-24"
+    },
+    {
+      "aussage": "VPS-Compose veraltet: target cpu inexistent (nur builder/runtime), private Pfade, /data, 127.0.0.1:2000, ready+ok-Health vs Liveness; Legacy-Artefakt.",
+      "beleg": "vps/docker-compose.yml Z.11-56; Dockerfile Z.7/43; Tests Z.141-148/181-194; Betrieb unbekannt.",
+      "evidenz": "A",
+      "gueltigkeit": "nur Legacy-Ordner",
+      "id": "E6-25"
+    },
+    {
+      "aussage": "Build-Tooling vorhanden; CI-Definition im Snapshot unbelegt (.github-Glob ohne Treffer).",
+      "beleg": "Dateien vorhanden vs Globs .github/.gitlab/Jenkins/Makefile/tox ohne Treffer; Tests Z.68-88.",
+      "evidenz": "B",
+      "gueltigkeit": "Snapshot",
+      "id": "E6-26"
+    },
+    {
+      "aussage": "Einstieg console_scripts + Re-Export; main: parse_args→settings_from_args→logging→uvicorn.run(create_app); Service/Event-Store/Control/Refresh vor Lifespan, start im Lifespan.",
+      "beleg": "setup.py Z.409-423; server.py Z.8-26; server.py Z.8816-8852/10813-10835; Tests Z.111-120.",
+      "evidenz": "A",
+      "gueltigkeit": "alle Wege (Container python -m)",
+      "id": "E6-27"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N6-01",
+      "thema": "Kein Startup-mkdir models/stt/* außerhalb Docker/Provisioning."
+    },
+    {
+      "id": "N6-02",
+      "thema": "Auto-Provisioning Shipped-Produkte ineligibel → manuell [E6-12]."
+    },
+    {
+      "id": "N6-03",
+      "thema": "Kein Fallback/Download-Rettung bei fehlendem Modell."
+    },
+    {
+      "id": "N6-04",
+      "thema": "Kein GPU-Pfad (nur cpu)."
+    },
+    {
+      "id": "N6-05",
+      "thema": "Kein Seed/Admin-Bootstrap/Keygen."
+    }
+  ],
+  "researcher_session": "ses_e3e17494cffe6Fi2vkpsUn6fJE",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U6-01",
+      "thema": "Nicht-Offline-Bare-Metal-Download aus Servercode unbelegt."
+    },
+    {
+      "id": "U6-02",
+      "thema": "VPS-Compose-Betriebsstatus unbekannt."
+    },
+    {
+      "id": "U6-03",
+      "thema": "CI-Definition im Snapshot unbelegt (Forscher-Glob)."
+    }
+  ],
+  "writer_notes": "Nur Defaults ohne YAML nennen (max_sessions 4 vs config 8 nicht vermischen); Wege referenzieren; Secrets nur verlinken; Event-Store nur Abhängigkeit; STARTUP/DERIVED/Whitelist → 03.x (nur PATCH-Folge). Diagramm NOT_REQUESTED, Kanten nur optional."
+}

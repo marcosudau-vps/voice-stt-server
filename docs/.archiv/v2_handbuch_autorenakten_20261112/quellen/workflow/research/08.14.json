@@ -1,0 +1,281 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup NICHT verifizierbar (HEAD ohne Ref); nur Commit bindend.",
+  "chapter": "08.14",
+  "commit_verification": ".git/HEAD exakt Hash (detached, 1 Zeile). Nur *.py.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "Drei ok-Formeln metrics/health/ready_payload."
+    },
+    {
+      "id": "C2",
+      "thema": "metrics 12-Key Server vs WS 27-Key Sitzung."
+    },
+    {
+      "id": "C3",
+      "thema": "droppedChunks vs droppedAudioChunks gleicher Wert."
+    },
+    {
+      "id": "C4",
+      "thema": "coalescedRealtime doppelt (Submit+Drop)."
+    },
+    {
+      "id": "C5",
+      "thema": "scheduler sessions != activeSessions."
+    },
+    {
+      "id": "C6",
+      "thema": "realtimeDegradationThresholdMs ohne Konsument."
+    },
+    {
+      "id": "C7",
+      "thema": "Zwei Perzentilformeln."
+    },
+    {
+      "id": "C8",
+      "thema": "avg Lifetime vs p50/95 Fenster."
+    },
+    {
+      "id": "C9",
+      "thema": "_model_state loaded schon init."
+    },
+    {
+      "id": "C10",
+      "thema": "metrics ohne Auth vs models mit Auth."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "GET /api/metrics JSON service.metrics; Handler ohne Auth, keine Middleware.",
+      "beleg": "server.py:8939-8941,7685-7700",
+      "evidenz": "A",
+      "gueltigkeit": "prozessweit Momentaufnahme",
+      "id": "ME8-01"
+    },
+    {
+      "aussage": "metrics 12 Keys aus 5 Quellen (sessions 5 + ready/ok/scheduler/models/management/limits/startupErrors).",
+      "beleg": "server.py:7685-7700",
+      "evidenz": "A",
+      "gueltigkeit": "nur HTTP; WS = Snapshot",
+      "id": "ME8-02"
+    },
+    {
+      "aussage": "active/pending Gauges; rejected kumulativ 5 Stellen (reserve x2/add x2/can_accept x1) ohne Reset.",
+      "beleg": "server.py:6222-6234,6142-6172,6185-6191",
+      "evidenz": "A",
+      "gueltigkeit": "prozessweit",
+      "id": "ME8-03"
+    },
+    {
+      "aussage": "Snapshot 27 Keys: 13 Zaehler, 2 Gauges, 3 bool, state, 5 Zeiger/Konfig, Ledger, 3 Latenzgruppen.",
+      "beleg": "server.py:4624-4666",
+      "evidenz": "A",
+      "gueltigkeit": "pro Sitzung",
+      "id": "ME8-04"
+    },
+    {
+      "aussage": "Lane kumulativ submitted/completed/rejected/cancelled/stale; coalesced doppelt (Submit+Drop).",
+      "beleg": "server.py:3050-3100",
+      "evidenz": "A",
+      "gueltigkeit": "pro Sitzung; clear kein Reset",
+      "id": "ME8-05"
+    },
+    {
+      "aussage": "queueDepth Summe Queues; rejected streaming False; dropped Exception; recordingSeconds resettet.",
+      "beleg": "server.py:5999-6009,3011-3042,2963",
+      "evidenz": "A",
+      "gueltigkeit": "pro Sitzung",
+      "id": "ME8-06"
+    },
+    {
+      "aussage": "RunningStats 5 Felder ms: count/avg/max lifetime, p50/95 nur deque 256 nearest-rank; leer 0.",
+      "beleg": "server.py:1580-1615",
+      "evidenz": "A",
+      "gueltigkeit": "pro Instanz; nicht konfigurierbar",
+      "id": "ME8-07"
+    },
+    {
+      "aussage": "queueDelay/inference/total je Lane (6x5); total Queue+Inference, >=0 geklemmt.",
+      "beleg": "server.py:3093-3096,2066-2069,2413-2415",
+      "evidenz": "A",
+      "gueltigkeit": "nur recorder-Sitzungen",
+      "id": "ME8-08"
+    },
+    {
+      "aussage": "Scheduler mode 2 Werte; Queue 7; rejected 4 Ursachen; Reset mit Neubau.",
+      "beleg": "server.py:2190-2204,1898-1915,1783-1815",
+      "evidenz": "A",
+      "gueltigkeit": "Reset Modellwechsel",
+      "id": "ME8-09"
+    },
+    {
+      "aussage": "Worker 9 Felder; busyRatio Lebenszeit-Mittel; shared mischt Lanes.",
+      "beleg": "server.py:1998-2010,2070",
+      "evidenz": "A",
+      "gueltigkeit": "pro Worker",
+      "id": "ME8-10"
+    },
+    {
+      "aussage": "/health 11 Keys; ok = metrics.ok + logging_ready; sttReady separat; ready nach wait_ready.",
+      "beleg": "server.py:8885-8905,8521-8523",
+      "evidenz": "A",
+      "gueltigkeit": "Liveness nicht Bereitschaft",
+      "id": "ME8-11"
+    },
+    {
+      "aussage": "models 12 Felder; state 5 Werte init loaded; idleSecondsRemaining nur loaded+Unload an.",
+      "beleg": "server.py:7599-7621,6308,7411-7565",
+      "evidenz": "A",
+      "gueltigkeit": "prozessweit",
+      "id": "ME8-12"
+    },
+    {
+      "aussage": "management 9 Felder (diagnosticResults); state not_ready/ready_complete/ready_optional_provisioning/ready_optional_errors.",
+      "beleg": "stt_model_management.py:815-833,305-340,30",
+      "evidenz": "A",
+      "gueltigkeit": "prozessweit LKG aktiv",
+      "id": "ME8-13"
+    },
+    {
+      "aussage": "limits 7 Grenzwerte (4/4/30/1500/8/64/1500); degradation nur Echo nie gelesen.",
+      "beleg": "server.py:7702-7711,487-494",
+      "evidenz": "A",
+      "gueltigkeit": "Startwerte",
+      "id": "ME8-14"
+    },
+    {
+      "aussage": "startupErrors unbeschraenkt {type,message,where} nur Engine-Fehler, nie geleert.",
+      "beleg": "server.py:6254,8629-8645,7699",
+      "evidenz": "A",
+      "gueltigkeit": "Prozess-Lebenszeit",
+      "id": "ME8-15"
+    },
+    {
+      "aussage": "Ledger 8 Felder + activations 7 (draining/terminal); next*/counts/pending.",
+      "beleg": "segment_ledger.py:428-460",
+      "evidenz": "A",
+      "gueltigkeit": "pro Sitzung",
+      "id": "ME8-16"
+    },
+    {
+      "aussage": "eventStore 6 Felder; latest High-Water monoton, oldest MIN/0; Cursor Ganzzahl.",
+      "beleg": "event_logging.py:1268-1288,605-614,895-898",
+      "evidenz": "A",
+      "gueltigkeit": "persistent; Lesefehler degraded",
+      "id": "ME8-17"
+    },
+    {
+      "aussage": "WS metrics = {type,sessionId,metrics} session.snapshot 27, nicht Serverkatalog; Name irrefuehrend.",
+      "beleg": "server.py:10087-10092",
+      "evidenz": "A",
+      "gueltigkeit": "nur offene Session",
+      "id": "ME8-18"
+    },
+    {
+      "aussage": "OpenAI openai-uuid ohne deadline nie stale; Queue+Worker ja, Sitzung nein; erklaert Gauge-Differenz.",
+      "beleg": "server.py:8366-8408,8600-8627",
+      "evidenz": "A",
+      "gueltigkeit": "prozessweit",
+      "id": "ME8-19"
+    },
+    {
+      "aussage": "WS status dupliziert 6 Metriken; droppedChunks Alias droppedAudioChunks; rejected fehlt.",
+      "beleg": "server.py:3102-3137",
+      "evidenz": "A",
+      "gueltigkeit": "Push Wechsel",
+      "id": "ME8-20"
+    },
+    {
+      "aussage": "Kein /metrics/Prometheus/OTel/Histogramme; nur JSON ohne Sample-Zeit.",
+      "beleg": "server.py:8939; Grep prometheus|otel|histogram=0",
+      "evidenz": "A",
+      "gueltigkeit": "gesamter Commit",
+      "id": "ME8-21"
+    },
+    {
+      "aussage": "Hub drop_counts/_dropped_events intern, kein Endpunkt/Metrikfeld referenziert.",
+      "beleg": "event_logging.py:708-709,1071-1074,1294-1296",
+      "evidenz": "A",
+      "gueltigkeit": "prozessweit unsichtbar",
+      "id": "ME8-22"
+    },
+    {
+      "aussage": "Performance-Log p50/p95/timeTo mit ceil-Formel; Log-Kanal kein Metrikpfad.",
+      "beleg": "server.py:5259-5290; openai_routes.py:291-323",
+      "evidenz": "A",
+      "gueltigkeit": "nur logging an",
+      "id": "ME8-23"
+    },
+    {
+      "aussage": "Resets: Sitzung bis close, Scheduler bis Wechsel, rejected/startup bis Prozess, Cursor persistent; kein createdAt.",
+      "beleg": "server.py:2354-2367,6307,6140; event_logging.py:895-898",
+      "evidenz": "A",
+      "gueltigkeit": "Delta/Rate kritisch",
+      "id": "ME8-24"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Kein /metrics/Prometheus/Labels/OTel."
+    },
+    {
+      "id": "N2",
+      "thema": "Keine Zeit/Uptime/Build-Metrik."
+    },
+    {
+      "id": "N3",
+      "thema": "Keine Drop-Zaehler-Exposition."
+    },
+    {
+      "id": "N4",
+      "thema": "Kein Degradationsindikator."
+    },
+    {
+      "id": "N5",
+      "thema": "Keine Ressourcen/Wake-Quoten."
+    },
+    {
+      "id": "N6",
+      "thema": "Keine Rate/Reset-Hilfen."
+    }
+  ],
+  "researcher_session": "ses_e3444772fffeBKfgPw7Z43MpNz",
+  "solver_notes": [
+    "S1 /health 11 ohne Auth",
+    "S2 /api/metrics 12 ohne Auth",
+    "S3 WS metrics = Snapshot 27",
+    "S4 logging eventStore (Admin)",
+    "12 top; scheduler 3; queue 7; worker 9; stats 5; models 12; management 9; limits 7; sessions 27; ledger 8+7; eventStore 6; health 11",
+    "Baseline 43 (12+3+12+9+7); je Sitzung +27; je Lane +7+9",
+    "Scheduler ungeladen 3 Keys 0 Lanes",
+    "Nur *.py; Mechanik 06.x/Logging 08.11 referenziert"
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "rejectedSessions-Reset Absicht."
+    },
+    {
+      "id": "U2",
+      "thema": "coalesced-Doppel Absicht."
+    },
+    {
+      "id": "U3",
+      "thema": "metrics ohne Auth Absicht."
+    },
+    {
+      "id": "U4",
+      "thema": "pending in /health Absicht."
+    },
+    {
+      "id": "U5",
+      "thema": "Normale busy/p95 Bereiche (keine Schwellen)."
+    }
+  ],
+  "writer_notes": "Struktur 1) Oberflaechen+Abgrenzung 2) Server 12 3) Scheduler 3-7-9-5 Reset Wechsel 4) Sitzung 27+Ledger 6) EventStore/Cursor 7) Grenzen NI. Konflikte C1-C10 benennen, Limits Echo, OpenAI Gauge-Differenz, keine Schwellen."
+}

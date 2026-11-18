@@ -1,0 +1,230 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD); nur Commit bindend.",
+  "chapter": "09.03",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "extend->refresh Docstring veraltet; Code+Test invalid_action."
+    },
+    {
+      "id": "C2",
+      "thema": "ports Marker historisch; echte Transaktion gilt."
+    },
+    {
+      "id": "C3",
+      "thema": "logAccess Bootstrap-only vs Snapshot-Umfang (Reichweite)."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [
+    "Client->WS /ws/transcribe [VV9-01]",
+    "Client->WS /ws/v2 [VV9-01]",
+    "WS /ws/transcribe->Query-Admission [VV9-02]",
+    "Query-Admission->Server-hello [VV9-03]",
+    "Server-hello->start/stop/clear/ping/metrics [VV9-07]",
+    "Server-hello->trigger/audio_ack [VV9-07,VV9-10]",
+    "Steuerbefehle->Binaer nach start [VV9-16]",
+    "Steuerbefehle->status/warning/error/timeline/final/realtime [VV9-13,VV9-11]",
+    "trigger-Ack->Datenkanal [VV9-10]",
+    "Binaer v1->Datenkanal [VV9-11,VV9-16]",
+    "WS /ws/v2->hello/accepted [VV9-03]",
+    "accepted->5 Befehlstypen [VV9-07]",
+    "accepted->Binaer nach accepted [VV9-16]",
+    "accepted->Refusals/Close [VV9-12,VV9-21]",
+    "Befehle->ack/snapshot/Events [VV9-10,VV9-13,VV9-14]",
+    "Binaer v2->Events [VV9-13,VV9-16]"
+  ],
+  "facts": [
+    {
+      "aussage": "Zwei Routen /ws/transcribe + /ws/v2; v2 nicht im ConnectionManager.",
+      "beleg": "server.py:9912,10121,10133-10135",
+      "evidenz": "A",
+      "gueltigkeit": "selber Prozess",
+      "id": "VV9-01"
+    },
+    {
+      "aussage": "Admission v1 Query-Flags (legacy ohne Flags); v2 nur hello, Trigger Pflicht.",
+      "beleg": "server.py:985-994,9919-9924,1161-1173; handshake.py:118-142,212-228",
+      "evidenz": "A",
+      "gueltigkeit": "v2 immer controlled",
+      "id": "VV9-02"
+    },
+    {
+      "aussage": "v1 Server-hello zuerst; v2 Client-hello Pflicht, Antwort accepted+Snapshot+logAccess.",
+      "beleg": "server.py:10002-10020; connection.py:218-255,330-343; snapshot.py:82-89",
+      "evidenz": "A",
+      "gueltigkeit": "je Verbindung",
+      "id": "VV9-03"
+    },
+    {
+      "aussage": "Session-ID v1 32-hex, v2 kanonische UUID; kompakt auf v2 invalid.",
+      "beleg": "server.py:9938; schema.py:214-216; session.py:41-42",
+      "evidenz": "A",
+      "gueltigkeit": "keine Migration",
+      "id": "VV9-04"
+    },
+    {
+      "aussage": "Aktivierungs/Segment-IDs folgen Sessionform (v1 hex, v2 canonical_ids).",
+      "beleg": "activation.py:242; server.py:2337-2347; connection.py:281",
+      "evidenz": "A",
+      "gueltigkeit": "v2 nur canonical",
+      "id": "VV9-05"
+    },
+    {
+      "aussage": "commandId v1 freier String; v2 nur kanonische UUID sonst kein Ack/Slot.",
+      "beleg": "activation_commands.py:189-202; schema.py:219-243; commands.py:105-114",
+      "evidenz": "A",
+      "gueltigkeit": "v2-Vertrag",
+      "id": "VV9-06"
+    },
+    {
+      "aussage": "Befehle v1 7 offen; v2 genau 5 geschlossen; unbekannt v1 error, v2 keine Antwort.",
+      "beleg": "server.py:10074-10105; schema.py:44-57; boundary.py:47-79",
+      "evidenz": "A",
+      "gueltigkeit": "v2 geschlossen",
+      "id": "VV9-07"
+    },
+    {
+      "aussage": "Envelope v1 ohne Version/Session-Bindung; v2 version 2 + passende ID sonst invalid/stale.",
+      "beleg": "commands.py:116-126; boundary.py:280-331",
+      "evidenz": "A",
+      "gueltigkeit": "fremd stale",
+      "id": "VV9-08"
+    },
+    {
+      "aussage": "Aktion v1 trim/lower + wake_word + source ignoriert; v2 literal nur manual ohne source bei Control.",
+      "beleg": "activation_commands.py:168-245; commands.py:144-164",
+      "evidenz": "A",
+      "gueltigkeit": "v2 strikt",
+      "id": "VV9-09"
+    },
+    {
+      "aussage": "Ack v1 offener reason; v2 15 Codes geschlossen, accepted nur applied/no_change.",
+      "beleg": "server.py:3414-3425,3823-3833; connection.py:637-651; schema.py:107-143",
+      "evidenz": "A",
+      "gueltigkeit": "v2-Vokabular",
+      "id": "VV9-10"
+    },
+    {
+      "aussage": "Fehler v1 error/warning; v2 keine error/warning-Typen nur ack/Close.",
+      "beleg": "server.py:10030-10072; protocol_v2/**; boundary.py:165-198",
+      "evidenz": "A",
+      "gueltigkeit": "kein error v2",
+      "id": "VV9-11"
+    },
+    {
+      "aussage": "Close v1 1008/1013/1011; v2 4400/4406/4408 10s/4409/1011.",
+      "beleg": "server.py:9926-9985; schema.py:200-209; server.py:10229-10239",
+      "evidenz": "A",
+      "gueltigkeit": "Timeout nur vorher",
+      "id": "VV9-12"
+    },
+    {
+      "aussage": "Events v1 timeline-Umschlag; v2 kanonische Namen; cancelled->discarded.",
+      "beleg": "server.py:5900-5920; schema.py:146-187; events.py:54-73",
+      "evidenz": "A",
+      "gueltigkeit": "Mapping Autoritaet",
+      "id": "VV9-13"
+    },
+    {
+      "aussage": "Nur v2 eventId/eventSeq/stateVersion + Snapshot/ Ack-Felder; v1 ohne.",
+      "beleg": "session.py:129-144; snapshot.py:60-79; connection.py:637-651",
+      "evidenz": "A",
+      "gueltigkeit": "stateVersion!=Controller",
+      "id": "VV9-14"
+    },
+    {
+      "aussage": "Settings v1 hello+global config; v2 patch baseRevision + changed Policy + REST v2.",
+      "beleg": "server.py:10006,8907-8921,9223-9318; connection.py:505-582",
+      "evidenz": "A",
+      "gueltigkeit": "Revision Session",
+      "id": "VV9-15"
+    },
+    {
+      "aussage": "Audio gleiches Format; v1 nach start mit warning/error, v2 ab accepted vorher 4400 defekt still.",
+      "beleg": "protocol.py:40-75; server.py:3016-10052; connection.py:181-198",
+      "evidenz": "A",
+      "gueltigkeit": "Decoder gleich Politik anders",
+      "id": "VV9-16"
+    },
+    {
+      "aussage": "Replay ein Cache; v2 memo Wire-Ack Originalversionen kein Anstieg.",
+      "beleg": "connection.py:427-433,594-616,654-661",
+      "evidenz": "A",
+      "gueltigkeit": "Konflikt conflict",
+      "id": "VV9-17"
+    },
+    {
+      "aussage": "logAccess beide aus Token-Autoritaet; v2 nur Bootstrap accepted.",
+      "beleg": "server.py:10001-10013,7772-7806; connection.py:331-342",
+      "evidenz": "B",
+      "gueltigkeit": "kein v2-Test",
+      "id": "VV9-18"
+    },
+    {
+      "aussage": "Wake v1 tolerant Fallbacks; v2 nur kanonisch atomar alles-oder-nichts.",
+      "beleg": "server.py:603-639,7337-7341; ports.py:119-147; handshake.py:238-247",
+      "evidenz": "A",
+      "gueltigkeit": "atomare Admission",
+      "id": "VV9-19"
+    },
+    {
+      "aussage": "Capabilities v1 sessionCapabilities/Triggers; v2 wakeWordCapabilities + supported [2].",
+      "beleg": "server.py:7716-7770; snapshot.py:77; handshake.py:62-67",
+      "evidenz": "A",
+      "gueltigkeit": "Snapshot statt Capabilities",
+      "id": "VV9-20"
+    },
+    {
+      "aussage": "Version v1 keine; v2 genau (2,) max gemeinsam, v1-only incompatible+4406.",
+      "beleg": "schema.py:29-32; handshake.py:155-187; boundary.py:303-315",
+      "evidenz": "A",
+      "gueltigkeit": "keine >2",
+      "id": "VV9-21"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Kein v2-Keepalive/ping/pong; kein Idle nach accepted."
+    },
+    {
+      "id": "N2",
+      "thema": "Kein v2 start/stop/clear; Streaming bei Admission."
+    },
+    {
+      "id": "N3",
+      "thema": "Kein v2 error/warning-Typ; nur ack/Close."
+    },
+    {
+      "id": "N4",
+      "thema": "Keine Verhandlung >2 (SUPPORTED=(2,))."
+    }
+  ],
+  "researcher_session": "ses_e341746a5ffe1aruHhECyoFSa0",
+  "solver_notes": [
+    "29 Texte? V1/V2 getrennt: Routen, Admission, hello, IDs, Befehle, Envelope, Ack, Fehler, Close, Events, Versionen, Settings, Audio, Replay, logAccess, Wake, Capabilities."
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Branch detached."
+    },
+    {
+      "id": "U2",
+      "thema": "Produktive v1-Nutzung aus Code nicht entscheidbar."
+    },
+    {
+      "id": "U3",
+      "thema": "Client baseRevision-Verhalten nicht belegbar."
+    },
+    {
+      "id": "U4",
+      "thema": "clear-Auslassung Absicht nur Kommentar."
+    }
+  ],
+  "writer_notes": "Ketten UUID-Wurzel, hello-Grenze, Close-Versionen, Events+Versionen, Audio-Freigabe. Diagramm an VV9-01/02/03/07/10/12/13/14/16/21; keine Phasen/Zahlen ausser Codes/Timeout."
+}

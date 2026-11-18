@@ -1,0 +1,268 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD); nur Commit bindend.",
+  "chapter": "05.10",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached).",
+  "conflicts": [
+    {
+      "id": "C-1",
+      "thema": "Drei 401-Formen: Admin {error}+Auth; OpenAI {error:{}}+Auth+Audit; Log {error} ohne Header/Audit."
+    },
+    {
+      "id": "C-2",
+      "thema": "Vier 422-Bedeutungen (Framework/Settings/Wake-Refresh)."
+    },
+    {
+      "id": "C-3",
+      "thema": "404 dreifach OpenAI (disabled/unbekanntes Modell/Pfad)."
+    },
+    {
+      "id": "C-4",
+      "thema": "403 genau einmal (Admin remote ohne Key)."
+    },
+    {
+      "id": "C-5",
+      "thema": "400 != nichts passiert (Teilapplikation)."
+    },
+    {
+      "id": "C-6",
+      "thema": "409/500 per deutschem Substring."
+    },
+    {
+      "id": "C-7",
+      "thema": "PATCH v2 400-Zweig strukturell tot (Framework-422)."
+    },
+    {
+      "id": "C-8",
+      "thema": "Log-HTTP vs WS ungleiche Admin-Regel."
+    },
+    {
+      "id": "C-9",
+      "thema": "V1 admission ohne code, session_config mit code."
+    },
+    {
+      "id": "C-10",
+      "thema": "V2 schweigt absichtlich (4400/kein commandId)."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "[Client] --> [Admin/OpenAI/Logs/WS-V1/WS-V2]",
+    "[Admin falsch] --> [401+Auth {error}]",
+    "[Admin remote ohne Key] --> [403 {error}]",
+    "[OpenAI disabled] --> [404 code null vor Auth]",
+    "[OpenAI falsch] --> [401 invalid_api_key + Audit]",
+    "[OpenAI Feld/Override] --> [400]",
+    "[Modell nicht geladen] --> [409]",
+    "[Modell unbekannt] --> [404 model_not_found]",
+    "[Datei > Limit] --> [413 file_too_large]",
+    "[sync unerwartet] --> [500 transcription_failed]",
+    "[stream Fehler] --> [200 + SSE error]",
+    "[Log Scope None] --> [401 ohne code/Header]",
+    "[Store fehlt] --> [503 event_store_unavailable]",
+    "[WS live aus] --> [1008 log_live_disabled]",
+    "[WS Scope None] --> [1008 not_authorized]",
+    "[WS Cursor] --> [1008 invalid_cursor|cursor_ahead]",
+    "[WS Store fehlt] --> [1011]",
+    "[V1 session_config] --> [1008 + code]",
+    "[V1 admission] --> [1013 ohne code]",
+    "[V1 Frame/Audio/Befehl] --> [error/warning, kein Close]",
+    "[V2 Envelope/Binär] --> [4400 keine Nachricht]",
+    "[V2 Version] --> [4406 incompatible]",
+    "[V2 10s] --> [4408 keine Nachricht]",
+    "[V2 Session] --> [4409 rejected + errors[]]",
+    "[V2 intern] --> [1011]",
+    "[V2 ohne commandId/unbekannt] --> [ignoriert, kein ACK]"
+  ],
+  "facts": [
+    {
+      "aussage": "Admin: Key konfiguriert + falsch -> 401 {error} + WWW-Authenticate; kein Key + remote -> 403 {error} ohne Auth; Präzedenz Header; kein code/detail/type.",
+      "beleg": "security/admin.py Z.24-46; Tests 41-46, 327-328",
+      "evidenz": "stark",
+      "gueltigkeit": "alle Admin-Routen",
+      "id": "F5-01"
+    },
+    {
+      "aussage": "21 Admin-Routen (Liste mit Zeilen); öffentlich: /api/v2/info, /, /health, /api/config (nur Flag), /api/metrics, /api/v2/settings/schema|server, /api/v2/wake-words; /api/logs eigenes Gate, /v1 OpenAI-Gate.",
+      "beleg": "server.py Z.8923-9872, 8874-9294",
+      "evidenz": "stark",
+      "gueltigkeit": "HTTP-Routen",
+      "id": "F5-02"
+    },
+    {
+      "aussage": "OpenAI ohne Key -> kein Fehler/Audit; sonst exakt Bearer <configured> -> 401 {error:{message deutsch,invalid_request_error,null,invalid_api_key}} + WWW-Authenticate + Audit authentication.failed (transport, clientId, path, reason).",
+      "beleg": "security/openai.py Z.17-35; Tests 66-94",
+      "evidenz": "stark",
+      "gueltigkeit": "/v1/*",
+      "id": "F5-03"
+    },
+    {
+      "aussage": "POST prüft enabled zuerst: false -> Event transcription.rejected/warning/api_disabled + 404 openai_error deaktiviert (code null) + X-Request-ID, vor Auth; GET prüft enabled nicht (200).",
+      "beleg": "openai_routes.py Z.93-103 vs 43-65",
+      "evidenz": "stark",
+      "gueltigkeit": "POST vs GET",
+      "id": "F5-04"
+    },
+    {
+      "aussage": "Modellauflösung: Override bei model!=whisper-1 -> 400 invalid_model_override; vorhanden-aber-nicht-geladen -> 409 model_not_loaded; unbekannt -> 404 model_not_found (Aliasse gelistet).",
+      "beleg": "server.py Z.8425-8478; Tests 288-300 (400)",
+      "evidenz": "stark/mittel",
+      "gueltigkeit": "nur POST",
+      "id": "F5-05"
+    },
+    {
+      "aussage": "413 file_too_large nach Datei-/Endungs-/Form-/Modellprüfung; len>Limit; Body mit Limit; X-Request-ID.",
+      "beleg": "openai_routes.py Z.147-154",
+      "evidenz": "mittel (kein Test)",
+      "gueltigkeit": "Transkription",
+      "id": "F5-06"
+    },
+    {
+      "aussage": "Sync-Ausnahme -> logger.exception + Audit transcription.failed + 500 {server_error/transcription_failed}; Stream: 200 gesendet, dann SSE {type:error} ohne done; Client mit nur Status sieht Erfolg.",
+      "beleg": "openai_routes.py Z.588-617, 356-383, 459-467",
+      "evidenz": "stark/mittel",
+      "gueltigkeit": "POST stream true/false",
+      "id": "F5-07"
+    },
+    {
+      "aussage": "Log-HTTP: Scope None -> 401 {Logzugriff nicht autorisiert} ohne code/Auth/Audit; Store fehlt -> 503 event_store_unavailable (auch bei Query-Ausnahme); Parsefehler -> 400 roh; Erfolg 200 mit Cursorn/scopes/deliveryMode.",
+      "beleg": "server.py Z.9456-9537; security/logs.py Z.67-81; Tests 1413-1431",
+      "evidenz": "stark",
+      "gueltigkeit": "drei Log-Routen",
+      "id": "F5-08"
+    },
+    {
+      "aussage": "Log-WS Reihenfolge: live aus -> log_live_disabled+1008; Store fehlt -> event_store_unavailable+1011; Form falsch -> invalid_request+1008; Scope None -> not_authorized+1008; Cursor negativ/groesser -> invalid_cursor/cursor_ahead+1008; live Store-Fehler/generisch -> 1011; unbekannt nach Abo code-los offen; WS kein Loopback-Admin.",
+      "beleg": "server.py Z.9560-9847; security/logs.py Z.83-93; Tests 1444-1519, 1857, 1945-1948, 294",
+      "evidenz": "stark",
+      "gueltigkeit": "/ws/logs",
+      "id": "F5-09"
+    },
+    {
+      "aussage": "V1 Hülle {type:error,where,code nur session_config,message+Zusatz}; session_config + code -> 1008 (8 Codes); Init-Ausnahme -> session_initialization_failed + 1011; Limit -> admission ohne code + limits + 1013; Rest (audio_packet/audio/command/recorder/lane_engine/warning) kein Close.",
+      "beleg": "server.py Z.585-600, 9925-10105, 4702-4708, 8629-8645; Tests 2633-2652",
+      "evidenz": "stark",
+      "gueltigkeit": "/ws/transcribe",
+      "id": "F5-10"
+    },
+    {
+      "aussage": "trigger_ack kein Fehler: {trigger_ack,commandId,accepted,reason,activationId,phase,sessionId}; Rejections invalid_payload/ids/conflict/disabled/closed/not_started + Controller-Gründe; Konflikt nicht gespeichert, Ablehnung belegt Replay; ohne commandId ack mit commandId=\"\".",
+      "beleg": "server.py Z.3414-3425, 3500-3572; activation_commands.py Z.175-269",
+      "evidenz": "stark",
+      "gueltigkeit": "/ws/transcribe",
+      "id": "F5-11"
+    },
+    {
+      "aussage": "V2 Codes 4400/4406/4408/4409/1011 + 1000-Fallback (first-request-wins, idempotent); kein 1008/1013.",
+      "beleg": "protocol_v2/schema.py Z.200-209; server.py Z.10259-10281; Tests 463-482, 502-508, 380-401",
+      "evidenz": "stark",
+      "gueltigkeit": "/ws/v2",
+      "id": "F5-12"
+    },
+    {
+      "aussage": "V2 Stufen: Envelope (kein hello/kaputt/Typen/IDs/Suppression/Binär) -> 4400 ohne Nachricht; Version -> protocol.incompatible + 4406; Session (Trigger/Wake/Katalog/Config/Limit) -> session.rejected + errors[] + 4409 (invalid_requested_session/session_limit_reached); 4408 sendet nichts; Admission-Ausnahme -> 1011.",
+      "beleg": "handshake.py Z.83-178, 70-80; connection.py Z.218-305; Tests 431-461, 484-500",
+      "evidenz": "stark",
+      "gueltigkeit": "/ws/v2",
+      "id": "F5-13"
+    },
+    {
+      "aussage": "V2-Befehl mit kanonischer commandId genau ein ack (accepted nur applied/no_change; errors[] bei Settings); ohne/ungültige ID kein ACK; unbekannter Typ ignoriert; unparsebar Log ohne ACK/Close; conflict nie memoisiert, Replay wortgleich; unbekannter Reason -> internal_error + Log.",
+      "beleg": "schema.py Z.105-143; commands.py Z.90-138, 211-276; connection.py Z.347-369, 594-652; Tests vectors/contract",
+      "evidenz": "stark",
+      "gueltigkeit": "nach hello.accepted",
+      "id": "F5-14"
+    },
+    {
+      "aussage": "PATCH v2: result->409/500/422/sonst 200, Body immer to_dict; 400-Zweig bei Nicht-Dict strukturell tot (Framework-422); Codes unknown/invalid/out_of_range/too_few/cross/wrong_scope/stale/read_only/invalid_payload/wake/model/persistence.",
+      "beleg": "server.py Z.9244-9292; settings_control.py Z.153-165, 240-263; Tests 827-922",
+      "evidenz": "stark",
+      "gueltigkeit": "PATCH /api/v2/settings/server",
+      "id": "F5-15"
+    },
+    {
+      "aussage": "Legacy 400 bei Teilapplikation (applied gesetzt+persistiert+auditiert, rejected nicht leer): startup_only/unknown/invalid_value/invalid_dependency; weitere Formen error+fields/unavailableWakeWords/valid/409/500/422.",
+      "beleg": "server.py Z.8921-8937, 9383-9444, 9159-9216, 7826-7957, 9318, 8973-9113; Tests 330-336, 134-143",
+      "evidenz": "stark",
+      "gueltigkeit": "Legacy-Admin + wake-words",
+      "id": "F5-16"
+    },
+    {
+      "aussage": "/health immer 200 mit ok/ready/Zählern; ok = metrics.ok AND logging_ready; kein 503 (einziger 503 = Log-Store).",
+      "beleg": "server.py Z.8885-8905; Tests 1521-1522",
+      "evidenz": "stark",
+      "gueltigkeit": "GET /health",
+      "id": "F5-17"
+    },
+    {
+      "aussage": "404/405/422 Framework-Defaults (Not Found/Method Not Allowed/detail + Allow); kein Handler/HTTPException/Middleware/StaticFiles.",
+      "beleg": "server.py Z.8868-8872; Grep ohne Treffer",
+      "evidenz": "mittel",
+      "gueltigkeit": "alle Routen",
+      "id": "F5-18"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-1",
+      "thema": "Kein 429/Retry-After (kein Rate-Limit)."
+    },
+    {
+      "id": "N-2",
+      "thema": "Kein 403 außer Admin-Remote."
+    },
+    {
+      "id": "N-3",
+      "thema": "Kein RFC-7807/durchgängiger errorCode."
+    },
+    {
+      "id": "N-4",
+      "thema": "Kein eigener 404/405-Handler/HTTPException."
+    },
+    {
+      "id": "N-5",
+      "thema": "Keine Auth auf /ws/transcribe|/ws/v2."
+    },
+    {
+      "id": "N-6",
+      "thema": "Kein V1-Handshake-Timeout-Code."
+    },
+    {
+      "id": "N-7",
+      "thema": "Kein code auf V1-admission/meisten where."
+    },
+    {
+      "id": "N-8",
+      "thema": "Kein Fehlerobjekt unbekannter V2-Typ/kein ACK ohne ID."
+    },
+    {
+      "id": "N-9",
+      "thema": "Kein 503 für nicht-bereit."
+    }
+  ],
+  "researcher_session": "ses_e3eb0e170ffejjCkyivG0rXuHS",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-1",
+      "thema": "Framework-Default-Bodies/Allow versionsabhängig."
+    },
+    {
+      "id": "U-2",
+      "thema": "400-Zweig PATCH v2 Erreichbarkeit."
+    },
+    {
+      "id": "U-3",
+      "thema": "Proxy-413/502/504 außerhalb Code."
+    },
+    {
+      "id": "U-4",
+      "thema": "SessionConfigurationError-Vollständigkeit."
+    },
+    {
+      "id": "U-5",
+      "thema": "SSE-Fehlerpfad Client-Erkennung."
+    }
+  ],
+  "writer_notes": "Fläche bestimmt Hülle/Code/Nebenwirkung; drei stille Pfade (4400/4408/kein commandId). 413/500-SSE nicht testgedeckt als Code-Fakt. 409/500-Substring und toter 400-Zweig als so-nicht-Beispiele."
+}

@@ -1,0 +1,346 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar. Nur Commit a8993c5c68042d996eab680d84a5b138a214bb5d bindend.",
+  "chapter": "06.09",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached).",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "backupCount dokumentiert aber funktionslos [G6-18]."
+    },
+    {
+      "id": "C2",
+      "thema": "performance enabled (Quelle) vs mirrorEnabled (Sink); Hub-Sink heißt enabled – Verwechslungsgefahr."
+    },
+    {
+      "id": "C3",
+      "thema": "transcripts/transcriptMode global, aber im Audit-Block verortet."
+    },
+    {
+      "id": "C4",
+      "thema": "PUT performanceFile vs GET performance.file (ebenso transcription/systemDirectory vs directory)."
+    },
+    {
+      "id": "C5",
+      "thema": "log_level ACTIVE_RUNTIME, aber nicht via /api/logging (nur /api/config/CLI)."
+    },
+    {
+      "id": "C6",
+      "thema": "store startup-only vs liveEnabled laufzeit; Einschalten ohne Store → invalid_dependency."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "4 Kanäle audit/performance/transcription/system, je enabled/stdout/path/max_bytes/backup_count/retention_days; audit+performance-stdout an, transcription/system aus; alle enabled an.",
+      "beleg": "event_logging.py Z.765-893/769-854; server.py Z.450-486; config.yaml Z.99-131.",
+      "evidenz": "stark",
+      "gueltigkeit": "alle Prozesse (Defaults überschreibbar)",
+      "id": "G6-01"
+    },
+    {
+      "aussage": "Schalter nur Spiegel: Store aktiv → jedes Event zuerst SQLite; enabled/stdout nur JSONL/stdout; enabled=false → kein Sink, Event bleibt kanonisch.",
+      "beleg": "event_logging.py Z.928-930/994-1005/856-865; Tests Z.435-468.",
+      "evidenz": "stark",
+      "gueltigkeit": "Store an",
+      "id": "G6-02"
+    },
+    {
+      "aussage": "Performance zwei Schalter: logging_enabled = Quelle (None, kein Store), mirror_enabled nur JSONL; /api/logging enabled vs mirrorEnabled.",
+      "beleg": "operations.py Z.385-395; event_logging.py Z.783-785; Tests.",
+      "evidenz": "stark",
+      "gueltigkeit": "Fassade (direkt-emit umgeht Quelle)",
+      "id": "G6-03"
+    },
+    {
+      "aussage": "Transkripte nur transcription-Kanal: performance immer drop, none überall, final nur transcription.completed, andere Kanäle immer drop; Audit nie Transkripte.",
+      "beleg": "event_logging.py Z.144-155; Tests Z.222-241/471-544.",
+      "evidenz": "stark",
+      "gueltigkeit": "zentral, sink-unabhängig",
+      "id": "G6-04"
+    },
+    {
+      "aussage": "realtime_log_detail off/summary/events: events jedes Update, summary nur performance_summary, off keins; ungültig → ValueError.",
+      "beleg": "openai_routes.py Z.262/284/535; server.py Z.5205/5236/1222-1228/533-539.",
+      "evidenz": "stark",
+      "gueltigkeit": "Performance (Default events)",
+      "id": "G6-05"
+    },
+    {
+      "aussage": "Defaults: INFO; request on/on/on; transcript_mode None→final; max 10MiB; backup 12; retention 0; TZ Europe/Berlin; realtime events; store an; Queue 10000; live an; Audio aus.",
+      "beleg": "server.py Z.450-486; config.yaml Z.99-131.",
+      "evidenz": "stark",
+      "gueltigkeit": "überschreibbar",
+      "id": "G6-06"
+    },
+    {
+      "aussage": "Start: basicConfig (Format, ohne stream→stderr) → apply_level → uvicorn.run(host/port/level-lower).",
+      "beleg": "server.py Z.10813-10835.",
+      "evidenz": "stark/mittel",
+      "gueltigkeit": "Produktionsstart",
+      "id": "G6-07"
+    },
+    {
+      "aussage": "resolve nur bekannte Levelnamen (sonst ValueError); apply setzt Root/fastapi/uvicorn*/voicestt-Handler; ACTIVE_RUNTIME sofort, nicht in /api/logging.",
+      "beleg": "event_logging.py Z.276-302; server.py Z.180/7943-7944; Tests Z.936-958.",
+      "evidenz": "stark",
+      "gueltigkeit": "prozessglobal",
+      "id": "G6-08"
+    },
+    {
+      "aussage": "Recorder voicestt ein markierter StreamHandler (stderr), Level recorder.level, idempotent; kein Dateilog (no_log_file True Server).",
+      "beleg": "initialization.py Z.326-381; server.py Z.2754/2830; Tests.",
+      "evidenz": "stark",
+      "gueltigkeit": "Produktionsserver",
+      "id": "G6-09"
+    },
+    {
+      "aussage": "emit: sanitisieren → Kontext heben → Payload (v1/ID/UTC-Z/Kanal/Event/Severity/Instanz/Kontext/data/meldung) → Store-append → Cursor → control-commit → Spiegel. Ohne Store lokaler Cursor; None bei unbekannt/geschlossen/Fehler.",
+      "beleg": "event_logging.py Z.895-1006; Tests Z.391-433.",
+      "evidenz": "stark",
+      "gueltigkeit": "Hub/Service",
+      "id": "G6-10"
+    },
+    {
+      "aussage": "Store-Fehler → log + degraded(write) + None (kein Spiegel); nur Append beweist Heilung.",
+      "beleg": "event_logging.py Z.971-990/1110-1153; Tests Z.547-680.",
+      "evidenz": "stark",
+      "gueltigkeit": "Store an",
+      "id": "G6-11"
+    },
+    {
+      "aussage": "Prio 0 (audit/error-kritisch/terminale Transkription), 2 performance, 1 Rest; nicht-blockierend FIFO/Prio; voll → schlechterster nur bei besserem ersetzt sonst neues verworfen; Größe Queue-size (Default 10000/min 100/startup-only).",
+      "beleg": "event_logging.py Z.189-252/732-739/900-1015; server.py Z.1252; Tests Z.737-783.",
+      "evidenz": "stark",
+      "gueltigkeit": "je Ziel-Queue",
+      "id": "G6-12"
+    },
+    {
+      "aussage": "Spiegel-Drops nur Warnung (Zähler intern, keine Route/Metrik).",
+      "beleg": "event_logging.py Z.1017-1097/1294-1296; Negativ-Grep.",
+      "evidenz": "stark",
+      "gueltigkeit": "nur Prozesslog",
+      "id": "G6-13"
+    },
+    {
+      "aussage": "flush joint Queues+Control (wenn offen); close = flush→closed→Queues→Sentinel→joins-5s→Sinks→Store; ChannelManager nur bei eigenem Hub.",
+      "beleg": "event_logging.py Z.1298-1362.",
+      "evidenz": "stark",
+      "gueltigkeit": "Shutdown/Neukonfig",
+      "id": "G6-14"
+    },
+    {
+      "aussage": "Control-Queue nur payload-frei: commit-Cursor, store_error (kritisch, verdrängt), store_recovered; Abonnenten lesen SQLite ab eigenem Cursor; Zustellfehler debug.",
+      "beleg": "event_logging.py Z.740-744/1081-1212; Tests.",
+      "evidenz": "stark",
+      "gueltigkeit": "/ws/logs",
+      "id": "G6-15"
+    },
+    {
+      "aussage": "JSONL <root>/<YYYY-MM>/<YYYY-MM-DD>.jsonl (Tag aus Event-TZ); Rollover .1/.2 bei max_bytes; append/Neustart; kompakt+flush; RLock.",
+      "beleg": "event_logging.py Z.314-436; Tests Z.293-334.",
+      "evidenz": "stark",
+      "gueltigkeit": "je Kanal (nur enabled)",
+      "id": "G6-16"
+    },
+    {
+      "aussage": "Retention opt-in days>0, 1×/Tag: cutoff current-day − days; nur *.jsonl in YYYY-MM-Ordnern mit Präfix < cutoff, nicht offene; rmdir leer; Cutoff-Tag bleibt.",
+      "beleg": "event_logging.py Z.361/381-412; Tests Z.808-821.",
+      "evidenz": "stark",
+      "gueltigkeit": "pro Sink",
+      "id": "G6-17"
+    },
+    {
+      "aussage": "backupCount nur gespeichert (max 0), nie gelesen: keine Wirkung; Begrenzung nur maxBytes/retentionDays.",
+      "beleg": "event_logging.py Z.322/328; Voll-Grep.",
+      "evidenz": "stark",
+      "gueltigkeit": "alle Kanäle (C1)",
+      "id": "G6-18"
+    },
+    {
+      "aussage": "GET /api/logging (Admin): dataRoot/enabled/stdout/file/transcripts/transcriptMode/saveAudio/audioDirectory/maxBytes/backupCount/retentionDays/performance{...}/transcription{...}/system{...}/TZ/realtimeDetail/liveEnabled/v2/sqlite_first/replayAvailable/eventStore{...}.",
+      "beleg": "server.py Z.9320-9381; Tests Z.359-369.",
+      "evidenz": "stark",
+      "gueltigkeit": "Admin",
+      "id": "G6-19"
+    },
+    {
+      "aussage": "PUT /api/logging: 5 Pfadfelder → 400+fields; Mapping enabled/transcriptMode/maxBytes/backupCount/retentionDays/performance*/transcription*/system*/TZ/realtimeDetail/liveEnabled; maxBytes>0/backup≥0; 400 wenn rejected sonst 200 + Hub-Neukonfig + Persistenz + config.updated.",
+      "beleg": "server.py Z.9383-9444/7906-7944; Tests Z.330-379.",
+      "evidenz": "stark",
+      "gueltigkeit": "nur Runtime (level/Store/dataRoot still ignoriert)",
+      "id": "G6-20"
+    },
+    {
+      "aussage": "store+queue_size startup-only; live-ohne-store ValueError (Start) bzw invalid_dependency (Laufzeit).",
+      "beleg": "server.py Z.256-285/540-543/7857-7877.",
+      "evidenz": "stark",
+      "gueltigkeit": "Settings",
+      "id": "G6-21"
+    },
+    {
+      "aussage": "Historie: /api/logs/events|/sessions/{id}|/transcriptions/{id}; Nicht-Admin nur audit/performance/transcription + eigene Session (sonst not_authorized); system admin-only; Store-nicht-ready → 503 event_store_unavailable; Antwort data/Cursor/scopes/deliveryMode.",
+      "beleg": "server.py Z.9456-9558; Tests Z.1413-1442.",
+      "evidenz": "stark",
+      "gueltigkeit": "Store nötig",
+      "id": "G6-22"
+    },
+    {
+      "aussage": "/ws/logs: live-aus → 1008 log_live_disabled; Store-fehlt → 1011; subscribe+accessToken+Scope; afterCursor<0 invalid_cursor / >latest cursor_ahead (1008); hello(v2/sqlite_first/Cursor)/subscribed/gap(retention)/replay_completed; live replay:false.",
+      "beleg": "server.py Z.9560-9700; Tests Z.1444-2297/1941-1948.",
+      "evidenz": "stark",
+      "gueltigkeit": "Live-Log",
+      "id": "G6-23"
+    },
+    {
+      "aussage": "v2-logAccess: available (live+Store), Pfade, IDs, Cursor, v2/sqlite_first/replay; sonst code/reason ohne Token; sonst Token+expiresAt.",
+      "beleg": "server.py Z.7772-7806; connection.py Z.331-343; Tests Z.289-325.",
+      "evidenz": "stark",
+      "gueltigkeit": "v2-Bootstrap",
+      "id": "G6-24"
+    },
+    {
+      "aussage": "logProtocolVersion nur Literal 2 (Emission+Test), kein Schema-Check.",
+      "beleg": "Grep: server.py Z.7782/9373/9655; schema.py negativ.",
+      "evidenz": "stark",
+      "gueltigkeit": "Wire-Feld (N1)",
+      "id": "G6-25"
+    },
+    {
+      "aussage": "Sanitizing verwirft Secrets (Keys+Suffix)/Audio/Query/bytes rekursiv; Strings Bearer-/Label-bereinigt; URL-Query bei Schema-Host/url-Keys entfernt.",
+      "beleg": "event_logging.py Z.21-186; Tests Z.471-522.",
+      "evidenz": "stark",
+      "gueltigkeit": "alle Kanäle/Store/Spiegel",
+      "id": "G6-26"
+    },
+    {
+      "aussage": "Modi none/final/full: leer → request_log_transcripts (true final/false none); gesetzt maßgeblich; full alle Transkriptions-Events, final nur completed, none keins; wechselseitig synchron.",
+      "beleg": "event_logging.py Z.866-886; server.py Z.1229-1235/7895-7904/9332-9339; Tests.",
+      "evidenz": "stark",
+      "gueltigkeit": "Store+Spiegel",
+      "id": "G6-27"
+    },
+    {
+      "aussage": "Nur 6 Kontextfelder oben (client/request/segment/session/transcription/transport); Rest in data; message sanitisiert → meldung (deutsch).",
+      "beleg": "event_logging.py Z.21-28/946-969; Tests.",
+      "evidenz": "stark",
+      "gueltigkeit": "Wire-Format",
+      "id": "G6-28"
+    },
+    {
+      "aussage": "Keine Anonymisierung/Pseudonymisierung (nur Entfernen+Gating); Kennungen Klartext.",
+      "beleg": "Negativ-Grep Logpfad.",
+      "evidenz": "stark",
+      "gueltigkeit": "gesamter Pfad (N2)",
+      "id": "G6-29"
+    },
+    {
+      "aussage": "Audioarchiv: Tag-Ordner + <HHMMSS_micro>_<reqId><suffix> (Original sonst .audio); keine Retention; nur saveAudio/audioDirectory in API.",
+      "beleg": "operations.py Z.343-362; server.py Z.9340-9341/9408; Tests Z.222-241; Grep.",
+      "evidenz": "stark",
+      "gueltigkeit": "save (Default false)",
+      "id": "G6-30"
+    },
+    {
+      "aussage": "Settings-Redaktion (public_dict/persistiert/config.updated-Audit) = Konfigurationswerte, kein Event-Ersatz.",
+      "beleg": "credential_redaction.py Z.10-58; server.py Z.545-553/7945-7946.",
+      "evidenz": "stark",
+      "gueltigkeit": "Settings/Audit",
+      "id": "G6-31"
+    },
+    {
+      "aussage": "SQLite-Retention opt-in/Kanal: Tage aus Kanal-Settings; 1. Append/UTC-Tag DELETE<now-days + Watermark-UPSERT/Max je (channel,session); retentionCursor → gap(retention).",
+      "beleg": "event_logging.py Z.483-640/887-891; Tests Z.808-933/2145-2227.",
+      "evidenz": "stark",
+      "gueltigkeit": "days>0 (Default 0 unbegrenzt)",
+      "id": "G6-32"
+    },
+    {
+      "aussage": "Nur bei Schreiben: prune nur aus append, cleanup nur aus _ensure_stream; kein VACUUM → Größe bleibt.",
+      "beleg": "event_logging.py Z.361/545; VACUUM-Grep 0.",
+      "evidenz": "stark",
+      "gueltigkeit": "Speicherplanung (N3)",
+      "id": "G6-33"
+    },
+    {
+      "aussage": "disabled/kein Store; degraded bei offenem Lese- oder Schreibfehler (nur je Fähigkeit geheilt); Übergänge mit Typ/Zeit + store_error/recovered; status mit Cursorn.",
+      "beleg": "event_logging.py Z.1099-1292; Tests Z.547-734.",
+      "evidenz": "stark",
+      "gueltigkeit": "alle Store-Endpunkte",
+      "id": "G6-34"
+    },
+    {
+      "aussage": "logging_ready = !live || store.available; ok = metrics.ok && logging_ready; ready separat; eventStore mitgeliefert; degradiert → ok false (live an).",
+      "beleg": "server.py Z.8885-8905; Tests Z.1521-1522 (positiv; negativ U2).",
+      "evidenz": "stark/U2",
+      "gueltigkeit": "/health (Tiefe → 05.09)",
+      "id": "G6-35"
+    },
+    {
+      "aussage": "Store-fehlt → Historie 503 (auch Query-Exception), WS 1011; live-aus → 1008; kein Datei-Fallback.",
+      "beleg": "server.py Z.9487-9580; Tests Z.1856-1860/1941-1948.",
+      "evidenz": "stark",
+      "gueltigkeit": "Client-Vertrag",
+      "id": "G6-36"
+    },
+    {
+      "aussage": "VPS: stdout json-file 20m×5; JSONL+DB persistent /data/logs (App-verwaltet); data_root aus config.",
+      "beleg": "vps/docker-compose.yml Z.3-54; server.py Z.519-527; config Z.102.",
+      "evidenz": "stark",
+      "gueltigkeit": "VPS-Stack (andere U1)",
+      "id": "G6-37"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "logProtocolVersion kein Schema-Check (nur Literal) [G6-25]."
+    },
+    {
+      "id": "N2",
+      "thema": "Keine Anonymisierung/Pseudonymisierung [G6-29]."
+    },
+    {
+      "id": "N3",
+      "thema": "Kein VACUUM [G6-33]."
+    },
+    {
+      "id": "N4",
+      "thema": "backupCount wirkungslos [G6-18]."
+    },
+    {
+      "id": "N5",
+      "thema": "Keine Audio-Retention [G6-30]."
+    },
+    {
+      "id": "N6",
+      "thema": "Drop-Zähler keine API/Metrik [G6-13]."
+    },
+    {
+      "id": "N7",
+      "thema": "/api/logging kann Store/Level nicht setzen [G6-20/21]."
+    }
+  ],
+  "researcher_session": "ses_e3ddf042dffeB8xtR3NdpGnNQ0",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Andere Deployments Rotation ungeprüft [G6-37]."
+    },
+    {
+      "id": "U2",
+      "thema": "health-ok-false-negativ ungetestet [G6-35]."
+    },
+    {
+      "id": "U3",
+      "thema": "uvicorn-Level-Überschreibung ungetestet [G6-07]."
+    },
+    {
+      "id": "U4",
+      "thema": "Zeitzonen-Fallback ohne tzdata (lokal sonst ValueError) ungetestet."
+    }
+  ],
+  "writer_notes": "Mechanik → 06.08 (nur Betriebsbedeutung); Health-Tiefe → 05.09 (nur logging_ready/Store); Settings → 03.x (nur Logging-Einträge); Erzeuger → 06.07/06.06 (nur Senke/Schalter). Brief null → NOT_REQUESTED, keine Kanten."
+}

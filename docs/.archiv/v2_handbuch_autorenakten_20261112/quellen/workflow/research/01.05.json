@@ -1,0 +1,301 @@
+{
+  "branch_context": "feat/v2-release-cleanup",
+  "chapter": "01.05",
+  "conflicts": [
+    {
+      "auflösung": "Code + Tests gewinnen; extend existiert nicht.",
+      "beleg": "activation_commands.py Z.43,74-75,168-172; Tests invalid_action",
+      "id": "C-1",
+      "thema": "Docstring extend->refresh vs Ablehnung"
+    },
+    {
+      "auflösung": "Kein Widerspruch, dokumentationspflichtiger Vertragsunterschied; nicht verallgemeinern.",
+      "beleg": "v1 Test :288-300 vs schema.py:75-77",
+      "id": "C-2",
+      "thema": "Quellen-Vokabular v1 (wake_word ok) vs v2 (verboten)"
+    },
+    {
+      "auflösung": "Zwei Geltungsbereiche klar trennen (v1-Zulassung vs v2-Settings).",
+      "beleg": "server.py:1044-1079 (0.01-3600s) vs settings_control.py:286-366 (100ms-3600000ms)",
+      "id": "C-3",
+      "thema": "Timing-Grenzen doppelt"
+    },
+    {
+      "auflösung": "Im Kapitel disambiguieren.",
+      "beleg": "server.py:2190-2204",
+      "id": "C-4",
+      "thema": "mode ueberladen (Scheduler vs Activation)"
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "v1-Query ohne Flags -> mode=legacy, kein Controller [M-02,M-05]",
+    "v1-Query mit >=1 Flag -> mode=controlled [M-02,M-06]",
+    "beide Flags false -> activation_trigger_required [M-02]",
+    "unparsbares Flag -> invalid_activation_flag [M-03]",
+    "wake-only ohne Profil -> activation_wake_word_unavailable [M-04]",
+    "v2-hello -> immer controlled [M-24]",
+    "v2-hello beide false -> activation_trigger_required [M-24,M-04]",
+    "trigger{activate,manual} -> controller.activate(manual) [M-09,M-27]",
+    "Wake-Detektion -> controller.activate(wake_word) [M-10]",
+    "zweiter Trigger bei offen -> activation_locked [M-12]",
+    "unterdrueckte Quelle -> trigger_disabled -> Wire trigger_suppressed [M-13,M-14]",
+    "activate -> Gate oeffnen replace=True [M-06,M-09]",
+    "Sprache + offenes Gate -> recording_started -> segment_active [M-08,M-09]",
+    "idle -> waiting_first_speech (admitted) [M-17]",
+    "waiting_first_speech -> segment_active (recording_started) [M-17]",
+    "segment_active -> followup_wait (recording_ended) [M-17]",
+    "followup|segment_active -> closing_input (finish/cancel/audio/Timeout) [M-17,M-28]",
+    "closing_input -> idle (input_closed) [M-17]",
+    "idle + alte Finals parallel [M-17,M-19]",
+    "Segment laeuft -> Realtime-Interims (Deadline) [M-18,M-19]",
+    "Segment endet -> genau ein Final, keine Deadline [M-19]",
+    "v2: Interim nach Terminal verworfen [M-19]",
+    "Realtime nicht abschaltbar [M-18]",
+    "start -> listening bzw wakeword_wait [M-05,M-08]",
+    "VAD-Sprache (legacy offen) -> Aufnahme [M-08]",
+    "wakeword_detected (legacy) -> Gate offen [M-08]",
+    "Delay nicht abgelaufen -> Gate zu, einmaliges wakeword_timeout [M-08,M-21]",
+    "Legacy-Followup nach recording_stop (nur legacy) [M-20]",
+    "trigger-Befehl -> controlled_activation_disabled [M-23]",
+    "synthetische legacy-<session>-<n> im Ledger [M-22]"
+  ],
+  "facts": [
+    {
+      "aussage": "Genau zwei Modi: legacy/controlled. resolve_session_activation_config() liefert einen String; mode als activationConfig.mode (v1 hello/ready). Default legacy beim direkten Session-Bau ohne Config.",
+      "beleg": "server.py ResolvedSessionActivationConfig, Z.1012-1041 (public_dict), Z.1163, Z.1198, Z.2328-2334",
+      "evidenz": "CODE+TEST (controlled_e2e :419-440)",
+      "gueltigkeit": "serverweit pro Session, beide Transporte",
+      "id": "M-01"
+    },
+    {
+      "aussage": "Keine Flags -> legacy; >=1 Flag -> controlled, fehlendes Flag = false (Opt-in). Beide false -> Ablehnung activation_trigger_required. Fixiert bei Zulassung.",
+      "beleg": "server.py resolve Z.1161-1173, Z.1178-1183",
+      "evidenz": "CODE+TEST (:437-452, :454-462)",
+      "gueltigkeit": "Zulassung",
+      "id": "M-02"
+    },
+    {
+      "aussage": "Flags strikt geparst (true/1/yes/on|false/0/no/off), sonst invalid_activation_flag mit Feldname.",
+      "beleg": "server.py _parse_activation_flag Z.1081-1107, parse_query Z.1110-1150",
+      "evidenz": "CODE+TEST (:464-471)",
+      "gueltigkeit": "v1-Query",
+      "id": "M-03"
+    },
+    {
+      "aussage": "wake-only (manual false + wake true) nur mit wirksamem Wake-Profil, sonst activation_wake_word_unavailable. manual+wake ohne Profil erlaubt (wakeWordProfileEnabled=false, keine Detektion). v2-Pendant Handshake-Regeln.",
+      "beleg": "server.py Z.1185-1195, Z.1034, Z.1201; handshake.py:212-237",
+      "evidenz": "CODE+TEST (command_timer_e2e :1290-1350)",
+      "gueltigkeit": "Zulassung; ProfileEnabled informativ",
+      "id": "M-04"
+    },
+    {
+      "aussage": "Legacy: kein Controller (None), keine Gate-Policy. Nur controlled-Zweig setzt Policy + ActivationController.",
+      "beleg": "server.py Z.2328-2334, Z.2421-2441; activation_controller() None Z.3451-3453",
+      "evidenz": "CODE+TEST (:437-452)",
+      "gueltigkeit": "Legacy (v1 ohne Flags)",
+      "id": "M-05"
+    },
+    {
+      "aussage": "Controlled: recorder.set_activation_policy(controlled) + Controller mit Query-Timings + id_factory (kanonische UUIDs nur v2).",
+      "beleg": "server.py:2421-2441; audio_recorder.py:714-716",
+      "evidenz": "CODE+TEST (:511-515 gate controlled+activationId)",
+      "gueltigkeit": "controlled (v1-mit-Flags, v2)",
+      "id": "M-06"
+    },
+    {
+      "aussage": "Controller verlangt >=1 Quelle: beide None -> Defaults manual=True/wake=False; beide False -> ValueError. Server uebergibt echte Booleans.",
+      "beleg": "activation.py __init__ Z.208-218",
+      "evidenz": "CODE+TEST (activation_controller)",
+      "gueltigkeit": "Controller-API",
+      "id": "M-07"
+    },
+    {
+      "aussage": "controlled: ausschliesslich Gate-Event (latcht activationId+generation), wakeword_detected NICHT konsultiert. legacy: wakeword_detected ODER (keine Wake-Words/Delay vorbei) UND start_recording_on_voice_activity.",
+      "beleg": "activation_control.py Z.191-226 (198-201, 208-217, 218-226)",
+      "evidenz": "CODE+TEST (recorder_control :102-131; e2e :475-491, :549-565)",
+      "gueltigkeit": "Recorder, beide Transporte",
+      "id": "M-08"
+    },
+    {
+      "aussage": "activate(manual) -> waiting_first_speech + initial_speech-Deadline (Default 15s), Gate replace=True. Segment erst bei VAD-Sprache (recording_started -> segment_active + Watchdog).",
+      "beleg": "activation.py:464-509, :93; server.py:3929-3948; recording.py:351-356",
+      "evidenz": "CODE+TEST (:493-523 primarySource manual)",
+      "gueltigkeit": "controlled/manual",
+      "id": "M-09"
+    },
+    {
+      "aussage": "Detektion -> _activate_from_wake_candidate -> controller.activate(wake_word) = Commit; Verweigerung: kein Event/Latch/zweite Activation. Wake waehrend offener Activation wirkungslos.",
+      "beleg": "server.py Z.2588-2660, Z.5764-5812; wake_admission.py:1-25",
+      "evidenz": "CODE+TEST (:525-547, :1056-1060, command_timer :1341-1353)",
+      "gueltigkeit": "controlled + wake enabled",
+      "id": "M-10"
+    },
+    {
+      "aussage": "v1-Parser akzeptiert source {manual,wake_word}; v2 nur manual, wake_word -> invalid_payload (server-internal). Bewusste/historische Divergenz -> 04.12/09.03.",
+      "beleg": "activation_commands.py:48-50,212-243 vs schema.py:75-77, commands.py:143-167",
+      "evidenz": "CODE+TEST (trigger_contract :288-300)",
+      "gueltigkeit": "v1 trigger vs v2 activation.command",
+      "id": "M-11"
+    },
+    {
+      "aussage": "sources enthaelt nur primarySource; zweiter Trigger bei nicht-idle -> activation_locked (kein Merge, kein zweites Segment).",
+      "beleg": "activation.py _snapshot Z.403-415, activate Z.478-490",
+      "evidenz": "CODE+TEST (:1033-1053, :1062-1081)",
+      "gueltigkeit": "controlled beide Quellen",
+      "id": "M-12"
+    },
+    {
+      "aussage": "Suppression = Maskenfeld pro Quelle, nur neue Zulassungen; beendet keine laufende, aendert primarySource nicht. v2 trigger_suppression.set + hello.runtimeSuppression (Policy live, nicht schreibbar); v1 kein Command/Query.",
+      "beleg": "activation.py:310-352; connection.py:483-503,307-324; handshake.py:144-176; settings_control.py:396-423",
+      "evidenz": "CODE",
+      "gueltigkeit": "v2-Session",
+      "id": "M-13"
+    },
+    {
+      "aussage": "Controller trigger_disabled -> Wire trigger_suppressed + Diagnose-Event activation.trigger_suppressed. v1 sieht Domain-Reason trigger_disabled.",
+      "beleg": "commands.py:232-233, connection.py:448-449,663-673; schema.py:117,154",
+      "evidenz": "CODE",
+      "gueltigkeit": "v2-Wire (v1 abweichend)",
+      "id": "M-14"
+    },
+    {
+      "aussage": "Flags zulassungsfixiert (KEIN Settings-Key, nur Query/hello/activationConfig); sechs activation.*-Keys scope=session, apply=next_activation, ms, bei Admission als TimingPolicy gelatcht.",
+      "beleg": "server.py:985-994,1110-1208; settings_control.py:286-366; _new_activation_inputs Z.3350-3407",
+      "evidenz": "CODE+TEST (:567-594 Snapshot unveraendert)",
+      "gueltigkeit": "v2 Patch, v1 Query-Timings",
+      "id": "M-15"
+    },
+    {
+      "aussage": "Zwei Timing-Vertraege: v1-Query (0.01-3600s, Kommentar Test-Pfad) in Controller-Konstruktor; v1-controlled timing_policy=None -> Konstruktorwerte; v2 ausschliesslich Registry. Zwei Eingaenge, keine Doppeldefinition.",
+      "beleg": "server.py:1044-1079, :3350-3407; activation.py:272-288; settings_control 286-366",
+      "evidenz": "CODE+TEST (command_timer :1321-1325 initialSpeechTimeout=60)",
+      "gueltigkeit": "v1 vs v2",
+      "id": "M-16"
+    },
+    {
+      "aussage": "Fuenf Phasen idle/waiting_first_speech/segment_active/followup_wait/closing_input (OPEN_WINDOW_PHASES); recording_started -> segment_active + Watchdog; recording_ended -> followup_wait; finish/cancel/audio/Timeout -> closing_input; input_closed -> idle; danach neue Activation waehrend Finals laufen. Final KEINE Phase.",
+      "beleg": "activation.py:65-78; schema.py:85-102",
+      "evidenz": "CODE+TEST (:806-869 alte Final nach neuer Activation)",
+      "gueltigkeit": "controlled (Legacy nutzt Phasen nicht)",
+      "id": "M-17"
+    },
+    {
+      "aussage": "Server setzt enable_realtime_transcription=True hart; kein ServerSettings-Feld/Settings-Key. Worker beendet sich nur bei False - im Server unerreichbar. Realtime-aus KEINE Modus-Option.",
+      "beleg": "server.py:2778; realtime.py:43-45; Gegenprobe Settings Z.403-517",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "alle Server-Sessions, beide Modi/Transporte",
+      "id": "M-18"
+    },
+    {
+      "aussage": "Realtime-Jobs deadline (max_realtime_queue_age_ms, nur realtime); Final keine. Realtime nur wenn nicht reject_current_recording; Final pro Segment via Ledger (segment_state.final). Realtime/Final = orthogonale Achse zur Trigger-Achse.",
+      "beleg": "server.py:8283-8305,4900-4974,5441-5532; events.py:55-70,123-130",
+      "evidenz": "CODE",
+      "gueltigkeit": "modusunabhaengig",
+      "id": "M-19"
+    },
+    {
+      "aussage": "Legacy-Followup nur ohne Controller (wakeword_detected/timeout/start_recording_on_voice_activity direkt), braucht followup_window>0 + Wake-Setup. Controlled: Controller alleinige Followup-Autoritaet. followup_window wirkungslos in controlled/v2.",
+      "beleg": "server.py:5526-5531,5600-5659",
+      "evidenz": "CODE+TEST (:972-988 controlled 0 / legacy 1)",
+      "gueltigkeit": "Legacy vs controlled",
+      "id": "M-20"
+    },
+    {
+      "aussage": "Evaluator nur bei admitted Selection UND Controller; dann entfaellt Legacy-Ablauffrist (Latch gehoert Activation). Ohne Selektion (jede v1) bleibt wake_word_timeout aktiv.",
+      "beleg": "recording.py Z.600-617; server.py:2452-2477; wake_admission.py:1-25",
+      "evidenz": "CODE",
+      "gueltigkeit": "v2 mit Selektion vs v1",
+      "id": "M-21"
+    },
+    {
+      "aussage": "Legacy: _legacy_activation_sequence++, activation_id=legacy-<session>-<n> -> Ledger/Segment-Korrelation ohne Phasen/Gate-Semantik. Identitaetshinweis 02.03/01.07.",
+      "beleg": "server.py:5365-5379",
+      "evidenz": "CODE",
+      "gueltigkeit": "Legacy",
+      "id": "M-22"
+    },
+    {
+      "aussage": "Legacy: Aktivierungsbefehle -> trigger_ack accepted:false controlled_activation_disabled; audio_availability setzt nur Flag (kein Abbruch ohne Controller).",
+      "beleg": "server.py:3667-3670,3596-3601,3730-3818 (3799)",
+      "evidenz": "CODE+TEST (:443-452)",
+      "gueltigkeit": "Legacy v1",
+      "id": "M-23"
+    },
+    {
+      "aussage": "v2 immer controlled: beide hello-Flags Pflicht-Booleans, beide false schon im Handshake abgelehnt. Nie legacy, nie stream_not_started, KEIN start-Kommando.",
+      "beleg": "connection.py:257-282,307-328; handshake.py:212-219; commands.py:240-246",
+      "evidenz": "CODE",
+      "gueltigkeit": "v2",
+      "id": "M-24"
+    },
+    {
+      "aussage": "mode NICHT auf v2-Draht (hello.accepted: type/version/sessionId/serverVersion/serverCommit/snapshot/logAccess). v1 hello/ready mit activationConfig (mode/Flags/Profil/Timings). v2 stattdessen snapshot.trigger + snapshot.input.primarySource. Client erkennt Modus NICHT an mode in v2.",
+      "beleg": "connection.py:332-343; server.py:10002-10014; snapshot.py:73,168+",
+      "evidenz": "CODE+TEST (:424-435 nur v1)",
+      "gueltigkeit": "Wire-Vertraege; relevant 04.03/04.12",
+      "id": "M-25"
+    },
+    {
+      "aussage": "Capability serverweit nicht sessionspezifisch: supported=true, sources [manual,wake_word], actions [activate,refresh,finish,cancel], commandType trigger, ackType trigger_ack, 8 Query-Parameter, 4 Events - auch wenn Session Legacy (dann controlled_activation_disabled).",
+      "beleg": "server.py:7747-7769, Aufruf 10009",
+      "evidenz": "CODE+TEST (:431-435)",
+      "gueltigkeit": "v1 hello/ready",
+      "id": "M-26"
+    },
+    {
+      "aussage": "Nur activate|refresh|finish|cancel. activate OHNE activationId (sonst invalid_payload); refresh/finish/cancel MIT; source bei Controls ignoriert (nicht im Replay-Key). extend existiert nicht.",
+      "beleg": "activation_commands.py:43,168-172,204-210; schema.py:62-67",
+      "evidenz": "CODE+TEST (activation_commands :64-119; boundary :200-222)",
+      "gueltigkeit": "beide Transporte",
+      "id": "M-27"
+    },
+    {
+      "aussage": "finished/timed_out/watchdog verarbeiten akzeptiertes Audio weiter; nur cancelled/client_cancel/session_closed/stream_stopped unterdruecken Unpubliziertes. cancel markiert Ledger cancel_pending. Legacy keine solche Cancel-Semantik.",
+      "beleg": "server.py _cancel_close_reason Z.3956-3969, Ledger-Close Z.4112-4117",
+      "evidenz": "CODE+TEST (:871+ cancel unterdrueckt; :596-659 finish->idle)",
+      "gueltigkeit": "controlled",
+      "id": "M-28"
+    }
+  ],
+  "investigated_sources": [
+    "activation.py (Controller)",
+    "activation_commands.py (Envelope/Replay)",
+    "server.py (Zulassung/Mode/Session/Gates/Status)",
+    "settings_control.py (activation/runtimeSuppression/wakeWord-Keys)",
+    "core/activation_control.py (Gate legacy/controlled)",
+    "core/recording.py (Legacy-Pfad, Delay/Timeout)",
+    "audio_recorder.py (set_activation_policy)",
+    "protocol_v2/{schema,commands,handshake,connection,snapshot,events}.py",
+    "Tests (controlled_e2e, command_timer_e2e, trigger_contract, activation_commands, v1_v2_boundary, recorder_activation_control)"
+  ],
+  "not_implemented": [
+    "Kein dritter Modus (nur legacy/controlled; manuell/Wake = Quellen in controlled)",
+    "Kein Realtime-Abschalten serverseitig (M-18)",
+    "Kein Zurueckschalten/Live-Aendern der Trigger-Flags (nur Suppression)",
+    "Kein extend-Alias (M-27)",
+    "Kein v2-start-Kommando (M-24)",
+    "Keine finalizing-Phase (M-17)",
+    "Kein wake_word_followup_window in controlled/v2 (M-20)",
+    "Kein Legacy-Followup mit Controller (M-20); keine Legacy-Frist mit v2-Evaluator (M-21)"
+  ],
+  "researcher_session": "ses_e4703ebb0ffe0ZdAQ4GBFGfcso",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "storyline": "Zwei Modi (Zulassung) -> drei Trigger-Konfigurationen in controlled (manuell/Wake/beide, erster gewinnt) -> Legacy ohne Trigger (VAD/Wake direkt, eigene Followup-Mechanik) -> Phasenachse nur controlled -> Realtime/Final orthogonale Achse.",
+  "unknown": [
+    {
+      "id": "U-1",
+      "thema": "v1-controlled mit deaktiviertem Wake-Trigger: publiziert _on_wakeword_detected trotzdem Timeline-Event bei physischer Detektion? (Test prueft nur Gate, nicht Events)"
+    },
+    {
+      "id": "U-2",
+      "thema": "Legacy-Wake-Erkennung in v1-controlled haengt an use_wake_words + fehlendem Evaluator (konfigurationsabhaengig)"
+    },
+    {
+      "id": "U-3",
+      "thema": "Watchdog-/Followup-Details gehoeren 02.03/08.06; hier nur Kanten, keine eigenen Zahlen ausser activation.py:93-98"
+    }
+  ],
+  "review_notes": "2026-11-08 R1-F1: C-3/M-15 praezisiert - v2-Registry hat je Schluessel eigene Ranges (initialSpeech 100-3600000ms, followup 100-60000ms, watchdogInitial 60000-3600000ms, watchdogRefresh 30000-600000ms, watchdogWarning ab 5000ms+lessThan, closingRecovery 1000-30000ms; settings_control.py Z.286-366). Kapitel korrigiert."
+}

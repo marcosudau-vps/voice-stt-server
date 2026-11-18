@@ -1,0 +1,356 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (.git/refs/heads/feat/ fehlt); nur Commit bindend.",
+  "chapter": "08.06",
+  "commit_verification": ".git/HEAD gelesen = a8993c5c68042d996eab680d84a5b138a214bb5d (detached, verifiziert). Nur *.py/Schemas/Tests.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "'SSE-Keepalive 30s' vs Code: 30s ist WS-Log-Keepalive; SSE ohne Keepalive."
+    },
+    {
+      "id": "C2",
+      "thema": "Zwei Ranges: Registry ms/strikt vs Session-Query 0.01-3600s; Autoritaet Registry."
+    },
+    {
+      "id": "C3",
+      "thema": "Zwei Zeitbasen: monoton (Controller) vs Wall-Clock (Recorder-Legacy, Log-Token)."
+    },
+    {
+      "id": "C4",
+      "thema": "wake_word_timeout 5.0 als Setting vorhanden, in V2 wirkungslos."
+    },
+    {
+      "id": "C5",
+      "thema": "WarningMs ohne max; Obergrenze nur Cross-Field."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "1 idle--activate-->waiting (initial_speech) [TM8-02,08]",
+    "2 waiting--started-->segment (watchdog) [TM8-04]",
+    "3 waiting--timer initial-->closing [TM8-02,07]",
+    "4 waiting--refresh-->waiting invalid_phase [TM8-02]",
+    "5 segment--ended-->followup (followup) [TM8-03]",
+    "6 segment--refresh-->segment max(current,now+180s) [TM8-05]",
+    "7 segment--warning-->segment keine Verschiebung [TM8-06]",
+    "8 segment--timer watchdog-->closing kein Follow-up [TM8-04]",
+    "9 followup--refresh-->followup now+3s [TM8-03]",
+    "10 followup--timer followup-->closing [TM8-03]",
+    "11 followup--started-->segment neuer Token [TM8-04,11]",
+    "12 offen--finish|cancel|audio-->closing [TM8-07]",
+    "13 closing--timer recovery-->closing konsumiert [TM8-07]",
+    "14 closing--input_closed-->idle [TM8-07]",
+    "15 closing--Recovery unsicher-->session terminal [TM8-07]",
+    "16 worker--stale_token-->verworfen [TM8-11]",
+    "17 worker--now<deadline-->not_due weiter [TM8-10]",
+    "18 ws ohne hello--10.0s-->4408 [TM8-13]",
+    "19 realtime--wait>1500ms-->stale [TM8-14]",
+    "20 log_ws--30.0s-->keepalive [TM8-16]",
+    "21 log_token--86400s-->abgelaufen [TM8-17]",
+    "22 model_idle--idle>3600s-->unload [TM8-18]"
+  ],
+  "facts": [
+    {
+      "aussage": "4 Deadline-Arten: initial/followup/watchdog/closing_recovery; _set_timer_locked einziger Arm-Punkt (+Revision).",
+      "beleg": "activation.py:84-88,366-384,746-798",
+      "evidenz": "A",
+      "gueltigkeit": "pro Session",
+      "id": "TM8-01"
+    },
+    {
+      "aussage": "initial 15.0s ab Admission; Ablauf -> closing (timed_out/initial_speech_timeout); refresh invalid_phase.",
+      "beleg": "activation.py:93,502-505,538-541,793-798",
+      "evidenz": "A",
+      "gueltigkeit": "intern s, Schema ms",
+      "id": "TM8-02"
+    },
+    {
+      "aussage": "followup 3.0s bei Ende + refresh, absolut now+3, nie kumulativ; kein extend.",
+      "beleg": "activation.py:94,563-566,608-616",
+      "evidenz": "A",
+      "gueltigkeit": "followup_wait",
+      "id": "TM8-03"
+    },
+    {
+      "aussage": "watchdog initial 600.0s, Warnung 30s davor; Fenster>Rest -> sofort faellig; VAD kein Reset.",
+      "beleg": "activation.py:95,380-382,578-583,587-592",
+      "evidenz": "A",
+      "gueltigkeit": "segment_active",
+      "id": "TM8-04"
+    },
+    {
+      "aussage": "watchdog refresh 180.0s: max(current,now+refresh); frueh No-op ohne Revision.",
+      "beleg": "activation.py:96,547-562",
+      "evidenz": "A",
+      "gueltigkeit": "segment_active",
+      "id": "TM8-05"
+    },
+    {
+      "aussage": "Warnung eigenes Event: keine Verschiebung, Revision unveraendert, Token gueltig.",
+      "beleg": "activation.py:763-777; server.py:3907-3911",
+      "evidenz": "A",
+      "gueltigkeit": "einmal je Arming",
+      "id": "TM8-06"
+    },
+    {
+      "aussage": "recovery 5.0s: konsumiert, bleibt closing (recoveryRequested); nur input_closed->idle; Fehlschlag terminal.",
+      "beleg": "activation.py:98,694-697,800-817; server.py:4141-4258",
+      "evidenz": "A",
+      "gueltigkeit": "closing_input",
+      "id": "TM8-07"
+    },
+    {
+      "aussage": "ms->s /1000 aus einem Snapshot; 6 Werte bei Admission gelatcht, Patch erreicht laufende nicht.",
+      "beleg": "settings_control.py:1111-1143; server.py:3350-3405",
+      "evidenz": "A",
+      "gueltigkeit": "next_activation",
+      "id": "TM8-08"
+    },
+    {
+      "aussage": "Cross-Field: warning < initial UND < refresh; Pruefung je Watchdog-Key gegen finalen Kandidaten.",
+      "beleg": "settings_control.py:136-149,789-821",
+      "evidenz": "A",
+      "gueltigkeit": "Settings-Patch",
+      "id": "TM8-09"
+    },
+    {
+      "aussage": "Ein Worker je Token; due=min(warning,deadline); wait; frueh -> not_due weiter.",
+      "beleg": "server.py:4393-4479",
+      "evidenz": "A",
+      "gueltigkeit": "Daemon je Session",
+      "id": "TM8-10"
+    },
+    {
+      "aussage": "Token (id,seq,revision,phase,kind,segment) macht alte Callbacks inert (stale_timer).",
+      "beleg": "activation.py:127-143,396-399,753-761",
+      "evidenz": "A",
+      "gueltigkeit": "alle Timer",
+      "id": "TM8-11"
+    },
+    {
+      "aussage": "Deadlines monotonic; Wire nur abgeleitet Unix-ms/remaining; Wanduhr aendert nichts.",
+      "beleg": "activation.py:21-22,241; snapshot.py:126-139",
+      "evidenz": "A",
+      "gueltigkeit": "Zeitbasis-Kontrakt",
+      "id": "TM8-12"
+    },
+    {
+      "aussage": "Handshake 10.0s je Receive (keine Gesamtfrist), Close 4408, keine Session.",
+      "beleg": "schema.py:204-209; server.py:10229-10239",
+      "evidenz": "A",
+      "gueltigkeit": "vor accepted",
+      "id": "TM8-13"
+    },
+    {
+      "aussage": "Realtime-Alter 1500ms nur realtime, Drop stale; Final ohne Alters-Drop.",
+      "beleg": "server.py:491,1841-1849,8283-8302",
+      "evidenz": "A",
+      "gueltigkeit": "Realtime-Lane",
+      "id": "TM8-14"
+    },
+    {
+      "aussage": "transcribe_openai timeout 600.0s -> TimeoutError + cancel; Aufrufer ohne Wert.",
+      "beleg": "server.py:8362-8408; openai_routes.py:342-350",
+      "evidenz": "B",
+      "gueltigkeit": "OpenAI-Lane",
+      "id": "TM8-15"
+    },
+    {
+      "aussage": "Log-WS-Keepalive 30.0s -> log.keepalive; SSE ohne Keepalive.",
+      "beleg": "server.py:149,9715-9719,9805-9810",
+      "evidenz": "A",
+      "gueltigkeit": "Log-WebSocket",
+      "id": "TM8-16"
+    },
+    {
+      "aussage": "Log-Token-TTL 86400s Wall-Clock; Sweep ab 1024; volatil.",
+      "beleg": "security/logs.py:9-13,22,26,47-55",
+      "evidenz": "A",
+      "gueltigkeit": "Log-Auth",
+      "id": "TM8-17"
+    },
+    {
+      "aussage": "Modell-Idle 3600.0s, Intervall min(30,timeout/4); unload bei Audio verschiebbar.",
+      "beleg": "server.py:500,7599-7639",
+      "evidenz": "B",
+      "gueltigkeit": "Modell-Lifecycle",
+      "id": "TM8-18"
+    },
+    {
+      "aussage": "ensure_models_loaded 180.0s -> TimeoutError; wait_ready(None) unbegrenzt.",
+      "beleg": "server.py:2161-2171,7393-7412",
+      "evidenz": "B",
+      "gueltigkeit": "Modell-Laden",
+      "id": "TM8-19"
+    },
+    {
+      "aussage": "Joins: Engine 10s, ready/idle je 5s, text 3s; keine Domaenenfristen.",
+      "beleg": "server.py:1981-1997,2933-2934,7304-7315",
+      "evidenz": "B",
+      "gueltigkeit": "Stop/Close",
+      "id": "TM8-20"
+    },
+    {
+      "aussage": "Audio-Deckel 30.0s (30*16000) -> Zwangs-Finalisierung; Sample-Budget kein Timer.",
+      "beleg": "server.py:489,6011-6029",
+      "evidenz": "B",
+      "gueltigkeit": "pro Recording",
+      "id": "TM8-21"
+    },
+    {
+      "aussage": "Wake-Follow-up Default 0.0=aus; >0 sleep(window), Generationsguard, timeout-Event.",
+      "beleg": "server.py:446,5600-5680",
+      "evidenz": "B",
+      "gueltigkeit": "Wake-Pfad",
+      "id": "TM8-22"
+    },
+    {
+      "aussage": "Recorder wake_word_timeout 5.0 durchgereicht, in V2 wirkungslos (Evaluator uebersprungen).",
+      "beleg": "recording.py:602-617; audio_recorder.py:79",
+      "evidenz": "A",
+      "gueltigkeit": "nur Legacy",
+      "id": "TM8-23"
+    },
+    {
+      "aussage": "cooldownMs Default 0/min0/ohne max/monoton/nach Close; WW-18 EVIDENCE_BLOCKED.",
+      "beleg": "settings_control.py:449-472; wake_detection.py:555,729-733",
+      "evidenz": "B",
+      "gueltigkeit": "next_activation",
+      "id": "TM8-24"
+    },
+    {
+      "aussage": "preRollMs Default 0, Clamp auf Historie; WW-19 EVIDENCE_BLOCKED.",
+      "beleg": "settings_control.py:473-498; wake_audio_boundary.py:116-138",
+      "evidenz": "B",
+      "gueltigkeit": "next_activation",
+      "id": "TM8-25"
+    },
+    {
+      "aussage": "Kroko-Check 5.0s je Roundtrip, kein Retry.",
+      "beleg": "security/kroko.py:25-27,41-52",
+      "evidenz": "B",
+      "gueltigkeit": "Kroko/Pro",
+      "id": "TM8-26"
+    },
+    {
+      "aussage": "Session-Query 0.01-3600.0s nur Fallback ohne timing_policy; sonst Bundle.",
+      "beleg": "server.py:1044-1079,2421-2441",
+      "evidenz": "B",
+      "gueltigkeit": "v1/Fallback",
+      "id": "TM8-27"
+    },
+    {
+      "aussage": "Poll 0.2/0.1s keine Fristen, keine Uebergaenge.",
+      "beleg": "server.py:1867,8312,4709; openai_routes.py:353",
+      "evidenz": "A",
+      "gueltigkeit": "keine Deadline",
+      "id": "TM8-28"
+    },
+    {
+      "aussage": "Recorder-Infra: poll 5s, joins 10/10s, safepipe 0.1/+0.1s, queue 0.01s, waits 0.02s.",
+      "beleg": "realtime.py:259; shutdown.py:40,50; safepipe.py:52,152",
+      "evidenz": "A",
+      "gueltigkeit": "Recorder-Prozesse",
+      "id": "TM8-29"
+    },
+    {
+      "aussage": "Defaults 08.05/02.x: boundary (0.05,0.2), silence 0.2, preroll 200/160/600/80ms, audio 0.25/20.0s.",
+      "beleg": "server.py:434-435,495-496; preroll.py:16-19",
+      "evidenz": "A",
+      "gueltigkeit": "nur Katalog",
+      "id": "TM8-30"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Kumulative Verlaengerung (extend/Banked Time) fehlt."
+    },
+    {
+      "id": "N2",
+      "thema": "Gesamt-Timeout einer Activation fehlt; nur 4 Arten."
+    },
+    {
+      "id": "N3",
+      "thema": "Zweiter Recovery-Timer fehlt; danach terminal."
+    },
+    {
+      "id": "N4",
+      "thema": "SSE-Keepalive fehlt; nur WS-Log 30s + Poll 0.1s."
+    },
+    {
+      "id": "N5",
+      "thema": "V2-Wake-Timeout als Ende uebersprungen."
+    },
+    {
+      "id": "N6",
+      "thema": "Kalibrierte cooldown/preRoll EVIDENCE_BLOCKED; nur Defaults 0."
+    }
+  ],
+  "researcher_session": "ses_e34bf0a40ffe8tJ7782k7bWI4t",
+  "solver_notes": [
+    {
+      "id": "A",
+      "thema": "Deadline-Arten 4",
+      "werte": "initial/followup/watchdog/closing_recovery",
+      "zaehlung": 4
+    },
+    {
+      "id": "B",
+      "thema": "Settings-Keys 6",
+      "werte": "15000/100/3600000, 3000/100/60000, 600000/60000/3600000, 180000/30000/600000, 30000/5000/kein max, 5000/1000/30000",
+      "zaehlung": 6
+    },
+    {
+      "id": "C",
+      "thema": "Server-Fristen 13",
+      "werte": "10.0s, 1500ms, 600.0s, 180.0s, 3600.0s, min(30,t/4), 10/3/5/5s, 30.0s, 0.0, 5.0s",
+      "zaehlung": 13
+    },
+    {
+      "id": "D",
+      "thema": "Keepalive/TTL 2",
+      "werte": "30.0s WS, 86400s Token",
+      "zaehlung": 2
+    },
+    {
+      "id": "E",
+      "thema": "Recorder/Engine 7",
+      "werte": "5.0s, 5s, 10s, 10s, 0.1s, 0.01s, 0.02s",
+      "zaehlung": 7
+    },
+    {
+      "id": "F",
+      "thema": "Poll 4",
+      "werte": "0.2s, 0.1s, 0.1s, 0.1s",
+      "zaehlung": 4
+    },
+    {
+      "id": "G",
+      "thema": "Kroko 2",
+      "werte": "5.0s, 1800.0s/0.05s",
+      "zaehlung": 2
+    }
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "OS-Granularitaet ~15ms nur Kommentar."
+    },
+    {
+      "id": "U2",
+      "thema": "Warnung bei Rest<Warnfenster nach Refresh ohne Test."
+    },
+    {
+      "id": "U3",
+      "thema": "Handshake-Neuarmung nach Frames nicht getestet."
+    },
+    {
+      "id": "U4",
+      "thema": "wake_word_activation_delay>0 Wirkung nicht als Frist belegt."
+    }
+  ],
+  "writer_notes": "Phasen/Segment/Silence nur referenzieren (08.05/02.x). Diagramm nur Kanten 1-22, Negativkanten auslassen; Zeitachse monoton + abgeleitete Wall-Sicht."
+}

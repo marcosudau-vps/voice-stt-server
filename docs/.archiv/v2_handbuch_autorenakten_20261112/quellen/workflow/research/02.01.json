@@ -1,0 +1,258 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup lokal NICHT verifizierbar (detached HEAD by-SHA, refs/heads leer). Commit verifiziert (.git/HEAD, FETCH_HEAD, GitHub-API Metadaten). Alle Fakten gelten Baum dieses Commits. pytest.ini testpaths=tests/unit; CI tests/unit+tests/compatibility.",
+  "chapter": "02.01",
+  "commit_verification": ".git/HEAD detached a8993c5c68042d996eab680d84a5b138a214bb5d; FETCH_HEAD identisch",
+  "conflicts": [
+    {
+      "auflösung": "Branch-Angabe nicht verifiziert; Commit verifiziert. Vor Freigabe klaeren.",
+      "beleg": "detached HEAD, leere refs/heads",
+      "id": "C-1",
+      "thema": "Branch-Name unbestätigt"
+    },
+    {
+      "auflösung": "Keinen festen Wert behaupten; /api/config ist Quelle.",
+      "beleg": "Default 4/4/8 an drei Stellen",
+      "id": "C-2",
+      "thema": "max_sessions 4/4/8"
+    },
+    {
+      "auflösung": "Nicht vermischen; status unsichtbar fuer v2.",
+      "beleg": "S1-11 vs S1-12",
+      "id": "C-3",
+      "thema": "Zwei Zustandswelten (status vs inputPhase)"
+    },
+    {
+      "auflösung": "v1 limits in hello, v2-Snapshot ohne; /api/config + /health serverweit.",
+      "beleg": "snapshot.py:65-68; Test :280-287",
+      "id": "C-4",
+      "thema": "v1-Limits vs v2-Snapshot"
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "[*] -> Connected | TCP/WS accept /ws/v2 [S1-01]",
+    "Connected -> Handshaking | erster Frame [S1-01]",
+    "Handshaking -> Closed | 4400 invalid handshake [S1-06]",
+    "Handshaking -> Closed | 4406 keine Version [S1-06]",
+    "Handshaking -> Closed | 4408 Timeout 10s [S1-19]",
+    "Handshaking -> Closed | 4409 session.rejected [S1-06,S1-07]",
+    "Handshaking -> Admitted | hello gueltig -> admit_session(new UUID) [S1-01,S1-02,S1-04]",
+    "Admitted -> Admitted | activation.command/settings.patch/... [S1-10,S1-12]",
+    "Admitted -> Closing | Disconnect/Terminal-Recovery [S1-16,S1-18]",
+    "Closing -> Closed | close_session -> remove -> close() [S1-16]",
+    "Closed -> [*] | Close-Frame + Audit session.closed [S1-16]",
+    "Client->/ws/v2 hello -> handshake.parse_hello -> admit_requested_session -> admit_session(new ID) -> reserve -> Session-Init (Recorder/Controller/Wake/Text-Thread) -> add -> start_streaming -> log_access -> hello.accepted [S1-01,S1-02,S1-04,S1-07,S1-08,S1-09,S1-10,S1-20]",
+    "Client disconnect -> request_close(1000) -> Writer-Drain 5s -> close_session (Observer loesen) -> remove_session (Store-remove) -> close() (Reset/Ledger/Scheduler/Pending/Sprecher/Recorder/Thread/Replay) -> websocket.close -> Audit [S1-16,S1-17,S1-18]"
+  ],
+  "facts": [
+    {
+      "aussage": "Einziger v2-Erzeuger /ws/v2-Endpoint nach validiertem hello. accept, clientId-Norm, ProtocolV2Connection; vor hello keine Domain-Session (state None). Reihenfolge parse_hello -> admit_requested_session -> _admit -> _activate_session.",
+      "beleg": "server.py 10121-10147; connection.py 218-255,105-107",
+      "evidenz": "E2 (e2e :451-461, :436-449)",
+      "gueltigkeit": "v2 (v1 anderer Pfad S1-05)",
+      "id": "S1-01"
+    },
+    {
+      "aussage": "sessionId servergeneriert kanonisch (uuid4, 36, klein); hello-sessionId-Feld ignoriert. Kompakt/Gross abgelehnt.",
+      "beleg": "connection.py 257-282,312-316; schema.py 214-233; handshake.py 83-155",
+      "evidenz": "E2/E4 (contract :324-342; e2e :269-276, :1454-1488)",
+      "gueltigkeit": "alle v2-Sessions (IDs 01.07)",
+      "id": "S1-02"
+    },
+    {
+      "aussage": "ProtocolSessionState: _state_version=0, _last_event_seq=0, _settings_revision=Session-Revision; nicht-kanonisch -> ValueError; keine Phasen/Deadline/Ledger-Autoritaet.",
+      "beleg": "session.py 32-144 (41-42,57-60,72-101,105-144)",
+      "evidenz": "E2 (contract :539-545, :613-618)",
+      "gueltigkeit": "pro v2-Verbindung",
+      "id": "S1-03"
+    },
+    {
+      "aussage": "Slots = sessions + reserved vs max_sessions; reserve lehnt Duplikat/Ueberlauf ab (rejected_sessions++); add verbraucht; remove gibt Slot+Reserve+Sprecher frei.",
+      "beleg": "server.py 6133-6237 (reserve 6142-6151, add 6153-6165, can_accept, remove, slots 6236-6237); admit 7325-7370 (7349,7353,7362)",
+      "evidenz": "E2 (multi_user :1295-1341, :950-958)",
+      "gueltigkeit": "serverweit (alle Transporte)",
+      "id": "S1-04"
+    },
+    {
+      "aussage": "v1 32-Hex (Z.9938 vor admit 9940, connect 9988, Server-hello 10002-10111); v2 kanonisch (Session/Activation/Segment). Kein Umbau.",
+      "beleg": "server.py 9938,10138-10146,2337-2343,1308-1352",
+      "evidenz": "E2 (boundary :229-260; e2e :1490-1506)",
+      "gueltigkeit": "Transportgrenze (Details 01.07)",
+      "id": "S1-05"
+    },
+    {
+      "aussage": "Fehlerreihenfolge: hello unparsebar -> 4400 (ggf +incompatible ->4406); admit-errors -> session.rejected invalid_requested_session +4409; SessionConfigurationError -> rejected +4409; admit None (Limit) -> rejected session_limit_reached +4409; sonst 1011. admit wirft -> Reserve frei + Halbfertige schliessen + raise. v1: 1008/1013.",
+      "beleg": "connection.py 230-305; schema.py 202-206; server.py 7366-7370; v1 9925-9986",
+      "evidenz": "E2 (1/2/3/5) + E1 Code (4); Luecke N-1",
+      "gueltigkeit": "v2",
+      "id": "S1-06"
+    },
+    {
+      "aussage": "Requested-Session atomar gegen einen Katalog-Snapshot: Codes trigger_required/wake_required/not_allowed/unavailable; Auswahl einmal befragt, durchgereicht, nie neu aufgeloest.",
+      "beleg": "handshake.py 190-247; connection.py 260-271",
+      "evidenz": "E2 (e2e :406-434)",
+      "gueltigkeit": "v2-Admission (Phasen 02.03)",
+      "id": "S1-07"
+    },
+    {
+      "aussage": "Init-Reihenfolge: Settings-Kopie+Configs; IDs/clientId/canonical_ids; observer None/SegmentState/Timeline/lock; streaming False/idle/generation 0/Zaehler; Ledger; Settings-State; Dispatch-Lock; Epochen/Cache/audio verfuegbar/Statistik; recorder-Bau; Controller nur controlled (+Policy); Wake-Runtime; LETZTER Schritt text_thread.start. Exception im Konstruktor -> kein Thread (admit schliesst nur zugewiesene, gibt Reserve frei).",
+      "beleg": "server.py __init__ 2308-2448 (Punkte 2320-2343,2346-2380,2409-2416,2421-2442,2443-2448); admit 7366-7370",
+      "evidenz": "E1 + E3-Inferenz",
+      "gueltigkeit": "jede Session (controlled nur v2/aktiviert)",
+      "id": "S1-08"
+    },
+    {
+      "aussage": "Pro Session Recorder (use_microphone False, spinner False, synchrone Callbacks, Modell/VAD/Wake-Config, nur zugelassene Klassifizierer, final+realtime Executor auf Service). Externer Executor -> ready-Event gesetzt, kein Worker-Prozess.",
+      "beleg": "server.py 2737-2848; Executor 2273-2305; initialization.py 446-448",
+      "evidenz": "E2 (multi_user :960-1001, :1207)",
+      "gueltigkeit": "pro Session (Engine geteilt)",
+      "id": "S1-09"
+    },
+    {
+      "aussage": "Streaming beginnt mit Admission: settings_port, ProtocolSessionState, EventProjector, runtime_suppression, observer, start_streaming, Snapshot, log_access, hello.accepted (Version/IDs/Server/Snapshot/Log). Nur 5 Inbound-Typen, KEIN start/stop/clear. v1 startet per start-Command.",
+      "beleg": "connection.py 307-343; schema.py 44-48; start_streaming 2850-2863; v1 10075-10080",
+      "evidenz": "E2 (e2e :269-295)",
+      "gueltigkeit": "v2",
+      "id": "S1-10"
+    },
+    {
+      "aussage": "Domain-status idle/listening/wakeword_wait/wakeword_detected/wakeword_timeout/voice/silence/recording/transcribing/closed. Terminalregel: publish_status unter lock No-Op wenn closed und neu != closed (kein Wiederbeleben).",
+      "beleg": "server.py 3102-3137,5589-5733, Setzungen 2857-5824,2870/2889,2900",
+      "evidenz": "E1 + E2 Wake-Folge (:1031-1091)",
+      "gueltigkeit": "sitzungsbezogen; NICHT Wire-Phase (S1-12)",
+      "id": "S1-11"
+    },
+    {
+      "aussage": "v2-inputPhase aus Controller (5 kanonische Phasen), nie aus status. Session-status nie auf Wire.",
+      "beleg": "connection.py 799-804,620-652,781-797; server.py 3440-3458; schema.py 85-89",
+      "evidenz": "E2 (e2e :630-649, :1284-1330)",
+      "gueltigkeit": "v2 (Semantik 02.03)",
+      "id": "S1-12"
+    },
+    {
+      "aussage": "Serverweit: Store, ServerSettingsState (Overlay+Revision persistiert), Scheduler+Queues, Executor->session_id nur, Wake-Katalog (+Revision), Hub (+instance), Audit/Performance, STTModelManager, Manager; Store referenziert Settings (nicht kopiert). Sitzungsbezogen: SessionSettingsState (Revision 0, nie persistiert), Ledger, Controller, Timeline, ReplayCache, Recorder, Text-Thread, status/streaming/Epochen, _audio_available.",
+      "beleg": "server.py 6253,6133,6288-6294,6307,2111-2204,1756-1939,6321-6325, event_logging 697-701, Manager 1692-1754,6248/6253; Sitzung 875-913/939-942,2372,2423-2441,2348,2409,2416,2443,2350-2401,2412",
+      "evidenz": "E1 + E2 Settings-Trennung",
+      "gueltigkeit": "Architekturgrenze (Details 01.06, IDs 01.07)",
+      "id": "S1-13"
+    },
+    {
+      "aussage": "Settings bei Admission eingefroren: SessionState aus server_effective-Kopie + zugelassener Wake-Auswahl, Revision 0. Spaeterer Server-Patch schreibt Bestehende nicht um.",
+      "beleg": "server.py 3173-3196 (Kommentar 3178-3181); settings_control.py 875-913,933-942",
+      "evidenz": "E2 (settings :1182-1225)",
+      "gueltigkeit": "pro Sitzung",
+      "id": "S1-14"
+    },
+    {
+      "aussage": "Session-Slot bei Admission, Sprecher-Slot erst bei on_recording_start. Sprecher-Limit -> Aufnahme verworfen (reject+chunks++), Legacy-warning via Manager (Session bleibt).",
+      "beleg": "server.py try/deactivate 6201-6212, Erwerb 5314, Freigaben 5490,2880,2928,2996,6077,5308/5392/5407; Defaults 487-488",
+      "evidenz": "E2 (multi_user :934-948)",
+      "gueltigkeit": "serverweit, sitzungsausgeloest",
+      "id": "S1-15"
+    },
+    {
+      "aussage": "Close-Reihenfolge v2: request_close (Idempotenz erster gewinnt) -> Writer-Drain 5s/cancel -> close_session (Observer loesen -> remove_session -> session=None) -> Store-remove (Slot+Sprecher) -> session.close() (Lock: generation++/epoch++/wake None/streaming False/closed/timeline+Statistik/Wake-Reset/activation-Reset locked; danach Wake-Reset, activation_closed-Event, ledger.cancel_all, ggf final_cancelled, scheduler-/pending-cancel, deactivate, recorder.shutdown, text_join 3s, replay.clear, Seal) -> websocket.close -> Audit session.closed. Observer VOR remove geloest -> activation_closed nur Log/Manager, kein v2-Event. v1: remove vor disconnect.",
+      "beleg": "server.py 10259-10288, connection 200-214,140-152, remove 7372-7375/6178-6183, close 2891-2948, publish 5880-5950; v1 10111-10119",
+      "evidenz": "E2 (terminal_recovery :200-248; multi_user :803-825, :1286-1293) + E3-Inferenz Observer",
+      "gueltigkeit": "v2 (v1 analog)",
+      "id": "S1-16"
+    },
+    {
+      "aussage": "Reconnect = neue Sitzung (neue UUID pro hello); alte mit Transport weg (Store-pop). Replay sitzungsgebunden, bei close() geleert -> Idempotenz nur in Sitzung.",
+      "beleg": "connection.py 257-282; server.py 2907/4484 Kommentar, activation reset 819-827, close 2935-2937, commands 295-303",
+      "evidenz": "E2 (terminal_recovery :234-248; races :766-790)",
+      "gueltigkeit": "v2 (N-3/N-4: kein Resume/Persistenz/Befehl)",
+      "id": "S1-17"
+    },
+    {
+      "aussage": "Terminal-Recovery: Eingabepfad nicht sicher schliessbar -> _audio_available False, Legacy-Warnung, close(), interner Marker -> request_close(1011). Idempotent (closed -> False).",
+      "beleg": "server.py fail_closed 4246-4324 (Notify 5963, Observer 4316-4322); connection 688-702",
+      "evidenz": "E2 (terminal_recovery :168-198, :250-269)",
+      "gueltigkeit": "v2 (Ursachen/Deadlines 02.03)",
+      "id": "S1-18"
+    },
+    {
+      "aussage": "Handshake-Timeout 10s NUR vor Admission (accepted False); angenommene Sitzung KEIN Idle-Timeout/kein ping/pong. Vor Admission kein Slot (Reserve erst admit).",
+      "beleg": "schema.py 209; connection.py 74-78; server.py 10229-10239",
+      "evidenz": "E2 (e2e :502-508)",
+      "gueltigkeit": "v2 (N-5: kein Reaper, nur Modell-Idle)",
+      "id": "S1-19"
+    },
+    {
+      "aussage": "/health: activeSessions/activeSpeakers/rejectedSessions; snapshots(): plus pendingAdmissions + pro Session snapshot(). create_log_access: sitzungs-Token + instance + Cursor.",
+      "beleg": "server.py metrics 7685-7700, limits 7702-7711, /health 8885-8905, /api/config 8907-8913, snapshots 6222-6234, log_access 7772-7806",
+      "evidenz": "E1 + E2 (e2e :289-295)",
+      "gueltigkeit": "serverweit (v2-Snapshot ohne limits, C-4)",
+      "id": "S1-20"
+    },
+    {
+      "aussage": "ACTIVE_RUNTIME_SETTINGS enthaelt max_sessions/max_active_speakers; update_settings setattr + appliesTo active_sessions. Store teilt Objekt mit Service -> Lesen bei jedem Aufruf -> Aenderung gilt ab naechster Entscheidung, Bestehende nicht verdraengt.",
+      "beleg": "server.py 178-221 (187,182), 7826-7892 (7879-7892), 6248/6253",
+      "evidenz": "E2 (multi_user :2427-2447)",
+      "gueltigkeit": "serverweit (Wert C-2)",
+      "id": "S1-21"
+    },
+    {
+      "aussage": "V1+V2 parallel im Store, getrennte Kanaele: v2 nicht im Manager (publish Session trifft v2 nicht: send None-Lookup -> still False). v2 nur via ProtocolV2Connection.send/_event_dispatch_lock. Folge N-2.",
+      "beleg": "server.py 10133-10135; publish 1745-1748 (1710-1716)",
+      "evidenz": "E2 (e2e :1961-1982; boundary :92-112)",
+      "gueltigkeit": "gesamt",
+      "id": "S1-22"
+    }
+  ],
+  "investigated_sources": [
+    "server.py (Endpoint, Store, Session, Scheduler, Settings, Limits, Health, close)",
+    "protocol_v2/{connection,session,schema,handshake} (Handshake, Admission, State, Fehler)",
+    "segment_ledger.py, activation_commands.py, settings_control.py",
+    "event_logging.py (Hub/instance)",
+    "Tests (v2_e2e, contract, state_version, terminal_recovery, races, settings, multi_user, boundary, controlled_e2e, command_timer_e2e)"
+  ],
+  "not_implemented": [
+    {
+      "id": "N-1",
+      "thema": "Kein v2-Test session_limit_reached (nur Code-Pfad)"
+    },
+    {
+      "id": "N-2",
+      "thema": "Kein v2-Wire-Signal Sprecher-Limit-Ablehnung (nur Manager-Warnung; kein warning-Typ Schema)"
+    },
+    {
+      "id": "N-3",
+      "thema": "Keine Resumption (kein Resume-Token/Persistenz)"
+    },
+    {
+      "id": "N-4",
+      "thema": "Kein client-initiierter Abschluss v2 (kein session.close/end)"
+    },
+    {
+      "id": "N-5",
+      "thema": "Kein Session-Idle-Timeout/Reaper (nur Modell-Idle)"
+    },
+    {
+      "id": "N-6",
+      "thema": "Kein v2-Audit session.accepted/rejected (nur session.closed; v1 mehr)"
+    }
+  ],
+  "researcher_session": "ses_e46d2dcf9ffeaGufzaMv68jB7x",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-1",
+      "thema": "websocket.close-Fehler still verschluckt (Client-Beobachtung?)"
+    },
+    {
+      "id": "U-2",
+      "thema": "service.stop() beendet v2-Verbindung nicht aktiv (kein request_close-Pfad)"
+    },
+    {
+      "id": "U-3",
+      "thema": "hello mit unbekanntem Feld (z.B. sessionId): gelesen-ignoriert? (E3, kein Test)"
+    }
+  ],
+  "writer_notes": [
+    "C-1 vor Freigabe klaeren (Branch unbestätigt); C-2 als Fussnote (Wert konfigurationsabhaengig); N-2/N-4/N-5 explizit nicht-vorhanden (keine Pseudogarantien).",
+    "StateDiagram v2-Lebenszyklus + 2 Sequenzdiagramme (Admission, Disconnect) aus Kanten A/B/C; inputPhase NICHT hier (02.03)."
+  ],
+  "review_notes": "2026-11-08 R1 (8 Findings): Kante Handshaking->Connected als codewidrig ENTFERNT (connection.py:218-234 schliesst immer); Lesart/Tabelle/Diagramm korrigiert. uebrige Kanten bestaetigt."
+}

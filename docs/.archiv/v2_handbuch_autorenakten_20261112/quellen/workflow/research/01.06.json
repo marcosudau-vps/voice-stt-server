@@ -1,0 +1,260 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup im Checkout nicht als Ref (.git/refs leer) - nur Orchestrator-Angabe; Commit belegt.",
+  "chapter": "01.06",
+  "correction_round": 0,
+  "diagram_edges": [
+    "Service -> SessionStore (Verwaltung) [S-01,S-04]",
+    "Service -> InferenceScheduler (1x) [S-01,S-02]",
+    "Scheduler -> main_queue / realtime_queue (0/1 weitere) [S-02]",
+    "Queue -> SharedEngineWorker -> Engine (1 je Lane) [S-02]",
+    "Service -> EventHub/Audit/Performance [S-06]",
+    "Service -> SecurityService + LogTokenAuthority [S-07]",
+    "Service -> WakeWordCatalogAuthority -> Registry [S-08]",
+    "Service -> ServerSettingsState + RuntimeConfigStore [S-09]",
+    "Service -> STTModelManager -> RegistryView [S-09]",
+    "Service -> ConnectionManager (nur v1) [S-05]",
+    "Session -> Recorder (eigene Queues, Wake-Engine) [S-11]",
+    "Session -> SegmentState/Timeline/Ledger [S-12]",
+    "Session -> SessionSettingsState (eigene Revision) [S-12]",
+    "Session -> CommandReplayCache [S-13]",
+    "Session -> ActivationController + Timer-Thread, text_thread [S-14]",
+    "Session -> ProtocolV2Connection/SessionState (nur v2) [S-15]",
+    "Session --submit--> Service.transcribe_for_recorder -> Scheduler [S-03,S-25]",
+    "Worker --InferenceResult--> Service -> Pending-Holder -> Session-Thread [S-03]",
+    "Session --emit--> EventHub (sessionId Feld) [S-06]",
+    "Session --publish_session--> ConnectionManager (v1) / v2-Sink [S-05]",
+    "Service --catalog_changed--> alle Sessions (availability) [S-08]",
+    "Session.close --cancel--> Scheduler/Pending-Maps [S-16]",
+    "Service.switch_models --stop/start--> Scheduler (Sessions unveraendert) [S-24]",
+    "SessionStore.reserve --max_sessions--> Admission [S-18]"
+  ],
+  "facts": [
+    {
+      "aussage": "Ein Service-Objekt: security/sessions/scheduler/stt_model_manager/model_registry/events/audit/performance/wakeword_catalog+registry/settings_control/config_store. create_app erzeugt, lifespan startet/stoppt genau diesen.",
+      "beleg": "server.py create_app Z.8816-8850; __init__ Z.6240-6327",
+      "evidenz": "CODE+TEST (openai_endpoint :441; multi_user admit)",
+      "gueltigkeit": "Prozess/Instanz",
+      "id": "S-01"
+    },
+    {
+      "aussage": "Genau eine Queue + ein Worker je Lane; Engines Lane- nicht Session-Ressourcen. realtime_queue = main oder eigene; realtime_worker nur wenn nicht use_main_model_for_realtime. snapshot mode low-memory-one-model/balanced-main-plus-realtime.",
+      "beleg": "server.py:2111-2149,2012-2023,2206-2270,2192-2204",
+      "evidenz": "CODE+TEST (kroko_native_child :176)",
+      "gueltigkeit": "serverweit; max 1 Engine/Lane",
+      "id": "S-02"
+    },
+    {
+      "aussage": "Sessions ohne Engine-Handles; routen via Executor -> service.transcribe_for_recorder -> InferenceJob -> submit. Kein Session-Zugriff auf worker.engine. Ermoeglicht Scheduler-Austausch.",
+      "beleg": "server.py:2273-2305,8251-8351,7458-7526; Bindung 2831-2840",
+      "evidenz": "CODE+TEST (multi_user :1217-1219)",
+      "gueltigkeit": "Architekturgrenze",
+      "id": "S-03"
+    },
+    {
+      "aussage": "Registry: _sessions Dict, _reserved_session_ids, _active_speakers; Belegung = sessions+reserved vs settings.max_sessions (Referenz auf Service-Settings -> live).",
+      "beleg": "server.py SessionStore Z.6133-6237 (reserve 6142, add 6153, slots 6236, speaker 6201; settings-Referenz 6135)",
+      "evidenz": "CODE+TEST (multi_user :950, :1295)",
+      "gueltigkeit": "serverweit, ein Store",
+      "id": "S-04"
+    },
+    {
+      "aussage": "v1: admit -> manager.connect, Server-hello. v2: eigene Schicht, bewusst NICHT im ConnectionManager (Docstring), hello_accepted + Snapshot. Beide admit_session: gemeinsame Domaene, getrennte Kanaele.",
+      "beleg": "server.py:9912-9988,10121-10136; connection.py:218-255; CM 1692-1753",
+      "evidenz": "CODE+TEST (boundary :229-238)",
+      "gueltigkeit": "Transport",
+      "id": "S-05"
+    },
+    {
+      "aussage": "Ein StructuredEventHub (server_instance_id, SQLite-Store, drei bounded Queues event_log_queue_size) + Audit/Performance-Manager. Sessions emit mit sessionId/clientId als Feld.",
+      "beleg": "event_logging.py:697-763; server.py:6313-6315,5852-5878",
+      "evidenz": "CODE+TEST (multi_user :401)",
+      "gueltigkeit": "serverweit; Session nur Feld",
+      "id": "S-06"
+    },
+    {
+      "aussage": "Admin/OpenAI/Kroko-Gates + LogTokenAuthority einmal pro Service. Token: sessionId+expiresAt (24h), validate bindet Session, Sweep 1024. Scopes admin vs sessionId.",
+      "beleg": "security/service.py:13-19; logs.py:9,16-38,53-57; server.py:7772-7806",
+      "evidenz": "CODE+TEST (security_modularization; multi_user :2299)",
+      "gueltigkeit": "Credentials serverweit, Token pro Session",
+      "id": "S-07"
+    },
+    {
+      "aussage": "Eine Autoritaet mit RLock, _snapshot, catalog_revision; Port ohne eigenen Katalog/Revision/Resolver. Aenderung an ALLE Sessions via Funnel publiziert; Refresh beruehrt gebaute Sessions nie. catalogRevision != settingsRevision.",
+      "beleg": "wakeword_catalog.py:1147-1198; ports.py:16-33,84-90; server.py:7214-7264,6321-6325",
+      "evidenz": "CODE+TEST (wakeword_catalog, _api)",
+      "gueltigkeit": "serverweit",
+      "id": "S-08"
+    },
+    {
+      "aussage": "RuntimeConfigStore.load_control -> ServerSettingsState(persist); STTModelManager(data_root)+RegistryView; switch_models auf settings+manager. Eine Datei runtime.json/Overlay.",
+      "beleg": "server.py:6282-6305,7971-7975,8042-8250; settings_control.py:1171-1260",
+      "evidenz": "CODE+TEST (control_plane :365-387; runtime_persistence)",
+      "gueltigkeit": "serverweit persistiert",
+      "id": "S-09"
+    },
+    {
+      "aussage": "Lane-Paar-Politik: medium_equivalents=sum(rank>=3); Limit 2 wenn allow_two_medium_models sonst 1; max(rank)>3 -> ValueError. Status mediumEquivalentLimit. Keine Session-Quote.",
+      "beleg": "server.py:8711-8741,8764-8801,7606-7621",
+      "evidenz": "CODE+TEST (openai_endpoint :207-220; kroko :505-521)",
+      "gueltigkeit": "serverweit",
+      "id": "S-10"
+    },
+    {
+      "aussage": "Pro Session: recorder_factory mit eigenen Callbacks, eigener audio/recorded_queue (_recorder_queue_depth), allowed_latency_limit=audio_queue_size, handle_buffer_overflow, eigene _wake_engine_options. Kosten skalieren mit max_sessions.",
+      "beleg": "server.py __init__ Z.2308-2448, _create_recorder Z.2737-2848 (2816)",
+      "evidenz": "CODE+TEST (multi_user :1207-1222 verschiedene Instanzen, gemeinsame Executors)",
+      "gueltigkeit": "eine Instanz je Session",
+      "id": "S-11"
+    },
+    {
+      "aussage": "Sessionlokal: SegmentState/TimelineTracker, SegmentLedger (eigener Lock, eigene Sequenzen), SessionSettingsState (eigene settingsRevision, Serverdefaults bei Admission kopiert, never persisted).",
+      "beleg": "server.py:2347-2348,2372,2376,3173-3196; segment_ledger.py:133-148; settings_control.py:875-913",
+      "evidenz": "CODE+TEST (control_plane :338-361; segment_ledger)",
+      "gueltigkeit": "strikt sessionlokal",
+      "id": "S-12"
+    },
+    {
+      "aussage": "Cache haelt ganze Session (capabilities.commandHistory=session), clear erst in close(). Kein Limit (dict ohne maxsize, setdefault); Speicher waechst mit commandIds.",
+      "beleg": "server.py:2406-2409,2935-2937; activation_commands.py:295-329; caps 7756-7758",
+      "evidenz": "CODE+TEST (trigger_contract Idempotenz)",
+      "gueltigkeit": "sessionlokal, prozessfluechtig",
+      "id": "S-13"
+    },
+    {
+      "aussage": "Session: RLock, _ledger_dispatch_lock, text_thread (VoiceSTTSessionText-<id>), Timer-Threads (VoiceSTTActivationTimeout-<id>) pro Deadline. Service: Scheduler-RLock+Condition, Settings/Refresh/Pending/Kroko-Locks. Store/CM eigene Locks. Threadzahl waechst mit Sessions/Aktivierungen.",
+      "beleg": "server.py:2349,2380,2443-2448,4414-4420; 6249-6281; 6136; 1695",
+      "evidenz": "CODE+TEST (command_timer_e2e Timer)",
+      "gueltigkeit": "Nebenlaeufigkeitsmodell",
+      "id": "S-14"
+    },
+    {
+      "aussage": "Pro Verbindung: _lock/_event_dispatch_lock/_ack_memo/_closing_versions; _state_version/_last_event_seq; SettingsPort.revision = nur diese v2-Session (nie Server). Geteilt nur Autoritaeten.",
+      "beleg": "connection.py:59-101; session.py:29-135; ports.py:36-81",
+      "evidenz": "CODE+TEST (state_version; settings :1253-1264)",
+      "gueltigkeit": "pro Verbindung",
+      "id": "S-15"
+    },
+    {
+      "aussage": "close: closed, streaming False, Ledger cancel_all(session_closed), cancel_scheduler_session, cancel_pending_recorder, deactivate_speaker, recorder.shutdown, text_thread.join(3s), replay.clear. stop(): remove_all vor Scheduler. Alle pending Segmente terminal.",
+      "beleg": "server.py:2891-2948,7372-7375,7304-7315,8505-8515",
+      "evidenz": "CODE+TEST (multi_user :803-825, :1286-1293)",
+      "gueltigkeit": "Session-Lebenszyklus",
+      "id": "S-16"
+    },
+    {
+      "aussage": "Defaults: max_sessions=4, max_active_speakers=4, max_audio_queue_seconds=30.0, max_realtime_queue_age_ms=1500, final-Tiefe 8/Session, global 64, audio_queue_size=128, max_packet 512KiB, event_log_queue 10000, idle_timeout 3600s, allow_two_medium=True, openai_max 25MiB, realtime_min/max 0.25/20.0. limits_dict exponiert 7 an Client/hello. CLI/ENV/YAML/Runtime ueberschreibbar.",
+      "beleg": "server.py:448-449,483,487-500,513,7702-7711,1211-1216",
+      "evidenz": "CODE+TEST (protocol :349; multi_user :2428ff)",
+      "gueltigkeit": "Defaults",
+      "id": "S-17"
+    },
+    {
+      "aussage": "Drei Eingriffspunkte: reserve (Plaetze VOR Recorder-Bau) vs try_activate_speaker (Aufnahme; Ueberschreitung: reject_current_recording+Warnung, Session bleibt) vs Paketgroesse (AudioPacketError) vs Stream-Status (abgelehnt). Session-Limit=Admission, Sprecherlimit=Aufnahme.",
+      "beleg": "server.py:6142-6151,6201-6208,7653-7655,3011-3018; Aufruf 5314-5327",
+      "evidenz": "CODE+TEST (multi_user :934-948,:1295-1341,:1224-1233)",
+      "gueltigkeit": "Semantik je Punkt",
+      "id": "S-18"
+    },
+    {
+      "aussage": "max_samples = max_audio_queue_seconds*16000; bei Erreichen flush + Zwangs-Final + Warnung. recorded_queue-Rueckstau auf final-Tiefe gekuerzt; Verworfene im Ledger discarded. Schutz gegen unbegrenztes Session-Wachstum.",
+      "beleg": "server.py:6011-6029,6031-6085,6087-6128",
+      "evidenz": "CODE+TEST (multi_user :1235-1285)",
+      "gueltigkeit": "pro Session",
+      "id": "S-19"
+    },
+    {
+      "aussage": "Round-robin via deque: pro get() eine Session poppen, ein Job (final zuerst, sonst realtime), bei Rest hinten einreihen. Zwei Lanes unabhaengig (keine lane-uebergreifende Ordnung). Ein Worker-Thread je Lane serialisiert Inferenz.",
+      "beleg": "server.py:1820-1874,1917-1920,1771-1818",
+      "evidenz": "CODE+TEST (protocol :653-665 a,b,a)",
+      "gueltigkeit": "pro Queue",
+      "id": "S-20"
+    },
+    {
+      "aussage": "Nur Realtime koalesziert (alter ersetzt, coalesced=True, _total_queued unveraendert, VOR Tiefenpruefung -> gelingt auch bei voller Queue). final eigene deque+Tiefenpruefung. Zaehler coalescedRealtime.",
+      "beleg": "server.py:1799-1818",
+      "evidenz": "CODE+TEST (protocol :630-651)",
+      "gueltigkeit": "pro Session/Queue",
+      "id": "S-21"
+    },
+    {
+      "aussage": "Deadline nur realtime (max_realtime_queue_age_ms); beim Dequeue deadline<now -> stale, Drop-Callback, kein Engine-Aufruf.",
+      "beleg": "server.py:1841-1849; Setzung 8298-8302",
+      "evidenz": "CODE+TEST (protocol :667-677)",
+      "gueltigkeit": "pro Realtime-Job",
+      "id": "S-22"
+    },
+    {
+      "aussage": "Ablehnung Gruende finale/globale Tiefe voll; Service: scheduler.overloaded + queue.limit_reached bei voll; Session: final_rejected/realtime_rejected, Finals im Ledger failed. Globale Tiefe zaehlt nur akzeptierte Jobs der Queue.",
+      "beleg": "server.py:1783-1809,7499-7525,3050-3091",
+      "evidenz": "CODE+TEST (multi_user :742-777)",
+      "gueltigkeit": "pro Lane",
+      "id": "S-23"
+    },
+    {
+      "aussage": "switch: unter Refresh+Scheduler-Lock alter stop, Settings, neuer Scheduler, wait_ready, bei Fehler Rollback. Blockade NUR bei loading (nicht busy). unload verweigert bei busy (active_speakers/pending). Idle-Worker periodisch. Sessions ueberleben als Objekte.",
+      "beleg": "server.py:8042-8250,7544-7573,7537-7542,7393-7456,7623-7639",
+      "evidenz": "CODE+TEST (kroko :655-708; openai :434-451)",
+      "gueltigkeit": "serverweit",
+      "id": "S-24"
+    },
+    {
+      "aussage": "Submit: ensure_models_loaded, unter Lock Revalidierung scheduler-Stale -> Retry. Kroko-Admission Generation/Revocation unter Lock. Kein Enqueue in ersetzten Worker.",
+      "beleg": "server.py:7467-7498",
+      "evidenz": "CODE+TEST (kroko_regression; multi_user_asr :54ff)",
+      "gueltigkeit": "pro Submit",
+      "id": "S-25"
+    }
+  ],
+  "investigated_sources": [
+    "server.py (Service/Session/Scheduler/Recorder/Limits)",
+    "event_logging.py (Hub)",
+    "security/{service,logs}.py (Gates, Token)",
+    "wakeword_catalog.py (Autoritaet)",
+    "protocol_v2/{connection,session,ports}.py (Verbindungszustand)",
+    "settings_control.py (States)",
+    "segment_ledger.py",
+    "activation_commands.py (Replay)",
+    "tests/unit (multi_user, protocol, state_version, settings, security_modularization, trigger_contract, command_timer_e2e, openai_compatible, kroko_pr15, wakeword_catalog, segment_ledger)",
+    "pytest.ini, ci.yml"
+  ],
+  "not_implemented": [
+    {
+      "beleg": "server.py:217,316,494,7710,10756 - deklariert/koerziert/exponiert/geparst, kein Verbraucher in api_fastapi_server/VoiceSTT",
+      "id": "N-01",
+      "thema": "realtime_degradation_threshold_ms wirkungslos"
+    },
+    {
+      "beleg": "activation_commands.py:295-329 dict ohne maxsize; clear nur close()/clear()",
+      "id": "N-02",
+      "thema": "Kein Limit/Eviction Replay-Cache"
+    },
+    {
+      "beleg": "Kein Kontingent pro Session; nur Lane-Politik S-10",
+      "id": "N-03",
+      "thema": "UNKNOWN: sessionbezogenes CPU/RAM-Budget (Container/Cgroup ausserhalb Code)"
+    },
+    {
+      "beleg": "Worker.stop 1981-1996 (stop_event+close, get->None ohne _notify_drops); transcribe_for_recorder wartet ohne Timeout (8312-8321); kein Test fuer Pfad (Gegenprobe multi_user :803 nur Session-close)",
+      "id": "N-04",
+      "thema": "UNKNOWN/Risiko: Scheduler-Stop drainiert wartende Jobs nicht (switch kann eingereihten Job ohne Drop/Fehler verlieren)"
+    },
+    {
+      "beleg": "S-02,S-23: _total_queued je Instanz",
+      "id": "N-05",
+      "thema": "Praezisierung: globale Tiefe gilt pro Lane (2x bei getrennten Lanes, 1x Low-Memory); 64 serverweit waere falsch"
+    },
+    {
+      "beleg": "switch prueft nur loading, nicht busy (S-24)",
+      "id": "N-06",
+      "thema": "UNKNOWN: Modellwechsel bei laufenden Aktivierungen nicht spezifiziert (Ist-Zustand beschreiben, keine Garantie)"
+    },
+    {
+      "beleg": "Keine zweite Pruefung (FD/Thread-Budget); Threads wachsen mit Sessions (S-14)",
+      "id": "N-07",
+      "thema": "NOT_IMPLEMENTED Thread-Budget; kein Max jenseits max_sessions"
+    }
+  ],
+  "researcher_session": "ses_e4703ebaeffesj30my88QqXJFr",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src"
+}

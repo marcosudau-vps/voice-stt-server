@@ -1,0 +1,206 @@
+{
+  "branch_note": "Beauftragt C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src (existiert, detached HEAD a8993c5c, verifiziert 2026-11-09). Researcher nutzte zusätzlich C:\\Users\\user\\AppData\\Local\\Temp\\voice-stt-pr18-review-ab2642a607794d27b100aa7cbedc585c (Branch-Ref feat/v2-release-cleanup verifizierbar). BEIDE Checkouts rev-parse HEAD = a8993c5c68042d996eab680d84a5b138a214bb5d. Bindend bleibt der Commit; kein Widerspruch.",
+  "chapter": "05.04",
+  "commit_verification": "Beide Checkouts verifiziert 2026-11-09: opencode\\voice-stt-v2-src und voice-stt-pr18-review-... rev-parse HEAD = a8993c5c68042d996eab680d84a5b138a214bb5d. Branch-Ref im zweiten Checkout verifizierbar (refs/heads/feat/v2-release-cleanup).",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "scoped = ID-Bindung, nicht Lebensdauer; sonst Fehlschluss Token-stirbt-mit-Session."
+    },
+    {
+      "id": "C2",
+      "thema": "Sessionrecht = Scope-Semantik, kein Rechtsobjekt; auth=session Metadatum."
+    },
+    {
+      "id": "C3",
+      "thema": "Kein RBAC; vier Mechanismen statt Rollen."
+    },
+    {
+      "id": "C4",
+      "thema": "Überschneidung 05.01/02.01/04.03/04.04/05.05 nur zitieren, eigener Beitrag Bindung/Grenze."
+    },
+    {
+      "id": "C5",
+      "thema": "Token 64 Hex (nicht 48); Code bestätigt."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "Client --hello(ohne sessionId)--> /ws/v2 [E2-13]",
+    "/ws/v2 --admit(new_canonical_id)--> Session [E2-13]",
+    "Session --create_log_access--> LogToken{sessionId} [E2-07/E2-10]",
+    "LogToken --http_scope--> EventStore(session_id=) [E2-08]",
+    "LogToken --websocket_scope--> /ws/logs [E2-09]",
+    "command --sessionId==state?--> Handler sonst stale_session [E2-12]",
+    "binary audio --ohne Identität--> session.ingest [E2-15]",
+    "Session --eigener--> SessionSettingsState [E2-04]",
+    "Admin --PATCH server(Key)--> ServerSettings [E2-06]",
+    "SessionSettings --patch(server)--> wrong_scope [E2-03]"
+  ],
+  "facts": [
+    {
+      "aussage": "Geprüft Commit a8993c5c; zwei Checkouts, selber Commit, Branch im zweiten verifizierbar.",
+      "beleg": ".git/HEAD + refs/heads/feat/v2-release-cleanup; beide rev-parse HEAD",
+      "evidenz": "A",
+      "gueltigkeit": "gesamte Akte",
+      "id": "E2-01"
+    },
+    {
+      "aussage": "Registry 19 Definitionen: 16 scope=session/auth=session, 3 scope=server/auth=admin; auth nur Metadaten (Schema/server_public), kein Gate.",
+      "beleg": "settings_control.py Z. 38-43, 190, 204, 278-609, 663-669, 1407-1444; server.py Z. 9223-9233",
+      "evidenz": "A",
+      "gueltigkeit": "Settings-Domäne",
+      "id": "E2-02"
+    },
+    {
+      "aussage": "Scope feldweise atomar: Session-Patch lehnt server-Keys wrong_scope, writable=False read_only ab; Server-Patch ohne has_server_default wrong_scope.",
+      "beleg": "settings_control.py Z. 933-1041, 1260-1336; Tests 912-922",
+      "evidenz": "A+T",
+      "gueltigkeit": "beide Schreibpfade",
+      "id": "E2-03"
+    },
+    {
+      "aussage": "Pro Session eigener Settings-Zustand (Kopie server_effective + Wake-Auswahl), eigene Revision ab 0, nie persistiert; Server-Default ändert Bestehende nicht.",
+      "beleg": "server.py Z. 3173-3196, 3261-3263; Tests 337-361",
+      "evidenz": "A+T",
+      "gueltigkeit": "pro Session",
+      "id": "E2-04"
+    },
+    {
+      "aussage": "Session-Patch nur via eigene V2-Verbindung (session_settings.patch); keine HTTP-Route, kein sessionId-Parameter; Port hält keinen Wert.",
+      "beleg": "connection.py Z. 505-542; ports.py Z. 36-81",
+      "evidenz": "A",
+      "gueltigkeit": "V2-Wire",
+      "id": "E2-05"
+    },
+    {
+      "aussage": "Admin-Schreibpfad getrennt key-geschützt (PATCH server 401 ohne Key); Lesen public ohne Secrets; Session patcht ohne Admin-Nachweis.",
+      "beleg": "server.py Z. 9235-9292; Tests 827-853",
+      "evidenz": "A+T",
+      "gueltigkeit": "Server-Settings",
+      "id": "E2-06"
+    },
+    {
+      "aussage": "Log-Token trägt genau eine sessionId; validate None bei Abweichung; 64 Hex, 24 h, flüchtig, kein Revoke.",
+      "beleg": "security/logs.py Z. 9, 24-59; Tests 97-106",
+      "evidenz": "A+T",
+      "gueltigkeit": "Log-Zugriff",
+      "id": "E2-07"
+    },
+    {
+      "aussage": "HTTP-Logscope: Token erzwingt eigene Session, fremde ID 401 (Code, ungetestet); Admin/Loopback-Regel; Nicht-Admin Kanäle beschnitten, sonst 200 leer.",
+      "beleg": "security/logs.py Z. 67-81; server.py Z. 9456-9537; Tests 297-336, 2326-2337",
+      "evidenz": "A+T teils",
+      "gueltigkeit": "drei HTTP-Log-Routen",
+      "id": "E2-08"
+    },
+    {
+      "aussage": "WS-Logscope: gleiche Bindung, kein Loopback-Admin; None -> not_authorized + 1008; Kanäle beschnitten.",
+      "beleg": "security/logs.py Z. 83-93; server.py Z. 9560-9672; Tests 119-130, 1444-1451, 338-357",
+      "evidenz": "A+T",
+      "gueltigkeit": "/ws/logs",
+      "id": "E2-09"
+    },
+    {
+      "aussage": "Token-Ausgabe nur Bootstrap (v1-hello, v2-hello.accepted) und nur bei live+Store; sonst available=false ohne Token; nicht in Resync.",
+      "beleg": "server.py Z. 7772-7806, 10001-10013; connection.py Z. 330-343; Tests 289-324",
+      "evidenz": "A+T",
+      "gueltigkeit": "v1+v2 Bootstrap",
+      "id": "E2-10"
+    },
+    {
+      "aussage": "Keine Lebensdauer-Bindung: kein Revoke; remove/close fassen Map nicht an; Token bis Ablauf nutzbar.",
+      "beleg": "security/logs.py Z. 16-59; connection.py Z. 200-214; server.py Z. 7372-7375",
+      "evidenz": "A/B",
+      "gueltigkeit": "nach Session-Ende",
+      "id": "E2-11"
+    },
+    {
+      "aussage": "Fremde kanonische sessionId -> stale_session (accepted=false, aktuelle ID, keine Wirkung, nutzbar); gilt vor Dispatch für alle fünf Typen (Tests nur activation).",
+      "beleg": "commands.py Z. 90-138, 197-203; connection.py Z. 347-369, 637-648; Tests 406-418, 630-649",
+      "evidenz": "A+T teils",
+      "gueltigkeit": "V2-Wire",
+      "id": "E2-12"
+    },
+    {
+      "aussage": "SessionId serververgeben (V2 new_canonical_id, V1 uuid4hex); hello ohne sessionId-Feld; clientId nur Label 1-128, keine Auth/Eindeutigkeit.",
+      "beleg": "connection.py Z. 257-282; handshake.py Z. 83-178; server.py Z. 1362-1372, 9938, 9914-9917, 10138-10141",
+      "evidenz": "A+T",
+      "gueltigkeit": "v1+v2",
+      "id": "E2-13"
+    },
+    {
+      "aussage": "1 Verbindung = 1 Session; zweites hello still ignoriert; V2 nicht im ConnectionManager; Replay-Cache sitzungsgebunden, bei Close leer.",
+      "beleg": "connection.py Z. 168-179, 200-214; commands.py Z. 101-103; server.py Z. 10133-10135, 1692-1753, 7372-7375",
+      "evidenz": "A",
+      "gueltigkeit": "V2-Transport",
+      "id": "E2-14"
+    },
+    {
+      "aussage": "Audio ohne Identität im Paket (nur sampleRate/channels/format/frames); Zuordnung via Verbindungsobjekt/streaming-Check; kein Fremd-Einspeisen; vor accepted 4400.",
+      "beleg": "connection.py Z. 181-198; protocol.py Z. 52-75; server.py Z. 7653-7683, 3011-3042",
+      "evidenz": "A",
+      "gueltigkeit": "V2-Audio (V1 gleicher Decoder)",
+      "id": "E2-15"
+    },
+    {
+      "aussage": "Historie session-gefiltert (SQL session_id=? AND transcription_id): fremde transcriptionId -> 200 leer, kein 401; retention_cursor gleich gefiltert.",
+      "beleg": "event_logging.py Z. 616-675; server.py Z. 9495-9515; Test 2326-2337",
+      "evidenz": "A+T teils",
+      "gueltigkeit": "Log-/Historie",
+      "id": "E2-16"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Kein Benutzer-/Konten-/Mandantenmodell"
+    },
+    {
+      "id": "N2",
+      "thema": "auth-Feld nicht durchgesetzt"
+    },
+    {
+      "id": "N3",
+      "thema": "Keine Session-Auth am Transport"
+    },
+    {
+      "id": "N4",
+      "thema": "Kein Token-Revoke/Ende-Bindung"
+    },
+    {
+      "id": "N5",
+      "thema": "Kein Fremd-Pfad für Session-Settings"
+    },
+    {
+      "id": "N6",
+      "thema": "Keine clientId-Eindeutigkeit"
+    }
+  ],
+  "researcher_session": "ses_e42408b8effeoeLllZ4A8iE99v",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Zweiter Client gleiche sessionId konstruktiv unmöglich"
+    },
+    {
+      "id": "U2",
+      "thema": "Token nach Ende vs Retention ungetestet"
+    },
+    {
+      "id": "U3",
+      "thema": "Proxy auf HTTP-Loopback-Admin"
+    },
+    {
+      "id": "U4",
+      "thema": "stale_session auf Settings-Kommando ungetestet"
+    },
+    {
+      "id": "U5",
+      "thema": "clientId als Identität downstream unbelegt"
+    }
+  ],
+  "writer_notes": "Vier Formen, kein RBAC: Scope/Endpoint-Trennung, Token-ID-Bindung, Kommando-Gleichheit, konstruktive Trennung. Nur zitieren, nicht wiederholen. 'nur eigene Session' je Mechanismus unterscheiden."
+}

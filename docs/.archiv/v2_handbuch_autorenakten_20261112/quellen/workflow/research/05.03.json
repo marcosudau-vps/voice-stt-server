@@ -1,0 +1,256 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD); nur Commit bindend.",
+  "chapter": "05.03",
+  "commit_verification": "Checkout C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src. .git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached).",
+  "conflicts": [
+    {
+      "id": "C-1",
+      "thema": "Falscher erster Traeger gewinnt nur bei nicht-leerem Wert; leerer faellt durch (D3-07)."
+    },
+    {
+      "id": "C-2",
+      "thema": "Kein Audit bei Admin-401/403, Kontrast OpenAI mit Audit (D3-16)."
+    },
+    {
+      "id": "C-3",
+      "thema": "Proxy-Header-Verhalten uvicorn nicht repo-belegt; client.host-Garantie nur App-Code (D3-11)."
+    },
+    {
+      "id": "C-4",
+      "thema": "V1-Routen-Inventar deckungsgleich; GET /api/config public mit adminAuthRequired (D3-14/D3-15)."
+    },
+    {
+      "id": "C-5",
+      "thema": "Kein RBAC: ein Key = alle 21 Routen; Rechte nur zwischen Mechanismen (D3-17)."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [
+    "[Request] --> [x-voicestt-admin-key] --> [Bearer] --> [x-admin-key] (D3-07)",
+    "[configured_key truthy] --> [compare_digest] --> [401 oder Handler] (D3-08/D3-09)",
+    "[kein Key] --> [client.host in Menge] --> [Handler oder 403] (D3-10/D3-11)",
+    "[401/403] -.kein Audit.-> [Eventstore] (D3-16)"
+  ],
+  "facts": [
+    {
+      "aussage": "Untersuchter Stand Commit a8993c5c68042d996eab680d84a5b138a214bb5d; alle Positionen gelten fuer diesen Commit.",
+      "beleg": ".git/HEAD Z. 1",
+      "evidenz": "A",
+      "gueltigkeit": "gesamte Akte",
+      "id": "D3-01"
+    },
+    {
+      "aussage": "Admin-Auth ist pro Handler aufgerufene Funktion admin_auth_error -> SecurityService.admin_http_error -> AdminGate.http_error; kein Middleware/Dependency-Konstrukt.",
+      "beleg": "security/admin.py Z. 11-13; security/service.py Z. 7, 15, 21-25; server.py Z. 6249, 8918-8919",
+      "evidenz": "A",
+      "gueltigkeit": "gesamte Admin-HTTP-Auth",
+      "id": "D3-02"
+    },
+    {
+      "aussage": "Key-Quelle settings.admin_api_key oder ENV VOICESTT_ADMIN_API_KEY; Settings gewinnt; ENV live ohne Neustart solange kein Settings-Wert; keine Auto-Erzeugung.",
+      "beleg": "security/admin.py Z. 15-16; server.py Z. 508, 10521, 10767-10768; Tests Z. 57-63",
+      "evidenz": "A",
+      "gueltigkeit": "Start- und Laufzeit-Key",
+      "id": "D3-03"
+    },
+    {
+      "aussage": "Pro Request zwei configured_key()-Lesungen, kein Snapshot; leerer Settings-Wert falsy, whitespace truthy ungetrimmt; TOCTOU theoretisch.",
+      "beleg": "security/admin.py Z. 25, 19, 16",
+      "evidenz": "B",
+      "gueltigkeit": "Key-Aufloesung",
+      "id": "D3-04"
+    },
+    {
+      "aussage": "Kein YAML-Key (SystemExit), keine Persistenz, kein Laden aus runtime.json, kein Key in public_dict; nur adminAuthRequired bool.",
+      "beleg": "server.py Z. 10301, 10366-10370, 7959-7969, 8827-8839, 545-553, 8907-8916",
+      "evidenz": "A",
+      "gueltigkeit": "Konfiguration/Ausgabe",
+      "id": "D3-05"
+    },
+    {
+      "aussage": "PATCH /api/config mit admin_api_key startup_only; PATCH /api/v2/settings/server kennt Key nicht (unknown_key).",
+      "beleg": "server.py Z. 256-285, 7835-7840; settings_control.py Z. 1292-1317",
+      "evidenz": "A",
+      "gueltigkeit": "Settings-Schreibpfade",
+      "id": "D3-06"
+    },
+    {
+      "aussage": "Reihenfolge x-voicestt-admin-key -> Bearer -> x-admin-key; erster nicht-leerer gewinnt; Bearer exakt 'Bearer '; Header-Namen case-insensitiv, Werte byteweise.",
+      "beleg": "security/admin.py Z. 26-31; Tests Z. 34-48",
+      "evidenz": "A",
+      "gueltigkeit": "alle 21 Routen",
+      "id": "D3-07"
+    },
+    {
+      "aussage": "compare_digest(str, str) nur bei konfiguriertem Key und Kandidat; kein Trim/Case-Folding; nicht-ASCII wirft TypeError (ungetestet).",
+      "beleg": "security/admin.py Z. 18-22",
+      "evidenz": "A",
+      "gueltigkeit": "alle 21 Routen",
+      "id": "D3-08"
+    },
+    {
+      "aussage": "Bei Key und Fehler 401 {error} + WWW-Authenticate: Bearer; kein code, kein Key-Echo, kein Audit.",
+      "beleg": "security/admin.py Z. 32-39; Tests Z. 45-47",
+      "evidenz": "A",
+      "gueltigkeit": "alle 21 Routen",
+      "id": "D3-09"
+    },
+    {
+      "aussage": "Ohne Key und remote 403 ohne WWW-Authenticate, mit Hinweis auf VOICESTT_ADMIN_API_KEY.",
+      "beleg": "security/admin.py Z. 40-45; Test Host 203.0.113.7",
+      "evidenz": "A",
+      "gueltigkeit": "Admin-HTTP ohne Key",
+      "id": "D3-10"
+    },
+    {
+      "aussage": "Loopback exakt {127.0.0.1, ::1, localhost, testclient}; nur request.client.host; kein Forwarded; IPv4-mapped nicht enthalten.",
+      "beleg": "security/admin.py Z. 8, 40-41; Tests Z. 50-54",
+      "evidenz": "A",
+      "gueltigkeit": "ohne Key",
+      "id": "D3-11"
+    },
+    {
+      "aussage": "Mit Key entscheidet nur Key (auch Loopback 401); ohne Key nur Host (403 sonst).",
+      "beleg": "security/admin.py Z. 32-45; Tests",
+      "evidenz": "A",
+      "gueltigkeit": "alle 21 Routen",
+      "id": "D3-12"
+    },
+    {
+      "aussage": "Guard erste Anweisung im Handler, vor Fachvalidierung; 401/403 statt 400/409/422 bei fehlendem Key.",
+      "beleg": "server.py Z. 8921-8926 u.a.; Tests Z. 330-336",
+      "evidenz": "A",
+      "gueltigkeit": "alle 21 Routen",
+      "id": "D3-13"
+    },
+    {
+      "aussage": "Genau 21 HTTP-Routen mit admin_auth_error (21 Aufrufstellen (def Z. 8918, Aufrufe Z. 8923-9872) [R1-F4 2026-11-09]); auch lesende Verwaltungsrouten geschuetzt.",
+      "beleg": "server.py 21 Stellen Z. 8921-9874",
+      "evidenz": "A",
+      "gueltigkeit": "HTTP-Administration",
+      "id": "D3-14"
+    },
+    {
+      "aussage": "Public: /api/v2/info, /, /health, /api/config (adminAuthRequired), /api/metrics, /api/v2/settings/schema|server, /api/v2/wake-words.",
+      "beleg": "server.py Z. 8874-9294",
+      "evidenz": "A",
+      "gueltigkeit": "unauthentifiziert",
+      "id": "D3-15"
+    },
+    {
+      "aussage": "401 und 403 ohne Audit/Zaehler/Log/Client-ID; OpenAI auditiert dagegen.",
+      "beleg": "security/admin.py Z. 24-46 vs security/openai.py Z. 17-30",
+      "evidenz": "A",
+      "gueltigkeit": "Admin-HTTP",
+      "id": "D3-16"
+    },
+    {
+      "aussage": "Kein Rate-Limit/Lockout/Sperrliste/Rotation/Ablauf/Hashes/Mehrfach-Keys/RBAC; ein Key = alle 21 Routen.",
+      "beleg": "Negativsuche 429/rate/lockout; AdminGate nur 3 Methoden",
+      "evidenz": "B",
+      "gueltigkeit": "Admin-Auth gesamt",
+      "id": "D3-17"
+    },
+    {
+      "aussage": "LogGate nutzt Admin-Primitiven, eigene Politik: kein x-admin-key, HTTP-Loopback-Admin ja, WS nein, 401 ohne 403.",
+      "beleg": "security/logs.py Z. 67-93; server.py Z. 9453-9472",
+      "evidenz": "A",
+      "gueltigkeit": "Abgrenzung 05.04",
+      "id": "D3-18"
+    },
+    {
+      "aussage": "OpenAI/Kroko getrennt; kein Key oeffnet fremde Flaeche; Docstring verbietet Gleichsetzung.",
+      "beleg": "security/service.py Z. 1-5; security/openai.py; security/kroko.py",
+      "evidenz": "A",
+      "gueltigkeit": "Mechanismus-Trennung",
+      "id": "D3-19"
+    },
+    {
+      "aussage": "Unit-Tests Gate-Semantik: alle Traeger, falscher-erster-gewinnt, 401 ohne Key-Echo, Loopback vs 203.0.113.7, ENV-Rotation.",
+      "beleg": "test_server_security_modularization.py Z. 20-63",
+      "evidenz": "A",
+      "gueltigkeit": "Gate-Verhalten",
+      "id": "D3-20"
+    },
+    {
+      "aussage": "HTTP-Ebene: mit Key ohne Header 401, mit Header 200; 400 erst nach Auth; kein Key in runtime.json.",
+      "beleg": "test_openai_compatible_endpoint.py Z. 316-337, 371-379",
+      "evidenz": "A",
+      "gueltigkeit": "Routen+Persistenz",
+      "id": "D3-21"
+    },
+    {
+      "aussage": "v2-Settings-Patch nutzt dasselbe Gate; alle Traeger ok; Leserouten public ohne Secrets.",
+      "beleg": "test_protocol_v2_settings.py Z. 65-69, 742-876, 1275-1297",
+      "evidenz": "A",
+      "gueltigkeit": "v2-Settings",
+      "id": "D3-22"
+    },
+    {
+      "aussage": "N/U/C: kein Admin-Audit, kein Rate-Limit, keine Rotation/RBAC; Proxy/422-Body/nicht-ASCII/Frontend offen.",
+      "beleg": "Negativbefunde",
+      "evidenz": "B",
+      "gueltigkeit": "Grenzen",
+      "id": "D3-23"
+    },
+    {
+      "aussage": "Offen: UI-Key-Haltung (JS, nicht untersucht); Loopback nur Peer ohne Key; 403-Text nennt ENV; testclient als Risiko.",
+      "beleg": "Texte/Interpretation",
+      "evidenz": "B",
+      "gueltigkeit": "Writer-Hinweise",
+      "id": "D3-24"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-1",
+      "thema": "Admin-Audit bei 401/403"
+    },
+    {
+      "id": "N-2",
+      "thema": "Rate-Limit/Lockout/Backoff"
+    },
+    {
+      "id": "N-3",
+      "thema": "Key-Rotation via API"
+    },
+    {
+      "id": "N-4",
+      "thema": "Key-Ablauf"
+    },
+    {
+      "id": "N-5",
+      "thema": "RBAC/Scopes/Mehrfach-Keys"
+    },
+    {
+      "id": "N-6",
+      "thema": "Key-Hashing at rest"
+    },
+    {
+      "id": "N-7",
+      "thema": "Auto-Erzeugung"
+    }
+  ],
+  "researcher_session": "ses_e4254c712ffe4sUmpDRU78erG",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-1",
+      "thema": "uvicorn-Proxy-Header und client.host hinter Proxy"
+    },
+    {
+      "id": "U-2",
+      "thema": "422-vor-401 bei ungueltigem JSON-Body"
+    },
+    {
+      "id": "U-3",
+      "thema": "nicht-ASCII-Key TypeError"
+    },
+    {
+      "id": "U-4",
+      "thema": "Frontend-Verhalten (JS, nicht untersucht)"
+    }
+  ],
+  "writer_notes": "Gate-Mechanik vollständig; Header-Priorität mit Leerwert-Nuance; 401/403 ohne code/Audit; 21 Routen einzeln belegt; Log-Gate-Abgrenzung kein x-admin-key. Keine Betriebszusage."
+}

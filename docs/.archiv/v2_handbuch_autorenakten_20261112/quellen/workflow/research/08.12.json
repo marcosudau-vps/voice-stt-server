@@ -1,0 +1,217 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup NICHT verifizierbar (HEAD ohne Ref); nur Commit bindend.",
+  "chapter": "08.12",
+  "commit_verification": ".git/HEAD nur Hash a8993c5c68042d996eab680d84a5b138a214bb5d (detached), verifiziert.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "Env schlaegt Config ist falsch: CLI > yaml > Env > Default."
+    },
+    {
+      "id": "C2",
+      "thema": "admin-key doppelt (Parser + Request-Fallback); Rotation nur bei leerem Settings-Wert."
+    },
+    {
+      "id": "C3",
+      "thema": "Code vs yaml abweichend: model small vs turbo, max_sessions 4 vs 8, warmup True vs false, wake timeout 5 vs 7, followup 0 vs 7, data_root None vs /data."
+    },
+    {
+      "id": "C4",
+      "thema": "48 Legacy-Flags nicht V2."
+    },
+    {
+      "id": "C5",
+      "thema": "Beispiel-VOICESTT_* nicht Server."
+    },
+    {
+      "id": "C6",
+      "thema": "Zaehlungen commitgebunden."
+    }
+  ],
+  "correction_round": 2,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "CLI-Args nur parse_args; re-export; 5 scripts, legacy/stt/install getrennt.",
+      "beleg": "setup.py:409-423; server.py:8-26,10394,10813",
+      "evidenz": "E1",
+      "gueltigkeit": "a8993c5c",
+      "id": "CE8-01"
+    },
+    {
+      "aussage": "Pre-Parser --config + Haupt 100 Args -> 120 Strings; gesamt 121.",
+      "beleg": "server.py:10395-10656",
+      "evidenz": "E3",
+      "gueltigkeit": "a8993c5c",
+      "id": "CE8-02"
+    },
+    {
+      "aussage": "config zuerst Pre-Parser, yaml laden, set_defaults nach Args: YAML ersetzt Defaults.",
+      "beleg": "server.py:10395-10401,10655",
+      "evidenz": "E2",
+      "gueltigkeit": "a8993c5c",
+      "id": "CE8-03"
+    },
+    {
+      "aussage": "CLI > yaml > Env > Default; danach runtime.json ausser 3 Keys + 7 Pfade. Live-Fallback Admin (VOICESTT_ADMIN_API_KEY) + OpenAI (VOICESTT_API_KEY) je Request bei leerem Settings-Wert.",
+      "beleg": "server.py:10655,8827-8842; security/admin.py:16",
+      "evidenz": "E2",
+      "gueltigkeit": "a8993c5c",
+      "id": "CE8-04"
+    },
+    {
+      "aussage": "Nur 22/100 Flags mit Env-Default; 78 ohne (host/port/model/engine/device/sessions...).",
+      "beleg": "server.py:10396-10654",
+      "evidenz": "E3",
+      "gueltigkeit": "a8993c5c",
+      "id": "CE8-05"
+    },
+    {
+      "aussage": "env_bool {1,true,yes,on} sonst False; timeout float ungeschuetzt -> ValueError.",
+      "beleg": "server.py:10294-10298,10506",
+      "evidenz": "E1",
+      "gueltigkeit": "Fehler ungetestet",
+      "id": "CE8-06"
+    },
+    {
+      "aussage": "Settings 108 (100 init + 8 init=False); Pfade aus data_root logs/*/events.sqlite3/runtime.json.",
+      "beleg": "server.py:403-543,293-301",
+      "evidenz": "E2",
+      "gueltigkeit": "a8993c5c",
+      "id": "CE8-07"
+    },
+    {
+      "aussage": "YAML version 1, 98 zulaessig (108-2-8); Secrets/derived/unbekannt SystemExit; device cpu; nur custom; _resolved_stt_models wirkungslos (String-Fallback, Args ignoriert).",
+      "beleg": "server.py:10294-10391,10301-10302",
+      "evidenz": "E2",
+      "gueltigkeit": "a8993c5c",
+      "id": "CE8-08"
+    },
+    {
+      "aussage": "config.yaml 94; fehlen download_root/initial×2; deployment/example nicht Parser.",
+      "beleg": "config.yaml:1-131,133-265; compose.py:28-42",
+      "evidenz": "E3",
+      "gueltigkeit": "Datei Commit",
+      "id": "CE8-09"
+    },
+    {
+      "aussage": "BASE 8 (5,3,16,16,0.02,0.2,0.55,0.2); nur custom; 8 None via _value_or_default.",
+      "beleg": "server.py:151-175,10659-10731",
+      "evidenz": "E2",
+      "gueltigkeit": "a8993c5c",
+      "id": "CE8-10"
+    },
+    {
+      "aussage": "17 BOA (stt_auto_download_enabled, ...) + 6 store_true; Inversionen; YAML 14 Mappings; abgeleitet.",
+      "beleg": "server.py:10458-10778",
+      "evidenz": "E1",
+      "gueltigkeit": "a8993c5c",
+      "id": "CE8-11"
+    },
+    {
+      "aussage": "Zweite Env-Schicht: Modellwurzeln/Offline/Kroko-Optins/Store/Wake/Commit/Version.",
+      "beleg": "model_resolver.py:10-12; kroko/models.py:43-107; artifacts.py:95-163",
+      "evidenz": "E1",
+      "gueltigkeit": "a8993c5c",
+      "id": "CE8-12"
+    },
+    {
+      "aussage": "KROKO-Key recognizer>options>Env 4; LICENSE Capability; SUPPRESS geschrieben.",
+      "beleg": "kroko/credentials.py:13-47; buildinputs.py:253",
+      "evidenz": "E2",
+      "gueltigkeit": "a8993c5c",
+      "id": "CE8-13"
+    },
+    {
+      "aussage": "Weitere: stt_server 48, cli 22, install 14, engineering 111; keine yaml.",
+      "beleg": "stt_server.py:399-543; stt_cli_client.py:42-90; install_kroko.py:163-266",
+      "evidenz": "E1",
+      "gueltigkeit": "a8993c5c",
+      "id": "CE8-14"
+    },
+    {
+      "aussage": "VOICESTT_HOST/PORT/MODEL/... nur examples; compose IMAGE/VARIANT/PORT/THREADS/PATH.",
+      "beleg": "examples/app_*/server.py:12-29; compose.py:131-137",
+      "evidenz": "E1",
+      "gueltigkeit": "a8993c5c",
+      "id": "CE8-15"
+    },
+    {
+      "aussage": "ACTIVE 42 + NEW 30 + STARTUP 28 = 100; runtime.json zuletzt + post_init + cpu-policy.",
+      "beleg": "server.py:178-285,1211-1216,8826-8843",
+      "evidenz": "E2",
+      "gueltigkeit": "a8993c5c",
+      "id": "CE8-16"
+    },
+    {
+      "aussage": "coerce Domaenen log/zone/realtime/transcript, bytes/backup/retention/queue; live braucht store; device cpu.",
+      "beleg": "server.py:1219-1273,533-543,8764-8801",
+      "evidenz": "E1",
+      "gueltigkeit": "a8993c5c",
+      "id": "CE8-17"
+    },
+    {
+      "aussage": "Negativ: kein dotenv/host-port-Env/HF-Leser/VARIANT-Reader; Env-Tests fehlen.",
+      "beleg": "grep getenv api_fastapi_server/; qualify_build_identity.py:201",
+      "evidenz": "E4",
+      "gueltigkeit": "a8993c5c",
+      "id": "CE8-18"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Kein dotenv im Server; echte Prozess-Env noetig."
+    },
+    {
+      "id": "N2",
+      "thema": "Kein host/port-Env im Parser."
+    },
+    {
+      "id": "N3",
+      "thema": "Kein HF/TRANSFORMERS-Leser im Server."
+    },
+    {
+      "id": "N4",
+      "thema": "Kein VARIANT-Reader Python-Server."
+    },
+    {
+      "id": "N5",
+      "thema": "ARTIFACT_RETENTION nur install (kein Runtime)."
+    }
+  ],
+  "researcher_session": "ses_e3465f77fffeW2mJZTNKu4i3rE",
+  "solver_notes": [
+    "S1 Haupt 100 Args",
+    "S2 Pre 1 --config",
+    "S3 120 Strings Haupt",
+    "S4 121 gesamt",
+    "S5 Env 23 Namen / 22 Flags",
+    "S6 Settings 108 = 100+8",
+    "S7 YAML 98 (108-2-8,1 wirkungslos)",
+    "S8 yaml 94 Keys",
+    "S9 TUNING 1, BASE 8",
+    "S10 Runtime 42/30/28=100",
+    "S11 stt_server 48",
+    "S12 cli 22",
+    "S13 install 14",
+    "S14 engineering 111/12"
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Branch nicht verifiziert."
+    },
+    {
+      "id": "U2",
+      "thema": "Compose/Dockerfile Interpolation ausserhalb Scope."
+    },
+    {
+      "id": "U3",
+      "thema": "Testabdeckung 22 Env-Defaults fehlt."
+    }
+  ],
+  "writer_notes": "Kette CE8-01>02>03/11/14; 03>04>05/16; 05>06/12/15; 07>08/16/17; 08>09; 12>13. Nur referenzieren 03.x/05.x/Modell/Deployment. Tabellen A-D weiterverwenden."
+}

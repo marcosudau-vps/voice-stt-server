@@ -1,0 +1,394 @@
+{
+  "branch_note": "feat/v2-release-cleanup nicht verifizierbar (HEAD ohne Ref); nur Commit bindend.",
+  "chapter": "08.04",
+  "commit_verification": ".git/HEAD = a8993c5c68042d996eab680d84a5b138a214bb5d (detached, exakte ID). Quellen: server.py, openai_routes.py, protocol_v2/*, security/*, settings_control.py, openai_compat.py, tests/unit/*.",
+  "conflicts": [
+    {
+      "id": "HINWEIS-01",
+      "thema": "Kein echter Konflikt: GET /api/config + /api/metrics bewusst ohne Auth (kein Gate-Aufruf), obwohl Betriebsdaten."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "Alle 35 Routen in create_app(); 2 OpenAI via include_router ohne Prefix. Kein weiterer Router, kein add_api_route, kein Mount.",
+      "beleg": "server.py:8816,8868-8872,9899-9910,10290; openai_routes.py:41",
+      "evidenz": "A",
+      "gueltigkeit": "gesamte Oberflaeche",
+      "id": "AP8-01"
+    },
+    {
+      "aussage": "Admin-Gate: x-voicestt-admin-key, dann Bearer, dann x-admin-key; falsch 401+WWW-Authenticate, ohne Key remote 403. Ein Gate alle 21 Admin-Routen.",
+      "beleg": "security/admin.py:8,11-46; server.py:8918-8919",
+      "evidenz": "A",
+      "gueltigkeit": "alle Admin-Routen",
+      "id": "AP8-02"
+    },
+    {
+      "aussage": "GET / statisch index.html (kein Mount). GET /health immer 200 mit ok/ready/Sessions/sttModels/eventStore; Readiness nur Feld.",
+      "beleg": "server.py:8881-8905,139-140",
+      "evidenz": "A",
+      "gueltigkeit": "auch vor Modellstart",
+      "id": "AP8-03"
+    },
+    {
+      "aussage": "GET /api/config oeffentlich (settings/limits/engines/runtime/capabilities/adminAuthRequired). PATCH admin, settings|flach, 200 oder 400.",
+      "beleg": "server.py:8907-8937",
+      "evidenz": "A",
+      "gueltigkeit": "v1, keine Revision",
+      "id": "AP8-04"
+    },
+    {
+      "aussage": "GET /api/metrics oeffentlich, ohne Auth/Parameter, immer 200, Body = service.metrics(); Felder 04.x.",
+      "beleg": "server.py:8939-8941",
+      "evidenz": "A",
+      "gueltigkeit": "Betriebsdaten ohne Gate",
+      "id": "AP8-05"
+    },
+    {
+      "aussage": "OpenAI-Gate nur Bearer==Key; ohne Key frei, sonst 401 invalid_api_key + Audit. /v1/models ergaenzt whisper-1 routing_alias.",
+      "beleg": "security/openai.py:10-35; openai_routes.py:43-65",
+      "evidenz": "A",
+      "gueltigkeit": "beide /v1/*; Key pro Request",
+      "id": "AP8-06"
+    },
+    {
+      "aussage": "POST /v1/audio/transcriptions: file+model Pflicht; 404 disabled/not_found, 401, 400, 409 not_loaded, 413 too_large, 500 failed; stream SSE delta/done.",
+      "beleg": "openai_routes.py:67-617; openai_compat.py:92-157; server.py:8425-8491",
+      "evidenz": "A",
+      "gueltigkeit": "einziger Upload",
+      "id": "AP8-07"
+    },
+    {
+      "aussage": "GET /api/v2/info oeffentlich, no-store; RuntimeIdentity.public_info (schema/protocol/identityStatus/build/distribution/runtime/instanceId).",
+      "beleg": "server.py:8874-8879; identity.py:85-108",
+      "evidenz": "A",
+      "gueltigkeit": "Identitaet beim App-Bau, kein Git",
+      "id": "AP8-08"
+    },
+    {
+      "aussage": "GET schema + /server oeffentlich: Metadaten secretsExposed=false bzw. Revision + requested/effective, Secrets redacted.",
+      "beleg": "server.py:9223-9242; settings_control.py:1407-1444",
+      "evidenz": "A",
+      "gueltigkeit": "Inventar 08.03",
+      "id": "AP8-09"
+    },
+    {
+      "aussage": "PATCH /v2/settings/server admin; baseRevision+changes; 200/409 conflict/422 rejected/500 internal/400 body; forceCommunity invalidiert Pro-Grant vorher.",
+      "beleg": "server.py:9244-9292; settings_control.py:228-264",
+      "evidenz": "A",
+      "gueltigkeit": "Defaults, persistiert",
+      "id": "AP8-10"
+    },
+    {
+      "aussage": "GET /v2/wake-words oeffentlich ohne Pfade/Marker. POST refresh admin: 200 ok, 422 Fehler; letzter guter Katalog bleibt.",
+      "beleg": "server.py:9294-9318",
+      "evidenz": "A",
+      "gueltigkeit": "Mechanik 06.x",
+      "id": "AP8-11"
+    },
+    {
+      "aussage": "Acht Modell-Routen admin; refresh 409, kroko 400 (0<t<=60)/409, lifecycle 400, load 500, unload 409, active 400/409/500.",
+      "beleg": "server.py:8943-9113",
+      "evidenz": "A",
+      "gueltigkeit": "Autoritaet 04.x",
+      "id": "AP8-12"
+    },
+    {
+      "aussage": "GET|PUT /language + /wake-word admin; language ohne Feld 400; wake PUT 400 bei enabled!=bool/fremdem Backend/unbekanntem Wort/sensitivity ausser 0..1.",
+      "beleg": "server.py:9115-9216,559-582",
+      "evidenz": "A",
+      "gueltigkeit": "neue Sessions",
+      "id": "AP8-13"
+    },
+    {
+      "aussage": "GET|PUT /logging admin; GET volles Abbild; PUT verbietet abgeleitete Pfade (400), maxBytes>0, backupCount>=0.",
+      "beleg": "server.py:9320-9444",
+      "evidenz": "A",
+      "gueltigkeit": "Mechanik 06.x/09.x",
+      "id": "AP8-14"
+    },
+    {
+      "aussage": "/api/logs/* Log-Scope: Admin/Bearer oder Loopback ohne Key, sonst Log-Token; 401/400/503. WS /ws/logs subscribe, Close 1008/1011, kein Loopback.",
+      "beleg": "server.py:9456-9847,7772-7806; security/logs.py:16-93",
+      "evidenz": "A",
+      "gueltigkeit": "HTTP/WS asymmetrisch",
+      "id": "AP8-15"
+    },
+    {
+      "aussage": "WS /ws/transcribe oeffentlich; Query clientId/wake*/activation-Timings; Close 1008 Config, 1011 Init, 1013 Limit; start/stop/clear/ping/metrics/trigger/audio.",
+      "beleg": "server.py:9912-10119,655-753,1110-1150",
+      "evidenz": "A",
+      "gueltigkeit": "v1 compatibility path",
+      "id": "AP8-16"
+    },
+    {
+      "aussage": "WS /ws/v2 oeffentlich ohne Query-Auth; Hello Pflicht; Close 4400/4406/4408 10s/4409/1011/1000; 5 Kommandotypen.",
+      "beleg": "server.py:10121-10288; connection.py:168-369; handshake.py:83-247; schema.py:202-209",
+      "evidenz": "A",
+      "gueltigkeit": "nicht im ConnectionManager",
+      "id": "AP8-17"
+    },
+    {
+      "aussage": "POST /config/validate prueft Kandidat (400 unbekannt/abgeleitet); /config/reload teilt persistiert in runtime/models, 400 bei OS/Value/Runtime.",
+      "beleg": "server.py:9849-9892",
+      "evidenz": "A",
+      "gueltigkeit": "admin; validate schreibt nichts",
+      "id": "AP8-18"
+    },
+    {
+      "aussage": "Zusaetzlich /openapi.json, /docs, /oauth2-redirect, /redoc als FastAPI-Default; nicht Teil der 37.",
+      "beleg": "server.py:8868-8872; test_server_info.py:71",
+      "evidenz": "C",
+      "gueltigkeit": "FastAPI-abhaengig",
+      "id": "AP8-19"
+    },
+    {
+      "aussage": "Negativliste: kein /ready, /v2/health, /v2/version, REST-Snapshot, /v2/logs/*, /v1/*-Prefix, Static-Mount, Modell-Download, weitere WS-Pfade.",
+      "beleg": "Grep api_fastapi_server/*.py; test_browser_client_contract.py:55",
+      "evidenz": "A",
+      "gueltigkeit": "Sollmenge + Abwesenheit",
+      "id": "AP8-20"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-01",
+      "thema": "/ready (nur Feld in /health)."
+    },
+    {
+      "id": "N-02",
+      "thema": "/api/v2/health, /api/v2/version."
+    },
+    {
+      "id": "N-03",
+      "thema": "REST-Snapshot (nur WS-v2)."
+    },
+    {
+      "id": "N-04",
+      "thema": "/api/v2/logs/* (Log-REST /api/logs/*)."
+    },
+    {
+      "id": "N-05",
+      "thema": "/api/v1/*-Prefix (v1 = /api/*)."
+    },
+    {
+      "id": "N-06",
+      "thema": "Static-Mounts /static,/ui (nur GET / index.html)."
+    },
+    {
+      "id": "N-07",
+      "thema": "Modell-Download/Install (nur refresh/load/unload/active/lifecycle/management)."
+    },
+    {
+      "id": "N-08",
+      "thema": "Weitere WS-Pfade /ws/audio, /ws/logs/v2."
+    }
+  ],
+  "researcher_session": "ses_e36ad8553ffe184PxckXYoqD3j",
+  "solver_notes": [
+    {
+      "a": "pub",
+      "m": "GET",
+      "p": "/"
+    },
+    {
+      "a": "pub",
+      "m": "GET",
+      "p": "/health"
+    },
+    {
+      "a": "pub",
+      "m": "GET",
+      "p": "/api/v2/info"
+    },
+    {
+      "a": "pub",
+      "m": "GET",
+      "p": "/api/config"
+    },
+    {
+      "a": "admin",
+      "m": "PATCH",
+      "p": "/api/config"
+    },
+    {
+      "a": "pub",
+      "m": "GET",
+      "p": "/api/metrics"
+    },
+    {
+      "a": "admin",
+      "m": "GET",
+      "p": "/api/models"
+    },
+    {
+      "a": "admin",
+      "m": "GET",
+      "p": "/api/models/management"
+    },
+    {
+      "a": "admin",
+      "m": "POST",
+      "p": "/api/models/refresh"
+    },
+    {
+      "a": "admin",
+      "m": "POST",
+      "p": "/api/kroko/license/refresh"
+    },
+    {
+      "a": "admin",
+      "m": "GET",
+      "p": "/api/models/lifecycle"
+    },
+    {
+      "a": "admin",
+      "m": "PUT",
+      "p": "/api/models/lifecycle"
+    },
+    {
+      "a": "admin",
+      "m": "POST",
+      "p": "/api/models/load"
+    },
+    {
+      "a": "admin",
+      "m": "POST",
+      "p": "/api/models/unload"
+    },
+    {
+      "a": "admin",
+      "m": "GET",
+      "p": "/api/models/active"
+    },
+    {
+      "a": "admin",
+      "m": "PUT",
+      "p": "/api/models/active"
+    },
+    {
+      "a": "admin",
+      "m": "GET",
+      "p": "/api/language"
+    },
+    {
+      "a": "admin",
+      "m": "PUT",
+      "p": "/api/language"
+    },
+    {
+      "a": "admin",
+      "m": "GET",
+      "p": "/api/wake-word"
+    },
+    {
+      "a": "admin",
+      "m": "PUT",
+      "p": "/api/wake-word"
+    },
+    {
+      "a": "pub",
+      "m": "GET",
+      "p": "/api/v2/settings/schema"
+    },
+    {
+      "a": "pub",
+      "m": "GET",
+      "p": "/api/v2/settings/server"
+    },
+    {
+      "a": "admin",
+      "m": "PATCH",
+      "p": "/api/v2/settings/server"
+    },
+    {
+      "a": "pub",
+      "m": "GET",
+      "p": "/api/v2/wake-words"
+    },
+    {
+      "a": "admin",
+      "m": "POST",
+      "p": "/api/v2/wake-words/refresh"
+    },
+    {
+      "a": "admin",
+      "m": "GET",
+      "p": "/api/logging"
+    },
+    {
+      "a": "admin",
+      "m": "PUT",
+      "p": "/api/logging"
+    },
+    {
+      "a": "log",
+      "m": "GET",
+      "p": "/api/logs/events"
+    },
+    {
+      "a": "log",
+      "m": "GET",
+      "p": "/api/logs/sessions/{session_id}"
+    },
+    {
+      "a": "log",
+      "m": "GET",
+      "p": "/api/logs/transcriptions/{transcription_id}"
+    },
+    {
+      "a": "admin",
+      "m": "POST",
+      "p": "/api/config/validate"
+    },
+    {
+      "a": "admin",
+      "m": "POST",
+      "p": "/api/config/reload"
+    },
+    {
+      "a": "oai",
+      "m": "GET",
+      "p": "/v1/models"
+    },
+    {
+      "a": "oai",
+      "m": "POST",
+      "p": "/v1/audio/transcriptions"
+    },
+    {
+      "a": "wstoken",
+      "m": "WS",
+      "p": "/ws/logs"
+    },
+    {
+      "a": "pub",
+      "m": "WS",
+      "p": "/ws/transcribe"
+    },
+    {
+      "a": "pub",
+      "m": "WS",
+      "p": "/ws/v2"
+    }
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Branch nicht verifizierbar (detached HEAD)."
+    },
+    {
+      "id": "U2",
+      "thema": "Framework-Routen /docs/redoc/openapi versionsabhaengig."
+    },
+    {
+      "id": "U3",
+      "thema": "Feldinventar metrics/lifecycle/management/limits/contracts/capabilities nicht hier (04.x/08.03)."
+    }
+  ],
+  "writer_notes": "Nur Routen/Transport. Mechanik 04.x/05.x/06.x/07.x, Settings 08.03 nur referenzieren. Keine Diagramme."
+}

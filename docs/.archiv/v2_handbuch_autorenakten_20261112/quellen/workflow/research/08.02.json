@@ -1,0 +1,348 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD). Nur Commit bindend.",
+  "chapter": "08.02",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached HEAD). Quellen: api_fastapi_server/**/*.py, VoiceSTT/core/wakeword_catalog.py, tests/**/*.py, tests/contracts/protocol-v2-vectors.json.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "already_idle/already_recording/input_closing in DOMAIN_REASON_RESULTS, stammen aus Recorder-/Timer-Uebergaengen, fehlen in NON_COMMAND_REASONS; Erreichbarkeit via Ack nicht testbelegt."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "Sollmenge 5 Commands an drei Stellen deckungsgleich: COMMAND_TYPES, _VALIDATORS und Handler-Dict; kein weiterer Typ dispatchbar.",
+      "beleg": "protocol_v2/schema.py:51; protocol_v2/commands.py:197; protocol_v2/connection.py:347-369",
+      "evidenz": "A+B",
+      "gueltigkeit": "jede akzeptierte v2-Verbindung",
+      "id": "CM8-01"
+    },
+    {
+      "aussage": "Unbekannter/fehlender Typ und Nicht-Objekt -> None, kein Ack. Bekannter Typ ohne kanonische commandId -> invalid_payload mit command_id=None, kein Ack/Slot.",
+      "beleg": "commands.py:98-114; connection.py:351-357",
+      "evidenz": "A+B",
+      "gueltigkeit": "alle 5 Commands",
+      "id": "CM8-02"
+    },
+    {
+      "aussage": "Envelope-Pflicht: type aus COMMAND_TYPES, kanonische commandId, protocolVersion==2 (Bool verworfen), kanonische sessionId==aktuelle Session; additive Fremdfelder erlaubt.",
+      "beleg": "commands.py:101-131; schema.py:219-244",
+      "evidenz": "A+B",
+      "gueltigkeit": "alle Commands",
+      "id": "CM8-03"
+    },
+    {
+      "aussage": "activation.command: action activate/refresh/finish/cancel; activate verbietet activationId und verlangt source=manual; Controls verbieten source und verlangen activationId; kein extend.",
+      "beleg": "commands.py:143-167; schema.py:62-77",
+      "evidenz": "A+B",
+      "gueltigkeit": "v2-Wire",
+      "id": "CM8-04"
+    },
+    {
+      "aussage": "activation.command -> Legacy-Dict, handle_trigger_command, reason-Mapping. Results: applied/no_change/activation_locked/not_active/invalid_phase/closing_input/stale_activation/audio_unavailable/trigger_suppressed/command_id_conflict/invalid_payload/internal_error.",
+      "beleg": "connection.py:373-390,408-450; commands.py:211-247; server.py:3500-3572",
+      "evidenz": "A+B",
+      "gueltigkeit": "v2-Wire",
+      "id": "CM8-05"
+    },
+    {
+      "aussage": "trigger_suppression.set: manual und wakeWord beide bool Pflicht. unveraendert no_change, geaendert applied + genau ein advance_state (sichtbar ohne Event); ohne Controller internal_error.",
+      "beleg": "commands.py:170-174; connection.py:483-503; activation.py:316-335",
+      "evidenz": "A+B",
+      "gueltigkeit": "v2-Wire; nur neue Admissions",
+      "id": "CM8-06"
+    },
+    {
+      "aussage": "audio_availability.set: audioAvailable bool Pflicht. applied bei Aenderung, no_change bei Wiederholung; visible_without_event hebt stateVersion genau einmal.",
+      "beleg": "commands.py:177-180; connection.py:392-406,452-479; server.py:3730-3821",
+      "evidenz": "A+B",
+      "gueltigkeit": "v2-Wire",
+      "id": "CM8-07"
+    },
+    {
+      "aussage": "session_settings.patch: baseSettingsRevision int>=0 (Bool abgelehnt), changes nicht-leeres dict. applied/no_change/revision_conflict/rejected; errors[] aus FieldError-Dicts, atomar.",
+      "beleg": "commands.py:183-190; connection.py:505-542; settings_control.py:227-264,764-781,933",
+      "evidenz": "A+B",
+      "gueltigkeit": "v2-Wire",
+      "id": "CM8-08"
+    },
+    {
+      "aussage": "session.snapshot.request ohne typspezifische Felder: erst command.ack (applied, accepted=true), dann immer session.snapshot, auch beim Replay.",
+      "beleg": "commands.py:193; connection.py:584-592; snapshot.py:36-89",
+      "evidenz": "A+B",
+      "gueltigkeit": "v2-Wire; Felder 08.03",
+      "id": "CM8-09"
+    },
+    {
+      "aussage": "command.ack 10 Pflichtfelder (type/version/session/commandId/accepted/result/activationId/inputPhase/stateVersion/settingsRevision) + errors nur wenn nicht leer; accepted nur applied/no_change; idle normalisiert.",
+      "beleg": "connection.py:620-652; commands.py:279-281; schema.py:85-98",
+      "evidenz": "A+B",
+      "gueltigkeit": "jedes Ack",
+      "id": "CM8-10"
+    },
+    {
+      "aussage": "RESULT_CODES geschlossen 15 Werte, accepted nur applied/no_change. Unbekannter Reason -> UnmappedDomainReason, geloggt zu internal_error.",
+      "beleg": "schema.py:107-143; commands.py:266-276; connection.py:412-421",
+      "evidenz": "A+B",
+      "gueltigkeit": "frozen vocabulary",
+      "id": "CM8-11"
+    },
+    {
+      "aussage": "DOMAIN_REASON_RESULTS 26 Eintraege, NON_COMMAND_REASONS 10, disjunkt; drei unerreichbare Session-Zustaende explizit internal_error.",
+      "beleg": "commands.py:211-263",
+      "evidenz": "A+B",
+      "gueltigkeit": "Projektion v2-Wire",
+      "id": "CM8-12"
+    },
+    {
+      "aussage": "commandId validiert nie umgeschrieben: nur 36-stellige kleingeschriebene UUID; kompakt/Gross/Whitespace ungueltig -> kein Ack/Slot.",
+      "beleg": "schema.py:219-244; commands.py:105-114",
+      "evidenz": "A+B",
+      "gueltigkeit": "ganze Session",
+      "id": "CM8-13"
+    },
+    {
+      "aussage": "Genau ein Replay-Cache: Domaene Semantik-Key, Wire raw freeze (Payload ohne commandId); setdefault, Konflikt nie ueberschrieben; Replay wortgleich mit Original-Versionen; REPLAY ohne Memo internal_error.",
+      "beleg": "connection.py:594-616,654-661; activation_commands.py:295-329; server.py:3472-3478",
+      "evidenz": "A+B",
+      "gueltigkeit": "pro Session",
+      "id": "CM8-14"
+    },
+    {
+      "aussage": "Additive Fremdfelder: activation/audio_availability bleibt Replay (Semantik-Key); suppression/patch/snapshot -> command_id_conflict (Raw-Key).",
+      "beleg": "activation_commands.py:67-79; server.py:3760; commands.py:65-77",
+      "evidenz": "A (B nur activation)",
+      "gueltigkeit": "code-verifiziert",
+      "id": "CM8-15"
+    },
+    {
+      "aussage": "Nicht-kanonische sessionId -> invalid_payload; wohlgeformte fremde/aeltere -> stale_session; Ack traegt aktuelle sessionId, stateVersion unveraendert.",
+      "beleg": "commands.py:120-126; connection.py:637-648",
+      "evidenz": "A+B",
+      "gueltigkeit": "alle Commands",
+      "id": "CM8-16"
+    },
+    {
+      "aussage": "Close-Zuordnung: 4400 Handshake, 4406 keine Version, 4408 Timeout (Default 10.0s), 4409 inadmissibel, 1011 intern; nie halbe Session.",
+      "beleg": "schema.py:202-209; connection.py:218-255,284-305; server.py:10229-10267",
+      "evidenz": "A+B",
+      "gueltigkeit": "Timeout konfigurierbar",
+      "id": "CM8-17"
+    },
+    {
+      "aussage": "protocol.incompatible nur bei gueltigem Envelope ohne gemeinsame Version: type/reason/serverVersion/serverCommit/supported=[2], keine sessionId; danach Close 4406.",
+      "beleg": "handshake.py:70-73,155-165; connection.py:230-234",
+      "evidenz": "A+B",
+      "gueltigkeit": "Handshake-Stufe 2",
+      "id": "CM8-18"
+    },
+    {
+      "aussage": "session.rejected: type/reason/serverVersion/serverCommit/supported/errors[] (Wake zusaetzlich reason/wakeWordId); Reasons invalid_requested_session/session_limit_reached; Close 4409.",
+      "beleg": "handshake.py:76-80,201-247; ports.py:119-147; wakeword_catalog.py:378-400",
+      "evidenz": "A+B",
+      "gueltigkeit": "nur Handshake",
+      "id": "CM8-19"
+    },
+    {
+      "aussage": "Acht interne 4400-Reasons werden nicht gesendet (kein Nutzpayload).",
+      "beleg": "handshake.py:83-153; connection.py:218-223,230-234",
+      "evidenz": "A+B",
+      "gueltigkeit": "intern, kein Wire-Feld",
+      "id": "CM8-20"
+    },
+    {
+      "aussage": "1011 bei Admission-/Endpoint-Exception, send_text-Fehler, internem __session_terminal__; request_close idempotent, erster Code gewinnt.",
+      "beleg": "connection.py:140-152,688-702; server.py:10176-10190,10248-10267",
+      "evidenz": "A+B",
+      "gueltigkeit": "Transport, kein Wire-Message",
+      "id": "CM8-21"
+    },
+    {
+      "aussage": "stateVersion im Ack nur bei applied dreifach: closing_input Eintrittsversion; sichtbare Aenderung ohne Event genau ein advance; sonst None. no_change/Rejections nie.",
+      "beleg": "connection.py:452-479,718-750; session.py:86-101",
+      "evidenz": "A+B",
+      "gueltigkeit": "pro Verbindung; Replay Original",
+      "id": "CM8-22"
+    },
+    {
+      "aussage": "v1-Typen (trigger/audio_availability/start/stop/clear/ping/metrics) und wiederholtes hello nach Accept: kein Ack/Event/Versionssprung; kein v2-start (Audio startet bei Admission).",
+      "beleg": "connection.py:168-179,326-328; server.py:10074-10105",
+      "evidenz": "A+B",
+      "gueltigkeit": "v2-Wire",
+      "id": "CM8-23"
+    },
+    {
+      "aussage": "Oeffentlich: 5 Commands, command.ack, session.snapshot, 4 Handshake-Typen. Intern: Reason-Vokabular, Legacy-Acks, Handshake-Reasons, __session_terminal__, INPUT_CLOSING_NOTIFICATION, v1-Typen.",
+      "beleg": "schema.py:37-48; connection.py:688-717; server.py:3414-3425,3823-3833",
+      "evidenz": "A+B",
+      "gueltigkeit": "Katalogtrennung",
+      "id": "CM8-24"
+    },
+    {
+      "aussage": "Command vor hello.accepted = Handshake-Verletzung: Close 4400, kein Ack/Session/Recorder.",
+      "beleg": "connection.py:168-171,218-234; handshake.py:85-89",
+      "evidenz": "A+B",
+      "gueltigkeit": "Verbindungsbeginn",
+      "id": "CM8-25"
+    },
+    {
+      "aussage": "v2-Admission uebergibt boolesche Triggerflags -> mode=controlled -> Controller immer vorhanden; controller-lose Zweige auf v2 unerreichbar.",
+      "beleg": "connection.py:257-282,485-487; server.py:1153-1208,2421-2441",
+      "evidenz": "A",
+      "gueltigkeit": "v2-Admission",
+      "id": "CM8-26"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "NI-1",
+      "thema": "Kein start/stop/clear als v2-Command; Audio startet atomar bei Admission."
+    },
+    {
+      "id": "NI-2",
+      "thema": "Kein extend-Alias in v2; extend -> invalid_payload."
+    },
+    {
+      "id": "NI-3",
+      "thema": "Kein Ack-Timeout/Retry-Message; Identitaet nur via commandId-Replay."
+    },
+    {
+      "id": "NI-4",
+      "thema": "Kein zweiter Replay-Cache."
+    }
+  ],
+  "researcher_session": "ses_e36c75018ffeCN67m1ZiKP1UBd",
+  "solver_notes": [
+    {
+      "id": "S-1.1",
+      "thema": "COMMAND_TYPES 5",
+      "werte": [
+        "activation.command",
+        "trigger_suppression.set",
+        "audio_availability.set",
+        "session_settings.patch",
+        "session.snapshot.request"
+      ],
+      "zaehlung": 5
+    },
+    {
+      "id": "S-1.2",
+      "thema": "_VALIDATORS Keys 5",
+      "werte": [
+        "activation.command",
+        "trigger_suppression.set",
+        "audio_availability.set",
+        "session_settings.patch",
+        "session.snapshot.request"
+      ],
+      "zaehlung": 5
+    },
+    {
+      "id": "S-1.3",
+      "thema": "Handler-Dict 5",
+      "werte": [
+        "_apply_activation_command",
+        "_apply_trigger_suppression",
+        "_apply_audio_availability",
+        "_apply_settings_patch",
+        "_apply_snapshot_request"
+      ],
+      "zaehlung": 5
+    },
+    {
+      "id": "S-1.4",
+      "thema": "parse_command-Zweige 8",
+      "werte": [
+        "Nicht-Objekt->None",
+        "unbekannt->None",
+        "ohne commandId->invalid_payload",
+        "version!=2->invalid_payload",
+        "sessionId unkanonisch->invalid_payload",
+        "sessionId fremd->stale_session",
+        "Validatorfehler->reject",
+        "akzeptiert"
+      ],
+      "zaehlung": 8
+    },
+    {
+      "id": "S-1.5",
+      "thema": "RESULT_CODES 15",
+      "werte": [
+        "applied",
+        "no_change",
+        "activation_locked",
+        "not_active",
+        "invalid_phase",
+        "closing_input",
+        "stale_session",
+        "stale_activation",
+        "command_id_conflict",
+        "invalid_payload",
+        "trigger_suppressed",
+        "audio_unavailable",
+        "settings_revision_conflict",
+        "settings_rejected",
+        "internal_error"
+      ],
+      "zaehlung": 15
+    },
+    {
+      "id": "S-1.6",
+      "thema": "Close-Codes 5",
+      "werte": [
+        "4400",
+        "4406",
+        "4408 (10.0s)",
+        "4409",
+        "1011"
+      ],
+      "zaehlung": 5
+    },
+    {
+      "id": "S-1.7",
+      "thema": "Reason-Tabellen 26+10 disjunkt",
+      "werte": [
+        "DOMAIN_REASON_RESULTS=26",
+        "NON_COMMAND_REASONS=10",
+        "Ueberschneidung=0"
+      ],
+      "zaehlung": "26+10"
+    },
+    {
+      "id": "S-1.8",
+      "thema": "Message-Typen Command-Pfad",
+      "werte": [
+        "Client->Server: 5 + hello (nur Handshake)",
+        "Server->Client: ack + snapshot",
+        "Handshake: accepted/incompatible/rejected"
+      ],
+      "zaehlung": "5+1/3"
+    }
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Absicht Replay-Key-Divergenz additive Felder (CM8-15); kein Test/Kommentar."
+    },
+    {
+      "id": "U2",
+      "thema": "Erreichbarkeit controller-loser Zweige auf v2 (CM8-26); strukturell ausgeschlossen, ungetestet."
+    },
+    {
+      "id": "U3",
+      "thema": "Timeout-Default 10.0s nur Code-Fakt; Test mit 0.25s."
+    },
+    {
+      "id": "U4",
+      "thema": "suppression.set auf unkonfigurierter Quelle als sichtbare Aenderung; kein Test."
+    },
+    {
+      "id": "U5",
+      "thema": "snapshot.request mit additivem Feld als conflict (Raw-Key); kein Test."
+    }
+  ],
+  "writer_notes": "Abhaengigkeiten: 08.01 Events referenzieren (suppressed diagnostisch, settings.changed nach applied, input_closed=no_change); 02.x Trigger (Phasenmatrix/closing/Timer); 04.x Registry/Fehlercodes; 06.x Admission/wake-errors; 07.x __session_terminal__->1011; 08.03 Snapshot-Felder (nur ack-zuerst-dann-snapshot). Kein start/stop/clear, kein extend, kein Ack-Timeout, kein zweiter Cache. U1-U5 + C1 offen benennen. NOT_REQUESTED: keine Diagramme."
+}

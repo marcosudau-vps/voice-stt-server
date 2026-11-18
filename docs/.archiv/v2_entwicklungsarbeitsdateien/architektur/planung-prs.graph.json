@@ -1,0 +1,72 @@
+{
+  "format": "branchgraph",
+  "schema_version": 1,
+  "title": "Release V2 mit parallelen Arbeitspaketen und Pull Requests",
+  "source": {"kind": "plan"},
+  "branches": [
+    {"id": "main", "name": "main", "type": "main", "parent": null},
+    {"id": "release", "name": "release/v2", "type": "release", "parent": "main"},
+    {"id": "feature", "name": "feat/graph", "type": "feature", "parent": "release"},
+    {"id": "ap1", "name": "AP1", "type": "work", "parent": "feature"},
+    {"id": "ap2", "name": "AP2", "type": "work", "parent": "feature"},
+    {"id": "ap3", "name": "AP3", "type": "work", "parent": "feature"}
+  ],
+  "events": [
+    {"id": "e1", "type": "release", "branch": "main", "label": "Release V1.9"},
+    {"id": "e2", "type": "fork", "source": "main", "branches": ["release"]},
+    {"id": "e3", "type": "fork", "source": "release", "branches": ["feature"]},
+    {"id": "e4", "type": "fork", "source": "feature", "branches": ["ap1", "ap2", "ap3"]},
+    {"id": "e5", "type": "commit", "branch": "ap1", "label": "b220dd0"},
+    {"id": "e6", "type": "commit", "branch": "ap2", "label": "a220cd1"},
+    {"id": "e7", "type": "commit", "branch": "ap3", "label": "e8d1aaa"},
+    {"id": "e8", "type": "pull_request", "number": 15, "status": "open", "source": "ap1", "target": "feature"},
+    {"id": "e9", "type": "pull_request", "number": 16, "status": "closed", "source": "ap2", "target": "feature"},
+    {"id": "e10", "type": "pull_request", "number": 17, "status": "merged", "source": "ap3", "target": "feature"},
+    {"id": "e11", "type": "merge", "source": "ap2", "target": "feature"},
+    {"id": "e12", "type": "merge", "source": "ap1", "target": "feature"},
+    {"id": "e13", "type": "merge", "source": "feature", "target": "release"},
+    {"id": "e14", "type": "merge", "source": "release", "target": "main"},
+    {"id": "e15", "type": "release", "branch": "main", "label": "Release V2.0.0"}
+  ],
+  "policies": {
+    "max_concurrent_children": null,
+    "per_branch": {"feature": {"max_concurrent_children": 3}}
+  },
+  "views": {
+    "details": {
+      "show_branch_names": true,
+      "show_commits": true,
+      "show_commit_labels": true,
+      "show_merge_labels": true,
+      "show_pull_requests": true,
+      "show_tags": true,
+      "parallel_fork_layout": "grouped",
+      "min_horizontal_gap": 3,
+      "vertical_gap": 1,
+      "reuse_free_lanes": true,
+      "branch_visibility": {},
+      "hidden_branch_types": []
+    },
+    "overview": {
+      "show_branch_names": true,
+      "show_commits": false,
+      "show_pull_requests": true,
+      "show_tags": true,
+      "parallel_fork_layout": "separate",
+      "min_horizontal_gap": 3,
+      "vertical_gap": 1,
+      "reuse_free_lanes": true,
+      "branch_visibility": {},
+      "hidden_branch_types": []
+    },
+    "releases_only": {
+      "show_commits": false,
+      "show_pull_requests": false,
+      "show_tags": true,
+      "parallel_fork_layout": "grouped",
+      "hidden_branch_types": ["work"],
+      "min_horizontal_gap": 3,
+      "vertical_gap": 1
+    }
+  }
+}

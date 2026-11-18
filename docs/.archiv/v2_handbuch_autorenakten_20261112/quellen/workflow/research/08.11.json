@@ -1,0 +1,247 @@
+{
+  "branch_note": "feat/v2-release-cleanup NICHT verifizierbar (HEAD detached); nicht bindend.",
+  "chapter": "08.11",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached). Nur *.py.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "Auftrag instanceId vs Code serverInstanceId."
+    },
+    {
+      "id": "C2",
+      "thema": "Audit-Katalog 16 suggeriert voll; 13 aktiv/3 tot."
+    },
+    {
+      "id": "C3",
+      "thema": "enabled klingt Kanal-aus, meint nur JSONL; Store kanonisch."
+    },
+    {
+      "id": "C4",
+      "thema": "backupCount exponiert ohne Wirkung."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "Genau 4 Kanaele (audit/performance/transcription/system); unbekannt/closed => emit None ohne Fehler.",
+      "beleg": "event_logging.py:769-854,925-932",
+      "evidenz": "A",
+      "gueltigkeit": "alle Pfade",
+      "id": "LG8-01"
+    },
+    {
+      "aussage": "Envelope fix schemaVersion 1/eventId/timestamp Z/channel/event/severity/serverInstanceId; 6 Kontext hochgezogen; meldung optional; cursor nach Append.",
+      "beleg": "event_logging.py:916-1006,957-969",
+      "evidenz": "A",
+      "gueltigkeit": "alle Kanaele",
+      "id": "LG8-02"
+    },
+    {
+      "aussage": "None-Felder entfallen; segmentId int Payload, str Spalte (kein Filter).",
+      "beleg": "event_logging.py:936-945,572-576",
+      "evidenz": "B",
+      "gueltigkeit": "alle Kanaele",
+      "id": "LG8-03"
+    },
+    {
+      "aussage": "Audit 16 deklariert/13 aktiv; 3 websocket.* tot; Katalog keine Whitelist (Default Eventname).",
+      "beleg": "operations.py:18-35; event_logging.py:1340-1355",
+      "evidenz": "A",
+      "gueltigkeit": "audit",
+      "id": "LG8-04"
+    },
+    {
+      "aussage": "Performance 12=12 deckungsgleich; models.* via Helfer, load_failed nur Fehlerzweig.",
+      "beleg": "operations.py:37-50; server.py:7575-7597,8532-8537",
+      "evidenz": "A",
+      "gueltigkeit": "performance",
+      "id": "LG8-05"
+    },
+    {
+      "aussage": "system genau 6 (recorder.failed/scheduler.overloaded/server.starting-ready-stopping/worker.failed); keine Tabelle.",
+      "beleg": "server.py:3024-8643",
+      "evidenz": "B",
+      "gueltigkeit": "system",
+      "id": "LG8-06"
+    },
+    {
+      "aussage": "transcription 20; 14 via Mapping (text entfernt) + 6 direkt (completed/accepted/cancelled/failed/discarded/rejected).",
+      "beleg": "server.py:5921-5949,4598-4611,4876-4893",
+      "evidenz": "A",
+      "gueltigkeit": "WS+HTTP",
+      "id": "LG8-07"
+    },
+    {
+      "aussage": "Audit/Performance Severity per Suffix failed->error/rejected-warning-timeout-dropped->warning/sonst info; Fassaden ohne Severity.",
+      "beleg": "event_logging.py:1340-1355; operations.py:351-395",
+      "evidenz": "B",
+      "gueltigkeit": "audit/performance",
+      "id": "LG8-08"
+    },
+    {
+      "aussage": "severity frei ohne Validierung; nur Queue-Prioritaet audit/error-critical 0, Transcription-Terminals 0, performance 2, sonst 1.",
+      "beleg": "event_logging.py:900-914,933-934",
+      "evidenz": "B",
+      "gueltigkeit": "nur Spiegel",
+      "id": "LG8-09"
+    },
+    {
+      "aussage": "Redaktion 21 Keys/8 Suffixe/8 Audio/4 Query/12 Transcript/2 Muster rekursiv bytes-Drop einmalig vor Senken.",
+      "beleg": "event_logging.py:116-186,90-113,31-83",
+      "evidenz": "A",
+      "gueltigkeit": "alle Kanaele",
+      "id": "LG8-10"
+    },
+    {
+      "aussage": "Transcript performance immer Drop; none Drop; final nur completed; full alle transcription; fremd immer Drop. Default final.",
+      "beleg": "event_logging.py:144-155,870-883; server.py:7895-7904",
+      "evidenz": "A",
+      "gueltigkeit": "alle Kanaele",
+      "id": "LG8-11"
+    },
+    {
+      "aussage": "Store kanonisch unabhaengig Schalter; enabled nur JSONL, stdout nur bei enabled+stdout.",
+      "beleg": "event_logging.py:971-1005",
+      "evidenz": "A",
+      "gueltigkeit": "alle 4",
+      "id": "LG8-12"
+    },
+    {
+      "aussage": "JSONL root/YYYY-MM/DD.jsonl Zeitzone; max_bytes Rollover .n; retention pro Tag; backup_count ungenutzt.",
+      "beleg": "event_logging.py:314-436,328,345-357",
+      "evidenz": "A",
+      "gueltigkeit": "JSONL-Senke",
+      "id": "LG8-13"
+    },
+    {
+      "aussage": "SQLite 14 Spalten/6 Indizes/watermarks; WAL/NORMAL; Query 1..1000; Cursor MAX(cursor,seq).",
+      "beleg": "event_logging.py:438-694",
+      "evidenz": "A",
+      "gueltigkeit": "nur Store an",
+      "id": "LG8-14"
+    },
+    {
+      "aussage": "HTTP 3 Routen/8 Params/9 Felder; CSV; limit geklemmt; fehlt 503, Parse 400.",
+      "beleg": "server.py:9446-9558",
+      "evidenz": "A",
+      "gueltigkeit": "Historie",
+      "id": "LG8-15"
+    },
+    {
+      "aussage": "WS 8 Typen, subscribe Pflicht, 6 Fehlercodes, Keepalive 30s, Queue 1000, Replay 1000, 1008/1011.",
+      "beleg": "server.py:9560-9847,149",
+      "evidenz": "A",
+      "gueltigkeit": "Live-Log",
+      "id": "LG8-16"
+    },
+    {
+      "aussage": "Auth HTTP Admin/Bearer Loopback-nur-ohne-Key sonst Token; WS nie implizit; Nicht-Admin nur audit/performance/transcription (system leer).",
+      "beleg": "security/logs.py:67-93; server.py:9478-9616",
+      "evidenz": "A",
+      "gueltigkeit": "HTTP+WS",
+      "id": "LG8-17"
+    },
+    {
+      "aussage": "Token 64 Hex 86400s nur Memory (Neustart tot), Session-Bindung, Sweep >1024; logAccess v1+v2 hello.",
+      "beleg": "security/logs.py:9-59; server.py:7772-7806; connection.py:331-342",
+      "evidenz": "B",
+      "gueltigkeit": "beide WS",
+      "id": "LG8-18"
+    },
+    {
+      "aussage": "GET+PUT logging 27 Mapping/5 Pfade 400; validiert nur maxBytes>0/backup>=0; backup wirkungslos.",
+      "beleg": "server.py:9320-9444",
+      "evidenz": "A",
+      "gueltigkeit": "Laufzeit-Config",
+      "id": "LG8-19"
+    },
+    {
+      "aussage": "Zustand disabled/ready/degraded read/write getrennt; Read loescht Write nie; health ok an available.",
+      "beleg": "event_logging.py:1099-1288; server.py:8885-8905",
+      "evidenz": "A",
+      "gueltigkeit": "Store an",
+      "id": "LG8-20"
+    },
+    {
+      "aussage": "Append-Fehler Exception-Log degraded return None; weder JSONL/Stdout/Subscriber (kein Fallback).",
+      "beleg": "event_logging.py:971-981",
+      "evidenz": "A",
+      "gueltigkeit": "Store an",
+      "id": "LG8-21"
+    },
+    {
+      "aussage": "log_level separate Achse via LevelNamesMapping; Root/fastapi/uvicorn/Handler + Recorder/uvicorn-Arg; nicht Severity/Kanal.",
+      "beleg": "event_logging.py:276-302; server.py:2754,10816-10834",
+      "evidenz": "A",
+      "gueltigkeit": "Prozess-Logging",
+      "id": "LG8-22"
+    },
+    {
+      "aussage": "realtime_log_detail off/summary/events vor Hub: off keine, summary nur summary, events beide.",
+      "beleg": "server.py:5205-5292; openai_routes.py:262,284,535",
+      "evidenz": "A",
+      "gueltigkeit": "performance",
+      "id": "LG8-23"
+    },
+    {
+      "aussage": "v1 accepted+closed (websocket), v2 nur closed (websocket_v2); protocol_v2 ohne Audit.",
+      "beleg": "server.py:9989-10288",
+      "evidenz": "B",
+      "gueltigkeit": "audit Lifecycle",
+      "id": "LG8-24"
+    },
+    {
+      "aussage": "Tests Envelope/Redaktion/Schalter/Version/Scope; nicht 51/backup/Totkatalog/Asymmetrie.",
+      "beleg": "test_server_operations.py:222-544; test_multi_user.py:1413-2360",
+      "evidenz": "C",
+      "gueltigkeit": "Test-Suite",
+      "id": "LG8-25"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "LG8-N1",
+      "thema": "backup_count gespeichert/validiert/exponiert, nie verwendet."
+    },
+    {
+      "id": "LG8-N2",
+      "thema": "3 Audit-Eintraege ohne Emissionsstelle."
+    },
+    {
+      "id": "LG8-N6",
+      "thema": "Kein Fallback bei Store-Fehler (SQLite-first)."
+    }
+  ],
+  "researcher_session": "ses_e34768853ffe54WYrBlMuucHM5",
+  "solver_notes": [
+    "Kanaele 4: audit 13, performance 12, system 6, transcription 20 = 51 Paare, 44 distinct (7 doppelt).",
+    "Kataloge 16 audit (3 tot) + 12 performance (deckt).",
+    "Envelope schemaVersion/eventId/timestamp/channel/event/severity/serverInstanceId + 6 Kontext + data/meldung/cursor.",
+    "Redaktion 21/8/8/4/12/2 + bytes/None-Drop.",
+    "WS 8 + 6 Codes; HTTP 3/8/9; limit 1..1000.",
+    "Modi transcript none-final-full; realtime off-summary-events; log_level Python-Achse.",
+    "Severity nur info-warning-error; critical nur Prioritaet."
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "LG8-N3",
+      "thema": "Absicht v2-Asymmetrie (kein accepted) unkommentiert."
+    },
+    {
+      "id": "LG8-N4",
+      "thema": "severity-Menge undefiniert/unvalidiert."
+    },
+    {
+      "id": "LG8-N5",
+      "thema": "critical Prioritaet 0 aber nie erzeugt."
+    },
+    {
+      "id": "LG8-N7",
+      "thema": "Keepalive-Timing nicht testfixiert."
+    }
+  ],
+  "writer_notes": "Mechanik Queue/Worker/flush nur 06.x. v2-Wire keine Log-Events (nur closed). Legacy-Timeline zuerst dann Log (text entfernt). Deskriptiv nicht erzwungen. Level-Begriffe trennen."
+}

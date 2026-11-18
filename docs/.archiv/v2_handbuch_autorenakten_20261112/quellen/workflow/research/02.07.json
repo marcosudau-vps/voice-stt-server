@@ -1,0 +1,331 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup NICHT verifizierbar (detached HEAD, leere refs). Commit verifiziert.",
+  "chapter": "02.07",
+  "commit_verification": ".git/HEAD = a8993c5c68042d996eab680d84a5b138a214bb5d (detached)",
+  "correction_round": 0,
+  "diagram_edges": [
+    "[Server] -> [STTModelManager] | ein Registry-Owner [M2-01]",
+    "[STTModelManager] -> [FasterWhisperAdapter|KrokoAdapter] [M2-01]",
+    "[ProductModel] -> [Provisionierung] | nur mit file+sha256+bytes+source [M2-02]",
+    "[Discovery fasterwhisper] -> [ProductModel faster-whisper-*] [M2-03]",
+    "[Recovery] -> [tiny(300), small(200)] | nur generische Fallbacks [M2-03]",
+    "[models.json] -> [default_product_authority] -> [STTModelManager.authority] [M2-04]",
+    "[load_manifest] -> [KrokoModelManifest] -> [get(id|filename)] [M2-06]",
+    "[Settings] -> [OperatorIntent] -> [Eligibility]; [installierte Build-Identitaet] -> [kroko_runtime_variant] [M2-07]",
+    "[global|engine|model auto_download] -> [effective_auto_download] : OR [M2-08]",
+    "[custom_paths] -> [VOICESTT_*_MODEL_ROOT] -> [default_root] : erste Uebereinstimmung [M2-09]",
+    "[root] -> [root/<sub>] -> [_model_path]; [snapshots/*] -> [letzter sortierter Treffer] [M2-10]",
+    "[root(.data)] -> [ModelCandidate]; [root/] -> [glob *.data] -> [ModelCandidate]; [filename-Match] -> [product_id] [M2-11]",
+    "[DISCOVERED] -> [VALIDATED] : Struktur/Groesse ok [M2-12]",
+    "[VALIDATED] -> [LOAD_VERIFIED] : load_probe [M2-19]",
+    "[provisioning_allowed=False] -> [PermissionError] [M2-13]",
+    "[Ziel existiert+verifiziert] -> [return] [M2-13]",
+    "[Download] -> [source_identity?] -> [size+sha256?] -> [os.replace] -> [VALIDATED-Kandidat] [M2-13]",
+    "[Fehler] -> [.part geloescht] [M2-13]",
+    "[defaults] -> [eligibility] -> [provision?] -> [probe] -> [active[role]] [M2-14]",
+    "[missing roles] -> [priority-sort] -> [probe] -> [active]; [priority=None] -> [kein Fallback] [M2-14]",
+    "[not_ready] -> [minimum_ready] : refresh ok [M2-15]",
+    "[minimum_ready] -> [minimum_ready(optional_provisioning)] -> [ready_complete|ready_optional_errors] [M2-15]",
+    "[refresh nicht ready + alter ready] -> [alter Snapshot bleibt] [M2-15]",
+    "[Kandidat] -> [eligible] -> [available] [M2-16]",
+    "[authority] -> [operatorEnabled], [autoDownloadRequestedScopes] [M2-16]",
+    "[requested name] -> [_tokens] -> [Schnittmenge] -> [entry|None] [M2-17]",
+    "[Settings] -> [Manager.intent]; [Lizenzcheck] -> [refresh] -> [MINIMUM_READY?] -> [_resolved_stt_models]; [nicht ready] -> [leer] [M2-18]",
+    "[VALIDATED] -> [load_probe] -> [LOAD_VERIFIED]; [Probe-Exception] -> [VALIDATED + problem] [M2-19]",
+    "[_resolved_stt_models[role].path] -> [TranscriptionEngineConfig.model] [M2-20]",
+    "[license check] -> [intent swap] -> [manager.refresh] -> [apply] -> [busy?] -> [scheduler replace] -> [ok|rollback] [M2-21]",
+    "[refresh] -> [probe conflict concurrent_native_identity] -> [busy?] ->|nein| [unload] -> [refresh]; [busy] -> [RuntimeError, defer] [M2-22]",
+    "[PUT /api/models/active] -> [validate keys] -> [use_main False?] -> [cpu policy] -> [kroko preflight] -> [license] -> [manager.refresh] -> [minimum_ready?] -> [registry.resolve] -> [loading?] -> [scheduler replace] -> [persist] [M2-23]",
+    "[*] -> loaded : Konstruktion mit Scheduler [M2-24]",
+    "unloaded -> loading : ensure_models_loaded [M2-24]",
+    "loading -> loaded : wait_ready+healthy [M2-24]",
+    "loading -> unloaded : Ladefehler [M2-24]",
+    "loaded -> unloading : unload_models [M2-24]",
+    "unloading -> unloaded : stop ok [M2-24]",
+    "unloading -> loaded : stop Fehler [M2-24]",
+    "loading -> stopped : stop_event [M2-24]",
+    "[loaded] -> [idle >= timeout] -> [unloading] -> [unloaded]; [busy] -> [unload RuntimeError] -> [loaded, retry] [M2-25]",
+    "[engine erzeugt] -> [warmup?] -> [engine.warmup(wav)] -> [ready.set()]; [Fehler] -> [weiter] [M2-26]",
+    "[settings pair] -> [ranks] -> [max>3?|count>=3>limit?] ->|ja| [ValueError]; [same engine+model] -> [use_main True] [M2-27]",
+    "[Kroko commercial] -> [forceCommunity?] ->|ja| [deny]; [UUID?] ->|nein| [deny]; [Proof|native] -> [restart_conflict?] ->|ja| [deny]; [Variante !=] -> [incompatible] [M2-28]",
+    "[*] -> [LKG restore] : Aktivierung fehlgeschlagen [M2-29]",
+    "[LKG] -> [license filter] -> [Rollen ggf. entfernt] -> [not_ready|minimum_ready] [M2-29]",
+    "[PATCH /api/config] -> [pending intent] -> [POST /api/models/refresh] -> [Provisionierung/Aktivierung] [M2-30]",
+    "[/health] -> [readiness_summary, pfadfrei] [M2-30]",
+    "[Engine-Init] -> [model_resolver] ->|Treffer| [Pfad]; [kein Treffer] -> [TranscriptionEngineError]; [Provisionierung] -> nur [STTModelManager] [M2-31]"
+  ],
+  "facts": [
+    {
+      "aussage": "STTModelManager einziger transaktionaler Registry-Owner: authority (Produktfakten), intent (Betreiberabsicht), load_probe, provisioner, optional license_policy, genau 2 Engine-Adapter. Trennung Policy hier / Dateilayouts in Adaptern (Docstring).",
+      "beleg": "stt_model_management.py:628-660, :1-6",
+      "evidenz": "A hoch",
+      "gueltigkeit": "Start/Refresh/Switch/Provisionierung/Recovery",
+      "id": "M2-01"
+    },
+    {
+      "aussage": "ProductModel frozen; __post_init__: normalisierter Engine-Name, id/engine nicht-leer, filename ohne Pfadanteile. Bei provisioning_allowed=True: filename+sha256+bytes+source Pflicht, artifact_kind=file, bytes>0 (kein bool), sha256 exakt 64 Hex, sonst ValueError. public_dict ohne Pfade.",
+      "beleg": "stt_model_management.py:80-155",
+      "evidenz": "A+B (:557-570 immutable/no-path)",
+      "gueltigkeit": "jede Produktdeklaration inkl. Overrides",
+      "id": "M2-02"
+    },
+    {
+      "aussage": "11 Faster-Whisper-Produkte (tiny/tiny.en/base/base.en/small/small.en/medium/medium.en/large-v2/large-v3/large-v3-turbo), artifact_kind=directory, provisioning_allowed=False, LOCAL_ONLY_UNPINNED, Rollen final+realtime. Nur tiny (300) + small (200) Recovery-Prioritaet.",
+      "beleg": "stt_model_management.py:343-370,405",
+      "evidenz": "A",
+      "gueltigkeit": "Standardautoritaet",
+      "id": "M2-03"
+    },
+    {
+      "aussage": "Pro Manifest-Eintrag ein ProductModel engine=kroko_onnx: license_class, runtime_variant, revision (provenance), filename, sha256, bytes, rights_status, recovery_priority=100 nur kroko-de-community-64-l. Aktuell 4 Community + 8 Pro = 12 (gesamt 23).",
+      "beleg": "stt_model_management.py:371-405; models.json:28-213",
+      "evidenz": "A",
+      "gueltigkeit": "diese Installation",
+      "id": "M2-04"
+    },
+    {
+      "aussage": "schemaVersion 1, manifestRevision 1, upstream Banafo/Kroko-ASR d45212ae..., licensePolicy community POLICY_REQUIRED / pro PROHIBITED. Community: community-unresolved/POLICY_REQUIRED/free. Pro: commercial/PROHIBITED/pro/operator-provisioned.",
+      "beleg": "models.json:1-27,28-92,93-212",
+      "evidenz": "A (Schema/Asset)",
+      "gueltigkeit": "dieser Commit",
+      "id": "M2-05"
+    },
+    {
+      "aussage": "KrokoModelEntry verlangt id/filename/requiresRuntimeVariant/redistributionStatus (sonst KrokoModelError); redistributable nur bei ALLOWED. get(): ID -> exakter Dateiname -> case-insensitiv. load_manifest via importlib.resources (+Pfad-Fallback), wirft bei fehlend/unlesbar.",
+      "beleg": "models.py:118-256",
+      "evidenz": "A+B (model_authority)",
+      "gueltigkeit": "Manifest-Lesen, kein Netz/Native",
+      "id": "M2-06"
+    },
+    {
+      "aussage": "OperatorIntent.from_settings: stt_engine_settings (normalisiert), stt_model_settings, transcription/realtime_engine, auto_download, model/realtime_model. Legacy-Pfade (model_path/file/root/dir aus Engine-Options) + download_root in custom_paths angehaengt (ohne Duplikate). Kroko-Variante NUR installed_kroko_variant(), nie Key/Config. Credentials gesammelt (Redaction).",
+      "beleg": "stt_model_management.py:158-280; :46-51",
+      "evidenz": "A+B (:573-603 keine Fakten-Ueberschreibung; :623-631 Variante nur installiert)",
+      "gueltigkeit": "jede Intent-Bildung",
+      "id": "M2-07"
+    },
+    {
+      "aussage": "auto_download_scope feste Reihenfolge (global,engine,model); effective = OR. Defaults ALLE False (Server, engine-, model-Ebene).",
+      "beleg": "stt_model_management.py:258-269; Defaults server.py:503; CLI :10435-10451 (BooleanOptional, Default False)",
+      "evidenz": "A+B (:239-248 Matrix; :925-934 Defaults False)",
+      "gueltigkeit": "global/engine/model",
+      "id": "M2-08"
+    },
+    {
+      "aussage": "discovery_roots(engine) = custom_paths/paths (Reihenfolge), dann VOICESTT_FASTER_WHISPER_MODEL_ROOT bzw VOICSTT_KROKO_MODEL_ROOT, dann default_root. Duplikate behalten erste Position. default_root = <runtime_root>/models/stt/fasterwhisper|kroko_asr. runtime_root = data_root_path or data.",
+      "beleg": "stt_model_management.py:662-686; model_resolver.py:10-11; server.py:6295-6296",
+      "evidenz": "A+B (:102-122 Custom-vor-Default)",
+      "gueltigkeit": "beide Engines",
+      "id": "M2-09"
+    },
+    {
+      "aussage": "FW-Discovery: Wurzel + genau eine Ebene Unterordner. Gueltig: Ordner mit config.json+model.bin oder snapshots/-Unterordner (lexikographisch LETZTER gueltiger). Staging-Namen (./.part/.staging) uebersprungen. Dedupe aufgeloester Pfad (case-insensitiv). id = Produkt-ID bei Match, sonst friendly (models--Org--Name->Name).",
+      "beleg": "stt_model_management.py:408-488; gleiche Regel model_resolver.py:34-63",
+      "evidenz": "A+B (:124-146 Struktur; :148-160 Staging)",
+      "gueltigkeit": "faster_whisper",
+      "id": "M2-10"
+    },
+    {
+      "aussage": "Kroko-Discovery: Wurzel .data-Datei (source_root=Eltern) oder Ordner glob(*.data). Staging uebersprungen, Dedupe Pfad. Produktzuordnung NUR Dateiname (by_name lower); ohne Treffer product_id=None, id=Dateiname (unmanaged).",
+      "beleg": "stt_model_management.py:491-543",
+      "evidenz": "A+B (:163-175 Datei-Quelle; :177-198 unmanaged sichtbar/nicht available)",
+      "gueltigkeit": "kroko_onnx",
+      "id": "M2-11"
+    },
+    {
+      "aussage": "FW VALIDATED nur Struktur (config+model), sonst DISCOVERED+Befund. Kroko VALIDATED nur .data-Datei; bei bekanntem Produkt zusaetzlich Groessen-Gleichheit. KEIN SHA-256 bei Discovery/Validierung (nur Provisioner). Vorhanden+groessenrichtig+inhaltlich-falsch = VALIDATED (nur Load-Probe faengt).",
+      "beleg": "stt_model_management.py:476-488,528-543,613-625",
+      "evidenz": "A (Negativ: sha256/verify nur Provisioner)",
+      "gueltigkeit": "Discovery/Validierung (NICHT Provisionierung)",
+      "id": "M2-12"
+    },
+    {
+      "aussage": "provision(): Ineligible -> PermissionError (rightsStatus). Ziel = erster beschreibbarer Root (UUID-Schreibprobe). Pro Zielpfad Prozess-Lock (normcase). Existiert+verifiziert -> kein Reload. Sonst Temp .<name>.<uuid>.part im Ziel, Download urlopen (kein Cache, 1MiB-chunks), Quellen-Identitaet (source_identity/source), Groesse+SHA256, os.replace. finally Temp loeschen.",
+      "beleg": "stt_model_management.py:546-625; Aufruf :1253-1291",
+      "evidenz": "A+B (:505-516 falscher Inhalt/Redirect keine Reste; :518-529 Altinhalt intakt; :531-554 2 Threads 1 Fetch; :201-238 read-only->Runtime-Ziel)",
+      "gueltigkeit": "jede Provisionierung",
+      "id": "M2-13"
+    },
+    {
+      "aussage": "Snapshot-Bau: (1) Discovery+Validierung ALLER Produkte beider Engines (keine Probe), (2) je Rolle final/realtime konfigurierter Default pruefen -> Eligibility -> ggf provisionieren -> Probe, (3) generische Recovery nur Produkte MIT recovery_priority sortiert (priority,id) aufsteigend, nur fehlende Rollen; Stopp bei REQUIRED_ROLES gedeckt. Probe pro Pfad gecacht.",
+      "beleg": "stt_model_management.py:922-1031,1096-1115",
+      "evidenz": "A+B (:266-292 Default-vor-Prio, Gleichstand alphabetisch; :295-308 ohne Prio kein Fallback/Probe; :332-348 Stopp bei Minimum)",
+      "gueltigkeit": "jeder Snapshot",
+      "id": "M2-14"
+    },
+    {
+      "aussage": "refresh() unter Operations-Lock, _refresh_running; Kandidat publiziert NUR wenn minimum_ready ODER bisheriger nicht. Gescheiterter Kandidat nie teil-sichtbar; Diagnosen in lastRefreshDiagnostics. revision nur beim Bau. public_dict(): state ready_complete/ready_optional_provisioning/ready_optional_errors/not_ready + readiness/minimumReady/active/candidates/diagnostics.",
+      "beleg": "stt_model_management.py:905-920,305-340,1032-1079,835-837",
+      "evidenz": "A+B (:421-448 waehrend Refresh revision 0/candidates []/inProgress, danach minimumReady; :404-418 gescheitert = altes Objekt)",
+      "gueltigkeit": "Status/Aktivierungsentscheidung",
+      "id": "M2-15"
+    },
+    {
+      "aussage": "status() pro Kandidat eligible (seiteneffektfrei) + available = eligible UND state in VALIDATED/LOAD_VERIFIED; pro Autoritaet operatorEnabled (engine+model) + autoDownloadRequestedScopes; + refreshInProgress/lastRefreshDiagnostics. readiness_summary() PFADFREI (Revision/Zustand/Zaehler/Diagnose-Ergebnisse) fuer nicht-authentifizierte Liveness.",
+      "beleg": "stt_model_management.py:780-833,1220-1251; server.py:8901-8902 /health",
+      "evidenz": "A+B (:177-198,451-466)",
+      "gueltigkeit": "/api/models/management (admin) vs /health",
+      "id": "M2-16"
+    },
+    {
+      "aussage": "list_models(): id/object/engine/alias/name/folder/path/available/eligible/validationState/problems; available an VALIDATED/LOAD_VERIFIED+Eligibility. _tokens() normalisiert (lower,_->-,Basename, models--...-- weg, faster-whisper- weg); aliases_for()/resolve() Schnittmenge id/name/folder/path; resolve nur available.",
+      "beleg": "stt_model_management.py:1294-1372; Nutzung server.py:7975-8013,8130",
+      "evidenz": "A",
+      "gueltigkeit": "Namen (API/OpenAI/Switch)",
+      "id": "M2-17"
+    },
+    {
+      "aussage": "Service baut Manager (runtime_root=data_root_path or data, intent from_settings, load_probe, license_policy). VOR erstem refresh(): refresh_kroko_license_policy(background=False). _apply_stt_model_snapshot schreibt _resolved_stt_models={role:{id,engine,path}} NUR wenn minimum_ready sonst False. _resolved_stt_models aus public_dict entfernt.",
+      "beleg": "server.py:6295-6312,6363-6374,515-517,545-553",
+      "evidenz": "A+B (:816-922 Server bedienbar bei sttReady=false)",
+      "gueltigkeit": "Start + jede Aktivierung",
+      "id": "M2-18"
+    },
+    {
+      "aussage": "Probe: Kroko laufend+gesund+identisches Modell -> True (kein zweiter Native-Load), sonst Native-Preflight; dann Кlon-Settings (model=realtime_model=path des Kandidaten, use_main=True, _resolved beide Rollen), Probe-Scheduler + wait_ready(180.0) and healthy; immer gestoppt.",
+      "beleg": "server.py:6329-6361,6897-6958,2012-2030,2161-2178",
+      "evidenz": "A; Timeout 180 Code-Wert",
+      "gueltigkeit": "jede Pruefung; teuer, nur ernsthafte Kandidaten",
+      "id": "M2-19"
+    },
+    {
+      "aussage": "Fabriken lesen _resolved_stt_models[final|realtime]: model=resolved[path] (Fallback settings), engine=resolved[engine]; Options aus resolved_engine_options (Lane-Optionen passender Engine zuerst, dann andere Lane gleiche Engine, dann stt_engine_settings[engine].*/options).",
+      "beleg": "server.py:2206-2270,1276-1305",
+      "evidenz": "A",
+      "gueltigkeit": "beide Lanes",
+      "id": "M2-20"
+    },
+    {
+      "aussage": "Locked-Refresh: (1) Lizenz vor Admission, (2) alt merken (Snapshot/Intent/resolved), (3) candidate_intent from_settings, (4) quiesced_manager_refresh. Fehler -> Intent zurueck, restore_last_known_good, refresh_required=True, RuntimeError. Alter ready + Revision gleich -> gleicher Rollback-kein-MINIMUM_READY. Danach apply. Bei Model-Aenderung + busy -> VOLLER Rollback + Fehler (nicht aktiviert). Sonst alt stop, neu start+wait_ready+healthy; Fehler -> Rollback-Scheduler (auch defekt: unloaded + Fehler).",
+      "beleg": "server.py:7065-7179",
+      "evidenz": "A+B (:740-793 Intent erst nach ready, LKG+Redaction; pr15 :640-670 busy kein Pro-Load, LKG, pending)",
+      "gueltigkeit": "Refresh/Provider-Recheck/Force-Reconcile/Settings-Refresh",
+      "id": "M2-21"
+    },
+    {
+      "aussage": "Quiesced: Konflikte merken; concurrent_native_identity + NICHT beschaeftigt -> einmal unload(reason=kroko_model_transition) + refresh erneut; beschaeftigt -> RuntimeError (aktive Sessions/Transkriptionen).",
+      "beleg": "server.py:6960-6984; Guard-Codes 46-52",
+      "evidenz": "A+B (pr15 :695-721 anderer Pro abgelehnt; gleicher nach Unload ladbar, Peak 1)",
+      "gueltigkeit": "nur kroko_onnx",
+      "id": "M2-22"
+    },
+    {
+      "aussage": "switch akzeptiert nur model/realtime_model/transcription_engine/realtime_transcription_engine/use_main_model_for_realtime/language/options; sonst ValueError. Modell/Engine-Aenderung ohne use_main -> False erzwungen. enforce_cpu_model_policy, _kroko_assert_switch_possible, Lizenz-Reeval, quiesced_refresh, Gate minimum_ready, registry.resolve (sonst nicht-lokal ValueError). Gesperrt NUR bei loading. Ohne Scheduler nur uebernehmen+persistieren (reloaded=False); sonst alt stop/neu start/wait_ready; Fehler -> Rollback (alles) + Rollback-Scheduler. Erfolg: audit models.switched, Perf-Event, persist.",
+      "beleg": "server.py:8042-8249,9094-9113",
+      "evidenz": "A+B (pr15 :695-709 anderes Pro abgelehnt, Instanz/Settings unveraendert)",
+      "gueltigkeit": "Operator-API",
+      "id": "M2-23"
+    },
+    {
+      "aussage": "Zustaende nur _model_state: Start loaded (Scheduler existiert), ensure lazy (eine Laderin via _model_condition; Timeout-Param), Erfolg loaded, Fehler unloaded+error, Shutdown waehrend Laden stopped. unload verweigert bei loading + busy (Sprecher/Pendings), setzt unloading, scheduler.stop(), Fehler -> loaded, sonst unloaded + gc.collect(); unbeteiligt changed=False. Status: state/loaded/error/lastActivity/idle/automatic/idleTimeout/remaining/memoryPolicy/allowTwo/maxEquivalent/active.",
+      "beleg": "server.py:6308,7393-7573,7599-7621, alle Uebergaenge 7411-7565,7168",
+      "evidenz": "A+B (openai :382-406 Unload+Lazy-Reload; :454-498 Health waehrend loading)",
+      "gueltigkeit": "alle Engines (ein Scheduler)",
+      "id": "M2-24"
+    },
+    {
+      "aussage": "Idle-Daemon ab start(). Intervall min(30, max(0.1, timeout/4)); Timeout max(0.1, model_idle_timeout_seconds). Deaktiviert/unjuengst -> nichts. Sonst unload(reason=idle_timeout); RuntimeError (beschaeftigt) verschluckt (=Verschiebung), andere geloggt. Defaults enabled True, timeout 3600.0 (Env VOICESTT_MODEL_IDLE_TIMEOUT_SECONDS/_UNLOAD).",
+      "beleg": "server.py:7623-7639,7297-7302,498-500,10497-10507",
+      "evidenz": "A+B (openai :434-451 Timeout 0.2 -> unloaded, Health ok; :409-431 Konfig via API)",
+      "gueltigkeit": "prozessweit, ein Zeitgeber alle Lanes",
+      "id": "M2-25"
+    },
+    {
+      "aussage": "model_warmup (Default True) steuert _warmup(): nach Erzeugung warmup_audio.wav float32 lesen + engine.warmup(audio); Exception nur Debug (Uebersprungen). Laueft im Worker vor ready.",
+      "beleg": "server.py:2101-2108,2023,141-146,498; base.py:125",
+      "evidenz": "A",
+      "gueltigkeit": "jede Instanz (auch Probe)",
+      "id": "M2-26"
+    },
+    {
+      "aussage": "model_size_rank(): kroko 2, large-v3-turbo 3, large 4, medium 3, small 2, base|tiny 1, sonst None. enforce: device cpu, Engine-Check, use_main=True bei gleicher Engine+gleichem Modell; wenn memory_policy aus -> keine Pruefung; sonst Ablehnung bei max>3 ODER count(>=3)>Limit (2 bei allow_two_medium, sonst 1). None ueberspringt. Durchgesetzt Start/create_app, Switch, Lifecycle-PUT. KEINE rueckwirkende Entladung bei reiner Policy-Aenderung.",
+      "beleg": "server.py:8711-8741,8764-8801,8843,8074,9064-9067,7617-7619",
+      "evidenz": "A+B (openai :205-251: 2 Medium ok, large-v3-turbo-german ab, allow_two=False ab, Policy ok large-v3+large-v3)",
+      "gueltigkeit": "nur wenn nicht use_main",
+      "id": "M2-27"
+    },
+    {
+      "aussage": "Entitlement: Nicht-Kroko (True,not_kroko); ohne UUID (False,no_license_uuid); Force-Community (False,force_community); frischer modellgebundener VALID-Proof oder bestaetigter nativer Kontext (True,license_valid|native_license_context) wenn kein Restart-Konflikt; sonst reasonCode/policy_error. commercial verlangt exakt installierte Variante (pro); community(-unresolved) free ODER pro; andere Klassen strikt. Guard 4 Konflikte (2 restart-only). Revocation: neue Pro-Jobs bei Force-Community/entferntem Key verweigert, ohne Thread-Warten. Tier/UUID offline aus ersten 65536 Header-Bytes (id-UUID, free-Flag).",
+      "beleg": "server.py:6532-6579,6488-6530,6778-6864; stt_model_management.py:1117-1212,:37-40; native_guard.py:46-180; models.py:458-511; settings_control.py:93,591-608",
+      "evidenz": "A+B (stt :451-502 Key allein nicht eligible; pr15 :675-692 Rotation -> restartRequired, kein Grant)",
+      "gueltigkeit": "nur kroko commercial (Lizenzfrage)",
+      "id": "M2-28"
+    },
+    {
+      "aussage": "restore_last_known_good(snapshot, message): nur ModelSnapshot; Lizenzfilter (live Policy) entfernt Rollen, setzt readiness MINIMUM_READY/NOT_READY + Diagnose eligibility/kroko_license_lkg_filtered/dropped. Ohne policy unveraendert.",
+      "beleg": "stt_model_management.py:839-903",
+      "evidenz": "A+B (:404-418 gescheitert behält LKG; :767-793 LKG+Redaction)",
+      "gueltigkeit": "jeder Fehlschlag",
+      "id": "M2-29"
+    },
+    {
+      "aussage": "Admin: GET /api/models (Katalog ohne path, +active/lifecycle/management), GET management, POST refresh, POST /api/kroko/license/refresh (Timeout (0,60] Default 5.0; bei Pro zusätzlich refresh_stt_models), GET/PUT lifecycle (nur automaticUnloadEnabled/idleTimeoutSeconds>=1/memoryPolicyEnabled/allowTwoMediumModels + Snake-Aliase), POST load/unload (409 bei RuntimeError), GET/PUT active. Ohne Guard: /health sttReady+sttModels aus pfadfreier readiness_summary. PATCH /api/config (auto_download/engine/model-Einstellungen) nur appliesTo=model_refresh + required=True - KEIN Auto-Refresh/Provisionierungslauf.",
+      "beleg": "server.py:287-291,7879-7894,8899-8902,8943-9113,8979-9027; Test :816-922",
+      "evidenz": "A+B",
+      "gueltigkeit": "HTTP-Betriebsflaeche",
+      "id": "M2-30"
+    },
+    {
+      "aussage": "Engine: resolve_faster_whisper_model sucht Pfad/Snapshot, model_root, Env, download_root Aliase+Glob, sonst TranscriptionEngineError (kein Download). Kroko resolve sucht path/file, model_root/dir+ENV+download, genau-eine-.data; sonst Fehler. urlopen/hf_hub_download in Engines NICHT vorhanden; Env/auto_download in Engine-Options umgehen Provisioner nicht.",
+      "beleg": "model_resolver.py:66-155; factory.py:16-47; Tests :937-952, :368-412",
+      "evidenz": "A+B",
+      "gueltigkeit": "beide Engines",
+      "id": "M2-31"
+    }
+  ],
+  "investigated_sources": [
+    "stt_model_management.py (Authority/Intent/Discovery/Provisionierung/Recovery/Registry-Sicht)",
+    "kroko/models.py + assets/kroko/models.json (Manifest/Schema/Lookup)",
+    "kroko/native_guard.py (Konflikte)",
+    "kroko_runtime.py (Lane/Identitaet)",
+    "model_resolver.py + factory.py (lokale Aufloesung, kein Download)",
+    "server.py (Verdrahtung/Probe/Scheduler/Refresh/Switch/Lebenszyklus/Limits/Lizenz/Routen)",
+    "Tests (stt_model_management, openai_compatible_endpoint, pr15_final_correction, kroko_onnx_engine, kroko_model_authority)",
+    "settings_control.py (Kroko-Settings-Key), protocol_v2/identity.py (Variantenherkunft)"
+  ],
+  "not_implemented": [
+    {
+      "id": "N-01",
+      "thema": "Kein eigener Download-/Provisionierungs-Endpunkt (nur Nebeneffekt von refresh/switch bei Auto-Download)"
+    },
+    {
+      "id": "N-02",
+      "thema": "Kein ausgeliefertes Kroko-Produkt provisionierbar (alle 12 Manifest: POLICY_REQUIRED 4x / PROHIBITED 8x -> blocked_ineligible)"
+    },
+    {
+      "id": "N-03",
+      "thema": "Faster-Whisper nie provisionierbar (directory, False); lokal vorhanden noetig"
+    },
+    {
+      "id": "N-04",
+      "thema": "Kein Hash beim Discovery/Validieren (nur Groesse bei Kroko)"
+    },
+    {
+      "id": "N-05",
+      "thema": "VOICESTT_KROKO_ALLOW_MODEL_DOWNLOAD + VERIFY_HASH im Managerpfad ungenutzt (nur Report/Fehlertext)"
+    },
+    {
+      "id": "N-06",
+      "thema": "Kein Dateisystem-Rollback bei Provisionierungsfehler (Temp geloescht, Alt bleibt)"
+    },
+    {
+      "id": "N-07",
+      "thema": "switch_models prueft NICHT _models_busy (nur loading); Refresh-Pfad blockiert bei aktiv (unterschiedliche Semantik)"
+    },
+    {
+      "id": "N-08",
+      "thema": "Branch feat/v2-release-cleanup UNKNOWN (kein Git-Ref; nur SHA)"
+    },
+    {
+      "id": "N-09",
+      "thema": "Inhaltliche Richtigkeit: nur Load-Probe entscheidet (kein Hash-Nachweis)"
+    },
+    {
+      "id": "N-10",
+      "thema": "Zweite .data im Ordner bei fehlender Config: Engine-Fallback vs Manager (nur Fehlerfall-Divergenz)"
+    }
+  ],
+  "researcher_session": "ses_e46739e9bffeNEWT5HDJVcgWCe",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src"
+}

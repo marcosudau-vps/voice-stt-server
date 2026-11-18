@@ -1,0 +1,290 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup NICHT unabhängig bestätigt: .git/refs/heads ist leer und .git/packed-refs existiert nicht. Die Branch-Angabe stammt nur aus dem Auftrag; verifiziert ist ausschließlich der Commit-Hash über .git/HEAD.",
+  "chapter": "03.02",
+  "commit_verification": "Verifiziert: C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src\\.git\\HEAD enthält direkt den Hash a8993c5c68042d996eab680d84a5b138a214bb5d (detached HEAD). Alle Belege stammen ausschließlich aus *.py (Produktionscode und Tests) dieses Baums.",
+  "correction_round": 0,
+  "diagram_edges": [
+    "Registry --> SessionScopeKeys (16) [S-00a, S-02]",
+    "Registry --> ServerScopeKeys (3) [S-00b, S-02]",
+    "Registry --> SchemaEndpoint (GET /api/v2/settings/schema) [S-03]",
+    "AdminHTTP --> ServerSettingsState (PATCH /api/v2/settings/server) [S-05]",
+    "ServerSettingsState --> runtime.json (settingsControlOverlay + settingsRevision) [S-10]",
+    "ServerSettingsState --> NewSession (seed at admission) [S-09]",
+    "RegistryDefaults --> ServerSettingsState [S-21]",
+    "WS session_settings.patch --> SettingsPort --> SessionSettingsState [S-14]",
+    "SessionSettingsState --> Snapshot (own settingsRevision ab 0) [S-11]",
+    "SessionSettingsState --> requestedSettings/effectiveSettings (Filter scope==session) [S-13]",
+    "SessionPatch --> NextActivationLatch (apply_policy=next_activation) [S-18]",
+    "SessionPatch --> RequestedOnly (apply_policy=next_session) [S-19]",
+    "NextActivationLatch --> RunningActivation (freeze bei Aktivierungsstart) [S-18]",
+    "RequestedOnly --> Effective (neue Session) [S-19]",
+    "ServerScopeKeys --> WakeAdmission (read at admission) [S-17]",
+    "ServerSettingsState[globalDisabledIds] --> Catalog.available_ids [S-16]",
+    "Catalog.available_ids --> SessionSelectionValidation [S-16]",
+    "trigger_suppression.set --> ActivationController --> Snapshot [S-15]",
+    "ServerPatch[forceCommunity|globalDisabledIds] --> SideEffectHooks [S-27]",
+    "CloseConnection --> SessionDestroyed [S-20]",
+    "NewHello --> NewSession[revision=0] [S-20]",
+    "NEGATIV: SessionPatch --x--> ServerScopeKey (wrong_scope) [S-07]",
+    "NEGATIV: ServerPatch --x--> SessionOnlyKey (wrong_scope) [S-06]",
+    "NEGATIV: ServerSettingsState -.-> ExistingSession (keine Propagation) [S-09]",
+    "NEGATIV: SessionPatch -.-> RunningActivation (keine Wirkung) [S-18]",
+    "NEGATIV: SessionPatch --x--> runtimeSuppression.* (read_only_runtime_authority) [S-15]",
+    "NEGATIV: ForeignSessionId --x--> SessionState (stale_session) [S-12]",
+    "NEGATIV: SessionSettings -.-> runtime.json (nicht persistiert) [S-10]",
+    "NEGATIV: client_local -.-> Registry (kein Key) [S-01]",
+    "NEGATIV: ServerPatch -.-> SessionEventStream (kein settings.changed) [S-27]",
+    "RANDKNOTEN (kein Scope): Config --> resolved_engine_options --> Lane [S-23]",
+    "RANDKNOTEN (kein Scope): HTTPRequest --> RequestOptions --> Job [S-24]",
+    "RANDKNOTEN: Admin --> PATCH /api/config --> LegacyServerSettings [S-25]"
+  ],
+  "facts": [
+    {
+      "aussage": "Registry-Inventar Session-Scope: 16 Keys in builtin_definitions (Z. 278-609): 11 activation/wakeWord-Keys mit has_server_default=true, writable=true, apply_policy=next_activation; wakeWord.selection (kein Serverdefault, next_session); wakeWord.noiseSuppressionEnabled, wakeWord.vadThreshold (Serverdefault, next_session); runtimeSuppression.manual/.wakeWord (kein Serverdefault, writable=false, live).",
+      "beleg": "api_fastapi_server/settings_control.py:builtin_definitions Z. 278-609; SettingDefinition Z. 188-198; Assertions tests/unit/test_settings_control_plane.py:52-104",
+      "evidenz": "A",
+      "gueltigkeit": "Registry-Lebensdauer; pro Key fest verdrahtet, kein dynamischer Scope",
+      "id": "S-00a"
+    },
+    {
+      "aussage": "Registry-Inventar Server-Scope: 3 Keys, alle has_server_default=true, auth=admin: wakeWord.inferenceBackend (next_session), wakeWord.globalDisabledIds (next_session), kroko.forceCommunity (live, bool). Gesamt: 19 Keys, 16 Serverdefault-Facetten, 0 Keys mit APPLY_SERVER_RESTART.",
+      "beleg": "api_fastapi_server/settings_control.py Z. 558-608 (Definitionen), Z. 640-644 (server_default_keys), Z. 57 (APPLY_POLICIES); tests/unit/test_settings_control_plane.py:90-96, 395-400",
+      "evidenz": "A",
+      "gueltigkeit": "Registry-Lebensdauer; Server-Oberfläche und Server-Patch",
+      "id": "S-00b"
+    },
+    {
+      "aussage": "Der Code kennt genau drei Scope-Werte: session, server, client_local. SCOPE_CLIENT_LOCAL wird nirgends sonst referenziert; kein Registry-Key trägt diesen Scope.",
+      "beleg": "api_fastapi_server/settings_control.py: Modulkonstanten Z. 38-40; Volltextsuche über api_fastapi_server und VoiceSTT*: genau 1 Treffer (die Definition)",
+      "evidenz": "B",
+      "gueltigkeit": "gesamter Settings-Control-Plane",
+      "id": "S-01"
+    },
+    {
+      "aussage": "Implementierter Scope-Raum ist ausschließlich Session und Server: 16 Keys SCOPE_SESSION, 3 Keys SCOPE_SERVER. Kein lane-, engine-, segment-, tenant- oder connection-Scope; Scope ist pro Key statisch verdrahtet.",
+      "beleg": "api_fastapi_server/settings_control.py:builtin_definitions Z. 278-609; session_keys Z. 634-638, server_default_keys Z. 640-644; tests/unit/test_settings_control_plane.py:52-104",
+      "evidenz": "A",
+      "gueltigkeit": "Registry-Lebensdauer",
+      "id": "S-02"
+    },
+    {
+      "aussage": "Scope ist veröffentlichtes Metadatum jeder Definition: GET /api/v2/settings/schema liefert je Key key, scope, auth, type, constraints, defaultValue, applyPolicy (nach Key sortiert, ohne Secrets).",
+      "beleg": "api_fastapi_server/settings_control.py:SettingDefinition.to_schema_dict Z. 200-212, schema_payload Z. 663-669; server.py:settings_schema_v2 Z. 9223-9233; tests/unit/test_protocol_v2_settings.py:777-814",
+      "evidenz": "A",
+      "gueltigkeit": "öffentliche schreibfreie Lesefläche",
+      "id": "S-03"
+    },
+    {
+      "aussage": "scope ist nicht gleich Serverdefault-Facette: has_server_default ist ein zweites, unabhängiges Merkmal. 13 der 16 session-Keys besitzen einen admin-verwalteten Serverdefault; die Server-Schreibfläche wird über has_server_default entschieden, nicht über scope=server.",
+      "beleg": "api_fastapi_server/settings_control.py:has_server_default Z. 196-198, server_default_keys Z. 640-644, patch_server Z. 1297-1308; tests/unit/test_settings_control_plane.py:395-400, 422-433",
+      "evidenz": "A",
+      "gueltigkeit": "Server-Oberfläche und Server-Patch",
+      "id": "S-04"
+    },
+    {
+      "aussage": "Server-Schreibfläche ist ausschließlich Admin-HTTP mit eigenem Revisionsstrom: PATCH /api/v2/settings/server verlangt Admin-Auth (401 ohne/falschen Key), liefert 409 bei stale Revision, 422 bei settings_rejected, 500 bei Persistenzfehler. Schema- und Server-Read sind ohne Key lesbar.",
+      "beleg": "server.py:patch_settings_server_v2 Z. 9244-9292, admin_auth_error Z. 8918-8919; settings_control.py:ServerSettingsState Z. 1171-1405; tests/unit/test_protocol_v2_settings.py:827-893",
+      "evidenz": "A",
+      "gueltigkeit": "serverweit, eigener settingsRevision-Zähler",
+      "id": "S-05"
+    },
+    {
+      "aussage": "Ein Server-Patch auf einen session-only Key ohne Serverdefault (z. B. wakeWord.selection) wird atomar mit wrong_scope abgelehnt (HTTP 422).",
+      "beleg": "settings_control.py:ServerSettingsState.patch_server Z. 1297-1308, CODE_WRONG_SCOPE Z. 158; tests/unit/test_settings_control_plane.py:395-400; tests/unit/test_protocol_v2_settings.py:912-922",
+      "evidenz": "A",
+      "gueltigkeit": "Server-Schreibfläche",
+      "id": "S-06"
+    },
+    {
+      "aussage": "Ein Session-Patch auf einen Server-Scope-Key (inferenceBackend, globalDisabledIds, forceCommunity) wird mit wrong_scope abgelehnt; die Prüfung greift vor Typ- und Wertevalidierung (harte Schranke).",
+      "beleg": "settings_control.py:SessionSettingsState.apply_patch Z. 971-987; tests/unit/test_settings_control_plane.py:209-213",
+      "evidenz": "A",
+      "gueltigkeit": "pro Session/Verbindung",
+      "id": "S-07"
+    },
+    {
+      "aussage": "Für Session-Scope-Keys mit Serverdefault ist der Serverdefault nur Startwert: ein bestätigter Session-Patch setzt requested und effective der Session lokal und erhöht die Session-Revision; der Serverdefault bleibt unverändert (kein Rückfluss).",
+      "beleg": "settings_control.py:SessionSettingsState.__init__ Z. 899-913, apply_patch Z. 1060-1078",
+      "evidenz": "B",
+      "gueltigkeit": "pro Session",
+      "id": "S-08"
+    },
+    {
+      "aussage": "Der Serverdefault-Overlay wird bei der Session-Erzeugung einmalig kopiert. Ein späterer Server-Patch verändert weder requested noch effective einer laufenden Session; nur neue Admissions erben den neuen Default.",
+      "beleg": "server.py:_build_settings_state Z. 3173-3196, Aufruf Z. 2373-2376; settings_control.py:server_effective Z. 1255-1258; tests/unit/test_settings_control_plane.py:347-361",
+      "evidenz": "A",
+      "gueltigkeit": "pro Session ab Admission",
+      "id": "S-09"
+    },
+    {
+      "aussage": "Persistiert wird ausschließlich settingsControlOverlay plus settingsRevision im einen Runtime-JSON (atomarer Read-Modify-Write unter Modul-Lock). Session-Settings haben keinen Schreibpfad auf Platte.",
+      "beleg": "settings_control.py:apply_patch Docstring Z. 938-942, persist Z. 1199; server.py:_persist_settings_control Z. 7971-7973; operations.py:save_settings_control Z. 451-469, load_control Z. 471-516; tests/unit/test_settings_runtime_persistence.py:26-72",
+      "evidenz": "A",
+      "gueltigkeit": "Serverneustart bzw. Datei-Lebensdauer",
+      "id": "S-10"
+    },
+    {
+      "aussage": "Zwei getrennte Revisionsräume: jede Session beginnt bei settingsRevision 0 und zählt pro bestätigtem Patch monoton; der Server führt einen unabhängigen Zähler. session.snapshot veröffentlicht nur die Session-Revision, die Server-Revision nur GET /api/v2/settings/server.",
+      "beleg": "settings_control.py:settings_revision Z. 915-918 (Start 0 Z. 891/896), Z. 1242-1245; ports.py:SettingsPort.revision Z. 50-53; session.py:ProtocolSessionState Z. 32-49; snapshot.py Z. 68; tests/unit/test_settings_control_plane.py:338-345",
+      "evidenz": "A",
+      "gueltigkeit": "pro Session bzw. pro Server",
+      "id": "S-11"
+    },
+    {
+      "aussage": "Wire-Isolation: session_settings.patch ist an die eigene Verbindungssession gebunden. Fremde, formal gültige sessionId führt zu RESULT_STALE_SESSION ohne Wirkung. Session A kann Session B weder patchen noch lesen.",
+      "beleg": "commands.py:parse_command Z. 120-126; connection.py:_apply_settings_patch Z. 505-521, Port-Bindung Z. 311, close_session Z. 200-214; tests/unit/test_protocol_v2_e2e.py:630-649",
+      "evidenz": "A",
+      "gueltigkeit": "pro WebSocket-Verbindung/Session",
+      "id": "S-12"
+    },
+    {
+      "aussage": "Session-Projektion filtert strikt auf scope=session: requestedSettings, effectiveSettings und settingsRevision im Snapshot enthalten nur die 16 Session-Keys. Die drei Server-Scope-Werte erscheinen dort nicht.",
+      "beleg": "settings_control.py:settings_projection Z. 1153-1166, activation_admission_settings Z. 1128-1143; snapshot.py:build_snapshot Z. 55-78",
+      "evidenz": "B",
+      "gueltigkeit": "Snapshot und Events jeder v2-Session",
+      "id": "S-13"
+    },
+    {
+      "aussage": "Einziger Schreibpfad für Session-Settings ist das WS-Kommando session_settings.patch über SettingsPort. Keine REST-Route, kein Admin-Endpunkt für Session-Settings. Envelope verlangt baseSettingsRevision (nicht-negative int) und nicht-leeres changes-Objekt.",
+      "beleg": "connection.py Handler-Map Z. 362-369, _apply_settings_patch Z. 505-521; commands.py:_validate_session_settings_patch Z. 183-189; server.py: nur drei /api/v2/settings*-Routen Z. 9223, 9235, 9244",
+      "evidenz": "B",
+      "gueltigkeit": "v2-Wire",
+      "id": "S-14"
+    },
+    {
+      "aussage": "runtimeSuppression.manual/.wakeWord sind read-only Registry-Metadaten (writable=false); jeder Patch wird mit read_only_runtime_authority abgelehnt. Der veröffentlichte Wert wird live aus dem ActivationController gelesen; die Registry führt nur den Default.",
+      "beleg": "settings_control.py Definitionen Z. 396-423, Ablehnung Z. 988-1000; server.py:_suppression_live Z. 3282-3300; tests/unit/test_settings_control_plane.py:215-219",
+      "evidenz": "A",
+      "gueltigkeit": "live, pro Session",
+      "id": "S-15"
+    },
+    {
+      "aussage": "Globale Schranke: ein serverweit deaktiviertes Wake Word ist für jede Session nicht verfügbar; eine Session-Auswahl, die es enthält, wird abgelehnt. Der Katalog bleibt Verfügbarkeitsautorität, das Settings-Overlay liefert nur die Liste.",
+      "beleg": "server.py:_validate_wake_selection_key Z. 3198-3259, Verdrahtung Z. 9281-9286, _configured_global_disabled_wake_words Z. 7183-7197; wakeword_catalog.py:with_global_disabled Z. 726-763; tests/unit/test_wakeword_catalog.py:188-193",
+      "evidenz": "A",
+      "gueltigkeit": "serverweit, wirkt auf neue Sessions/Admissions",
+      "id": "S-16"
+    },
+    {
+      "aussage": "Server-Scope-Werte werden pro Admission direkt am Server gelesen, nicht aus der Session: inferenceBackend und globalDisabledIds stammen aus server_effective(). Die Session führt sie nur als Kopie.",
+      "beleg": "server.py:wake_word_inference_backend Z. 7199-7212, _configured_global_disabled_wake_words Z. 7183-7197; ports.py:WakeWordPort.resolve_selection Z. 119 ff.",
+      "evidenz": "B",
+      "gueltigkeit": "pro Admission",
+      "id": "S-17"
+    },
+    {
+      "aussage": "Zusätzliche Gültigkeitsgrenze ist die laufende Aktivierung (kein Registry-Scope): beim Aktivierungsstart wird der next_activation-Satz eingefroren; ein späterer Session-Patch ändert weder Latch noch laufende Deadline. Während der Aktivierung zeigt effectiveSettings den gelatchten Wert.",
+      "beleg": "settings_control.py:freeze_activation Z. 1093-1109; server.py:_new_activation_inputs Z. 3350-3407, _latched_wire_effective Z. 3265-3280; activation.py:_snapshot_locked Z. 403-424; tests/unit/test_protocol_v2_settings.py:628-695, 1148-1164",
+      "evidenz": "A",
+      "gueltigkeit": "pro Aktivierung",
+      "id": "S-18"
+    },
+    {
+      "aussage": "apply_policy=next_session wirkt erst in einer neuen Session: selection, noiseSuppressionEnabled und vadThreshold erscheinen nach dem Patch als neuer requestedValue, der effectiveValue der laufenden Session bleibt.",
+      "beleg": "settings_control.py:apply_patch Z. 1069-1072; tests/unit/test_protocol_v2_settings.py:1182-1200; tests/unit/test_settings_control_plane.py:244-251",
+      "evidenz": "A",
+      "gueltigkeit": "pro Session",
+      "id": "S-19"
+    },
+    {
+      "aussage": "Neue Verbindung bedeutet neue Session: neue sessionId, settingsRevision 0, kein Transfer von Session-Patches. hello/requestedSession trägt nur Trigger-Flags, wakeWordIds und runtimeSuppression.",
+      "beleg": "connection.py:_admit Z. 257-282, _activate_session Z. 307-316, close_session Z. 200-214; handshake.py:parse_hello Z. 118-177; server.py:_build_settings_state Z. 3186-3190",
+      "evidenz": "B",
+      "gueltigkeit": "pro Verbindung",
+      "id": "S-20"
+    },
+    {
+      "aussage": "Startwerte der Serverdefaults sind ausschließlich Registry-Defaults plus persistierter Overlay. Kein Codepfad seedet ServerSettings-/config.yaml-Felder in die Registry-Defaults.",
+      "beleg": "server.py:VoiceSTTService.__init__ Z. 6283-6294; settings_control.py:ServerSettingsState.__init__ Z. 1222-1239",
+      "evidenz": "B",
+      "gueltigkeit": "Serverstart",
+      "id": "S-21"
+    },
+    {
+      "aussage": "Der server_restart-Pfad ist implementiert, aber mit der eingebauten Registry ungenutzt: kein SettingDefinition trägt apply_policy=APPLY_SERVER_RESTART, daher kann requiresRestart nie true werden.",
+      "beleg": "settings_control.py:APPLY_SERVER_RESTART Z. 54/57, requires_restart Z. 1389-1404; Negativsuche in builtin_definitions",
+      "evidenz": "B",
+      "gueltigkeit": "Server-Patch",
+      "id": "S-22"
+    },
+    {
+      "aussage": "Lane-/Engine-Optionen sind Konfigurationsauflösung, kein Settings-Scope: Optionen werden pro Lane aus statischer Serverkonfiguration aufgelöst und sind nicht Teil der Registry; eine Änderung ist keine session_settings.patch-Operation.",
+      "beleg": "server.py:resolved_engine_options Z. 1276-1305",
+      "evidenz": "B",
+      "gueltigkeit": "pro Modellauflösung/Lane",
+      "id": "S-23"
+    },
+    {
+      "aussage": "OpenAI-kompatible Request-Optionen sind flüchtig und kein Scope: prompt, temperature, threshold und timestamp_granularities gelten nur für den einen Transkriptionsauftrag, werden nicht gespeichert und berühren Session-/Server-Settings nicht.",
+      "beleg": "openai_routes.py Z. 204-209, Z. 339-347, Z. 474; server.py Z. 2045-2050; faster_whisper_engine.py:transcribe_with_options Z. 85-105",
+      "evidenz": "B",
+      "gueltigkeit": "pro HTTP-Request",
+      "id": "S-24"
+    },
+    {
+      "aussage": "Neben dem Registry-Overlay existiert eine zweite, ältere serverweite Schreibfläche mit eigener Klassifikation (ACTIVE/NEW_SESSION/STARTUP_ONLY), Allowlist und PATCH /api/config. Registry-Scopes beschreiben nur die 19 Registry-Keys.",
+      "beleg": "server.py:ACTIVE_RUNTIME_SETTINGS Z. 178-221, NEW_SESSION_RUNTIME_SETTINGS Z. 223-254, STARTUP_ONLY_SETTINGS Z. 256 ff., update_settings Z. 7826-7860, Route PATCH /api/config Z. 8921-8937",
+      "evidenz": "B",
+      "gueltigkeit": "serverweit, Legacy-Pfad",
+      "id": "S-25"
+    },
+    {
+      "aussage": "Das Feld auth ist reines Metadatum: der Registry-Code prüft auth nie. Durchgesetzt wird der Zugriff an der Oberfläche (Session-Bindung bzw. Admin-Auth). Ein Session-Token im Kommando existiert nicht.",
+      "beleg": "settings_control.py AUTH_SESSION/AUTH_ADMIN Z. 42-43, Ausgabe nur Z. 204 und Z. 1422/1431; commands.py Z. 120-126; server.py:admin_auth_error Z. 9246",
+      "evidenz": "B",
+      "gueltigkeit": "alle Schreibflächen",
+      "id": "S-26"
+    },
+    {
+      "aussage": "Ein bestätigter Server-Patch erzeugt kein settings.changed und wird laufenden Sessions nicht als Event zugestellt; nur HTTP-Antwort plus zwei Hooks (forceCommunity, globalDisabledIds). settings.changed wird ausschließlich sessionseitig emittiert und trägt hart kodiert scope=session.",
+      "beleg": "settings_control.py:patch_server Z. 1394-1405; server.py:patch_settings_server_v2 Z. 9264-9292, _on_wake_word_catalog_changed Z. 7214-7242; connection.py:_emit_settings_changed Z. 544-582 (scope-Feld Z. 574); tests/unit/test_protocol_v2_settings.py:137-149",
+      "evidenz": "B",
+      "gueltigkeit": "Server-Patch gegenüber Session-Eventstrom",
+      "id": "S-27"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-1",
+      "thema": "Scope client_local: SCOPE_CLIENT_LOCAL ist als Konstante deklariert, aber kein Registry-Key trägt ihn und es gibt keine weitere Verwendung im Produktionscode. Nicht als Feature dokumentieren. [S-01]"
+    },
+    {
+      "id": "N-2",
+      "thema": "Lane-, Engine-, Segment-, Tenant- oder Connection-Scope in der Settings-Registry existieren nicht; Lane-/Engine-Optionen sind reine Konfigurationsauflösung. [S-02, S-23]"
+    },
+    {
+      "id": "N-3",
+      "thema": "apply_policy=server_restart ist ohne eingebauten Key; der requiresRestart-Codepfad ist vorhanden, aber ungenutzt. [S-22]"
+    },
+    {
+      "id": "N-4",
+      "thema": "Testlücke (kein NOT_IMPLEMENTED im Produkt): kein dedizierter Zwei-Session-Test über /ws/v2 für A-patcht-B-bleibt. Isolation stützt sich auf Code plus stale_session-Test und Revisions-Unit-Test. [S-12, S-13]"
+    },
+    {
+      "id": "N-5",
+      "thema": "Testlücke: kein Test behauptet explizit die Abwesenheit der drei Server-Scope-Keys in requestedSettings/effectiveSettings. [S-13]"
+    },
+    {
+      "id": "N-6",
+      "thema": "Testlücke: kein Test für Serverdefault-Override lokal in der Session (nur aus dem Code abgeleitet). [S-08]"
+    }
+  ],
+  "researcher_session": "ses_e464026b0ffeI5QrQxwikvi57E",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-1",
+      "thema": "Ob ServerSettings-/config.yaml-Werte die Registry-Defaults indirekt speisen: im Repo kein Codepfad gefunden, außerhalb nicht abschließend prüfbar. Betrifft 03.06/03.07. [S-21]"
+    },
+    {
+      "id": "U-2",
+      "thema": "Ob ein Client nach einem Server-Patch die Serverwerte pollen muss: serverseitig kein Event (S-27); Client-Verhalten außerhalb des Repos. [S-27]"
+    },
+    {
+      "id": "U-3",
+      "thema": "Branch feat/v2-release-cleanup ist nicht verifizierbar: .git/refs/heads leer, kein packed-refs; verifiziert ist nur der Commit-Hash über .git/HEAD."
+    }
+  ],
+  "writer_notes": "Kernbotschaft: genau ZWEI genutzte Gültigkeitsbereiche (Session, Server) plus EINE deklarierte, aber unbenutzte Konstante (client_local) und ZWEI zusätzliche, nicht-Registry-Gültigkeitsgrenzen (laufende Aktivierung als Latch, pro HTTP-Request bei OpenAI-Optionen). scope und has_server_default sind zwei getrennte Achsen. Server umfasst zwei Ebenen: Registry-Server-Scope und Legacy-ServerSettings. Startwerte der Registry stammen aus Registry-Defaults, nicht aus config.yaml. auth ist Metadatum, keine Durchsetzung. client_local nicht als Feature darstellen. Abgrenzung: 02.01 Session-Identität, 02.07 Lane-Optionen (kein Scope), 02.08 Live-Limits (Legacy-Ebene), 03.01 Architektur-Ebenen, 03.06/03.07 Werte, 03.08 Runtime-Änderungen, 03.09 apply_policy-Wirksamkeit."
+}

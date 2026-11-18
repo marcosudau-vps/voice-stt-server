@@ -1,0 +1,242 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup im Checkout nicht als Ref verifizierbar; nur Commit bindend.",
+  "chapter": "05.05",
+  "commit_verification": ".git/HEAD Zeile 1 exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached); FETCH_HEAD derselbe SHA; shallow vorhanden; kein refs/heads.",
+  "conflicts": [
+    {
+      "id": "C-1",
+      "thema": "Überschneidung 05.01/05.04 nur vertiefen, nicht duplizieren."
+    },
+    {
+      "id": "C-2",
+      "thema": "scoped = ID-Bindung, nicht Lebensdauer."
+    },
+    {
+      "id": "C-3",
+      "thema": "Nicht kurzlebig: exakt 86400 s ab Ausgabe."
+    },
+    {
+      "id": "C-4",
+      "thema": "HTTP/WS asymmetrisch (Kommentar logs.py 84-85)."
+    },
+    {
+      "id": "C-5",
+      "thema": "Live-Flag kein Logschloss (WS 1008, HTTP unbeeinflusst)."
+    },
+    {
+      "id": "C-6",
+      "thema": "__not_authorized__ = SQL-Filter, 200/count-0, kein Fehler."
+    },
+    {
+      "id": "C-7",
+      "thema": "Admin-Key nur via admin-Header/Bearer, nicht via log-token-Header; WS direkt als accessToken."
+    },
+    {
+      "id": "C-8",
+      "thema": "Falscher erster Träger verdrängt gültigen zweiten (401 trotz gültigem Token)."
+    },
+    {
+      "id": "C-9",
+      "thema": "Bei expiresAt bereits ungültig (<=)."
+    },
+    {
+      "id": "C-10",
+      "thema": "Code liefert logAccess in hello.accepted (Berichte falsch)."
+    },
+    {
+      "id": "C-11",
+      "thema": "testclient im Produktions-Frozenset."
+    }
+  ],
+  "correction_round": 2,
+  "diagram_edges": [
+    "[LogTokenAuthority] --issue--> [token 64hex / expiresAt +24h]",
+    "[validate] --now>=expiresAt--> [None + gelöscht]",
+    "[issue] --prune--> [Store]; [validate] --len>1024--> [Sweep]",
+    "[token] --fremde session--> [None, Token bleibt]",
+    "[HTTP] --> [http_scope] --> {admin|loopback|session|401}",
+    "[WS] --> [live?/store?] --> [subscribe] --> [websocket_scope] --> 1008 oder Scope",
+    "[session-scope] --> Kanäle bzw __not_authorized__ --> 200/count-0",
+    "[hello/hello.accepted] --> [logAccess]; [available:false] --> [kein Token]",
+    "[Session-Ende] -keine Wirkung-> [Authority]",
+    "[live=false] --> [WS 1008], HTTP unbeeinflusst"
+  ],
+  "facts": [
+    {
+      "aussage": "Geprüft Commit a8993c5c; detached HEAD, flacher Klon, kein Branch-Ref.",
+      "beleg": ".git/HEAD Z.1; FETCH_HEAD; shallow; kein refs/heads",
+      "evidenz": "A",
+      "gueltigkeit": "ganzes Kapitel",
+      "id": "G5-01"
+    },
+    {
+      "aussage": "Authority prozessintern: Dict unter RLock, injizierbare clock, keine Persistenz; einmal je SecurityService/VoiceSTTService; Neustart löscht alle.",
+      "beleg": "security/logs.py Z.16-22; security/service.py Z.13-19; server.py Z.6249",
+      "evidenz": "A",
+      "gueltigkeit": "Lebenszyklus/Deployment",
+      "id": "G5-02"
+    },
+    {
+      "aussage": "Token uuid4hex+uuid4hex = 64 Hex; TTL 86400 s; expires_at = clock()+86400; expiresAt ISO-8601 UTC ms+Z; kein Bezug Restlaufzeit/Refresh.",
+      "beleg": "security/logs.py Z.9, 25-26, 38; server.py Z.1354-1359, 7801-7805; Tests 100-102",
+      "evidenz": "A+T",
+      "gueltigkeit": "Format/Dauer",
+      "id": "G5-03"
+    },
+    {
+      "aussage": "Gültig nur expiresAt > now; bei <= gelöscht + None; kein Sliding.",
+      "beleg": "security/logs.py Z.46-56; Tests 105-106",
+      "evidenz": "A+T",
+      "gueltigkeit": "Gültigkeitsgrenze",
+      "id": "G5-04"
+    },
+    {
+      "aussage": "issue prunt immer (O(n)); validate nur bei len>1024 (strikt); getroffener abgelaufener einzeln entfernt; keine harte Grenze/Background-Sweeper; Threshold ungetestet.",
+      "beleg": "security/logs.py Z.11-13, 28-37, 47-55; Tests 489-500 (nur 5 Tokens)",
+      "evidenz": "A/B",
+      "gueltigkeit": "Speicher/Last",
+      "id": "G5-05"
+    },
+    {
+      "aussage": "Record {sessionId, expiresAt}; validate None bei abweichender session, Eintrag bleibt; ohne session keine Bindungsprüfung; str-Lookup exakt, kein compare_digest; mehrere Tokens pro Session möglich.",
+      "beleg": "security/logs.py Z.34-45, 57-59; Tests 103-104",
+      "evidenz": "A+T",
+      "gueltigkeit": "Mandantentrennung",
+      "id": "G5-06"
+    },
+    {
+      "aussage": "HTTP-Scope fest: 1) Admin-Key (admin-Header oder Bearer, falscher erster verdrängt) -> admin+angefragt; 2) ohne Key + Loopback -> admin+angefragt; 3) Token (log-token-Header vor Bearer) -> admin false + Token-Session; 4) sonst None -> 401 ohne WWW-Authenticate. Admin-Key nicht via log-token-Header.",
+      "beleg": "security/logs.py Z.67-81; server.py Z.9453-9472; Tests 113-118, 1413-1423",
+      "evidenz": "A+T",
+      "gueltigkeit": "drei HTTP-Log-Routen",
+      "id": "G5-07"
+    },
+    {
+      "aussage": "Loopback nur HTTP + nur ohne Key (127.0.0.1/::1/localhost/testclient) -> implizit admin (gewinnt über Token); mit Key Loopback ohne Key/Token 401; testclient Testartefakt.",
+      "beleg": "security/logs.py Z.74-76; admin.py Z.8, 15-16; Tests 125-128, 110; 1413-1416",
+      "evidenz": "A+T",
+      "gueltigkeit": "HTTP-Logs/Deployment",
+      "id": "G5-08"
+    },
+    {
+      "aussage": "WS-Scope kein Loopback-Admin; nur Key-match (compare_digest) oder session-Token; None -> log.error not_authorized + 1008. Token nur aus erstem subscribe-Frame; Reihenfolge accept->live->store->Form->Auth; unautorisiert erfährt vorher live/Store.",
+      "beleg": "security/logs.py Z.83-93; server.py Z.9560-9602, 9825-9831; Tests 119-130, 1444-1451, 338-357",
+      "evidenz": "A+T",
+      "gueltigkeit": "/ws/logs",
+      "id": "G5-09"
+    },
+    {
+      "aussage": "HTTP-Kanäle Nicht-Admin genau {audit,performance,transcription}; Rest verworfen, leer -> __not_authorized__ -> 200 data:[]; ohne Filter alle drei; Admin beliebig inkl system.",
+      "beleg": "server.py Z.9478-9486, 9495-9509, 9527-9537; event_logging.py Z.642-675; Tests 2326-2337",
+      "evidenz": "A+T",
+      "gueltigkeit": "HTTP-Historie",
+      "id": "G5-10"
+    },
+    {
+      "aussage": "WS-Kanäle Mengen-Schnitt; leer bei angefragten -> __not_authorized__ -> hello/subscribed + replay count 0; ohne Feld alle drei; Admin unverändert, allChannels-Regel.",
+      "beleg": "server.py Z.9605-9616, 9626-9672; Tests 2339-2360, 1460-1467",
+      "evidenz": "A+T",
+      "gueltigkeit": "WS Live/Replay",
+      "id": "G5-11"
+    },
+    {
+      "aussage": "Ausgabe nur Bootstrap (v1-hello, v2-hello.accepted); available = live AND store; false -> code + kein Token; true -> Token+expiresAt + statische Pfade/Version/Cursor; nicht in Resync; store_status kann degraded setzen.",
+      "beleg": "server.py Z.7772-7806, 10001-10013; connection.py Z.330-343, 781-797; event_logging.py Z.1268-1288; Tests 289-324",
+      "evidenz": "A+T",
+      "gueltigkeit": "beide Bootstrap-Pfade",
+      "id": "G5-12"
+    },
+    {
+      "aussage": "Kein Widerruf/Rotation/Refresh; Session-Ende fasst Map nicht an; Token bis Ablauf/ Sweep gültig; neues hello zusätzlich ohne Altes zu entwerten.",
+      "beleg": "security/logs.py Z.16-59; server.py Z.7372-7375, 1706; Negativsuche revoke/invalidate",
+      "evidenz": "A/B",
+      "gueltigkeit": "nach Session-Ende",
+      "id": "G5-13"
+    },
+    {
+      "aussage": "Live-Abschaltung berührt Tokens/HTTP nicht: validate nur Existenz/Ablauf/Session; live=false -> WS 1008 log_live_disabled, HTTP ohne live-Check (nur Store 503).",
+      "beleg": "security/logs.py Z.40-59; server.py Z.9539-9558, 9487-9494, 9563-9570, 7789-7800",
+      "evidenz": "A",
+      "gueltigkeit": "Laufzeitumschaltung",
+      "id": "G5-14"
+    },
+    {
+      "aussage": "Scope-Metadaten authorizationScope/allSessions/allChannels; Admin übernimmt angefragte ID ohne Existenzprüfung (leer ok); WS danach nur ping->pong + code-loser unbekannt-Befehl, keine Re-Auth.",
+      "beleg": "server.py Z.9473-9535, 9652-9672, 9727-9745; Tests 1460-1467, 2381-2384, 350-357",
+      "evidenz": "A+T",
+      "gueltigkeit": "Antwortschema/Admin-Scope",
+      "id": "G5-15"
+    },
+    {
+      "aussage": "Bearer-Kollision: AdminGate (compare_digest Admin-Key), OpenAIGate (== Bearer openai_key + Audit), LogGate (Token-Dict) getrennt; Log-Token öffnet kein Admin/OpenAI; Admin-Key kein Log außer WS-accessToken; log-token-Header nirgends sonst gelesen.",
+      "beleg": "security/openai.py Z.14-35; security/admin.py Z.24-38; security/logs.py Z.67-93; service.py Z.1-5; Tests 82-94",
+      "evidenz": "A+T",
+      "gueltigkeit": "Abgrenzung",
+      "id": "G5-16"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-1",
+      "thema": "Kein Widerruf/Logout"
+    },
+    {
+      "id": "N-2",
+      "thema": "Kein Refresh/Rotation (nur neues hello zusätzlich)"
+    },
+    {
+      "id": "N-3",
+      "thema": "Keine Lebensdauer-/Retention-Bindung"
+    },
+    {
+      "id": "N-4",
+      "thema": "Keine Persistenz"
+    },
+    {
+      "id": "N-5",
+      "thema": "Keine Formatprüfung/Rate-Limit (Dict-Lookup statt compare_digest)"
+    },
+    {
+      "id": "N-6",
+      "thema": "Keine Obergrenze"
+    },
+    {
+      "id": "N-7",
+      "thema": "Keine Existenzprüfung Admin-Session"
+    },
+    {
+      "id": "N-8",
+      "thema": "Keine Re-Auth im WS-Loop"
+    }
+  ],
+  "researcher_session": "ses_e422d5008ffeeijLRi2bCncwvP",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-1",
+      "thema": "Last ohne neue issue (>1024 ungetestet)"
+    },
+    {
+      "id": "U-2",
+      "thema": "Token-Nutzung nach Ende ungetestet"
+    },
+    {
+      "id": "U-3",
+      "thema": "Dict-Lookup Timing vs compare_digest"
+    },
+    {
+      "id": "U-4",
+      "thema": "Proxy erzeugt HTTP-Loopback-Admin"
+    },
+    {
+      "id": "U-5",
+      "thema": "401 fremde session ohne dedizierten Test"
+    },
+    {
+      "id": "U-6",
+      "thema": "401-Body-Details"
+    }
+  ],
+  "writer_notes": "Ein Gate, drei Träger, zwei Policen. Exakt: 64 Hex, 86400 s, Sweep >1024 nur validate, Prune immer issue. HTTP-Loopback nur ohne Key, nie WS. 401 ohne Auth vs not_authorized+1008. still 200/count-0. Kein Revoke. Live != Schloss. Bearer nur abgrenzen."
+}

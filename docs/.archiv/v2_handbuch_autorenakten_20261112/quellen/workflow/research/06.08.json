@@ -1,0 +1,285 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached shallow, keine Refs). Nur Commit a8993c5c68042d996eab680d84a5b138a214bb5d bindend.",
+  "chapter": "06.08",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d; FETCH_HEAD gleicher SHA.",
+  "conflicts": [
+    {
+      "id": "C-1",
+      "thema": "backup_count vorhanden aber wirkungslos (validiert/gespeichert, nie gelöscht/begrenzt); keine Rotation behaupten [H6-10]."
+    },
+    {
+      "id": "C-2",
+      "thema": "Audio-Tag Lokalzeit vs JSONL log_calendar_timezone: Datumsgrenzen können driften [H6-20/09]."
+    },
+    {
+      "id": "C-3",
+      "thema": "Kanal-enabled nur Spiegel; Store nimmt Audit auch bei request_logging=false auf; performance=false verhindert Erzeugung [H6-17]."
+    },
+    {
+      "id": "C-4",
+      "thema": "VPS-Compose betreiberspezifisch abweichend (/data, /config-Mount, target cpu inexistent, OPENWAKEWORD-ROOT tot; real WAKEWORD_ASSET_ROOT); keine Produktions-Referenz."
+    },
+    {
+      "id": "C-5",
+      "thema": "RuntimeConfig-Lock prozessweit; Multi-Prozess nicht serialisiert (last-writer-wins) [H6-06]."
+    },
+    {
+      "id": "C-6",
+      "thema": "Bind-Mount-Rechte vs uid 10001: Image-chown greift nur Image-Pfad; Host-Sache [H6-22]."
+    },
+    {
+      "id": "C-7",
+      "thema": "health.ok hängt an Store, ready nicht; Docker-Check nur 200 (Health → 06.x) [H6-18]."
+    },
+    {
+      "id": "C-8",
+      "thema": "STARTUP-Werte kleben via runtime.json (persistiert, beim Start angewandt) [H6-08]."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [
+    "data_root -> 7 Pfade logs/*, sqlite, audio, runtime.json [H6-01]",
+    "data_root -> models/stt/fasterwhisper|kroko_asr [H6-21]",
+    "PATCH /api/config -> persist_settings -> save settings-Sektion [H6-08/05]",
+    "PATCH defaults -> save_settings_control Overlay+Revision [H6-05]",
+    "Schreiber -> RLock/read/merge/.tmp/os.replace -> runtime.json [H6-06]",
+    "create_app -> load runtime.json -> settings -> post_init [H6-07]",
+    "emit -> SQLite.append commit -> control.publish [H6-16/14]",
+    "emit -> file-Queue -> JSONL <kanal>/<YYYY-MM>/<YYYY-MM-DD>.jsonl [H6-09/16]",
+    "emit -> stdout-Queue -> stdout [H6-16/19]",
+    "append -> prune 1x/Tag (days>0) -> watermarks+DELETE; kein VACUUM [H6-15]",
+    "JSONL-write -> cleanup 1x/Tag -> delete alte *.jsonl [H6-11]",
+    "POST /v1/audio -> size-check -> archive <audio>/<tag>/<zeit>_<reqId>.<ext> [H6-20]",
+    "provision -> .part -> bytes+sha -> replace -> models/stt [H6-21]",
+    "Image /var/lib/voicestt 10001 VOLUME <-> compose ${VOICESTT_DATA_PATH:-./data} [H6-22]"
+  ],
+  "facts": [
+    {
+      "aussage": "Genau 7 Pfade aus data_root (expanduser, sonst None): logs/audit, performance, transcription, system, voicestt-events.sqlite3, audio; config/runtime.json (nur mit Root). Alle str.",
+      "beleg": "server.py Z.519-532; Tests Z.161-165/25-39.",
+      "evidenz": "hoch+",
+      "gueltigkeit": "V2-Server (Re-Export Z.8-14)",
+      "id": "H6-01"
+    },
+    {
+      "aussage": "Reine Pfadkomposition: kein mkdir/resolve/abspath in post_init; relativ bleibt CWD-relativ (Image WORKDIR /var/lib/voicestt); Anlage lazy.",
+      "beleg": "server.py Z.519-543/293-301; grep mkdir 0.",
+      "evidenz": "hoch",
+      "gueltigkeit": "Ableitung",
+      "id": "H6-02"
+    },
+    {
+      "aussage": "7 Pfade gegen Einzelkonfiguration gesperrt (validate-Fehler, YAML-SystemExit automatisch-abgeleitet, Overlay ignoriert).",
+      "beleg": "server.py Z.293-301/9859-9862/10302/10371-10372/8832; Tests Z.167-180.",
+      "evidenz": "hoch+",
+      "gueltigkeit": "Admin/Config (Whitelist → 03.x)",
+      "id": "H6-03"
+    },
+    {
+      "aussage": "Ohne data_root keine runtime.json: path None → load {}/control ({},0)/save None.",
+      "beleg": "operations.py Z.419-479/520-521.",
+      "evidenz": "hoch",
+      "gueltigkeit": "Start ohne --data-root/ENV",
+      "id": "H6-04"
+    },
+    {
+      "aussage": "runtime.json Koexistenz: save settings{version,updatedAt,sortiert}; save_control additiv Overlay+Revision (bool/negativ→0, Unbekanntes bleibt); load Dict-Pflicht; load_control fail-fast (nur fehlend→leer).",
+      "beleg": "operations.py Z.401-516; Tests Z.39-267.",
+      "evidenz": "hoch+",
+      "gueltigkeit": "Server-Defaults + Legacy",
+      "id": "H6-05"
+    },
+    {
+      "aussage": "Atomar: mkdir parents, .<name>.<uuid>.tmp, RLock+Read-Modify-Write, indent-2-JSON, os.replace; Fehler→Temp weg/Original bleibt. Nur prozessweit, kein Interprozess-Lock.",
+      "beleg": "operations.py Z.55/518-556; Tests Z.111-289.",
+      "evidenz": "hoch+",
+      "gueltigkeit": "ein Prozess/Wurzel (multi: atomar, last-wins)",
+      "id": "H6-06"
+    },
+    {
+      "aussage": "Start: load runtime.json, setattr außer derived/Secrets/data_root, Re-post_init + Policy; Pfade bleiben wurzelabgeleitet; YAML<runtime.json<CLI.",
+      "beleg": "server.py Z.8826-8843.",
+      "evidenz": "hoch",
+      "gueltigkeit": "Start",
+      "id": "H6-07"
+    },
+    {
+      "aussage": "Allowlist = ACTIVE|NEW_SESSION|STARTUP_ONLY minus Secrets/Pfade/device/host/port; drop-Redaktion; STARTUP-klebt (mitgeschrieben/angewandt).",
+      "beleg": "server.py Z.178-285/7835-7840/7959-7969; operations.py Z.439; Tests.",
+      "evidenz": "hoch+",
+      "gueltigkeit": "PATCH/Refresh (Whitelist → 03.x)",
+      "id": "H6-08"
+    },
+    {
+      "aussage": "JSONL <root>/<YYYY-MM>/<YYYY-MM-DD>.jsonl (Monat-mkdir, append, flush/Zeile, compact-JSON); Tag aus timestamp in log_calendar_timezone (Default Europe/Berlin); Legacy-.json-Pfad→Ordner.",
+      "beleg": "event_logging.py Z.305-343/414-425; Tests Z.222-333.",
+      "evidenz": "hoch+",
+      "gueltigkeit": "4 Kanäle",
+      "id": "H6-09"
+    },
+    {
+      "aussage": "Rollover bei max_bytes→.1/.2.jsonl (Weiterverwendung); backup_count nur validiert/gespeichert, nie gelöscht → wirkungslos; nur retention_days löscht.",
+      "beleg": "event_logging.py Z.322-379; grep nur 7 Stellen; Tests Z.312-333.",
+      "evidenz": "hoch+",
+      "gueltigkeit": "alle Kanäle",
+      "id": "H6-10"
+    },
+    {
+      "aussage": "Retention opt-in: nur days>0, 1x/Tag/Sink; löscht *.jsonl in YYYY-MM-Ordnern vor cutoff (nicht offene), rmdir leer; Default 0 = kein Pruning (unbegrenzt).",
+      "beleg": "event_logging.py Z.381-412; server.py Z.459-478; Tests Z.808-821.",
+      "evidenz": "hoch+",
+      "gueltigkeit": "JSONL-Spiegel",
+      "id": "H6-11"
+    },
+    {
+      "aussage": "SQLite <logs>/voicestt-events.sqlite3; events(cursor PK, event_id UNIQUE, timestamp/channel/event/severity/instance/transport/client/session/request/transcription/segment, payload NOT NULL); 6 Indizes; watermarks(channel,session,cursor PK). IF NOT EXISTS + commit.",
+      "beleg": "event_logging.py Z.441-495; server.py Z.526; Tests Z.336-388.",
+      "evidenz": "hoch+",
+      "gueltigkeit": "kanonischer Store (Default an)",
+      "id": "H6-12"
+    },
+    {
+      "aussage": "Betrieb: parent-mkdir (logs bei Aufbau), eine Verbindung check_same_thread=False timeout 30, WAL + NORMAL, RLock. WAL-Sidecars abgeleitet.",
+      "beleg": "event_logging.py Z.442-451.",
+      "evidenz": "hoch/mittel",
+      "gueltigkeit": "Store an (aus→kein mkdir)",
+      "id": "H6-13"
+    },
+    {
+      "aussage": "Cursor = MAX(MAX(cursor),sqlite_sequence)+1 (Lücken bleiben); expliziter INSERT; commit/Event; Fehler rollback+Raise; payload inkl. cursor.",
+      "beleg": "event_logging.py Z.543-603; Tests Z.364-388.",
+      "evidenz": "hoch+",
+      "gueltigkeit": "ein Store/Prozess",
+      "id": "H6-14"
+    },
+    {
+      "aussage": "Retention lazy beim ersten append/UTC-Tag (nur days>0): Watermarks-UPSERT/Max je (channel,session), DELETE<cutoff, commit. Kein VACUUM.",
+      "beleg": "event_logging.py Z.497-541/887-891; Tests Z.847-933.",
+      "evidenz": "hoch+",
+      "gueltigkeit": "kanonisch (Default 0 = kein Prune)",
+      "id": "H6-15"
+    },
+    {
+      "aussage": "Hub: Store→configure→Queues file/stdout (10000)→control→3 Daemon-Writer; emit sanitisiert→SQLite→cursor→control→Mirrors; Prio audit/error 0, performance 2, sonst 1; Überlauf verwirft niedrig + zählt; flush joint; close flush+_closed+Queues+Sentinel+joins-5s+Sinks+Store.",
+      "beleg": "event_logging.py Z.697-763/916-1033/1298-1319; Tests Z.391-419/737-805.",
+      "evidenz": "hoch+",
+      "gueltigkeit": "ein Hub/Service (geteilt)",
+      "id": "H6-16"
+    },
+    {
+      "aussage": "Kanal-enabled nur Spiegel (Sink+stdout); Store nimmt hub.emit immer auf (auch request_logging=false, nur Spiegel entfällt); performance=false erzeugt gar kein Event.",
+      "beleg": "event_logging.py Z.765-893/928-1006; operations.py Z.392-395; Tests Z.275-290/737-782.",
+      "evidenz": "hoch+",
+      "gueltigkeit": "Datei-vs-Hub (C)",
+      "id": "H6-17"
+    },
+    {
+      "aussage": "Store-Ausfall getrennt lesend/schreibend (disabled/ready/degraded, available=ready); Schreibfehler geloggt, emit None (kein Mirror); health.ok faltet logging_ready (nicht ready); Log-APIs 503.",
+      "beleg": "event_logging.py Z.1110-1288; server.py Z.8885-8905/9487-9571; Tests Z.690-734.",
+      "evidenz": "hoch+",
+      "gueltigkeit": "Speicher-Relevanz (Health → 06.x)",
+      "id": "H6-18"
+    },
+    {
+      "aussage": "Kein persistentes Text-Log: basicConfig/uvicorn → stderr; persistent SQLite (kanonisch) + JSONL-Spiegel + stdout-Spiegel (Docker rotiert); /api/logging liefert Pfade/Parameter/Store-Status/sqlite_first/v2.",
+      "beleg": "server.py Z.10813-10835/9320-9381; event_logging.py Z.1058-1069.",
+      "evidenz": "hoch",
+      "gueltigkeit": "V2 (Legacy-realtimesst.log ausgenommen)",
+      "id": "H6-19"
+    },
+    {
+      "aussage": "Audio nur save_audio_files (Default False) + nur HTTP-Upload nach size-Check (25 MiB): <audio>/<YYYY-MM-DD (Lokalzeit!)>/<HHMMSS_%f>_<reqId><suffix>; write_bytes; keine Retention/Rechte.",
+      "beleg": "operations.py Z.343-362; openai_routes.py Z.147-159; server.py Z.485; Tests Z.222-249; chmod 0.",
+      "evidenz": "hoch+",
+      "gueltigkeit": "Audit-Manager (C Zeit/Rechte)",
+      "id": "H6-20"
+    },
+    {
+      "aussage": "Modelle <data_root>/models/stt/fasterwhisper|kroko_asr (ohne Root data/...): Discovery custom/Legacy-ENV→Default (dedup); Provisionierung Probe+normcase-Lock+.part+bytes/sha+replace+finally; Auto-Download aus; Image offline.",
+      "beleg": "server.py Z.6295-6300; stt_model_management.py Z.546-700; Dockerfile Z.76-78; Tests Z.845-922.",
+      "evidenz": "hoch+",
+      "gueltigkeit": "Modellverwaltung (Build-Cache ausgenommen)",
+      "id": "H6-21"
+    },
+    {
+      "aussage": "Container: DATA_ROOT /var/lib/voicestt, 10001/nologin/Home, Modellordner vorab+chown, USER/WORKDIR/VOLUME; logs/config erst Laufzeit; compose-Bind ./data→/var/lib/voicestt create_host_path (Tests USER/Mount). Bind überlagert chown (Host-Sache).",
+      "beleg": "Dockerfile Z.59-84; compose Z.56-64; Tests Z.119-178.",
+      "evidenz": "hoch/hoch+",
+      "gueltigkeit": "Image/Compose",
+      "id": "H6-22"
+    },
+    {
+      "aussage": "Kein Backup/Restore, keine Migration (nur IF NOT EXISTS, keine ALTER/Version), kein VACUUM/ANALYZE, kein Export (nur Query-API); runtime.json additiv. Wiederherstellung undefiniert.",
+      "beleg": "event_logging.py Z.452-495; operations.py Z.440-448; Grep VACUUM/backup/copy 0.",
+      "evidenz": "hoch/mittel",
+      "gueltigkeit": "ganze Wurzel",
+      "id": "H6-23"
+    },
+    {
+      "aussage": "Nur-Start-Flags: data_root/event_store/queue_size startup_only (PATCH startup_only); PUT /api/logging nur Live-Parameter (kein Store-Schalter); live-ohne-store ValueError.",
+      "beleg": "server.py Z.256-285/540-543/7835-7840/9404-9430.",
+      "evidenz": "hoch",
+      "gueltigkeit": "Laufzeit-vs-Neustart",
+      "id": "H6-24"
+    },
+    {
+      "aussage": "Start/Stop erzeugen erste Artefakte: server.starting→SQLite+system-JSONL; Stop audit/perf-close (No-Op)+server.stopping+hub.close (Flush/Store). Ohne stop nur WAL/Queue-Reste.",
+      "beleg": "server.py Z.7275-7323.",
+      "evidenz": "hoch/mittel",
+      "gueltigkeit": "jeder Start/Stop",
+      "id": "H6-25"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-1",
+      "thema": "Backup/Restore Wurzel/DB: kein Code/Endpunkt [H6-23]."
+    },
+    {
+      "id": "N-2",
+      "thema": "Schema-Migration/Version: nur IF NOT EXISTS, keine ALTER [H6-23]."
+    },
+    {
+      "id": "N-3",
+      "thema": "VACUUM/Verkleinerung: keins [H6-15/23]."
+    },
+    {
+      "id": "N-4",
+      "thema": "backup_count-Wirkung: keine [H6-10]."
+    },
+    {
+      "id": "N-5",
+      "thema": "Audio-Retention: keine [H6-20]."
+    },
+    {
+      "id": "N-6",
+      "thema": "Event-Export Datei: nur Query-API [H6-19]."
+    }
+  ],
+  "researcher_session": "ses_e3df68531ffe45MWUJMcWuRe8g",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-1",
+      "thema": "Dateirechte/umask: kein chmod [H6-20/22]."
+    },
+    {
+      "id": "U-2",
+      "thema": "Volle Platte/WAL-Wachstum: Pfade existent, ungetestet [H6-18]."
+    },
+    {
+      "id": "U-3",
+      "thema": "Multi-Prozess eine Wurzel: nicht abgesichert [H6-06]."
+    },
+    {
+      "id": "U-4",
+      "thema": "Wiederherstellungsprozedur: undefiniert [H6-23]."
+    },
+    {
+      "id": "U-5",
+      "thema": "Branch: detached, nur SHA bindend."
+    }
+  ],
+  "writer_notes": "Health → 06.x (nur logging_ready); Whitelist/Control/Revision → 03.x (nur Sperren/Allowlist); Install/Build nur Pfadkonsequenz; /ws/logs/Cursor → 06.07/05.09 (nur sqlite_first/503); CLI/YAML/ENV → 06.02 (nur Wirkung). Brief null → NOT_REQUESTED, Kanten Angebot."
+}

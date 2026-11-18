@@ -1,0 +1,264 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD). Nur Commit bindend.",
+  "chapter": "07.05",
+  "commit_verification": ".git/HEAD direkt a8993c5c68042d996eab680d84a5b138a214bb5d (detached, kein ref:). Quellen: pytest.ini, requirements-dev, workflows, tests/**, Factory/NativeGuard/Schema nur via Testnutzung. Keine Testausfuehrung.",
+  "conflicts": [
+    {
+      "id": "K1",
+      "thema": "Blanko-Falle: Default nur tests/unit; Packaging/Compatibility nur mit Pfad. Praxiswarnung noetig."
+    },
+    {
+      "id": "K2",
+      "thema": "Verzeichnisname unit != Testebene (E2E/Integration/Contract darin). Nach Testart gliedern."
+    },
+    {
+      "id": "K3",
+      "thema": "Auftrag nennt marker, keine Marker-Registrierung vorhanden. Nicht als Feature beschreiben."
+    },
+    {
+      "id": "K4",
+      "thema": "RC installiert pytest ungepinnt ad hoc; CI nutzt requirements-dev. Nur Beobachtung."
+    },
+    {
+      "id": "K5",
+      "thema": "tests/README + contracts/README existieren, als Quelle unzulaessig; nur Code/Config genutzt."
+    },
+    {
+      "id": "K6",
+      "thema": "Abgrenzung 07.09 (Ablauf) und 07.06 (Verfahren); hier nur Architektur/Matrix/Umgebungen."
+    },
+    {
+      "id": "K7",
+      "thema": "Konsistenz 07.01-07.04 nur Code-Ebene (Texte nicht geprueft): Anker requirements/venv, Layout/Shim, Protokoll-Doubles, Engine-Literal."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [
+    "pytest.ini --testpaths--> tests/unit",
+    "pytest.ini --python_files--> Sammlung (Wurzel-Skripte ausgeschlossen)",
+    "conftest.py --autouse--> native_guard.reset_for_tests()",
+    "ci.yml --matrix--> ubuntu-24.04/windows-latest x PY3.12",
+    "ci.yml --pytest--> tests/unit + tests/compatibility",
+    "ci.yml --pytest--> tests/packaging",
+    "test_v2_engine_boundary --reads--> factory.ENGINE_CLASS_PATHS",
+    "test_protocol_v2_contract --loads--> protocol-v2-vectors.json",
+    "test_v2_code_reference --AST--> schema COMMAND/RESULT/EVENT + Registry + Routen",
+    "test_docs_surface --rglob--> *.md Linkintegritaet",
+    "test_release_workflows --yaml--> workflows SHA-Pinning",
+    "test_server_controlled_e2e --doubles--> GateAwareRecorder+Scheduler",
+    "compatibility --git/uvicorn--> Client-Checkout + create_app",
+    "packaging --build/venv--> Wheel/sdist + consumer-venv",
+    "kroko_native --subprocess--> kroko_native_child.py"
+  ],
+  "facts": [
+    {
+      "aussage": "Pytest-Config nur 2 Einstellungen: testpaths=tests/unit, python_files=test_*.py; keine markers/addopts.",
+      "beleg": "pytest.ini:1-4",
+      "evidenz": "stark",
+      "gueltigkeit": "Repo-Root, einzige Config",
+      "id": "TA7-01"
+    },
+    {
+      "aussage": "Keine Marker-Registrierung, keine strict-Pruefung; nur eingebaute parametrize/skipif/usefixtures; -m slow NOT_IMPLEMENTED.",
+      "beleg": "pytest.ini/pyproject ohne markers; tests/** 57 Treffer eingebaut",
+      "evidenz": "stark",
+      "gueltigkeit": "commit-spezifisch",
+      "id": "TA7-02"
+    },
+    {
+      "aussage": "Blanko-Falle: nacktes pytest nur tests/unit; compatibility/packaging/contracts nur mit Pfad; CI nennt Pfade explizit + RC-Einzeldatei.",
+      "beleg": "pytest.ini:2; ci.yml:187-191; release-candidate.yml:94",
+      "evidenz": "stark",
+      "gueltigkeit": "Default = Teilmenge",
+      "id": "TA7-03"
+    },
+    {
+      "aussage": "Layout: unit 93 Module+conftest+__init__+4 Support+audio/fixtures; compatibility 1 ohne __init__; packaging 2 ohne __init__; contracts nur JSON+README; Wurzel __init__+24 Skripte (kein test_-Prefix, meist *_test.py).",
+      "beleg": "Listing tests/ (31), tests/unit (102); Glob tests/**/*.py",
+      "evidenz": "stark",
+      "gueltigkeit": "Zaehlung commit-gebunden",
+      "id": "TA7-04"
+    },
+    {
+      "aussage": "Wurzel-Skripte manuelle Helfer (venv/GUI), keine Suite; Sammelverhalten bei expliziter Nennung UNKNOWN.",
+      "beleg": "install_extras_matrix.py:1-9; realtime_loop_test.py:1-19",
+      "evidenz": "stark/mittel",
+      "gueltigkeit": "commit-spezifisch",
+      "id": "TA7-05"
+    },
+    {
+      "aussage": "Genau ein conftest.py (tests/unit); autouse Guard-Reset (Singleton leases/identity/revision/confirmed); pro_capable_fixture patcht installed_kroko_variant=pro.",
+      "beleg": "tests/unit/conftest.py:1-23; native_guard.py:254-266; Nutzung u.a. stt_model_management:11",
+      "evidenz": "stark",
+      "gueltigkeit": "nur tests/unit-Scope",
+      "id": "TA7-06"
+    },
+    {
+      "aussage": "Doubles faelschen nur Hardware/Modell (GateAwareRecorder nutzt echtes activation_control; TestClient optional); Scheduler/Recorder via Injektion; SyntheticCapture/FakeAudioQueue/_fake_torch.",
+      "beleg": "controlled_e2e:1-26,55-58,66-90; multi_user; openai_endpoint; compatibility:63,85-100",
+      "evidenz": "stark",
+      "gueltigkeit": "commit-spezifisch",
+      "id": "TA7-07"
+    },
+    {
+      "aussage": "4 Support-Module nicht sammelbar: release_support (RC-Manifest, PRO_WHEEL/WIN, kein Netz), wake_catalog (echte Bundles), audio_engine_fixtures (Golden-Audio), kroko_native_child (Kind-Interpreter, no test_ prefix).",
+      "beleg": "release_support:1-20,37-38; wake_catalog:1-25; audio_engine_fixtures:1-65; kroko_native_child:1-27",
+      "evidenz": "stark",
+      "gueltigkeit": "commit-spezifisch",
+      "id": "TA7-08"
+    },
+    {
+      "aussage": "Contract-Tests in tests/unit, Vektoren in tests/contracts/protocol-v2-vectors.json; kein Inline; Drift via VOICESTT_PROTOCOL_V2_VECTORS (skip ohne Env); Pflichtnamen Untergrenze; Vektorgleichheit Client/Server via git show; Verhalten vs echten Parser.",
+      "beleg": "test_protocol_v2_contract:1-15,44-109; compatibility:40-43",
+      "evidenz": "stark",
+      "gueltigkeit": "Bindung schema.PROTOCOL_VERSION",
+      "id": "TA7-09"
+    },
+    {
+      "aussage": "tests/contracts keine Suite (nur JSON+README); Contract ist Testart in unit/compatibility.",
+      "beleg": "Listing tests/contracts (2); Nutzung unit:44-47, compatibility:40",
+      "evidenz": "stark",
+      "gueltigkeit": "commit-spezifisch",
+      "id": "TA7-10"
+    },
+    {
+      "aussage": "unit enthaelt E2E/Integration (websocket->admit->Session->Gate->Callbacks; HTTP via TestClient; Dockerfile/Compose/JS als Text+Replay); Browser-Rendering bleibt manuell.",
+      "beleg": "controlled_e2e:1-26; protocol_v2_e2e; browser_client_contract:1-21; production_docker_contract:1-12",
+      "evidenz": "stark",
+      "gueltigkeit": "Testart, nicht Abdeckung",
+      "id": "TA7-11"
+    },
+    {
+      "aussage": "Packaging echte Builds/venvs, eigener CI-Schritt, nicht Default: build Wheel+sdist in tmp, Archive vs 12/15/10 FORBIDDEN; consumer-venv --no-deps, PRODUCTS 2, 5 VERSIONS, Evidenz-JSON.",
+      "beleg": "test_v2_distribution_contents:1-50; test_identity_installation:1-45; ci:190-191; RC:91-94",
+      "evidenz": "stark",
+      "gueltigkeit": "nur qualifizierte Hosts (build/wheel)",
+      "id": "TA7-12"
+    },
+    {
+      "aussage": "Compatibility opt-in commit-gepinnt echtes Loopback: Env ROOT+COMMIT, rev-parse/status/vectors/import sonst skip; backend uvicorn Port 0 Thread, model_warmup=False, Auto/GateAware, Ready 20s, join 15s; nur ASR/Hardware Fixture, Rest echt.",
+      "beleg": "test_client_v2_identity:28-82,85-100,109-208",
+      "evidenz": "stark",
+      "gueltigkeit": "nur externer unveraenderter Checkout; CI faktisch skip",
+      "id": "TA7-13"
+    },
+    {
+      "aussage": "Gitter Engine-Literal: SUPPORTED 2 vs ENGINE_CLASS_PATHS + get_supported; DRAFTS 5, REMOVED 7, FORMER 26 muessen UnsupportedError mit Supported-Meldung werfen.",
+      "beleg": "test_v2_engine_boundary:32-57,60-71; factory:16-22",
+      "evidenz": "stark",
+      "gueltigkeit": "Produktgrenze genau 2 Engines",
+      "id": "TA7-14"
+    },
+    {
+      "aussage": "Gitter Modulzahl: glob exakt 2 Engine-Module; 7 removed via rglob leer; 5 Drafts existieren isoliert ohne __init__; AST kein Draft-Import; setup-extras AST; MANIFEST prune engineering; Subprozess sys.modules exakt 6.",
+      "beleg": "test_v2_engine_boundary:118-132,135-223",
+      "evidenz": "stark",
+      "gueltigkeit": "hart kodiert",
+      "id": "TA7-15"
+    },
+    {
+      "aussage": "Gitter Registry/Doku: AST Routen >=30 + jede Route in 06+07; COMMAND/RESULT/EVENT in 07; Registry-Keys in 03 (echte Registry); ENGINE_KEYS in 04; 14 Seiten >2500 Zeichen, Primäre-Quellen-Link, Index, keine docs/-Links.",
+      "beleg": "test_v2_code_reference:23-42,48-110,113-200",
+      "evidenz": "stark",
+      "gueltigkeit": "setzt docs/v2-code-reference/* voraus",
+      "id": "TA7-16"
+    },
+    {
+      "aussage": "Doku-Oberflaeche Testgegenstand: maintained_markdown rglob *.md minus archiv/git/node/venv; README pinnt 3.12/x86-64, verbietet URLs/Badges/Pfade/Secrets; engines kein Ordner, 2 Guides direkt unter docs/.",
+      "beleg": "test_docs_surface:41-49,51-82,108-208",
+      "evidenz": "stark",
+      "gueltigkeit": "ersetzt keine Prosa-Review",
+      "id": "TA7-17"
+    },
+    {
+      "aussage": "Matrix 2 OS x 1 Python: ubuntu-24.04/windows-latest, fail-fast false, bash, PY3.12; Linux portaudio19-dev; cpu_only install-torch+PIP_CONSTRAINT + 2x check; RC spiegelt; x86-64 via Wheel-Tags.",
+      "beleg": "ci:36-51,63-67,100-111,184-191; RC:46-47,55,249; release_support:37-38",
+      "evidenz": "stark",
+      "gueltigkeit": "nur 2 OS, nur CPython 3.12",
+      "id": "TA7-18"
+    },
+    {
+      "aussage": "CPU-only nur Logik/Verdrahtung: echter Install-Beweis CI; Unit pinnt GPU-Namen + check via _fake_torch/sys.modules.",
+      "beleg": "test_cpu_only_contract:1-9,23-60",
+      "evidenz": "stark",
+      "gueltigkeit": "Beweislast echte Umgebung bei CI/RC",
+      "id": "TA7-19"
+    },
+    {
+      "aussage": "Workflows/Layout als Vertraege: YAML SHA-Pinning/kein-Publish/least-privilege/keine-Pfade; parst Workflows nach python-Skript/tools-Import, release.py-Pflicht, Root-Build-Dateien, Console-Script-Konsistenz, Shim-Identitaet, --help timeout 120.",
+      "beleg": "test_release_workflows:1-40; test_engineering_path_contract:22-23,73-144,170-241",
+      "evidenz": "stark",
+      "gueltigkeit": "Dateilayout/CI-Text, nicht Laufzeit",
+      "id": "TA7-20"
+    },
+    {
+      "aussage": "Opt-in skip statt Schein: skipif ohne ENV1; fehlende MODEL_DIR/AUDIO/Runtime -> skip NOT_RUN (never pass); frischer Interpreter, Timeout 1200/900s; Live echte WS zum Lizenzdienst, nicht CI.",
+      "beleg": "test_kroko_native_integration:27-60; test_kroko_live_license:25-31; kroko_native_child:1-27",
+      "evidenz": "stark",
+      "gueltigkeit": "nur mit Env, sonst skip",
+      "id": "TA7-21"
+    },
+    {
+      "aussage": "Umgebungen 2 Modi: requirements-dev (-r API-Reqs, pytest>=8, httpx, multipart; keine Coverage/xdist/Report); CI Smoke Wheel (nicht editable) vs Suite Source editable+dev-Reqs.",
+      "beleg": "requirements-dev:1-6; ci:87-105,173-191",
+      "evidenz": "stark/mittel",
+      "gueltigkeit": "Coverage/Parallel/Retry NOT_IMPLEMENTED",
+      "id": "TA7-22"
+    },
+    {
+      "aussage": "Paket/Import: tests + unit Pakete, absolute Importe tests.unit.*; compatibility/packaging ohne __init__ importieren tests.unit.*; python -m pytest bringt Root in sys.path; mehrere Module prependen REPO_ROOT (cpu_only, engineering_path, build_production, build_distribution, production_docker, release_*, release_support, kroko_native_child; kein zentrales Konzept); kein importmode/pythonpath.",
+      "beleg": "tests/__init__, unit/__init__; protocol_v2_contract:36-41; cpu_only:18; engineering_path:206-207; build_production:20-21; build_distribution:24-25; production_docker:70,84; release_support:21-22; kroko_native_child:23; ci:188",
+      "evidenz": "stark/mittel",
+      "gueltigkeit": "commit-spezifisch",
+      "id": "TA7-23"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Keine Marker-Registrierung/Selektion (nur eingebaut) [TA7-02]."
+    },
+    {
+      "id": "N2",
+      "thema": "Kein Root-conftest, keine globalen Fixtures ausserhalb unit [TA7-06]."
+    },
+    {
+      "id": "N3",
+      "thema": "Keine Contract-Suite (nur Daten) [TA7-10]."
+    },
+    {
+      "id": "N4",
+      "thema": "Keine Coverage/Parallel/Retry-Config [TA7-22]."
+    },
+    {
+      "id": "N5",
+      "thema": "Kein addopts (Aufrufdisziplin bei CI/Dev) [TA7-01/23]."
+    }
+  ],
+  "researcher_session": "ses_e37884e2affez52Knh0X0P6Wqx",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Branch detached, nicht verifiziert."
+    },
+    {
+      "id": "U2",
+      "thema": "Sammelverhalten explizit genannter Wurzel-Skripte (Pytest-Semantik)."
+    },
+    {
+      "id": "U3",
+      "thema": "Laufzeiten/Anzahl/Bestehen (nichts ausgefuehrt)."
+    },
+    {
+      "id": "U4",
+      "thema": "packaging ohne build/wheel (Umgebungsfrage)."
+    },
+    {
+      "id": "U5",
+      "thema": "22 Wurzel-Skripte nicht gelesen."
+    }
+  ],
+  "writer_notes": "Architektur (nicht Ablauf): Sammlung/Matrix/Umgebungen/Vertraege. Abgrenzung 07.09 Ablauf/Gates/Publish, 07.06 Verfahren/Ergebnisse, 07.07 Produktmechanik, 07.08 Native-Isolation. Lehre nach Testart, nicht Ordner; Blanko-Falle prominent."
+}

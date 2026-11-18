@@ -1,0 +1,331 @@
+{
+  "branch_context": "feat/v2-release-cleanup (Auftragskontext; Checkout detached, keine Ref)",
+  "chapter": "01.01",
+  "commit_verification": ".git/HEAD enthaelt exakt diesen Hash (detached HEAD; shallow clone, .git/shallow vorhanden)",
+  "conflicts": [
+    {
+      "auflösung": "Kein Verhaltenswiderspruch, sondern Precedence: YAML-Werte werden via parser.set_defaults(**yaml_defaults) (server.py:10655) zu Parser-Defaults und ueberschreiben Code-Defaults. Im Betrieb mit config.yaml gilt 8.",
+      "beleg": "ServerSettings:487, CLI server.py:10485 vs config.yaml:71",
+      "id": "C-01",
+      "thema": "max_sessions: Code-Default 4 vs config.yaml 8"
+    },
+    {
+      "auflösung": "Wie C-01; mit config.yaml gilt 7.0.",
+      "beleg": "server.py:10479 vs config.yaml:66",
+      "id": "C-02",
+      "thema": "wake_word_timeout: CLI-Default 5.0 vs config.yaml 7.0"
+    },
+    {
+      "auflösung": "Wie C-01.",
+      "beleg": "server.py:10473 (leitet bei gesetzten Wake-Words openwakeword ab, Z. 10734-10737) vs config.yaml:60",
+      "id": "C-03",
+      "thema": "wakeword_backend: CLI-Default '' vs config.yaml openwakeword"
+    },
+    {
+      "auflösung": "Scope-Grenze: Server-Katalog ist OpenWakeWord-manifestbasiert; Porcupine betrifft nur die Recorder-Bibliothek.",
+      "beleg": "wakeword.py:37 vs server.py:7728",
+      "id": "C-04",
+      "thema": "Wake-Word-Backends: Bibliothek Porcupine+OpenWakeWord, Server-Capabilities nur openwakeword"
+    },
+    {
+      "auflösung": "Zwei Rollen (Produktname vs Metadaten-Lookup); Verhalten konsistent, im Kapitel begrifflich trennen.",
+      "beleg": "_version.py:37 vs setup.py PUBLIC_DISTRIBUTION_NAMES",
+      "id": "C-05",
+      "thema": "Distributionsname voice-stt-server vs DISTRIBUTION_NAME voicestt"
+    }
+  ],
+  "correction_round": 0,
+  "dependencies": {
+    "Architektur/Modulgrenzen": "P-02, P-07, P-26",
+    "Betrieb/Deployment": "P-24",
+    "Konfiguration/Settings": "P-08, P-18, C-01..C-03",
+    "Logging/Observability": "P-19",
+    "OpenAI-Kompatibilitaet": "P-11",
+    "Release/CI": "P-03, P-25",
+    "STT-Engines und Modelle": "P-04, P-06, P-20, P-21",
+    "Sicherheit": "P-22",
+    "Trigger/Wake-Word": "P-16, P-17, C-04",
+    "V1-Transport": "P-12, P-13, P-23",
+    "V2-Transport": "P-14, P-15, P-16"
+  },
+  "example_flows": [
+    {
+      "ablauf": "docker compose up -> Container startet mit --host 0.0.0.0 --port 8010 --device cpu --compute-type int8 --engine-options {local_files_only:true} -> main() -> parse_args() -> settings_from_args() -> create_app() -> uvicorn.run -> /health liefert 200 mit ready:false solange kein Modell geladen",
+      "beleg": "Dockerfile:98-102, docker-compose.yml:43-55, server.py:10813-10835, server.py:8885-8905",
+      "id": "A",
+      "titel": "Serverstart ueber Compose"
+    },
+    {
+      "ablauf": "POST /v1/audio/transcriptions mit file und model=whisper-1 -> Auth ueber OpenAI-Key -> parse_transcription_form -> resolve_openai_model loest whisper-1 auf Lane final -> Dateigroesse <= openai_max_file_bytes -> decode_audio_float32 -> service.transcribe_openai -> JSON/Text bzw. bei stream=true SSE-Deltas und transcript.text.done",
+      "beleg": "openai_routes.py:67, config.yaml:94-96",
+      "id": "B",
+      "titel": "Transkription per OpenAI-API"
+    },
+    {
+      "ablauf": "Browser laedt / -> static/index.html -> WS /ws/transcribe?clientId=.. -> Server admittiert, erzeugt Hex-sessionId, sendet hello -> Client sendet {type:start} und Audiopakete (4-Byte-Laengenpraefix + JSON-Metadaten + PCM) -> Server antwortet mit Transkript-Events",
+      "beleg": "server.py:10002-10014, protocol.py",
+      "id": "C",
+      "titel": "Browser-Session ueber V1"
+    },
+    {
+      "ablauf": "Client /ws/v2 -> hello mit supportedProtocolVersions:[2], clientVersion, clientCommit, kanonischer clientRunId, requestedSession.trigger.manual=true, wakeWordIds:[] -> Server negotiiert v2, admittiert, antwortet hello.accepted mit serverVersion/serverCommit -> activation.command mit commandId (UUID), action:activate, source:manual -> command.ack applied -> Events activation.started, phase_changed, segment.*, transcription.* -> activation.completed",
+      "beleg": "handshake.py:62-67, schema.py",
+      "id": "D",
+      "titel": "V2-Session mit manuellem Trigger"
+    },
+    {
+      "ablauf": "config: transcription_engine faster_whisper / realtime kroko_onnx -> InferenceScheduler startet main_worker und realtime_worker -> /api/models zeigt zwei Katalogbereiche mit lanes -> /health meldet scheduler.workers.main und .realtime",
+      "beleg": "server.py:2130-2155, server.py:8004-8011, server.py:2198-2203",
+      "id": "E",
+      "titel": "Zwei Modelle parallel (Final + Realtime)"
+    }
+  ],
+  "facts": [
+    {
+      "aussage": "Produktversion ist 2.0.0; zentral ueber resolve_version() aufgeloest. setup.py und v2-Wire-Identitaet lesen durch dieselbe Funktion. SemVer wird strikt validiert; ungueltige Overrides sind harte Fehler.",
+      "beleg": "VERSION:1; VoiceSTT/_version.py resolve_version, DISTRIBUTION_NAME=voicestt (Z.37), BUILD_VERSION_ENV=VOICESTT_BUILD_VERSION (Z.42); setup.py:19,27; protocol_v2/identity.py server_version() (Z.130ff)",
+      "evidenz": "CONFIG+CODE",
+      "gueltigkeit": "Gesamtprodukt (Wheel, Server, v2-Handshake)",
+      "id": "P-01"
+    },
+    {
+      "aussage": "Genau ein oeffentlicher Distributionsname: voice-stt-server (Variante pro). Entwickler-/Legacy-Name voicestt bleibt Default ohne Variante. Oeffentliche Distribution bettet Pro-faehige Kroko-Native-Runtime ein.",
+      "beleg": "setup.py PUBLIC_DISTRIBUTION_NAMES={pro:voice-stt-server} (Z.33-35), LEGACY_DISTRIBUTION_NAME=voicestt (Z.32), resolve_distribution_variant() (Z.46ff); stt_model_management.py installed_kroko_variant() (Z.46)",
+      "evidenz": "CONFIG+TEST (test_unified_product.py::test_only_one_official_product_and_native_input)",
+      "gueltigkeit": "Packaging/Release",
+      "id": "P-02"
+    },
+    {
+      "aussage": "Oeffentliche Distribution deklariert >=3.12,<3.13; Legacy >=3.11. Kroko-Native-Wheels nur fuer cp312 (linux_x86_64, win_amd64).",
+      "beleg": "setup.py:42-43 (PUBLIC_/LEGACY_PYTHON_REQUIRES), verwendet Z.378-380; CI .github/workflows/ci.yml:37 PYTHON_VERSION 3.12",
+      "evidenz": "CONFIG",
+      "gueltigkeit": "Installation oeffentliches Produkt",
+      "id": "P-03"
+    },
+    {
+      "aussage": "Exakt faster_whisper und kroko_onnx registriert. Keine Alias-Aufloesung; fruehere Engine-Namen werden mit Fehlermeldung abgewiesen. Vormalige Adapter nur als nicht paketierte Entwuerfe bzw. entfernt.",
+      "beleg": "VoiceSTT/transcription_engines/factory.py ENGINE_CLASS_PATHS (Z.15-19), DEFAULT_ENGINE=faster_whisper (Z.22), normalize_transcription_engine_name() (Z.25), unsupported_engine_message() (Z.39), get_supported_transcription_engines() (Z.72)",
+      "evidenz": "CODE+TEST (test_v2_engine_boundary.py:32,61-71; test_fastapi_server_protocol.py:272,300-304 erwarten [faster_whisper,kroko_onnx] auf GET /api/config)",
+      "gueltigkeit": "Gesamtprodukt inkl. /api/config",
+      "id": "P-04"
+    },
+    {
+      "aussage": "device hart cpu, gpu_device_index 0; Factory ueberschreibt GPU-Wuensche. --device akzeptiert nur cpu.",
+      "beleg": "factory.py:64-65; server.py:10453 choices=(cpu,); enforce_cpu_model_policy() Z.8764-8767; Dockerfile:39 bricht bei torch.version.cuda ab",
+      "evidenz": "CODE+TEST (test_factory_keeps_gpu_arguments_compatible_but_forces_cpu; test_cpu_only_contract.py; CI tools/cpu_only.py check ci.yml:111,185)",
+      "gueltigkeit": "Gesamtprodukt",
+      "id": "P-05"
+    },
+    {
+      "aussage": "Zwei benannte Modell-Lanes. Default final=faster_whisper, realtime=kroko_onnx. Realtime-Lane kann per use_main_model_for_realtime die Final-Lane mitbenutzen. Lanes als Feld lanes:[final]/[realtime] in /v1/models.",
+      "beleg": "server.py Service.active_models() Z.8015-8040, model_catalog() Z.7975-8013; ServerSettings.transcription_engine Z.412, .realtime_transcription_engine Z.413",
+      "evidenz": "CODE+TEST (test_v2_engine_boundary.py:99-105)",
+      "gueltigkeit": "Inferenz-Scheduler, /api/models, OpenAI-Aliasaufloesung",
+      "id": "P-06"
+    },
+    {
+      "aussage": "voice-stt-server kanonischer Start; stt-server und stt-server-legacy Kompatibilitaetsaliase; stt CLI-Client; stt-install-kroko Entwickler-/Release-Helfer. voice-stt-server -> VoiceSTT_server.server:main re-exportiert api_fastapi_server.server.main.",
+      "beleg": "setup.py:409-424 entry_points; VoiceSTT_server/server.py:8-14; CI prueft alle fuenf Scripts ci.yml:141-144",
+      "evidenz": "CONFIG+CODE",
+      "gueltigkeit": "Installation/Betrieb",
+      "id": "P-07"
+    },
+    {
+      "aussage": "main() parst Argumente, baut ServerSettings, startet uvicorn.run(create_app(settings)). Code-Defaults --host 0.0.0.0 --port 8010 --profile custom. YAML (--config/VOICESTT_CONFIG) liefert Defaults, die CLI-Parameter ueberschreiben. Precedence: YAML-Werte werden zu Parser-Defaults (parser.set_defaults) und ueberschreiben Code-Defaults; explizite CLI-Flags gewinnen danach.",
+      "beleg": "server.py main() Z.10813-10835, parse_args() Z.10394-10418, parser.set_defaults(**yaml_defaults) Z.10655; config.yaml:8-9; Dockerfile:99-100",
+      "evidenz": "CODE+CONFIG",
+      "gueltigkeit": "Betrieb",
+      "id": "P-08"
+    },
+    {
+      "aussage": "TUNING_PROFILES enthaelt nur custom (keine Overrides). Jedes andere Profil -> ValueError mit Verweis auf explizite Batch-/Timing-/VAD-Werte.",
+      "beleg": "server.py:162-175 TUNING_PROFILES, validate_tuning_profile; TEST test_fastapi_server_protocol.py:279-281 (tuning_profile parakeet-balanced -> 400 mit custom)",
+      "evidenz": "CODE+TEST",
+      "gueltigkeit": "Konfiguration",
+      "id": "P-09"
+    },
+    {
+      "aussage": "37 registrierte Routen: 32 HTTP in server.py, 3 WS (/ws/logs, /ws/transcribe, /ws/v2), 2 HTTP im OpenAI-Router (/v1/models, /v1/audio/transcriptions, ohne Prefix eingebunden). Gruppen: Info/Health, Konfiguration, Modelle (9 Routen /api/models*, /api/kroko/license/refresh), Sprache, Wake-Word, Settings, Logging, Metriken.",
+      "beleg": "server.py Routen Z.8874-9870, WS Z.9560/9912/10121, include_router Z.9899-9910; openai_routes.py:43,67",
+      "evidenz": "CODE (Dekorator-Zaehlung)",
+      "gueltigkeit": "API-Oberflaeche",
+      "id": "P-10"
+    },
+    {
+      "aussage": "GET /v1/models liefert Modellkatalog plus synthetischen Eintrag whisper-1 (engine:routing_alias, lanes:[final]) falls fehlend. POST /v1/audio/transcriptions: Multipart-Upload, Routing via Modell-Aliase (whisper-1->final, fast->realtime Default), stream=true als SSE (transcript.text.delta/done), Formate json|text|srt|vtt|diarized_json, Dateigroessenlimit. Header X-VoiceSTT-Requested-Model/-Resolved-Model/-Route, X-Request-ID; Override via voicestt_model/model_override oder x-voicestt-model; Deaktivierung -> 404.",
+      "beleg": "openai_routes.py:43-65, :67-617; ServerSettings.openai_max_file_bytes CLI-Default 25*1024*1024 server.py:10526; Alias-Default server.py:10524; resolve_openai_model() server.py:8425; config.yaml:93-97",
+      "evidenz": "CODE+TEST (test_openai_compatible_endpoint.py)+CONFIG",
+      "gueltigkeit": "HTTP-API",
+      "id": "P-11"
+    },
+    {
+      "aussage": "V1 admittiert vor erster Nachricht per Query, erzeugt kompakte 32-Zeichen-Hex-sessionId, sendet als erste Nachricht Server-hello mit Settings/Session-/Activation-Config/Capabilities/Limits/Engines/Log-Zugang. Danach Binaer-Audio und JSON-Kommandos start|stop|clear|ping|metrics|trigger|audio_availability. Nicht deprecated.",
+      "beleg": "server.py websocket_transcribe() Z.9912-10119; hello-Payload Z.10002-10014; uuid.uuid4().hex Z.9938; Kommandos Z.10074-10105",
+      "evidenz": "CODE+TEST (test_protocol_v1_v2_boundary.py:6-9)",
+      "gueltigkeit": "Legacy-Transport, weiter unterstuetzt",
+      "id": "P-12"
+    },
+    {
+      "aussage": "Binaerformat: 4 Byte LE uint32 Metadatenlaenge, UTF-8-JSON (max 64 KiB), Roh-Audio-Bytes. Verstoesse -> AudioPacketError.",
+      "beleg": "protocol.py MAX_METADATA_BYTES=64*1024 (Z.7), encode_audio_packet() Z.40-49, decode_audio_packet() Z.52-75, require_positive_int() Z.78",
+      "evidenz": "CODE",
+      "gueltigkeit": "V1-Transport",
+      "id": "P-13"
+    },
+    {
+      "aussage": "Verbindung akzeptiert, admittiert nichts bis gueltiges Client-hello als erste Nachricht. Ablehnung: Envelope->4400, Versionskonflikt->protocol.incompatible+4406, Session unzulaessig->session.rejected+4409. Handshake-Timeout 10.0s->4408.",
+      "beleg": "protocol_v2/handshake.py parse_hello() Z.83-178, negotiate() Z.181, admit_requested_session() Z.201-247; schema.py:29-32 PROTOCOL_VERSION=2, SUPPORTED=(2,), Close-Codes Z.202-206, DEFAULT_HANDSHAKE_TIMEOUT_SECONDS=10.0 Z.209; server.py:10123-10136 Trennungsbegruendung",
+      "evidenz": "CODE+TEST (test_protocol_v2_contract.py, test_protocol_v2_e2e.py)",
+      "gueltigkeit": "v2-Wire",
+      "id": "P-14"
+    },
+    {
+      "aussage": "Kommandos: activation.command, trigger_suppression.set, audio_availability.set, session_settings.patch, session.snapshot.request. 15 Result-Codes (geschlossene Menge). 18 Domain-Events; watchdog.warning, activation.trigger_suppressed, transcription.interim sind Nicht-State-Events (kein stateVersion-Inkrement). Phasen idle/waiting_first_speech/segment_active/followup_wait/closing_input; finalizing ist keine Phase. IDs kanonische kleingeschriebene UUIDs mit Bindestrichen; kompakte/grosse IDs abgewiesen.",
+      "beleg": "protocol_v2/schema.py:37-57 Typen, :62-80 Actions/Sources, :85-102 Phasen, :107-143 Result-Codes, :148-197 Events, new_canonical_id()/is_canonical_uuid() Z.214-233",
+      "evidenz": "CODE+TEST (tests/contracts/protocol-v2-vectors.json via test_protocol_v2_contract.py:44-51)",
+      "gueltigkeit": "v2-Wire",
+      "id": "P-15"
+    },
+    {
+      "aussage": "primarySource manual|wake_word; CLIENT_SOURCES={manual}. wake_word nur serverintern via Detektions-Admission. Mindestens eine Triggerquelle Pflicht; Wake-Word-Trigger verlangt nicht-leere Auswahl; ohne Wake-Word-Trigger Auswahl unzulaessig.",
+      "beleg": "schema.py:72-80; handshake.py:210-247; V1-Aequivalent server.py:996 ACTIVATION_SOURCES_PUBLIC",
+      "evidenz": "CODE+TEST (test_protocol_v2_contract.py, test_wake_admission.py)",
+      "gueltigkeit": "Beide Transporte",
+      "id": "P-16"
+    },
+    {
+      "aussage": "Genau ein ActivationController pro Session serialisiert Trigger/Recorder-/Timeout-Callbacks. Defaults: initial_speech 15.0s, followup 3.0s, segment_watchdog_initial 600.0s, _refresh 180.0s, _warning 30.0s, closing_recovery 5.0s. Finale Transkription keine Phase; nach sicherem Input-Close Vordergrund idle waehrend Hintergrund auslaeuft.",
+      "beleg": "activation.py:93-98 Defaults, class ActivationController Z.191; server.py:1000-1009 SessionActivationRequest",
+      "evidenz": "CODE+TEST (test_server_activation_controller.py, test_protocol_v2_state_version.py)",
+      "gueltigkeit": "Aktivierungsablauf, beide Transporte",
+      "id": "P-17"
+    },
+    {
+      "aussage": "Registry mit Key/Scope/Auth/Typ/Constraints/Default/Apply-Policy. Scopes server/session/client_local; Policies live/next_activation/next_session/server_restart. Eigene monotone settingsRevision je v2-Session plus separate Server-Revision. U.a. Activation-Timeouts, Wake-Word-Parameter, kroko.forceCommunity. secretsExposed:false; PATCH /api/v2/settings/server admin-geschuetzt.",
+      "beleg": "settings_control.py:38-99, SessionSettingsState, PatchResult; server.py:9223-9292",
+      "evidenz": "CODE+TEST (test_settings_control_plane.py, test_settings_runtime_persistence.py)",
+      "gueltigkeit": "Konfigurations-API, v2 session_settings.patch",
+      "id": "P-18"
+    },
+    {
+      "aussage": "Vier Log-Klassen (Request/Performance/Transcription/System-Event, je Max-Bytes/Backup/Retention), Eventstore SQLite, Live-Streaming /ws/logs, Historie /api/logs/events, /api/logs/sessions/{id}, /api/logs/transcriptions/{id}. Session-Zugriff via kurzlebiges Token create_log_access.",
+      "beleg": "server.py:9320-9383 /api/logging, 9539-9560 Log-Routen+WS, Service.create_log_access() Z.7772-7806; event_logging.py StructuredEventHub/apply_process_log_level; operations.py AuditLogManager/PerformanceLogManager; config.yaml:99-131",
+      "evidenz": "CODE+CONFIG",
+      "gueltigkeit": "Betrieb/Observability",
+      "id": "P-19"
+    },
+    {
+      "aussage": "Idle-Unload nach Inaktivitaet (Default 3600s), Memory-Policy max zwei mittelgrosse Modelle (allow_two_medium_models), explizites Laden/Entladen und Lifecycle-Abfrage durch Operatoren.",
+      "beleg": "server.py:10497-10517 CLI-Defaults, enforce_cpu_model_policy() Z.8764-8801, Routen GET/PUT /api/models/lifecycle Z.9029-9036, POST /api/models/load|unload Z.9074-9084, GET/PUT /api/models/active Z.9094-9101; config.yaml:85-90",
+      "evidenz": "CODE+CONFIG",
+      "gueltigkeit": "Betrieb/Administration",
+      "id": "P-20"
+    },
+    {
+      "aussage": "Product Authority ueber Modell-IDs (11 Faster-Whisper + Kroko-Manifest), STTModelManager mit atomarem Provisioner, Last-Known-Good-Rollback, OperatorIntent. Auto-Download Default AUS, hierarchische Freigabe. Kroko Free/Pro-Laufzeitvariante; Lizenz-Key waehlt nie Pro; Recheck-Route. /api/kroko/license/refresh timeout in (0,60] Default 5.0s; bei tier==pro danach Modell-Refresh.",
+      "beleg": "stt_model_management.py default_product_authority() Z.343-405, STTModelManager Z.628, refresh() Z.905, ManagedModelRegistryView Z.1294; server.py:8966-9027; Z.8991-9001, Z.9006-9013; config.yaml:23-37; Dockerfile:76-78",
+      "evidenz": "CODE+CONFIG",
+      "gueltigkeit": "Administration/Deployment",
+      "id": "P-21"
+    },
+    {
+      "aussage": "Drei Schluesseldomaenen: (a) OpenAI-Key /v1/*, (b) Admin-Key (PATCH /api/config, Modell/Lizenz/Settings-PATCH, Log-Historien), (c) Log-Token pro Session. adminAuthRequired via /api/config. Transkriptions-WS ohne vorgeschaltete Auth im Handler.",
+      "beleg": "security/{service,admin,openai,logs,kroko}.py; server.py:8915 adminAuthRequired, Z.8918-8919 admin_auth_error(), Z.9894-9897 authenticate_openai(); config.yaml ohne Schluessel (Verweis .env Z.4); compose L36-37 VOICESTT_API_KEY/VOICESTT_ADMIN_API_KEY",
+      "evidenz": "CODE+TEST (test_server_security_modularization.py)+CONFIG",
+      "gueltigkeit": "Betrieb/Sicherheit",
+      "id": "P-22"
+    },
+    {
+      "aussage": "/ liefert static/index.html; verbindet /ws/transcribe?clientId=.. und /ws/logs. Kein V2-Client im Paket.",
+      "beleg": "server.py:139-140 STATIC_DIR/INDEX_PATH, Route / Z.8881-8883; static/index.html:1132,1138,1269; setup.py:405 package_data; TEST test_fastapi_server_protocol.py:283-294",
+      "evidenz": "CODE+TEST",
+      "gueltigkeit": "Web-UI",
+      "id": "P-23"
+    },
+    {
+      "aussage": "Multi-Stage-Build ubuntu:24.04 (Digest gepinnt), vorgebautes Wheel (kein Native-Build im Image), User voicestt UID 10001, Port 8010, Volume /var/lib/voicestt, Liveness-only-Healthcheck /health (200 auch ohne Modell; sonst Restart-Loop ohne provisioniertes Modell). Compose restart:unless-stopped, init:true, ${VOICESTT_PORT:-8010}:8010, Offline-Modell-Env.",
+      "beleg": "Dockerfile:7,28-40,43-101; docker-compose.yml:13-90; server.py:8885-8905 /health (ok,ready,activeSessions,sttReady,eventStore..)",
+      "evidenz": "CONFIG+CODE",
+      "gueltigkeit": "Betrieb",
+      "id": "P-24"
+    },
+    {
+      "aussage": "CI ubuntu-24.04+windows-latest, Python 3.12: Wheel+SDist, twine check, nicht-editierbare Wheel-Installation in frischer venv, pip check, CPU-Vertrag, Versionsgleichheit Metadaten vs resolve_version(), fuenf Console-Scripts, Paket-Assets (warmup_audio.wav, kroko/models.json, static/index.html, Wake-Word-Verz.). Danach pytest tests/unit tests/compatibility und tests/packaging. Kein Publish (kein PyPI/GHCR/Tag).",
+      "beleg": ".github/workflows/ci.yml:40-194; pytest.ini:1-3 testpaths=tests/unit",
+      "evidenz": "CONFIG",
+      "gueltigkeit": "Release-Qualitaet",
+      "id": "P-25"
+    },
+    {
+      "aussage": "Lazy AudioToTextRecorder, AudioToTextRecorderClient, AudioInput, RealtimeSpeechBoundaryDetector, SpeechBoundaryEvent/Result, __version__/get_version(). Import zieht kein torch/faster-whisper/PyAudio. voice_stt_server kanonische Importflaeche (re-exportiert). Recorder-Bibliothek: zwei Wake-Backends (openwakeword, porcupine pvp/pvporcupine/porcupine) - Server-Capabilities melden nur backends:[openwakeword] (Scope-Grenze Server-Katalog=OpenWakeWord-Manifest).",
+      "beleg": "VoiceSTT/__init__.py:7-55; voice_stt_server/__init__.py:10-53; TEST test_audio_recorder_public_api.py; wakeword.py:37-41 PORCUPINE_WAKEWORD_BACKENDS; server.py:7728",
+      "evidenz": "CODE+TEST",
+      "gueltigkeit": "Library-Nutzung ohne Server",
+      "id": "P-26"
+    },
+    {
+      "aussage": "stt-server-legacy startet VoiceSTT_server.stt_server - Recorder-basierter Einzelnutzer-Server mit Control-/Data-WS 8011/8012, bedient von CLI-Client stt. Nicht der FastAPI-Produktserver.",
+      "beleg": "setup.py:417-418; stt_server.py:1-45; stt_cli_client.py:18-19 DEFAULT_CONTROL_URL ws://127.0.0.1:8011, DEFAULT_DATA_URL ws://127.0.0.1:8012",
+      "evidenz": "CODE+CONFIG",
+      "gueltigkeit": "Kompatibilitaet; trennen: Produktserver voice-stt-server:8010 FastAPI vs Legacy 8011/8012",
+      "id": "P-27"
+    }
+  ],
+  "not_implemented": [
+    {
+      "beleg": "factory.py:15-19, test_v2_engine_boundary.py:33-57 (Whisper-CPP, Parakeet, Cohere, Moonshine, Qwen3-ASR, Sherpa-ONNX, FunASR, Granite, Omnilingual..)",
+      "id": "N-01",
+      "thema": "Nur zwei STT-Engines; alle anderen nicht importierbar"
+    },
+    {
+      "beleg": "factory.py:64-65, server.py:10453, server.py:8767",
+      "id": "N-02",
+      "thema": "Keine GPU-Ausfuehrung (CPU hart erzwungen)"
+    },
+    {
+      "beleg": "server.py:162-175",
+      "id": "N-03",
+      "thema": "Keine Tuning-Presets ausser custom"
+    },
+    {
+      "beleg": "static/index.html:1132 nutzt /ws/transcribe",
+      "id": "N-04",
+      "thema": "Kein ausgelieferter V2-Client / kein V2-Browser-UI"
+    },
+    {
+      "beleg": "config.yaml:25,29,35; server.py:10436-10441",
+      "id": "N-05",
+      "thema": "STT-Auto-Download per Default AUS"
+    },
+    {
+      "beleg": "openai_routes.py:43,67",
+      "id": "N-06",
+      "thema": "Kein PATCH/DELETE auf /v1/* (nur zwei OpenAI-Routen)"
+    }
+  ],
+  "researcher_session": "ses_e47390448ffe7pBdhkmq3zDiMs",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-01",
+      "thema": "Zweck von api_fastapi_server/index.html (Wurzelkopie): von keiner Route/keinem package_data referenziert; evtl. toter Bestand"
+    },
+    {
+      "id": "U-02",
+      "thema": "Ob Branch feat/v2-release-cleanup im Checkout existiert (shallow/detached, keine Ref-Info)"
+    },
+    {
+      "id": "U-03",
+      "thema": "Ob externer Client den V2-Vertrag ausserhalb der Testharness nutzt (nicht aus Repo-Code ableitbar)"
+    }
+  ],
+  "writer_guidance": [
+    "Ziel in einem Satz aus P-04/P-06/P-11/P-14: CPU-only-Sprachserver, zwei Engines, zwei Lanes, drei Client-Protokolle (V1-WS, V2-WS, OpenAI-HTTP).",
+    "Einsatzbereiche nur belegt: (a) Browser-Streaming via mitgelieferter UI, (b) OpenAI-kompatible Batch-Transkription, (c) V2-Wire eigene Clients (nur serverseitig), (d) Python-Bibliothek/Recorder ohne Server, (e) Container-Deployment. Keine Cloud-/GPU-/Multi-Tenant-Aussagen.",
+    "Produktfunktionen als Tabelle mit Gruppen aus P-10, je mit Routen-/Modulbeleg.",
+    "C-01..C-05 explizit als Hinweis (v.a. max_sessions, wake_word_timeout).",
+    "N-04 ehrlich: V2 serverseitig fertig, ohne ausgelieferten Client.",
+    "Kein Diagramm (NOT_REQUESTED); Fluesse A-E als Textbloecke."
+  ]
+}

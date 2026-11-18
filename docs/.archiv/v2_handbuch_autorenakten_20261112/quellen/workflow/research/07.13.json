@@ -1,0 +1,316 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached SHA). Nur Commit bindend. docs/** nur als Zielobjekt der Doku-Gates, nie als Wahrheit.",
+  "chapter": "07.13",
+  "commit_verification": ".git/HEAD literal a8993c5c68042d996eab680d84a5b138a214bb5d (detached). Quellen: *.py, Tests, setup.py/MANIFEST/requirements, VERSION, workflows, config.yaml.",
+  "conflicts": [
+    {
+      "id": "C-1",
+      "thema": "Kommentar-Drift _version.py L53-54 (Zukunftsform) vs implementierter CLI; Code gilt."
+    },
+    {
+      "id": "C-2",
+      "thema": "Vektor-Drift-Gate skip-by-default ohne ENV (kein immer-Gate)."
+    },
+    {
+      "id": "C-3",
+      "thema": "Client-Kompatibilitaetstest opt-in (Env-Pinning, sonst skip)."
+    },
+    {
+      "id": "C-4",
+      "thema": "'Kein Rueckschritt' nur frozen v2; v1-extend bewusst entfernt."
+    },
+    {
+      "id": "C-5",
+      "thema": "Ressource-vor-Override vs Checkout-Override (load None) praezise trennen."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "resolve_version --> VERSION",
+    "resolve_version --> validated_build_identity",
+    "validated_build_identity --> load_build_identity",
+    "load_build_identity --> BuildIdentityResource",
+    "resolve_version --> VOICESTT_BUILD_VERSION",
+    "resolve_version --> installed_metadata",
+    "setup.py --> resolve_version",
+    "get_version --> resolve_version",
+    "server_version --> resolve_version",
+    "server_commit --> validated_build_identity",
+    "capture_identity --> git[HEAD,tree,dirty,date]",
+    "complete --> require_complete[Gate]",
+    "require_complete --> qualify_build_identity[RC-Gate]",
+    "wheel_identity --> BuildIdentity",
+    "PROTOCOL_VERSION --> negotiate --> hello.accepted",
+    "negotiate --> incompatible[4406]",
+    "RESULT_CODES --> docs[07 WS] (Gate)",
+    "builtin_definitions --> Registry --> schema_payload",
+    "schema_payload --> docs[03] (Gate)",
+    "ENGINE_CLASS_PATHS --> factory --> docs[04] (Gate)",
+    "ENGINE_CLASS_PATHS --> enforce_cpu",
+    "declared_routes --> docs[06] (Gate)",
+    "rc_manifest[SCHEMA=3] --> validate --> assemble",
+    "assemble --> ManifestError[diff/dirty]",
+    "validate --> ReleaseState --> advance[monoton]",
+    "advance --> OrderError[no backwards]",
+    "ReleaseState --> run_engine[REAL] --> Gates",
+    "ci.yml --> tests/unit --> {version,identity,boundary,reference,surface,contract}"
+  ],
+  "facts": [
+    {
+      "aussage": "Eine Versionsautoritaet: Ressource > ENV > VERSION(+setup.py) > Metadaten (kein Besitzer PackageNotFound); VERSION 2.0.0; nie Branch/Commit-Message.",
+      "beleg": "_version.py:160-184; VERSION:1; setup.py:19,27,347; __init__:19,29-30",
+      "evidenz": "A",
+      "gueltigkeit": "gesamtes Produkt",
+      "id": "CR7-01"
+    },
+    {
+      "aussage": "SemVer hart (offizielle Grammatik, strip); verworfen u.a. 1.0/1/v1.0.0/1.0.0.0/1.0.0-/01/1.00/''; VERSION exakt + newline, kein v.",
+      "beleg": "_version.py:46-103; test_version_authority:26-54,94-110",
+      "evidenz": "A",
+      "gueltigkeit": "jeder Versionswert",
+      "id": "CR7-02"
+    },
+    {
+      "aussage": "Bump patch|minor|major (Default patch, minor/major exklusiv); Prerelease/Build verworfen; nur prepare-next-version --apply schreibt VERSION; RELEASE_NOTES unberuehrt; Preflight bumpt nie.",
+      "beleg": "_version.py:54-58,106-141; cli.py:267-286; preflight:1-7",
+      "evidenz": "A",
+      "gueltigkeit": "Release-Vorbereitung",
+      "id": "CR7-03"
+    },
+    {
+      "aussage": "SemVer->PEP440 Allowlist nur alpha./beta./rc.; 2.0.0rc1/a2/b3/+build; preview/rc1/rc1-ohne-Punkt/secret abgelehnt ohne Wert im Fehler; alt-normalisiert ohne Original harter Fehler.",
+      "beleg": "_build_identity:27-39; _version:182-184; test_build_identity:27-41,168-173",
+      "evidenz": "A",
+      "gueltigkeit": "Identity/Wheel/sdist/Public",
+      "id": "CR7-04"
+    },
+    {
+      "aussage": "Identity-Schema geschlossen/strikt 10 Felder; exakte Feldmenge; schemaVersion int==1 (kein bool); packageVersion==package_version_for; Name in 3; Commit/Tree 40hex; Dirty bool|None; Date strikt+Roundtrip; krokoVariant==PRODUCT_VARIANTS[Name]; provenance git|manual; Duplikat/korrupt IdentityError.",
+      "beleg": "_build_identity:19,27-39,112-193",
+      "evidenz": "A",
+      "gueltigkeit": "jede Ressource (Erweiterung=Bruch)",
+      "id": "CR7-05"
+    },
+    {
+      "aussage": "complete nur Commit+Tree+DirtyFalse+Date+git; sonst require_complete IdentityError.",
+      "beleg": "_build_identity:163-173; test_build_identity:74-83",
+      "evidenz": "A",
+      "gueltigkeit": "RC-Quali",
+      "id": "CR7-06"
+    },
+    {
+      "aussage": "Provenienz Build-Zeit: sdist erbt+prueft (Version/Name sonst Konflikt); ohne .git manual/None; mit .git rev-parse HEAD/tree/status/dirty/show %cI UTC; Git-Fehler IdentityError; kein Parent-Discovery.",
+      "beleg": "build_identity_support:19-68",
+      "evidenz": "A",
+      "gueltigkeit": "Build+RC, nie HTTP",
+      "id": "CR7-07"
+    },
+    {
+      "aussage": "Checkout-Ressource immer ignoriert (never contaminate); ausserhalb Konflikte fatal (Metadaten/BUILD_VERSION/SERVER_COMMIT); is_source_checkout = setup.py + (.git oder kein PKG-INFO).",
+      "beleg": "_build_identity:55-59,196-224; test_build_identity:97-157",
+      "evidenz": "A",
+      "gueltigkeit": "Install/Build",
+      "id": "CR7-08"
+    },
+    {
+      "aussage": "Wheel muss Ressource genau 1x + genau 1 METADATA + (Name,Version)==Identity enthalten; match feldweise.",
+      "beleg": "build_identity_support:77-111; qualify_build_identity:35-41",
+      "evidenz": "A",
+      "gueltigkeit": "Artefakt-Gate",
+      "id": "CR7-09"
+    },
+    {
+      "aussage": "Draht: public_info Schema1/PROTOCOL/serverVersion/serverCommit/complete|incomplete/build/dist/runtime/instanceId; complete braucht commit!=unknown+Tree/Date+DirtyFalse+Name+Variante; kein Git zur Laufzeit.",
+      "beleg": "identity.py:85-138; _build_identity:42-48; qualify INSTALLED_CHECK",
+      "evidenz": "A",
+      "gueltigkeit": "hello/snapshot/Refusals",
+      "id": "CR7-10"
+    },
+    {
+      "aussage": "Protokoll eine Version (2); Maximum-Schnittmenge sonst None; leer/falsch 4400; keine gemeinsame 4406+incompatible; Refusal traegt supported; Codes 4400/4406/4408/4409/1011.",
+      "beleg": "schema.py:29,32,202-206; handshake:91-187; test e2e:393; compatibility:180-195",
+      "evidenz": "A",
+      "gueltigkeit": "/ws/v2",
+      "id": "CR7-11"
+    },
+    {
+      "aussage": "Vokabular geschlossen (No free additions): 5 Commands, 15 Results (applied/no_change true), 18 Events, 3 Non-State, 5 Phasen; Domain-Reasons exhaustiv sonst Unmapped (kein internal_error-Fallback).",
+      "beleg": "schema.py:51-197; commands:13-39; contract + code_reference:173-180",
+      "evidenz": "A",
+      "gueltigkeit": "frozen v2 (neu = Code+Vektoren+Doku)",
+      "id": "CR7-12"
+    },
+    {
+      "aussage": "Bewusster Bruch: deprecated extend auf beiden Draehten entfernt (v2 INVALID_PAYLOAD, v1 accepted=false invalid_action); frozen-Regel gilt v2, nicht v1-Alias.",
+      "beleg": "commands Docstring:8-11; boundary:200-222,17-19",
+      "evidenz": "A",
+      "gueltigkeit": "v1+v2 (kontrolliert)",
+      "id": "CR7-13"
+    },
+    {
+      "aussage": "Keine ID-Migration: v1 32hex dauerhaft, v2 weist zurueck statt umzuformatieren; kanonisch hypheniert (32hex/Gross verboten: 2 Replay-Keys); commandId validiert nie umgeschrieben.",
+      "beleg": "schema Docstring:12-22,219-244; server:2339; activation:408,456; boundary:225ff",
+      "evidenz": "A",
+      "gueltigkeit": "IDs (NOT_IMPLEMENTED by design)",
+      "id": "CR7-14"
+    },
+    {
+      "aussage": "Stabile Oberflaeche: /api/v2/info no-store, FastAPI version=identity, schema/server/wake-words Routen, /ws/transcribe (v1 Pflicht) neben /ws/v2; unveraenderter Client (gepinnt clean, Vektoren byte-gleich) sieht identisch; opt-in skip ohne ENV.",
+      "beleg": "server:8868-8879,9223,9235,9294,9912,10121-10135; compatibility:28-43,109-206",
+      "evidenz": "A",
+      "gueltigkeit": "REST/WS Identitaet",
+      "id": "CR7-15"
+    },
+    {
+      "aussage": "Keine HTTP-Stabilitaets-/Deprecation-Policy (kein Header/Alias/Router-Modul); nur protocolVersion + openapi.version; keine Zusage erfinden.",
+      "beleg": "Grep deprecat|compatib nur Docstrings/Engine; declared_routes nur Doku",
+      "evidenz": "A (Negativ)",
+      "gueltigkeit": "REST/WS (NOT_IMPLEMENTED)",
+      "id": "CR7-16"
+    },
+    {
+      "aussage": "Neue Keys nur builtin_definitions (Registry Default, schema sortiert ohne Secrets); unbekannt unknown_key, Server-in-Session wrong_scope, nicht-schreibbar read_only; Secrets im Overlay secret_not_allowed + public ausgeblendet.",
+      "beleg": "settings_control:38-60,146-186,618-673,764-1009,1295-1418; tests control_plane",
+      "evidenz": "A",
+      "gueltigkeit": "Control-Plane",
+      "id": "CR7-17"
+    },
+    {
+      "aussage": "Klassen fix (int/float/bool/string/list; session/server/client_local; session/admin; live/next_activation/next_session/server_restart keine Synonyme); Constraints min/max/allowed/minItems/lessThan; Bool nie Zahl; Envelope baseRevision/changes; Timing-Bundle final + Watchdog-Keys.",
+      "beleg": "settings_control:38-60,146-186,689-826",
+      "evidenz": "A",
+      "gueltigkeit": "Schema/Patch",
+      "id": "CR7-18"
+    },
+    {
+      "aussage": "Settings nur mit Doku: jeder schema_payload-Key als Backtick in Settings-Seite sonst rot (CI).",
+      "beleg": "test_v2_code_reference:182-189",
+      "evidenz": "A",
+      "gueltigkeit": "Doku-Gate",
+      "id": "CR7-19"
+    },
+    {
+      "aussage": "Genau 2 Engines (Literal Autoritaet, Default faster_whisper); Normalisierung nur strip/lower/-; fremd vor Import Unsupported+Liste; Factory cpu/0; Server beide Felder; Start kein Fremd-Modul.",
+      "beleg": "factory:16-76; boundary:61-132",
+      "evidenz": "A",
+      "gueltigkeit": "Factory/Settings/Modelle/Start",
+      "id": "CR7-20"
+    },
+    {
+      "aussage": "Draft-Isolation/Entfernung strukturell: nur 2 *_engine*.py; 7 entfernt repo-weit weg; 5 Drafts ohne __init__ nicht importiert (AST inkl Strings); keine Engine-Extras/Pflicht-Deps; prune engineering.",
+      "beleg": "test_v2_engine_boundary:146-223",
+      "evidenz": "A",
+      "gueltigkeit": "Layout/Packaging",
+      "id": "CR7-21"
+    },
+    {
+      "aussage": "RC Schema 3 (2-Editionen verworfen); validate: schema==3, distributions {pro} name voice-stt-server, images {pro}, Plattformen linux/win, cp312, staging digest-gleich, redistribution BLOCKED|VERIFIED+evidence, qualification Felder; READINESS NOT/QUALIFIED/REJECTED; kein sdist.",
+      "beleg": "rc_manifest:1-229; test_release_rc_manifest",
+      "evidenz": "A",
+      "gueltigkeit": "RC/Publish-Vorbedingung",
+      "id": "CR7-22"
+    },
+    {
+      "aussage": "Publish-Gates nur REAL: Redistribution VERIFIED+Revision+evidence, QUALIFIED, evidence nicht leer/none, Commit/Tree gleich; Kandidat alle Varianten gleich Commit+Version, dirty verhindert.",
+      "beleg": "engine:192-215; candidate:229-252; tests release*",
+      "evidenz": "A",
+      "gueltigkeit": "Engine/RC/Publish",
+      "id": "CR7-23"
+    },
+    {
+      "aussage": "Version nach Beginn unveraenderlich; Identitaet exakt sonst StateError; advance nur gleich (Resume) oder +1 sonst OrderError; Tag vor erstem Public; Aliase erst nach EXTERNAL.",
+      "beleg": "state:41-52,164-262,265-308; engine:76-86",
+      "evidenz": "A",
+      "gueltigkeit": "Engine/State (+CR7-25)",
+      "id": "CR7-24"
+    },
+    {
+      "aussage": "Kein Rollback/Unpublish/Downgrade: kein Schritt/CLI; Monotonie strukturell; rollback/downgrade nur Scheduler/SQLite/Artefakt-Kommentare.",
+      "beleg": "engine:76-86; cli:456-548; Grep rollback|downgrade",
+      "evidenz": "A (Negativ)",
+      "gueltigkeit": "Release (NOT_IMPLEMENTED)",
+      "id": "CR7-25"
+    },
+    {
+      "aussage": "Keine Migration (migrat nur 'nicht migriert'); Settings Registry-validiert statt ueberfuehrt.",
+      "beleg": "schema:21-22; server:2339; activation:408,456; Grep",
+      "evidenz": "A (Negativ)",
+      "gueltigkeit": "Config/Settings/IDs (NOT_IMPLEMENTED)",
+      "id": "CR7-26"
+    },
+    {
+      "aussage": "Version nie aus Branch/Commit-Message (nur Override/VERSION/Ressource/Metadaten); Laufzeit ohne Git; Git nur Build/Preflight.",
+      "beleg": "_version Docstring:163-166; identity:9-12; build_identity:40-65; preflight:87-123",
+      "evidenz": "A",
+      "gueltigkeit": "Aufloesung (kein Branch)",
+      "id": "CR7-27"
+    },
+    {
+      "aussage": "Vektoren Drift-Schutz teilweise: Cross-Repo-Datei geladen nie inline; Byte-Gleichheit nur mit ENV sonst skip; immer Version+12 Pflicht + echter Parser/Projektion.",
+      "beleg": "contract:1-107; vectors.json",
+      "evidenz": "A",
+      "gueltigkeit": "v2-Contract (Drift BYPASS default)",
+      "id": "CR7-28"
+    },
+    {
+      "aussage": "Doku-Gitter Code-Referenz: fixe Seitenliste, >2500 Zeichen, Primaere-Quellen+Link, Index/Links, kein altes docs; Routen>=30, COMMAND/RESULT/EVENT, Settings-Keys, ENGINE_KEYS dokumentiert.",
+      "beleg": "test_v2_code_reference:27-200",
+      "evidenz": "A (CI Gate)",
+      "gueltigkeit": "docs/v2-code-reference/",
+      "id": "CR7-29"
+    },
+    {
+      "aussage": "Surface-Gate G51-60: kein docs/engines, genau 2 Guides >500, 9 Entfernte nirgends/kein Link, .archiv unberuehrt, Uebersicht verlinkt+markiert, README Links/Secrets/Pfade.",
+      "beleg": "test_docs_surface:1-208",
+      "evidenz": "A (Gate-Mechanik)",
+      "gueltigkeit": "docs/README",
+      "id": "CR7-30"
+    },
+    {
+      "aussage": "CI erzwingt Gates: build-and-test pip check/CPU/pytest unit+compat/packaging/diff; Workflows genau 3/nur dispatch/SHA-pin/Version-vor-Tag.",
+      "beleg": "ci:40-194; test_release_workflows:58,142,264,443",
+      "evidenz": "A",
+      "gueltigkeit": "jede PR/jeder Push",
+      "id": "CR7-31"
+    },
+    {
+      "aussage": "Tooling-Importe identisch (tools.X is engineering); historische CLI laufen --help; pipeline Facade.",
+      "beleg": "tools/*:1-21; pipeline:1; engineering_path_contract:197-229",
+      "evidenz": "A",
+      "gueltigkeit": "Dev/Tooling (nicht Wire)",
+      "id": "CR7-32"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-1",
+      "thema": "Keine HTTP-API-Stabilitaets-/Deprecation-Policy (CR7-16)."
+    },
+    {
+      "id": "N-2",
+      "thema": "Kein Rollback/Unpublish/Downgrade (CR7-25)."
+    },
+    {
+      "id": "N-3",
+      "thema": "Keine Konfig-/Settings-/ID-Migration (CR7-26, CR7-14)."
+    }
+  ],
+  "researcher_session": "ses_e36e25979ffeWVUfA3yenphEXy",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-1",
+      "thema": "stable Doctoring nicht auffindbar (frozen contract/immutable identity/Doku-Gates naechst). Nicht raten."
+    },
+    {
+      "id": "U-2",
+      "thema": "Branch detached nicht verifizierbar."
+    },
+    {
+      "id": "U-3",
+      "thema": "Realer 2.0.0-rc.N-Status nicht code-belegt (VERSION 2.0.0)."
+    }
+  ],
+  "writer_notes": "Mechanik nur referenzieren (STEP/Adapter/Resume 07.05-12; Vokabular 04.x; Registry 03.x; Fingerprint dort). Diagramm NOT_REQUESTED; edges nur Kanten. U-1 nicht behaupten."
+}

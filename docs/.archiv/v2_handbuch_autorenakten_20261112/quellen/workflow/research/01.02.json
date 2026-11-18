@@ -1,0 +1,376 @@
+{
+  "branch_context": "feat/v2-release-cleanup (Auftragskontext; Checkout detached, keine refs/heads/** vorhanden)",
+  "chapter": "01.02",
+  "commit_verification": ".git/HEAD enthaelt exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached HEAD)",
+  "conflicts": [
+    {
+      "auflösung": "Fallback existiert; Kommentar-Aussage 'nur Tests' ist unpraezise (C-19).",
+      "beleg": "server.py handle_inference_result Z.3044-3048 Kommentar vs _on_inference_result Z.8610-8611 Aufruf",
+      "id": "K-01",
+      "thema": "Kommentar 'nur von aelteren Inline-Session-Tests genutzt' vs regulaerer Fallback-Aufruf"
+    },
+    {
+      "auflösung": "Code bestaetigt Behauptung (kein manager.connect im V2-Pfad) - als explizite Architekturaussage verwendbar.",
+      "beleg": "connection.py-Docstring + server.py Z.10133-10135",
+      "id": "K-02",
+      "thema": "V2 nicht im ConnectionManager registriert"
+    }
+  ],
+  "correction_round": 0,
+  "diagram_brief_ref": "workflow/diagram-notes/01.02.md (Idee 1 Komponentenuebersicht, flowchart; unbelegte Phasen/Pfeile/Zahlen vermeiden)",
+  "diagram_edges": [
+    "Client -> FastAPI-App | HTTP/WS-Request | Transport | C-01,C-02",
+    "FastAPI-App -> /ws/transcribe | Route registriert | Registrierung | C-06",
+    "FastAPI-App -> /ws/v2 | Route registriert | Registrierung | C-09",
+    "FastAPI-App -> OpenAI-Router | include_router(create_openai_router(...)) | Registrierung | C-25",
+    "V1-Endpoint -> VoiceSTTService.admit_session | Query-Config -> admit_session | Aufruf | C-06,C-04",
+    "V2-Endpoint -> ProtocolV2Connection | Konstruktion + set_sink | Aufruf | C-09",
+    "ProtocolV2Connection -> admit_session | _admit nach validiertem hello, canonical_ids=True | Aufruf | C-10,C-04",
+    "admit_session -> SessionStore | reserve/add | Aufruf | C-04,C-05",
+    "admit_session -> RecorderBackedRealtimeSession | Konstruktion | Aufruf | C-04",
+    "Session -> ConnectionManager | publish_session (V1-Payload) | Publish | C-08,C-21",
+    "V1-Endpoint -> ConnectionManager | connect/disconnect | Registrierung | C-06,C-08",
+    "ProtocolV2Connection -> Session | set_protocol_observer + start_streaming | Bindung | C-10,C-11 [KEIN ConnectionManager-Pfeil fuer V2]",
+    "Session -> ProtocolV2Connection | _notify_protocol_observer(event,payload) | Callback | C-21,C-10",
+    "Session -> StructuredEventHub | _emit_structured_event | Emit | C-21,C-22",
+    "Session -> ActivationController | activate/refresh/finish/cancel/input_closed | Aufruf | C-13,C-12",
+    "ActivationController -> Session | ActivationDecision (accepted/reason/snapshot) | Rueckgabe | C-13,C-12",
+    "Session -> Recorder (Gate) | open/close/abort_controlled_activation | Aufruf | C-13,C-14,C-15",
+    "V1-Endpoint -> Session (Audio) | ingest_audio_packet | Aufruf | C-06,C-07",
+    "Session -> Recorder (Audio) | feed_audio(samples, original_sample_rate=16000) | Aufruf | C-07",
+    "Recorder -> Session | Lifecycle-Callbacks (on_recording_start/stop, on_wakeword_*, on_vad_*, on_recorded_chunk) | Callback | C-16",
+    "Recorder -> SchedulerTranscriptionExecutor | Final-/Realtime-Executor | Aufruf | C-16,C-17",
+    "SchedulerTranscriptionExecutor -> transcribe_for_recorder | Session-/Kind-Kontext | Aufruf | C-16",
+    "VoiceSTTService -> InferenceScheduler.submit | _submit_scheduler_job | Aufruf | C-18,C-19",
+    "InferenceScheduler -> FairInferenceQueue | main/ggf. realtime | Aufruf | C-18",
+    "FairInferenceQueue -> SharedEngineWorker | queue.get() | Aufruf | C-18",
+    "SharedEngineWorker -> Engine | transcribe_with_options/transcribe | Aufruf | C-18,C-30",
+    "SharedEngineWorker -> _on_inference_result | result_callback(InferenceResult) | Callback | C-18,C-19",
+    "VoiceSTTService._on_inference_result -> Pending-Holder | API-Holder -> Recorder-Holder | Zustellung | C-19",
+    "Pending-Holder -> Session-Aufrufer | threading.Event.set() -> TranscriptionResult | Rueckgabe | C-19",
+    "Session -> SegmentLedger | _dispatch_ledger_operation | Aufruf | C-20,C-21",
+    "Session -> VoiceSTTService | cancel_scheduler_session/deactivate_speaker (Teardown) | Aufruf | C-33",
+    "Session -> Recorder | shutdown()/abort() (Teardown) | Aufruf | C-33",
+    "VoiceSTTService -> SecurityService | admin_http_error/openai_http_error/log_*_scope | Aufruf | C-24",
+    "OpenAI-Router -> VoiceSTTService | resolve_openai_model/transcribe_openai/audit.archive_audio | Aufruf | C-25,C-26",
+    "OpenAI-Router -> InferenceScheduler | via transcribe_openai -> _submit_scheduler_job (indirekt) | Aufruf | C-26",
+    "VoiceSTTService -> STTModelManager | refresh/restore_last_known_good | Aufruf | C-27",
+    "STTModelManager -> Scheduler | Austausch stop->build->start | Zustand | C-27",
+    "Session -> SessionSettingsState | settings_state (Patch/Effective) | Aufruf | C-28,C-11",
+    "V2-SettingsPort -> SessionSettingsState | Delegation | Aufruf | C-11,C-28",
+    "WakeWordPort -> WakeWordCatalogAuthority | Katalog/Resolver | Aufruf | C-11,C-03",
+    "Recorder-Wake-Engine -> Evaluator | evaluator.process(chunk,end_sample) | Aufruf | C-29",
+    "Evaluator/Session -> WakeAdmissionCoordinator | admit(hit,boundary) | Aufruf | C-29",
+    "WakeAdmissionCoordinator -> ActivationController | activate(source=wake_word) via _activate_from_wake_candidate | Aufruf | C-29,C-12",
+    "create_app -> RuntimeConfigStore | load() beim Start | Aufruf | C-02,C-23",
+    "VoiceSTTService -> StructuredEventHub | server.starting/ready/stopping | Emit | C-32,C-22"
+  ],
+  "do_not_draw": [
+    "Keine Kante Recorder -> Kindprozess run_transcription_worker im Serverbetrieb (C-17).",
+    "Keine Kante V2 -> ConnectionManager (C-08, C-09).",
+    "Keine Kante InferenceScheduler -> Session direkt; Rueckweg nur via VoiceSTTService (C-19).",
+    "Keine Kante SegmentLedger -> Wire; Ledger via Session ausgewertet (C-20, C-21)."
+  ],
+  "downstream_deps": {
+    "01.03/01.09": "C-01,C-02,C-03,C-08,C-09,C-21",
+    "01.04, 02.02, 02.05, 02.08": "C-07,C-16,C-17,C-18,C-19",
+    "01.05, 01.07, 02.03, 02.04": "C-12,C-13,C-14,C-15,C-29",
+    "01.06, 02.01, 05.x": "C-05,C-24,C-28,C-33",
+    "01.08, 04.03/04.10/04.12, 09.03": "C-10,C-11,C-25,C-26,C-31",
+    "02.06, 02.07, 08.08": "C-27,C-30",
+    "06.08, 06.09, 08.13": "C-22,C-23"
+  },
+  "evidenzgrade": "A=Codepfad direkt belegbar; A-=Code+Docstring, Code bestaetigt; B=Code+Test; C=nur Kommentar (nie allein verwendet)",
+  "facts": [
+    {
+      "aussage": "Ein Prozess, eine ASGI-App, ein Einstiegspunkt. main() laedt uvicorn, ruft uvicorn.run(create_app(settings)). Kein Worker-/Broker-Modus. console_scripts voice-stt-server/stt-server -> VoiceSTT_server.server:main; VoiceSTT_server/server.py reiner Re-Export von api_fastapi_server.server.",
+      "beleg": "server.py main() Z.10813-10835, create_app() Z.8816; setup.py Z.409-423; VoiceSTT_server/server.py Z.8-14",
+      "evidenz": "A",
+      "gueltigkeit": "Prozess/Server",
+      "id": "C-01"
+    },
+    {
+      "aussage": "create_app setzt zusammen: optional RuntimeConfigStore.load() -> settings.__post_init__() -> enforce_cpu_model_policy -> ConnectionManager() -> VoiceSTTService(settings,manager,..) -> FastAPI(lifespan). Lifespan: service.start(loop), finally service.stop().",
+      "beleg": "server.py create_app Z.8816-8850, lifespan Z.8852-8866, app.state.voicestt_service Z.10290",
+      "evidenz": "A",
+      "gueltigkeit": "Server",
+      "id": "C-02"
+    },
+    {
+      "aussage": "Service haelt: SecurityService, ConnectionManager, SessionStore, settings_control ServerSettingsState+Registry, STTModelManager+ManagedModelRegistryView, InferenceScheduler, StructuredEventHub, Audit-/PerformanceLogManager, WakeWordCatalogAuthority+Registry, zwei Pending-Result-Registries, RuntimeConfigStore.",
+      "beleg": "server.py VoiceSTTService.__init__ Z.6240-6327",
+      "evidenz": "A",
+      "gueltigkeit": "Serverweit (ein Objekt pro App)",
+      "id": "C-03"
+    },
+    {
+      "aussage": "Session-Erzeugung als Fabrik: Wake-Word-/Activation-Config aufloesen -> SessionStore.reserve() -> RecorderBackedRealtimeSession(...) -> SessionStore.add(). Fehler: release_reservation + session.close().",
+      "beleg": "server.py admit_session Z.7325-7370",
+      "evidenz": "A",
+      "gueltigkeit": "Pro Verbindung/Session",
+      "id": "C-04"
+    },
+    {
+      "aussage": "SessionStore: dict session_id->Session, _reserved_session_ids, _active_speakers, rejected_sessions; Limits max_sessions/max_active_speakers; snapshots() liefert activeSessions/activeSpeakers/pendingSessionAdmissions/rejectedSessions + je Session snapshot(). Thread-safe via Lock.",
+      "beleg": "server.py SessionStore Z.6133-6237",
+      "evidenz": "A",
+      "gueltigkeit": "Serverweit",
+      "id": "C-05"
+    },
+    {
+      "aussage": "V1 /ws/transcribe: Query-Parsing -> service.admit_session -> manager.connect -> Server-hello mit logAccess -> Schleife: Binaerframe -> decode_audio_packet -> ingest_audio_packet; Text: start/stop/clear/ping/metrics/trigger/audio_availability. finally: remove_session + disconnect + Audit.",
+      "beleg": "server.py websocket_transcribe Z.9912-10119 (connect 9988, finally 10111-10119)",
+      "evidenz": "A",
+      "gueltigkeit": "Pro V1-Verbindung",
+      "id": "C-06"
+    },
+    {
+      "aussage": "Audio: Paket -> Sample-Konvertierung -> Pruefung streaming -> recorder.feed_audio(samples, original_sample_rate=SERVER_SAMPLE_RATE). Fehler: events.emit(system,recorder.failed), Rueckgabe (False,reason).",
+      "beleg": "server.py ingest_audio_packet Z.3011-3042, packet_to_server_samples Z.7653ff",
+      "evidenz": "A",
+      "gueltigkeit": "Pro Session",
+      "id": "C-07"
+    },
+    {
+      "aussage": "ConnectionManager: session_id->websocket; send/send_all JSON; publish_session/publish_all via asyncio.run_coroutine_threadsafe in Event-Loop. connect/disconnect nur im V1-Endpoint. Ein Kanal pro V1-Session.",
+      "beleg": "server.py ConnectionManager Z.1692-1753; Nutzung nur V1 (9988/10113)",
+      "evidenz": "A",
+      "gueltigkeit": "Serverweit",
+      "id": "C-08"
+    },
+    {
+      "aussage": "V2 /ws/v2: accept -> ProtocolV2Connection(service,client_id,server_version,server_commit) -> sink via loop.call_soon_threadsafe in asyncio.Queue, separater writer()-Task. Vor accepted: wait_for(receive, timeout=handshake_timeout); danach paralleles Warten Receive vs transport_close. Dispatch handle_binary/handle_text. finally: close_session(), Close-Code-Aushandlung, Audit session.closed. KEIN manager.connect im V2-Pfad.",
+      "beleg": "server.py websocket_protocol_v2 Z.10121-10288",
+      "evidenz": "A",
+      "gueltigkeit": "Pro V2-Verbindung",
+      "id": "C-09"
+    },
+    {
+      "aussage": "ProtocolV2Connection haelt Protokollzustand, keine Domaenentscheidungen. _admit baut SessionWakeWordRequest/SessionActivationRequest, ruft admit_session(canonical_ids=True). _activate_session erzeugt ports.SettingsPort, ProtocolSessionState, EventProjector, setzt runtime_suppression, session.set_protocol_observer(_on_domain_event), start_streaming(). _handle_command mappt 5 Kommandos.",
+      "beleg": "protocol_v2/connection.py Klasse Z.56-101, _handle_handshake 218, _admit 257-282, _activate_session 307-343, _handle_command 347-369, _on_domain_event 688-716",
+      "evidenz": "A",
+      "gueltigkeit": "Pro V2-Verbindung",
+      "id": "C-10"
+    },
+    {
+      "aussage": "Ports entkoppeln Wire von Session/Service: SettingsPort delegiert an session.settings_state; WakeWordPort an service.wakeword_catalog (catalog/capabilities/revision/available_ids/resolve/validate).",
+      "beleg": "protocol_v2/ports.py SettingsPort Z.36-82, WakeWordPort Z.84-160",
+      "evidenz": "A",
+      "gueltigkeit": "Pro Verbindung / serverweit (Katalog)",
+      "id": "C-11"
+    },
+    {
+      "aussage": "Ein ActivationController pro Session; Phasen idle/waiting_first_speech/segment_active/followup_wait/closing_input; Quellen manual/wake_word; Deadline-Arten initial_speech/followup/segment_watchdog/closing_recovery. Instanziierung nur bei activation_config.mode==controlled im Session-Init.",
+      "beleg": "activation.py Z.65-98 Konstanten/Defaults, Klasse Z.191, Methoden activate 464/refresh 511/finish 618/cancel 628/input_closed 722/tick 746/reset 819; server.py Z.2421-2441",
+      "evidenz": "A",
+      "gueltigkeit": "Pro Session (Semantik bei 02.03/08.06)",
+      "id": "C-12"
+    },
+    {
+      "aussage": "Trigger-Pfad: prepare_activation_command -> _command_replay.lookup (REPLAY/CONFLICT) -> controller.activate/refresh/finish -> _apply_activation_decision_locked. Offenes Fenster: recorder.open_controlled_activation(open_id, replace=True, generation); closing_input: nur InputClosePlan; Timer via _arm_activation_timer_locked.",
+      "beleg": "server.py handle_trigger_command Z.3500-3572, _run_activation_command_locked Z.3665-3728, _apply_activation_decision_locked Z.3873-3954 (Gate 3938-3940, Plan 3913-3927)",
+      "evidenz": "A",
+      "gueltigkeit": "Pro Session",
+      "id": "C-13"
+    },
+    {
+      "aussage": "Input-Close zweiphasig mit fester Reihenfolge: Phase A unter lock (Plan, kein Recorder). Phase B: Gate schliessen -> flush_buffered_audio falls recording -> Ledger schliessen -> Close-Event reservieren -> controller.input_closed -> publizieren. Fehlschlag: Session bleibt closing_input (Recovery).",
+      "beleg": "server.py _build_close_plan_locked Z.3835-3871, _run_input_close Z.4053-4139, _run_recovery_close Z.4141ff",
+      "evidenz": "A",
+      "gueltigkeit": "Pro Session/Activation",
+      "id": "C-14"
+    },
+    {
+      "aussage": "Recorder kennt nur Gate offen/geschlossen, generation-gebunden (activation_id, generation); kennt keine Triggerquelle.",
+      "beleg": "core/activation_control.py Z.1-16,29-37,52ff; audio_recorder.py set_activation_policy/open/close/abort_controlled_activation Z.714-751",
+      "evidenz": "A",
+      "gueltigkeit": "Pro Recorder (=pro Session)",
+      "id": "C-15"
+    },
+    {
+      "aussage": "Session konfiguriert Recorder (_create_recorder): AudioToTextRecorder mit use_microphone=False, start_callback_in_new_thread=False, alle Lifecycle-Callbacks, transcription_executor (final) + realtime_transcription_executor (realtime), beide -> service.transcribe_for_recorder.",
+      "beleg": "server.py _create_recorder Z.2737-2848; SchedulerTranscriptionExecutor Z.2273-2305",
+      "evidenz": "A",
+      "gueltigkeit": "Pro Session",
+      "id": "C-16"
+    },
+    {
+      "aussage": "Im Serverbetrieb laeuft Transkription nicht im Recorder-Kindprozess: mit externem Executor kein start_recorder_worker(run_transcription_worker), main_transcription_ready_event sofort gesetzt; Final-Audio via Thread -> call_transcription_executor -> Scheduler. Realtime ebenso.",
+      "beleg": "core/initialization.py Z.310-321,433-448; core/transcription.py submit_transcription_request Z.202-241; core/realtime.py Z.240-294; _uses_external_transcription_executor",
+      "evidenz": "A",
+      "gueltigkeit": "Serverbetrieb (Recorder immer mit Executors gebaut)",
+      "id": "C-17"
+    },
+    {
+      "aussage": "Scheduler: main_queue immer; realtime_queue = main_queue falls use_main_model_for_realtime sonst eigene Queue+Worker. submit: Final prueft Session-/globale Depth; Realtime ersetzt vorhandenen Job (coalesced) oder Ablehnung. get verwirft Realtime mit deadline_at<now als stale. Worker: engine.transcribe_with_options sonst transcribe -> InferenceResult via result_callback.",
+      "beleg": "server.py InferenceScheduler Z.2111-2271, FairInferenceQueue submit/get Z.1756-1893, SharedEngineWorker Z.1942-2108",
+      "evidenz": "A",
+      "gueltigkeit": "Serverweit (geteilte Queues/Worker)",
+      "id": "C-18"
+    },
+    {
+      "aussage": "Ergebnisrouting: Performance-Event -> complete_pending_api_transcription (return) -> complete_pending_recorder_transcription (return) -> session.handle_inference_result(result). transcribe_for_recorder blockiert in 0.1s-Schritten auf threading.Event, Abbruch bei Session-weg/Generationswechsel.",
+      "beleg": "server.py _on_inference_result Z.8547-8612, complete_pending_api_transcription Z.8415-8423, complete_pending_recorder_transcription Z.8353-8360, transcribe_for_recorder Z.8251-8351",
+      "evidenz": "A",
+      "gueltigkeit": "Serverweit, Ergebnis pro Request",
+      "id": "C-19"
+    },
+    {
+      "aussage": "SegmentLedger = vom Vordergrund entkoppelte Final-Buchhaltung. Foreground nach sicherem Input-Close idle; Ledger fuehrt akzeptierte Final-Segmente in sitzungsweiter Reihenfolge.",
+      "beleg": "segment_ledger.py Z.1-16 Terminals; server.py _open_ledger_activation 4507, _close_ledger_activation 4517, _dispatch_ledger_operation 4536, _apply_ledger_update 4553",
+      "evidenz": "A",
+      "gueltigkeit": "Pro Session",
+      "id": "C-20"
+    },
+    {
+      "aussage": "Ein Lifecycle-Funnel speist drei Verbraucher: jedes Timeline-Event an (a) manager.publish_session (V1-Wire), (b) StructuredEventHub.emit, (c) optionaler _protocol_observer (V2-Projektion; nur Benachrichtigung, fehlertolerant). Hoechster Knoten fuer Session->V1/V2/Hub.",
+      "beleg": "server.py _publish_timeline_event Z.5880-5950, publish_status Z.3102-3137, _notify_protocol_observer Z.5976-5991, _emit_structured_event Z.5852-5878",
+      "evidenz": "A",
+      "gueltigkeit": "Pro Session",
+      "id": "C-21"
+    },
+    {
+      "aussage": "StructuredEventHub normalisiert, faechert an SQLite+JSONL-Senken: bei event_store_enabled SQLiteEventStore(Path(event_store_path)); getrennte Queues/Threads file/stdout/control; Cursor-Subscriptions.",
+      "beleg": "event_logging.py StructuredEventHub Z.697-756+, SQLiteEventStore 438, CalendarJsonlSink 314, BoundedPriorityEventQueue 189",
+      "evidenz": "A",
+      "gueltigkeit": "Serverweit",
+      "id": "C-22"
+    },
+    {
+      "aussage": "Persistenz: RuntimeConfigStore versioniertes JSON (settings, settingsControlOverlay, settingsRevision) per Read-Modify-Write + os.replace. Pfade: <data_root>/logs/{audit,performance,transcription,system}, logs/voicestt-events.sqlite3, logs/audio, <data_root>/config/runtime.json.",
+      "beleg": "operations.py RuntimeConfigStore Z.401-470, AuditLogManager Z.327-362; server.py ServerSettings.__post_init__ Z.519-532",
+      "evidenz": "A",
+      "gueltigkeit": "Serverweit",
+      "id": "C-23"
+    },
+    {
+      "aussage": "Vier unabhaengige Mechanismen hinter Fassade SecurityService: AdminGate, OpenAIGate, LogTokenAuthority+LogGate, KrokoLicenseGate. HTTP-Admin, OpenAI-Bearer, Log-Tokens, Kroko-Lizenz nicht austauschbar.",
+      "beleg": "security/service.py SecurityService Z.13-36; Nutzung server.py Z.8918-8926 Admin, Z.9894-9897 OpenAI, Z.9592 Log-WS; security/{admin,openai,logs,kroko}.py",
+      "evidenz": "A+B (test_server_security_modularization.py Z.1-15,34-63)",
+      "gueltigkeit": "Serverweit",
+      "id": "C-24"
+    },
+    {
+      "aussage": "OpenAI-Router separates Modul ohne Import von server.py; alle Kollaborateure injiziert (service, settings, authenticate_openai, decode_audio_float32..). Transkription: service.resolve_openai_model (132), audit.archive_audio (155), service.transcribe_openai (343,470).",
+      "beleg": "openai_routes.py create_openai_router Z.28-41, Routen Z.43,67; Registrierung server.py Z.9899-9910",
+      "evidenz": "A",
+      "gueltigkeit": "Serverweit",
+      "id": "C-25"
+    },
+    {
+      "aussage": "OpenAI-Auftraege durch dieselben fairen Queues: Pseudo-session openai-<id>, InferenceJob mit request_options, Submit via _submit_scheduler_job, Warten mit Timeout, bei Timeout cancel_scheduler_session.",
+      "beleg": "server.py transcribe_openai Z.8362-8413, resolve_openai_lane Z.8493, _submit_scheduler_job Z.7458",
+      "evidenz": "A",
+      "gueltigkeit": "Pro HTTP-Request",
+      "id": "C-26"
+    },
+    {
+      "aussage": "Modellautoritaet kann Scheduler austauschen: aufgeloeste Modelle -> settings._resolved_stt_models; bei Aenderung unter _scheduler_lock alt stoppen, neu bauen/starten, Ready pruefen. Blockiert bei active_speaker_count>0 oder Pending-Ergebnissen. Idle-Thread entlaedt nach model_idle_timeout_seconds.",
+      "beleg": "server.py STTModelManager Z.6295-6300, _apply_stt_model_snapshot Z.6363-6374, refresh/_refresh_locked Z.7065-7144, _models_busy Z.7537-7542, unload_models Z.7544-7568, _model_idle_worker Z.7623-7639",
+      "evidenz": "A",
+      "gueltigkeit": "Serverweit (Scheduler geteilte Ressource)",
+      "id": "C-27"
+    },
+    {
+      "aussage": "Settings-Control-Plane: Scopes server/session/client_local; Policies live/next_activation/next_session/server_restart; Codes applied/no_change/settings_revision_conflict/settings_rejected/internal_error. Jede V2-Session eigene State-Instanz mit eigener settingsRevision aus Server-Defaults zum Admission-Zeitpunkt.",
+      "beleg": "settings_control.py Z.38-66, ServerSettingsState/SessionSettingsState; server.py Z.6288-6294, _build_settings_state Z.3173-3196",
+      "evidenz": "A",
+      "gueltigkeit": "Serverweit + pro Session",
+      "id": "C-28"
+    },
+    {
+      "aussage": "Wake-Pfad: Recording-Thread ruft Evaluator mit Chunk; bei Hit synchron recorder.on_wakeword_detected(hit,boundary); Session -> WakeAdmissionCoordinator.admit -> _activate_from_wake_candidate -> derselbe ActivationController.activate(wake_word). Refusal: kein Latch, kein Event.",
+      "beleg": "core/recording.py _wake_detection_step Z.60-121, Aufruf 309; server.py _install_wake_word_runtime Z.2452-2477, _on_wakeword_detected Z.5764-5812, _activate_from_wake_candidate Z.2588ff; wake_admission.py Z.1-65",
+      "evidenz": "A",
+      "gueltigkeit": "Pro Session, Ausfuehrung Recorder-Thread",
+      "id": "C-29"
+    },
+    {
+      "aussage": "ENGINE_CLASS_PATHS={faster_whisper,kroko_onnx}; create_transcription_engine erzwingt device=cpu, gpu_device_index=0, wirft UnsupportedTranscriptionEngineError sonst. Drafts ausserhalb Paket.",
+      "beleg": "transcription_engines/factory.py Z.16-19,59-69; __init__.py Z.5-14",
+      "evidenz": "A+B (test_v2_engine_boundary.py Z.32-39,61-70)",
+      "gueltigkeit": "Serverweit",
+      "id": "C-30"
+    },
+    {
+      "aussage": "V1/V2 getrennte Wire-Welten in einem Prozess: gemeinsam Prozess/Service/SessionStore; verschieden Admission (Query vs hello), ID-Form (uuid4().hex vs kanonische UUID new_canonical_id), Envelope-Pruefung, Ausgabekanal.",
+      "beleg": "server.py Z.9912ff vs Z.10121ff; tests/unit/test_protocol_v1_v2_boundary.py Z.1-20",
+      "evidenz": "B",
+      "gueltigkeit": "Pro Verbindung",
+      "id": "C-31"
+    },
+    {
+      "aussage": "start startet Scheduler+Ready-Thread+Idle-Thread; _ready_worker wartet scheduler.wait_ready(), setzt ready, emittiert server.ready, publiziert Ready-Payloads an alle V1-Sessions. /health aggregiert metrics, events.store_status(), sttModelManagement.",
+      "beleg": "server.py start Z.7275-7302, _ready_worker Z.8521-8545, metrics Z.7685-7700, /health Z.8885-8905, /api/config Z.8907-8916",
+      "evidenz": "A",
+      "gueltigkeit": "Serverweit",
+      "id": "C-32"
+    },
+    {
+      "aussage": "Session-Teardown geordnet ueber vier Fremdsysteme: closed -> Activation-Reset -> Ledger cancel_all -> cancel_scheduler_session -> cancel_pending_recorder_transcriptions -> deactivate_speaker -> recorder.shutdown() -> Text-Thread-Join -> _command_replay.clear().",
+      "beleg": "server.py RecorderBackedRealtimeSession.close Z.2891-2948, V1-finally Z.10111-10119, V2-finally Z.10259-10288",
+      "evidenz": "A",
+      "gueltigkeit": "Pro Session",
+      "id": "C-33"
+    }
+  ],
+  "investigated_sources": [
+    "api_fastapi_server/server.py (10839 Zeilen)",
+    "api_fastapi_server/activation.py",
+    "api_fastapi_server/activation_commands.py",
+    "api_fastapi_server/segment_ledger.py",
+    "api_fastapi_server/wake_admission.py",
+    "api_fastapi_server/protocol_v2/{connection,handshake,session,events,snapshot,commands,ports,identity,schema}.py",
+    "api_fastapi_server/openai_routes.py",
+    "api_fastapi_server/security/{service,admin,openai,logs,kroko}.py",
+    "api_fastapi_server/settings_control.py",
+    "api_fastapi_server/kroko_runtime.py",
+    "api_fastapi_server/protocol.py",
+    "VoiceSTT_server/{server,event_logging,operations,openai_compat,stt_model_management}.py",
+    "VoiceSTT/audio_recorder.py + core/{initialization,recording,realtime,transcription,activation_control}.py",
+    "VoiceSTT/transcription_engines/{base,factory,faster_whisper_engine,kroko_onnx_engine}.py",
+    "setup.py",
+    "tests/unit/test_protocol_v1_v2_boundary.py, test_v2_engine_boundary.py, test_server_security_modularization.py"
+  ],
+  "not_implemented": [
+    {
+      "beleg": "C-01, C-17, C-18 (ein Python-Prozess, Worker-Threads)",
+      "id": "N-01",
+      "thema": "Kein externer Message-Broker / keine Out-of-Process-Inferenz im Serverbetrieb"
+    },
+    {
+      "beleg": "C-02, C-11 (nur protocol_v2/ports.py; Kopplung via Konstruktor-Injektion)",
+      "id": "N-02",
+      "thema": "Keine explizite Architektur-/Interface-Schicht, kein DI-Container"
+    },
+    {
+      "beleg": "C-05 (In-Process-Objekte im SessionStore-Dict)",
+      "id": "N-03",
+      "thema": "Keine pro-Session-Prozessisolation"
+    }
+  ],
+  "researcher_session": "ses_e47390447ffeAISpOqtaA5T54A",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-01",
+      "thema": "Ob V1-Client nach hello ohne start-Befehl Audio senden darf (Code lehnt ab: stream is stopped) - Verhalten fuer 04.x, keine Architektur-Garantie"
+    },
+    {
+      "id": "U-02",
+      "thema": "Ob settings_control-Overlay ohne runtime_config_path je persistiert wird (RuntimeConfigStore schreibt bei path=None nicht) - Zielverhalten 03.10 offen"
+    },
+    {
+      "id": "U-03",
+      "thema": "Thread-Anzahl/-Reihenfolge zur Laufzeit nicht als garantierte Architektur formulieren"
+    }
+  ],
+  "writer_guidance": [
+    "Komponentenuebersicht-Diagramm (flowchart) vollstaendig aus den 45 Kanten baubar; jeder Pfeil genau eine Kante; Beschriftung = Code-Operation (feed_audio, admit_session, publish_session), keine erfundenen Phasen/Zeiten.",
+    "Default-Zeitwerte activation.py Z.93-98 sind belegt, gehoeren inhaltlich zu 02.03/08.06 - hier nicht als Architekturzahl.",
+    "V1/V2-Trennung prominent (C-31): gemeinsam Prozess/Service/Store, getrennt Admission/ID/Canal.",
+    "V2-Ausgabekanal NICHT ConnectionManager (C-08/C-09) - haeufige Fehlerquelle.",
+    "Servermodus-Klarstellung (C-17): kein Recorder-Kindprozess-Transkriptions-Thread."
+  ]
+}
