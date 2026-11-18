@@ -1,0 +1,176 @@
+# AP-SRV-070 W5: public CI for VoiceSTT.
+#
+# Scope (see build/BUILD.md and docs/release-process.md): ordinary
+# correctness/packaging CI for an open-source repository. It builds the
+# development wheel, proves the wheel installs and runs standalone (never from
+# an editable/source checkout), and runs the fast unit/guard/release-tool suite
+# on the two mandatory release-qualification platforms.
+#
+# This workflow intentionally publishes NOTHING: no PyPI/GHCR/Docker Hub
+# upload, no Git tag, no GitHub Release, not even a private staging push. It
+# needs no Kroko Pro runtime secret and performs no native Kroko build - that
+# is the separate, dispatch-only release-candidate workflow.
+#
+# W5-R04: every third-party action is pinned to a full immutable commit SHA
+# (section 23). tests/unit/test_release_workflows.py fails the build if a tag
+# reference is ever reintroduced here or in either release workflow.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - "main"
+      - "feat/**"
+      - "work/**"
+  workflow_dispatch: {}
+
+# Read-only. A normal push or pull request must not be able to write anything.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  build-and-test:
+    name: build-and-test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install Linux audio prerequisites
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev
+
+      - name: Upgrade packaging tools
+        run: python -m pip install --upgrade pip build twine
+
+      # ------------------------------------------------------------------
+      # 1. Package build + wheel metadata validation
+      # ------------------------------------------------------------------
+      - name: Build wheel + sdist (development distribution)
+        run: python -m build --outdir dist
+
+      - name: List built artifacts
+        run: ls -la dist
+
+      - name: twine check
+        run: python -m twine check dist/*
+
+      # ------------------------------------------------------------------
+      # 2. Fresh-install smoke test from the built wheel, never editable
+      # ------------------------------------------------------------------
+      - name: Create install-smoke virtual environment
+        run: python -m venv .venv-install-smoke
+
+      - name: Install the built wheel (not editable) into the smoke venv
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            PY=".venv-install-smoke/Scripts/python.exe"
+          else
+            PY=".venv-install-smoke/bin/python"
+          fi
+          echo "PY=$PY" >> "$GITHUB_ENV"
+          WHEEL=$(ls dist/*.whl | head -n1)
+          "$PY" -m pip install --upgrade pip
+          "$PY" -m pip install "${WHEEL}[recommended,server]"
+
+      - name: pip check (installed distribution)
+        run: $PY -m pip check
+
+      - name: Import / version check from the installed distribution
+        run: |
+          SMOKE_DIR="${RUNNER_TEMP:-/tmp}/voicestt-install-smoke"
+          mkdir -p "$SMOKE_DIR"
+          cd "$SMOKE_DIR"
+          "$OLDPWD/$PY" - <<'PYEOF'
+          import importlib.metadata as metadata
+          import VoiceSTT_server  # noqa: F401 - proves the installed distribution imports
+          import voice_stt_server  # noqa: F401 - the canonical public import package
+          from VoiceSTT._version import resolve_version
+
+          installed_version = metadata.version("voicestt")
+          resolved_version = resolve_version()
+          print(f"installed distribution version: {installed_version}")
+          print(f"resolve_version(): {resolved_version}")
+          assert installed_version == resolved_version, "installed metadata and resolve_version() disagree"
+          assert voice_stt_server.get_version() == resolved_version, "voice_stt_server disagrees on the version"
+          PYEOF
+
+      - name: Console-script availability (installed distribution)
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            BIN_DIR=".venv-install-smoke/Scripts"
+            EXT=".exe"
+          else
+            BIN_DIR=".venv-install-smoke/bin"
+            EXT=""
+          fi
+          for script in voice-stt-server stt-server stt-server-legacy stt stt-install-kroko; do
+            test -f "${BIN_DIR}/${script}${EXT}" || { echo "missing console script: ${script}"; exit 1; }
+            echo "found console script: ${script}"
+          done
+
+      - name: Installed package assets present (no checkout dependency)
+        run: |
+          SMOKE_DIR="${RUNNER_TEMP:-/tmp}/voicestt-install-smoke"
+          cd "$SMOKE_DIR"
+          "$OLDPWD/$PY" - <<'PYEOF'
+          import pathlib
+          import VoiceSTT
+          import api_fastapi_server
+
+          voicestt_root = pathlib.Path(VoiceSTT.__file__).resolve().parent
+          server_root = pathlib.Path(api_fastapi_server.__file__).resolve().parent
+
+          required = [
+              voicestt_root / "assets" / "warmup_audio.wav",
+              voicestt_root / "assets" / "kroko" / "models.json",
+              server_root / "static" / "index.html",
+          ]
+          missing = [str(p) for p in required if not p.is_file()]
+          assert not missing, f"missing installed package assets: {missing}"
+          wakeword_dir = voicestt_root / "assets" / "wakeword_models"
+          assert wakeword_dir.is_dir() and any(wakeword_dir.iterdir()), "wake-word assets missing from installed distribution"
+          print("all required installed package assets are present")
+          PYEOF
+
+      # ------------------------------------------------------------------
+      # 3. Fast unit/guard/packaging/release-tool tests
+      # ------------------------------------------------------------------
+      - name: Install development/test dependencies (source checkout)
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[recommended,server]"
+          python -m pip install -r requirements-dev.txt
+
+      - name: pip check (dev environment)
+        run: python -m pip check
+
+      - name: Run fast unit/guard/packaging/release-tool test suite
+        run: python -m pytest -q tests/unit
+
+      - name: git diff --check (no whitespace errors)
+        run: git diff --check

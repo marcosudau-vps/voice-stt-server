@@ -1,0 +1,73 @@
+name: ap-srv-070-w4c
+services:
+  server:
+    build:
+      context: P:\GithubRepos\marcosudau-vps\voice-stt-server\workspaces\ap-srv-070-w4c
+      dockerfile: Dockerfile
+      args:
+        VOICESTT_KROKO_VARIANT: free
+      target: runtime
+    command:
+      - --host
+      - 0.0.0.0
+      - --port
+      - "8010"
+      - --device
+      - cpu
+      - --compute-type
+      - int8
+      - --engine-options
+      - '{"local_files_only":true}'
+      - --realtime-engine-options
+      - '{"local_files_only":true}'
+    environment:
+      CT2_USE_EXPERIMENTAL_PACKED_GEMM: "1"
+      HF_HUB_OFFLINE: "1"
+      OMP_NUM_THREADS: "4"
+      TRANSFORMERS_OFFLINE: "1"
+      VOICESTT_ADMIN_API_KEY: ""
+      VOICESTT_API_KEY: ""
+      VOICESTT_CPU_ONLY: "1"
+      VOICESTT_DATA_ROOT: /var/lib/voicestt
+      VOICESTT_FASTER_WHISPER_MODEL_ROOT: /models/custom/faster-whisper
+      VOICESTT_KROKO_MODEL_ROOT: /models/custom/kroko
+      VOICESTT_OFFLINE_MODELS: "1"
+    healthcheck:
+      test:
+        - CMD
+        - python3.12
+        - -c
+        - import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health',
+          timeout=5).getcode() == 200 or exit(1)
+      timeout: 10s
+      interval: 30s
+      retries: 5
+      start_period: 1m0s
+    image: voice-stt-server:local
+    init: true
+    networks:
+      default: null
+    ports:
+      - mode: ingress
+        target: 8010
+        published: "8010"
+        protocol: tcp
+    restart: unless-stopped
+    volumes:
+      - type: bind
+        source: P:\GithubRepos\marcosudau-vps\voice-stt-server\workspaces\ap-srv-070-w4c\data
+        target: /var/lib/voicestt
+        bind: {}
+      - type: bind
+        source: P:\GithubRepos\marcosudau-vps\voice-stt-server\workspaces\ap-srv-070-w4c\models\custom\faster-whisper
+        target: /models/custom/faster-whisper
+        read_only: true
+        bind: {}
+      - type: bind
+        source: P:\GithubRepos\marcosudau-vps\voice-stt-server\workspaces\ap-srv-070-w4c\models\custom\kroko
+        target: /models/custom/kroko
+        read_only: true
+        bind: {}
+networks:
+  default:
+    name: ap-srv-070-w4c_default

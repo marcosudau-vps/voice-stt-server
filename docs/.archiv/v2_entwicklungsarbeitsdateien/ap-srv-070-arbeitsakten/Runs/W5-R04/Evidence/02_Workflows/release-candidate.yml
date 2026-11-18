@@ -1,0 +1,192 @@
+# AP-SRV-070 W5-R04: GitHub-native release-candidate build and qualification.
+#
+# Produces a COMPLETE release candidate from an exact source commit on a clean,
+# GitHub-hosted runner - with no dependency on any operator machine, local
+# artifact store, prebuilt wheel or local Docker credential:
+#
+#   exact commit/tree
+#     -> Kroko Free + Pro native artifacts (cache-accelerated, never
+#        cache-authoritative)
+#     -> voice-stt-server / voice-stt-server-pro distribution wheels, each with
+#        its qualified native runtime embedded
+#     -> Free + Pro production images
+#     -> private GHCR staging packages (digest-pinned)
+#     -> canonical RC manifest + SHA-256 inventory
+#
+# It publishes NOTHING public: no PyPI upload, no Docker Hub push, no public
+# GHCR tag, no Git tag, no GitHub Release. The only remote write is to the
+# PRIVATE staging packages, which exist so publication can later consume the
+# exact qualified bytes instead of rebuilding them. Staging is never presented
+# as a release.
+#
+# Dispatch-only on purpose: a normal push must never be able to start it.
+name: Release candidate
+
+on:
+  workflow_dispatch:
+    inputs:
+      qualification_context:
+        description: "Free-text note recorded in the RC manifest"
+        required: false
+        default: "GitHub-native candidate build"
+
+permissions:
+  contents: read
+
+concurrency:
+  # One candidate per commit at a time. Two concurrent candidate builds for the
+  # same source would race for the same staging tag and produce an ambiguity
+  # that section 13 requires to fail closed.
+  group: release-candidate-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  PYTHON_VERSION: "3.12"
+  KROKO_ARTIFACT_STORE: ${{ github.workspace }}/.kroko-artifacts
+  KROKO_WORK_DIR: ${{ github.workspace }}/.kroko-work
+  CANDIDATE_DIR: ${{ github.workspace }}/candidate
+
+jobs:
+  candidate:
+    name: Build and qualify candidate
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      # Only for the PRIVATE staging packages. No public package is written.
+      packages: write
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout the exact candidate commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python ${{ env.PYTHON_VERSION }}
+        uses: actions/setup-python@0b93645e9fea7318ecaed2b359559ac225c90a2b # v5.3.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@c47758b77c9736f4b2ef4073d4d51994fabfe349 # v3.7.1
+
+      - name: Install build prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y portaudio19-dev
+          python -m pip install --upgrade pip build
+
+      - name: Record the exact source identity
+        id: source
+        run: |
+          set -euo pipefail
+          echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "tree=$(git rev-parse 'HEAD^{tree}')" >> "$GITHUB_OUTPUT"
+          echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+          test -z "$(git status --porcelain)" || { echo "checkout is not clean"; exit 1; }
+
+      # ------------------------------------------------------------------
+      # Kroko artifact reuse.
+      #
+      # The cache key is the AUTHORITATIVE fingerprint, resolved inside the
+      # builder container (the host toolchain is not the build toolchain, so a
+      # host-computed fingerprint would key the cache on the wrong thing).
+      # Free and Pro have separate keys and separate store namespaces, so the
+      # two variants can never cross. The cache is an optimisation only: every
+      # reused artifact is revalidated against the fingerprint/artifact
+      # authority, and a miss simply builds from source.
+      # ------------------------------------------------------------------
+      - name: Resolve authoritative Kroko fingerprints
+        id: fingerprints
+        run: |
+          set -euo pipefail
+          python tools/release_candidate.py --print-fingerprints \
+            --kroko-artifact-store "$KROKO_ARTIFACT_STORE" \
+            --kroko-work-dir "$KROKO_WORK_DIR" > fingerprints.json
+          cat fingerprints.json
+          echo "free=$(python -c 'import json;print(json.load(open("fingerprints.json"))["free"])')" >> "$GITHUB_OUTPUT"
+          echo "pro=$(python -c 'import json;print(json.load(open("fingerprints.json"))["pro"])')" >> "$GITHUB_OUTPUT"
+
+      - name: Restore Kroko Free artifact
+        uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
+        with:
+          path: ${{ env.KROKO_ARTIFACT_STORE }}/free
+          key: kroko-free-${{ steps.fingerprints.outputs.free }}
+
+      - name: Restore Kroko Pro artifact
+        uses: actions/cache@6849a6489940f00c2f30c0fb92c6274307ccb58a # v4.1.2
+        with:
+          path: ${{ env.KROKO_ARTIFACT_STORE }}/pro
+          key: kroko-pro-${{ steps.fingerprints.outputs.pro }}
+
+      - name: Log in to GHCR (private staging only)
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build the release candidate
+        run: |
+          set -euo pipefail
+          python tools/release_candidate.py \
+            --out-dir "$CANDIDATE_DIR" \
+            --source-tree "${{ steps.source.outputs.tree }}" \
+            --kroko-artifact-store "$KROKO_ARTIFACT_STORE" \
+            --kroko-work-dir "$KROKO_WORK_DIR" \
+            --push-staging \
+            --qualification-context "${{ inputs.qualification_context }}"
+
+      - name: Validate the RC manifest
+        run: python release.py manifest validate "$CANDIDATE_DIR/rc-manifest.json"
+
+      - name: Prove this run performed no public release write
+        run: |
+          set -euo pipefail
+          # A candidate run must never create a tag, a public registry tag, or
+          # a PyPI file. The state machine is not even constructed here, and
+          # the only credential in scope is GITHUB_TOKEN scoped to packages.
+          test -z "$(git tag --points-at HEAD)" || { echo "a git tag was created"; exit 1; }
+          python - <<'PYEOF'
+          import json, pathlib, os
+          manifest = json.loads(pathlib.Path(os.environ["CANDIDATE_DIR"], "rc-manifest.json").read_text())
+          for variant, block in manifest["images"].items():
+              staging = block["staging"]
+              assert "-staging@sha256:" in staging, (variant, staging)
+          print("candidate images live only in private staging")
+          PYEOF
+
+      - name: Package/image smoke test
+        run: |
+          set -euo pipefail
+          python - <<'PYEOF'
+          import json, os, pathlib, zipfile
+          candidate = pathlib.Path(os.environ["CANDIDATE_DIR"])
+          manifest = json.loads((candidate / "rc-manifest.json").read_text())
+          for variant, block in manifest["distributions"].items():
+              wheel = block["wheels"][0]
+              path = next(candidate.rglob(wheel["filename"]))
+              with zipfile.ZipFile(path) as archive:
+                  names = archive.namelist()
+                  embedded = json.loads(archive.read("voice_stt_server/_embedded_kroko.json"))
+              assert any(n.startswith("kroko_onnx/") for n in names), f"{variant}: no embedded Kroko runtime"
+              assert any(n.startswith("voice_stt_server/") for n in names), f"{variant}: no canonical import package"
+              assert embedded["variant"] == variant, embedded
+              print(f"{variant}: {wheel['filename']} embeds the {variant} runtime")
+          PYEOF
+
+      - name: Upload candidate artifacts
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: release-candidate-${{ steps.source.outputs.commit }}
+          path: |
+            ${{ env.CANDIDATE_DIR }}/rc-manifest.json
+            ${{ env.CANDIDATE_DIR }}/sha256-inventory.json
+            ${{ env.CANDIDATE_DIR }}/build-manifest-*.json
+            ${{ env.CANDIDATE_DIR }}/distribution-*.json
+            ${{ env.CANDIDATE_DIR }}/staging-*.json
+            ${{ env.CANDIDATE_DIR }}/dist/*.whl
+          if-no-files-found: error
+          retention-days: 90

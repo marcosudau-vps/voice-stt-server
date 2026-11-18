@@ -1,0 +1,781 @@
+# AP-SRV-070 / W5 — Frozen-RC Correction
+## W5-R02-C1 — CI Determinism + RC Manifest Integration
+### Model: Sonnet 5
+
+---
+
+# 0. Run identity
+
+- **Project:** AP-SRV-070
+- **Phase:** W5 — Release Candidate Qualification
+- **Parent qualification:** W5-R02 / W5-RC1
+- **Correction run:** W5-R02-C1
+- **Purpose:** Correct only the confirmed source blockers discovered by frozen-RC qualification
+- **Model:** Anthropic Sonnet 5
+- **Session:** CONTINUE EXISTING W5-R02 SESSION
+- **Repository:** `marcosudau-vps/voice-stt-server`
+- **Distributed branch:** `feat/einheitliche-triggerarchitektur-distributed`
+- **Binding start commit:** `bb7a4bb7cc27897aeb257aa5a5b9f3b550b8f602`
+- **Binding start tree:** `f7b304b1959e48457a8eefd8919484f55214633b`
+- **Product version:** `2.0.0` — MUST remain unchanged
+- **Existing frozen qualification workspace:** `P:\GithubRepos\marcosudau-vps\voice-stt-server\workspaces\ap-srv-070-w5-r02`
+- **NEW correction workspace:** `P:\GithubRepos\marcosudau-vps\voice-stt-server\workspaces\ap-srv-070-w5-r02-c1`
+- **Prompt source:** `P:\GithubRepos\marcosudau-vps\_workflow-tools\AP-SRV-070\Prompts\2026-09-07_AP-SRV-070_W5_R02_C1_SONNET5.md`
+- **Correction run/evidence root:** `P:\GithubRepos\marcosudau-vps\_workflow-tools\AP-SRV-070\Runs\W5-R02-C1\`
+- **Parent qualification archive:** `P:\GithubRepos\marcosudau-vps\_workflow-tools\AP-SRV-070\Runs\W5-R02\`
+- **Operator secret bundle (outside Git/workspaces):** `P:\GithubRepos\marcosudau-vps\voice-stt-server\secrets\voice-stt.env`
+- **WSL view of same secret bundle:** `/mnt/p/Secrets/VoiceSTT/voice-stt.env`
+
+## Secret-bundle contract
+
+The operator has prepared a local secret file outside the repository/worktrees.
+
+Expected variable names:
+
+```text
+VOICESTT_API_KEY=<secret>
+VOICESTT_ADMIN_API_KEY=<secret>
+VOICESTT_KROKO_ONNX_KEY=<secret>
+```
+
+Important:
+
+- the secret file must never be copied into the repository, any worktree, run archive, evidence directory, Docker build context, package artifact or release state;
+- never print/cat/type/get-content the file into logs/evidence;
+- never record the secret values or a dump of the process environment;
+- do not commit the file or add its concrete values anywhere;
+- if a later qualification run needs these secrets, load only the required variables into the process/runtime environment and keep evidence redacted;
+- `VOICESTT_KROKO_ONNX_KEY` is the test/runtime-facing Kroko key variable for the current qualification tooling;
+- W5-R02-C1 itself does not need the secret values to correct D1/D3 and therefore must not consume them merely because they are available.
+
+The existence of this secret bundle means the prior W5-R02 Kroko-Pro qualification blocker caused by a missing operator credential can be retried in the future W5-RC2 qualification. It is **not** a reason to broaden C1 into a live Pro-E2E run.
+
+
+This is a **narrow source-correction run**.
+
+W5-RC1 is not being patched in place. It remains a frozen, failed qualification candidate.
+
+If this correction passes Root Review and its exact commit is later pushed to Distributed, that pushed commit will become the source candidate for **W5-RC2**, still product version `2.0.0`.
+
+---
+
+# 1. Binding Root Review disposition
+
+W5-R02 correctly ended:
+
+`NOT READY FOR ROOT REVIEW`
+
+The parent run found two confirmed source-level blocker groups that this correction must close.
+
+## D1 — Real GitHub Actions CI is not green
+
+Exact RC commit `bb7a4bb...` was run twice on real GitHub Actions.
+
+### Windows
+
+Four Kroko path tests fail because the same physical file is represented by:
+
+- long Windows path, e.g. `C:\Users\runneradmin\...`
+- resolved 8.3 path, e.g. `C:\Users\RUNNER~1\...`
+
+`resolve_kroko_model()` currently returns a resolved path.
+
+**Coordinator correction to the parent diagnosis:**
+
+Do **not** remove or weaken legitimate path resolution merely to make raw-string equality pass.
+
+Two different string spellings may identify the same Windows file.
+
+The preferred correction is therefore to make the affected tests assert **semantic filesystem identity / canonical path equivalence**, not byte-identical path spelling.
+
+Production resolver behavior should remain unchanged unless a separate reproducible product contract proves that returning a resolved path is itself wrong.
+
+### Ubuntu
+
+`test_store_outage_closes_live_stream_and_recovery_allows_new_stream` assumes an empty replay window and expects `log.replay_completed` immediately after `log.hello` and `log.subscribed`.
+
+A legitimate event can be appended after the client-side `afterCursor` snapshot but before the server computes its replay window. In that case one or more `log.event` frames may validly appear before `log.replay_completed`.
+
+The correction must make the test deterministic and **protocol-correct** while preserving its actual store-outage/recovery assertions.
+
+Do not change production event/replay behavior merely to suppress a valid race in the test.
+
+## D3 — RC manifest CLI disagrees with production build-manifest schema
+
+`tools/build_production.py` writes the Kroko artifact digest as:
+
+`wheelSha256`
+
+while:
+
+`release_tooling/cli.py::_cmd_manifest_build`
+
+reads:
+
+`sha256`
+
+at the corresponding nested location.
+
+The documented end-to-end command therefore fails with:
+
+`KeyError: 'sha256'`
+
+when fed real production-build output.
+
+This must be fixed and protected by an integration/contract regression test that exercises the production manifest schema rather than another hand-written self-consistent synthetic schema.
+
+---
+
+# 2. Findings that are NOT source blockers for this correction
+
+Do not broaden this run to solve unrelated qualification items.
+
+## D2 — Local memory/resource contention
+
+Environment/orchestration only. No source correction.
+
+## D4 — Faster-Whisper and Kroko Free E2E inconclusive
+
+Both engines transcribed the same first portion correctly and stopped at nearly the same point when exercised through the same load-test harness.
+
+The root cause was not established.
+
+Do **not** modify product source or that E2E harness in this correction unless you first establish a minimal reproducible source defect with direct evidence.
+
+These gates will be re-qualified separately for W5-RC2 using a more appropriate controlled real client/harness if needed.
+
+You may add a short diagnostic handoff note if new evidence is obtained without source changes, but D4 is not an implementation objective of C1.
+
+## D5 — Kroko Pro live E2E credential prerequisite
+
+The operator has now supplied the required runtime credential through the external secret bundle:
+
+`P:\GithubRepos\marcosudau-vps\voice-stt-server\secrets\voice-stt.env`
+
+with the Kroko qualification variable:
+
+`VOICESTT_KROKO_ONNX_KEY`
+
+This removes the prior **credential-availability** blocker for the future W5-RC2 qualification.
+
+However, D5 is still **not an implementation objective of C1**.
+
+Do not run or widen C1 into the Kroko-Pro live E2E merely because the credential is now available. The next frozen W5-RC2 qualification will consume it under the strict secret-handling contract above.
+
+Do not print, copy, hash-dump, embed or persist the credential value.
+
+## D6 — Docker Desktop Windows bind-mount behavior
+
+Environment-only. No source correction.
+
+## D7 — Read-only custom-model source not tested
+
+Qualification gap only. It will be tested in W5-RC2.
+
+---
+
+# 3. Governance
+
+## 3.1 New workspace, existing session
+
+Continue the existing W5-R02 Agent session for context, but create and work only in the new correction worktree:
+
+`P:\GithubRepos\marcosudau-vps\voice-stt-server\workspaces\ap-srv-070-w5-r02-c1`
+
+Do not modify the frozen W5-R02 qualification workspace.
+
+## 3.2 No push before external Root PASS
+
+During this run:
+
+- create exactly one local correction commit;
+- DO NOT push it to Distributed;
+- DO NOT create or push tags;
+- DO NOT publish packages/images/releases;
+- DO NOT modify canonical `feat/einheitliche-triggerarchitektur`;
+- DO NOT modify `main`;
+- DO NOT force-push.
+
+The coordinator performs Root Review first.
+
+## 3.3 Version
+
+`VERSION` must remain exactly:
+
+`2.0.0`
+
+No RC suffix and no patch bump.
+
+## 3.4 One durable commit for this correction run
+
+Final intended history:
+
+```text
+bb7a4bb7cc27897aeb257aa5a5b9f3b550b8f602   # current Distributed / W5-R01
+    ↓
+<exactly one local W5-R02-C1 correction commit>
+```
+
+Temporary local WIP commits may be squashed before submission, but final submitted history must contain exactly one correction commit.
+
+---
+
+# 4. Run archive
+
+Create:
+
+`P:\GithubRepos\marcosudau-vps\_workflow-tools\AP-SRV-070\Runs\W5-R02-C1`
+
+with:
+
+```text
+W5-R02-C1\
+├── 00_PROMPT.md
+├── 01_CORRECTION_CONTEXT.md
+├── 02_PLAN.md
+├── 03_CORRECTION_REPORT.md
+├── 04_GATE_INDEX.md
+├── 05_DEVIATIONS.md
+├── 06_FINAL_REPORT.md
+└── Evidence\
+    ├── 00_Preflight\
+    ├── 01_Windows_Path_Contract\
+    ├── 02_Ubuntu_Replay_Race\
+    ├── 03_RC_Manifest_Contract\
+    ├── 04_Targeted_Tests\
+    ├── 05_Windows_Regression\
+    ├── 06_Ubuntu_Regression\
+    ├── 07_Package_Release_Tooling\
+    └── 08_Final_Git_State\
+```
+
+Copy this prompt byte-identically to:
+
+`W5-R02-C1\00_PROMPT.md`
+
+Record SHA256 of source and copied prompt.
+
+---
+
+# 5. Plan-before-implementation requirement
+
+The previous W5-R01 run had an accepted historical waiver because its archive plan was created too late.
+
+That must not recur.
+
+Before editing any source-controlled file in C1:
+
+1. verify the starting state;
+2. read the relevant authorities/source;
+3. create `02_PLAN.md`;
+4. if required by repository archive policy, create the dated W5-R02-C1 plan under the AP-SRV-070 archive;
+5. only then begin implementation.
+
+The plan must state:
+
+- confirmed defects;
+- exact intended files;
+- test strategy;
+- no-go scope;
+- expected single-commit outcome.
+
+Evidence must prove the plan existed before the first source edit.
+
+---
+
+# 6. Starting-state verification
+
+Fetch origin and require:
+
+```text
+origin/feat/einheitliche-triggerarchitektur-distributed
+= bb7a4bb7cc27897aeb257aa5a5b9f3b550b8f602
+```
+
+Require tree:
+
+`f7b304b1959e48457a8eefd8919484f55214633b`
+
+Create the new worktree from exactly this commit on a new local branch such as:
+
+`work/ap-srv-070-w5-r02-c1`
+
+Record:
+
+- Git status
+- branch
+- HEAD
+- tree
+- parent
+- worktree list
+- Python
+- Git
+- OS
+- WSL Ubuntu version if used
+
+Mismatch or unrelated dirty state = STOP.
+
+---
+
+# 7. Read relevant source before editing
+
+At minimum inspect:
+
+- `AGENTS.md`
+- applicable nested `AGENTS.md`
+- `docs/.archiv/README.md`
+- W5-R01/W5-R02 archive material
+- `.github/workflows/ci.yml`
+- `VoiceSTT/transcription_engines/model_resolver.py`
+- `tests/unit/test_kroko_onnx_engine.py`
+- `tests/unit/test_fastapi_server_multi_user.py`
+- event replay/log protocol implementation relevant to the Ubuntu test
+- `tools/build_production.py`
+- `release_tooling/cli.py`
+- `release_tooling/rc_manifest.py`
+- relevant `tests/unit/test_release_*.py`
+
+Do not reopen closed product architecture without a new reproducible defect.
+
+---
+
+# 8. Correction A — Windows Kroko path tests
+
+## 8.1 Preserve product semantics
+
+The source currently resolves local Kroko model files to a real/resolved filesystem path.
+
+A Windows 8.3 path and a long path can refer to the same file.
+
+Do not make the resolver return a less-resolved/noncanonical path merely to satisfy tests unless the project has an explicit API contract requiring preservation of the original string spelling.
+
+## 8.2 Fix assertion semantics
+
+Update the four affected tests so they verify the behavior that actually matters:
+
+- the recognizer/backend receives the intended model file;
+- the file exists;
+- the returned/used path identifies the same physical file as the expected temp model;
+- relative/download-root, explicit model_path, absolute path, and model_dir-selection precedence still remain correct.
+
+Use an appropriate cross-platform semantic comparison, for example:
+
+- `os.path.samefile()` when both paths exist; and/or
+- consistent canonicalization on both expected and actual sides.
+
+Avoid lowercasing or string munging that could hide genuinely different files.
+
+## 8.3 Regression protection
+
+The tests must remain strict enough to catch:
+
+- wrong file;
+- wrong directory;
+- precedence regression;
+- missing-model behavior;
+- accidental implicit download.
+
+If practical on Windows, add a targeted assertion/helper test showing that alternate legal path spellings for the same file are accepted as identity-equivalent.
+
+Do not introduce a broad production path-normalization refactor.
+
+---
+
+# 9. Correction B — Ubuntu replay-window timing race
+
+The failing test is:
+
+`test_store_outage_closes_live_stream_and_recovery_allows_new_stream`
+
+The correction must reflect the actual replay protocol.
+
+## 9.1 Preserve protocol behavior
+
+A client takes `afterCursor = latest_cursor()` before subscribing.
+
+If an event is committed after that snapshot but before the server's replay query, that event is legitimately in the replay window.
+
+Therefore the test must not require an impossible guarantee that `log.replay_completed` is always the very next frame after `log.subscribed`.
+
+## 9.2 Required test behavior
+
+Keep strict assertions for the purpose of the test:
+
+- `log.hello` received;
+- subscription accepted;
+- any replayed `log.event` frames are valid for the requested cursor/window;
+- eventually `log.replay_completed` arrives;
+- the simulated event-store outage closes/fails the live stream as designed;
+- recovery permits a new stream;
+- ordering/cursor semantics remain correct;
+- no arbitrary event swallowing.
+
+Prefer changing the race-sensitive assertion/helper over production scheduler/event-store behavior.
+
+Do not disable real product behavior globally.
+
+If isolating an unrelated scheduler is demonstrably the cleaner unit-test boundary, document why; but do not use scheduler disabling to conceal a replay-protocol defect.
+
+## 9.3 Determinism evidence
+
+Run the corrected targeted Ubuntu test repeatedly in Ubuntu 24.04, not just once.
+
+Minimum target:
+
+`20 consecutive PASS` executions
+
+unless execution cost makes that unreasonable; if so, use at least 10 and justify.
+
+Also run the surrounding relevant test class/file.
+
+---
+
+# 10. Correction C — production build manifest ↔ RC manifest contract
+
+## 10.1 Existing producer is the compatibility anchor
+
+The W4C production build path already emits:
+
+`wheelSha256`
+
+for the Kroko artifact in its build manifest.
+
+Do not casually rename the W4C producer field and break existing manifests/consumers.
+
+Preferred correction:
+
+- make the RC-manifest CLI consume the real production field `wheelSha256`;
+- optionally accept legacy/test fixture `sha256` as a compatibility fallback if that is useful and unambiguous;
+- normalize to the canonical RC-manifest output field expected by `release_tooling.rc_manifest`.
+
+If supporting both keys:
+- if both are present and disagree, FAIL CLOSED;
+- do not silently choose one.
+
+## 10.2 Required integration/contract test
+
+The previous tests missed this because they used self-consistent synthetic input.
+
+Add a regression test that exercises the actual production-build manifest schema.
+
+Preferred approaches, in order:
+
+1. invoke/refactor the existing production manifest construction code sufficiently to generate a realistic manifest without Docker/native builds; then feed that output into the RC-manifest CLI path;
+2. if no callable boundary exists, use a fixture explicitly derived from and asserted against the current `tools/build_production.py` schema, with a guard that prevents silent divergence.
+
+Do not merely change one synthetic fixture from `sha256` to `wheelSha256` without establishing a producer/consumer contract.
+
+## 10.3 End-to-end CLI proof
+
+This command path must succeed with production-shaped input:
+
+```text
+release.py manifest build
+  --free-build-manifest <production-shaped-free-manifest>
+  --pro-build-manifest <production-shaped-pro-manifest>
+  ...
+```
+
+Then:
+
+```text
+release.py manifest validate <result>
+```
+
+must PASS.
+
+Also prove:
+
+- Free/Pro fingerprints preserved;
+- artifact SHA256 preserved;
+- source commit/tree preserved;
+- no secret fields;
+- conflicting dual-key input fails closed if dual-key compatibility is implemented.
+
+---
+
+# 11. Do not solve D4/D5/D7 by source edits
+
+This C1 commit should remain limited to D1 and D3 confirmed source-level blockers plus the Ubuntu D1 test-race correction.
+
+Specifically:
+
+- do not change ASR engine/session behavior for the inconclusive E2E result without a separate reproducible product defect;
+- do not add fake Kroko Pro keys;
+- do not weaken the W5-R02 Kroko Pro requirement;
+- do not mark the read-only custom-path gate as passed without testing it.
+
+The next frozen qualification run will handle those qualification gates.
+
+---
+
+# 12. Targeted validation
+
+Run targeted tests for all three corrections.
+
+At minimum:
+
+## Windows
+
+- four previously failing Kroko tests;
+- full `tests/unit/test_kroko_onnx_engine.py`.
+
+## Ubuntu 24.04
+
+- previously failing store-outage/recovery test repeatedly;
+- surrounding relevant test class/file.
+
+## Release tooling
+
+- new production-manifest/RC-manifest contract tests;
+- full `tests/unit/test_release_*.py` set.
+
+Record exact counts and exit codes.
+
+---
+
+# 13. Cross-platform full regression
+
+Before final submission, obtain trustworthy full-suite results on both required platforms.
+
+## Windows 11
+
+Run:
+
+`python -m pytest -q tests/unit`
+
+in an isolated, adequately resourced environment.
+
+Do not run heavy Docker/native compilation concurrently.
+
+Avoid the resource-contention conditions from W5-R02.
+
+## Ubuntu 24.04
+
+Run:
+
+`python -m pytest -q tests/unit`
+
+in Ubuntu 24.04 / Python 3.12.
+
+A WSL2 Ubuntu 24.04 environment is acceptable for this pre-push correction proof if isolated and stable.
+
+Expected:
+
+- zero failures;
+- no unexpected new skips;
+- counts explained against the prior 1704/14/985 baseline plus new tests.
+
+Also run:
+
+`git diff --check`
+
+GitHub Actions on the **new unpushed correction commit cannot be the authoritative proof yet** under project governance. Do not push a temporary correction to Distributed before Root PASS merely to obtain CI.
+
+After external Root PASS and authorized push, the exact new commit will be evaluated by GitHub Actions before it can become a successful W5-RC2 qualification.
+
+---
+
+# 14. Package/release-tool smoke
+
+Because release-tooling source changes are involved, also run:
+
+- package build as appropriate;
+- `twine check`;
+- targeted installed-wheel/import smoke if affected;
+- `release.py --help`;
+- `release.py manifest build` with production-shaped input;
+- `release.py manifest validate`;
+- `release.py dry-run` using a valid synthetic/non-public RC manifest if needed.
+
+No public write.
+
+Do not run `release.py publish` against real services.
+
+---
+
+# 15. Documentation/archive
+
+Update only what the correction materially changes.
+
+Required:
+
+- dated C1 plan created before implementation;
+- dated C1 Soll/Ist / implementation comparison after implementation;
+- document the three corrected findings;
+- document that W5-RC1 remains failed/frozen;
+- document that a future pushed C1 commit becomes the source basis for W5-RC2 only after Root PASS;
+- no historical rewrite.
+
+Do not edit W5-R02 evidence to pretend W5-RC1 passed.
+
+---
+
+# 16. Correction gates
+
+Use exactly these gate IDs in `04_GATE_INDEX.md`.
+
+## Context / governance
+
+- **W5C2-G01** Start commit/tree exactly match W5-RC1/Distributed.
+- **W5C2-G02** New clean correction workspace established; frozen W5-R02 workspace untouched.
+- **W5C2-G03** Correction plan/archive plan created before first source edit.
+- **W5C2-G04** VERSION remains exactly 2.0.0.
+- **W5C2-G05** No tag/push/public release performed.
+
+## Windows path correction
+
+- **W5C2-G06** Affected Kroko tests compare semantic file identity rather than raw Windows path spelling.
+- **W5C2-G07** Resolver production semantics are preserved unless separately justified by reproducible contract evidence.
+- **W5C2-G08** Four previously failing Windows Kroko tests PASS.
+- **W5C2-G09** Full Kroko engine unit-test file PASS.
+- **W5C2-G10** Wrong-file/precedence/missing-model protections remain tested.
+
+## Ubuntu replay-race correction
+
+- **W5C2-G11** Test reflects valid replay events between afterCursor snapshot and replay completion.
+- **W5C2-G12** Outage/recovery semantics remain strictly asserted.
+- **W5C2-G13** Previously failing Ubuntu test passes repeatedly (target >=20 consecutive runs, or justified >=10).
+- **W5C2-G14** Relevant surrounding Ubuntu test class/file PASS.
+
+## Manifest contract correction
+
+- **W5C2-G15** RC-manifest CLI consumes canonical production `wheelSha256`.
+- **W5C2-G16** Backward-compatible `sha256` handling, if retained, is unambiguous and fail-closed on conflict.
+- **W5C2-G17** Producer/consumer contract regression test uses actual production-manifest schema/code boundary, not merely a self-consistent hand-written fixture.
+- **W5C2-G18** End-to-end `manifest build` succeeds with production-shaped Free/Pro manifests.
+- **W5C2-G19** Resulting RC manifest validates and preserves exact artifact/fingerprint/source identities.
+
+## Validation
+
+- **W5C2-G20** Targeted correction test suite PASS.
+- **W5C2-G21** Full Windows unit suite PASS in stable environment.
+- **W5C2-G22** Full Ubuntu 24.04 unit suite PASS in stable environment.
+- **W5C2-G23** Package/release-tool smoke PASS.
+- **W5C2-G24** `git diff --check` PASS.
+- **W5C2-G25** Final adversarial diff review finds no unrelated scope expansion.
+
+## Final Git state
+
+- **W5C2-G26** Exactly one local W5-R02-C1 correction commit ahead of Distributed.
+- **W5C2-G27** Final workspace clean.
+- **W5C2-G28** Remote Distributed remains `bb7a4bb7cc27897aeb257aa5a5b9f3b550b8f602`; no push performed.
+
+Every mandatory gate must be PASS for `READY FOR ROOT REVIEW`.
+
+---
+
+# 17. Evidence format
+
+Every raw evidence file begins with:
+
+```text
+Evidence-ID:
+Gate(s):
+Timestamp UTC:
+Host:
+Working Directory:
+Command / Probe:
+Expected:
+Exit Code:
+Result:
+```
+
+No secrets.
+
+Do not duplicate the full W5-R02 qualification archive. Reference it for parent findings and store only correction evidence here.
+
+---
+
+# 18. Final report
+
+`06_FINAL_REPORT.md` must begin with exactly:
+
+`READY FOR ROOT REVIEW`
+
+or:
+
+`NOT READY FOR ROOT REVIEW`
+
+Never self-award Root PASS.
+
+Include:
+
+- W5-RC1 source commit/tree;
+- correction commit/tree;
+- VERSION;
+- exact files changed;
+- Windows fix summary;
+- Ubuntu fix summary;
+- manifest fix summary;
+- targeted tests;
+- full Windows tests;
+- full Ubuntu tests;
+- package/release-tool smoke;
+- gate tally;
+- workspace clean;
+- one commit ahead;
+- remote Distributed unchanged;
+- no public write;
+- explicit note that D4/D5/D7 remain qualification items for W5-RC2, not falsely closed by C1.
+
+---
+
+# 19. Final Git handling
+
+After all tests and evidence:
+
+1. review diff;
+2. ensure no generated dist artifacts, venvs, credentials, release state, logs, model files or caches are staged;
+3. create exactly one local correction commit on top of `bb7a4bb...`;
+4. suggested commit message:
+
+`AP-SRV-070 W5: correct RC qualification blockers`
+
+5. record commit SHA and tree;
+6. verify clean workspace;
+7. fetch origin;
+8. verify Distributed still equals `bb7a4bb7cc27897aeb257aa5a5b9f3b550b8f602`;
+9. verify exactly one local commit ahead;
+10. **DO NOT PUSH**.
+
+---
+
+# 20. Stop conditions
+
+STOP and report `NOT READY FOR ROOT REVIEW` if:
+
+- Distributed changed;
+- correction requires redesign of closed product architecture;
+- Windows fix would require weakening model identity/security;
+- Ubuntu fix requires changing protocol semantics merely to satisfy timing;
+- manifest producer/consumer contract cannot be made unambiguous;
+- full regression exposes a new product blocker;
+- public write is required;
+- secrets would need to be exposed;
+- correction begins to absorb D4/D5/D7 without a separately proven source defect.
+
+---
+
+# 21. Success state
+
+W5-R02-C1 succeeds when:
+
+```text
+W5-RC1 frozen failed candidate
+→ Windows path assertion corrected semantically
+→ Ubuntu replay-race assertion corrected protocol-correctly
+→ production build-manifest ↔ RC-manifest contract corrected
+→ targeted tests PASS
+→ full Windows suite PASS
+→ full Ubuntu 24.04 suite PASS
+→ release/package smoke PASS
+→ VERSION remains 2.0.0
+→ exactly one local correction commit
+→ no push/publication
+→ READY FOR ROOT REVIEW
+```
+
+After external Root PASS, only the exact approved correction commit may be fast-forwarded to Distributed.
+
+Only after that push and successful CI on the exact new commit may it be frozen as the source basis for `W5-RC2`.
