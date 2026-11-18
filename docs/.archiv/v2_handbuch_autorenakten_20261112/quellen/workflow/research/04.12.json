@@ -1,0 +1,218 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup aus .git/HEAD nicht verifizierbar (detached HEAD); nur Commit bindend.",
+  "chapter": "04.12",
+  "commit_verification": "Quellbaum C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src. .git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached, kein ref:) - verifiziert.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "Docstring 'extend normalised to refresh' vs Code/Test (invalid_action) -> Code gilt (Z1-12)."
+    },
+    {
+      "id": "C2",
+      "thema": "Auftrag nennt 'capabilities'; real sessionCapabilities (kein capabilities-Feld). V2-Patch real session_settings.patch, nicht settings.patch (Z1-04, Z1-15)."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "Client -> /ws/transcribe (Query: clientId, wakeWordEnabled+Felder, manualTriggerEnabled/wakeWordTriggerEnabled+Timings) -> admit_session [Z1-02]",
+    "admit_session (None/Limit) -> error(admission) + Close 1013 [Z1-05]",
+    "admit_session (SessionConfigurationError) -> error(session_config, code) + Close 1008 [Z1-06]",
+    "admit_session (Init-Fehler) -> error(session_initialization_failed) + Close 1011 [Z1-06]",
+    "admit_session (ok) -> manager.connect(accept) -> hello [Z1-04, Z1-13]",
+    "hello -> (ready) ready-Frame -> Startup-Error-Frames [Z1-17]",
+    "Client binary -> decode_audio_packet -> ingest -> (not streaming) warning [Z1-07, Z1-08]",
+    "ingest (AudioPacketError) -> error(audio_packet); (sonst) error(audio) [Z1-08]",
+    "Client text -> dispatch{start,stop,clear,ping,metrics,trigger,audio_availability} -> publish_session -> Client [Z1-09, Z1-13]",
+    "dispatch (unbekannt/ungueltig) -> error(command) [Z1-09]",
+    "trigger -> trigger_ack (1:1, commandId-Pflicht, Replay/conflict, stream_not_started ohne start) [Z1-10]",
+    "audio_availability -> audio_availability_ack (applied/no_change/...; false kann schliessen) [Z1-11]",
+    "finally: remove_session -> manager.disconnect [Z1-13]",
+    "Grenzlinie: V1 (timeline/status, trigger_ack, 32-Hex-ID, 1008/1011/1013, kein protocolVersion) || V2 (hello.accepted, command.ack, kanonische UUID, 4400/4406/4408/4409) [Z1-03, Z1-14, Z1-15]"
+  ],
+  "facts": [
+    {
+      "aussage": "Eigener Endpunkt ohne Client-Handshake: Nach accept (erst manager.connect) sendet Server sofort hello. Keine Empfangs-/Validierungsphase; Client meldet nichts an. Kein protocolVersion-Parameter. [Z1-02, Z1-04; Kontrast handshake.py:1-21 V2.]",
+      "beleg": "server.py websocket_transcribe Z. 9912-9988; Test browser_client_contract:137-148 (erster Frame hello ohne Vorlauf).",
+      "evidenz": "stark (Code+Test)",
+      "gueltigkeit": "nur /ws/transcribe; required compatibility path (10125-10131).",
+      "id": "Z1-01"
+    },
+    {
+      "aussage": "Admission nur Query: clientId (Fallback Header, sonst client-<uuid4hex>; max 128 Zeichen, alnum Unicode + ._-: [R1-F6 2026-11-09]); Wake-Word-Felder (wakeWordEnabled true|false|null|inherit, Backend, Woerter, Framework, Sensitivity, Delay, Timeout, Buffer, Followup); Aktivierung (manualTriggerEnabled, wakeWordTriggerEnabled, 6 Timings float 0.01-3600). Ungueltiges wakeWordEnabled = Fallback in sessionConfig.warnings (kein Fehler); Duplikate Fehler.",
+      "beleg": "server.py:9914-9917, 655-753, 1110-1160, Felder 559-568, 985-994, Zeiten 1048-1079; Tests multi_user:2516-2560.",
+      "evidenz": "stark (Code+Test)",
+      "gueltigkeit": "nur V1-Admission; keine Aenderung via WS (Z1-16).",
+      "id": "Z1-02"
+    },
+    {
+      "aussage": "Session-IDs kompakte 32-Hex ohne Bindestriche (uuid4().hex); canonical_ids=False Default, keine kanonischen UUIDs.",
+      "beleg": "server.py:9938; RecorderBackedRealtimeSession canonical_ids=False 2317, 2340-2342; Test boundary:229-238 (len 32, nicht kanonisch).",
+      "evidenz": "stark (Code+Test)",
+      "gueltigkeit": "nur V1; V2 new_canonical_id (214-216).",
+      "id": "Z1-03"
+    },
+    {
+      "aussage": "SERVER-hello zuerst, fester Satz. Reihenfolge: manager.connect (accept) -> Audit session.accepted -> create_log_access -> EIN Textframe type:hello mit genau clientId, sessionId, settings, sessionConfig, activationConfig, sessionCapabilities, limits, supportedEngines, runtimeSettings, logAccess. Schluessel sessionCapabilities, NICHT capabilities. logAccess u.a. /ws/logs, /api/logs/events, sessionId, logProtocolVersion 2, sqlite_first, Cursors.",
+      "beleg": "server.py:10001-10014, 7772-7806, 7716-7770, 7702-7711, 3139-3151, 3153-3155; Tests browser_client_contract:141-148, controlled_e2e:426-440.",
+      "evidenz": "stark (Code+Tests)",
+      "gueltigkeit": "nur V1; V2 hello.accepted erst nach Client-Handshake.",
+      "id": "Z1-04"
+    },
+    {
+      "aussage": "Limit -> error + Close 1013. admit_session None: {type:error, where:admission, message Sitzungslimit, limits:{...}}, danach close(1013). Kein hello, keine Manager-Registrierung.",
+      "beleg": "server.py:9970-9986; admit_session 7325-7370 (reserve None), ConnectionRegistry.reserve 6142-6150; Test multi_user:2642-2652.",
+      "evidenz": "stark Fehlerframe; mittel Close (Code-only, U1).",
+      "gueltigkeit": "nur V1; V2 kodierte Ablehnungen.",
+      "id": "Z1-05"
+    },
+    {
+      "aussage": "Config-Fehler -> error where=session_config + Close 1008. Query-Parsing + Admission: zuerst accept, dann error-Textframe type/where=session_config/code/message (+field/value), close 1008. Unerwartete Init: where session_config, code session_initialization_failed, close 1011. Keine Domain-Session; Config-Frame ohne sessionId.",
+      "beleg": "SessionConfigurationError.payload() 585-600; Pfade 9925-9936, 9946-9958, Init 9959-9969; Test multi_user:2606-2640 (code 1008).",
+      "evidenz": "stark (Code+Test)",
+      "gueltigkeit": "nur V1.",
+      "id": "Z1-06"
+    },
+    {
+      "aussage": "Audio: Binaerframes exakt dieselbe decode_audio_packet wie /ws/v2. Danach: leer (True,None); sonst bei not streaming (False, Startbefehl-Text) + rejected_audio_chunks+1; sonst feed_audio(..., 16000).",
+      "beleg": "server.py:10025-10029 (Import 123/131 protocol.py:52) -> ingest 3011-3018; packet_to_server_samples 7653-7683; Test multi_user:1224-1233.",
+      "evidenz": "stark (Code+Test)",
+      "gueltigkeit": "Format/Bereiche 04.05 (B1-05..B1-13), hier Referenz.",
+      "id": "Z1-07"
+    },
+    {
+      "aussage": "Fehler/Warnungen Textframes mit where-Diskriminator, drei Ebenen: (1) AudioPacketError -> error sessionId/message/where audio_packet, weiter; (2) sonst Exception -> where audio, weiter; (3) accepted False -> warning sessionId/Startbefehl-Text, kein Close/Abbruch. Textfehler where=command (Z1-09).",
+      "beleg": "server.py:10030-10052; Tests browser_client_contract:178-195, trigger_contract:236-248.",
+      "evidenz": "stark (Code+Tests)",
+      "gueltigkeit": "nur V1 (V2 Audio stumm, B1-12).",
+      "id": "Z1-08"
+    },
+    {
+      "aussage": "Befehlsvokabular V1-Textkanal: json.loads Dict-Pflicht (Liste/String -> error command); Dispatch type: start -> start_streaming (streaming True, wakeword_wait/listening, status-Frame); stop -> stop_streaming (idle, puffert, Sprecher frei); clear -> clear (u.a. clear/nextSegmentId); ping -> pong sessionId/serverTime float; metrics -> metrics/session.snapshot(); trigger -> handle_trigger_command -> ack (Z1-10); audio_availability -> handle_audio_availability_command -> ack (Z1-11); sonst error Unbekannter Befehl where command. Falsches JSON -> where command, 'Ungueltiges Befehls-JSON: '.",
+      "beleg": "server.py:10053-10105; Tests boundary:92-113, trigger_contract:272-277.",
+      "evidenz": "stark (Code+Tests)",
+      "gueltigkeit": "nur V1.",
+      "id": "Z1-09"
+    },
+    {
+      "aussage": "trigger -> genau eine trigger_ack (commandId-Pflicht, replay-faehig). Form {type:trigger_ack, commandId, accepted, reason, activationId, phase, sessionId}. Fehlt/ungueltig -> keyless (missing/invalid_command_id, commandId ''). Gueltige ID immer Replay-Identitaet (auch abgelehnt); identisch -> gespeicherte ack, gleiche ID anderer Payload -> command_id_conflict wirkungslos (Cache Session). Ohne start: accepted false reason stream_not_started (kein error).",
+      "beleg": "handle_trigger_command 3500-3572; _trigger_ack 3414-3425; prepare_activation_command 175-244; _handle_cancel_accept 3574ff; Tests trigger_contract:206-234, boundary:134-153.",
+      "evidenz": "stark (Code+Tests)",
+      "gueltigkeit": "nur V1-Wire; Engine wie V2.",
+      "id": "Z1-10"
+    },
+    {
+      "aussage": "audio_availability -> audio_availability_ack {type, commandId, accepted, reason applied|no_change|missing/invalid_command_id|invalid_payload|command_id_conflict, audioAvailable, activationId, phase, sessionId}. Muss bool. false kann offene Aktivierung via Publikationsbarriere wie Cancel schliessen; ID nie causedByCommandId.",
+      "beleg": "handle_audio_availability_command 3730-3821; _audio_availability_ack 3823-3833; Boundary V1_WIRE_MESSAGES 72-73.",
+      "evidenz": "stark (Code; indirekt Tests)",
+      "gueltigkeit": "nur V1; V2 audio_availability.set.",
+      "id": "Z1-11"
+    },
+    {
+      "aussage": "Vokabular: exakt activate/refresh/finish/cancel, Quellen manual/wake_word. extend NICHT implementiert -> invalid_action. Docstring 'extend normalised to refresh' vs Code (nur trim/lower) + Test Ablehnung -> Code gilt.",
+      "beleg": "activation_commands.py:37-50, 168-172, 204-210; server.py:3411-3412; Test boundary:200-222.",
+      "evidenz": "stark (Test+Code)",
+      "gueltigkeit": "beide Transporte (Engine); V1-Ack Z1-10.",
+      "id": "Z1-12"
+    },
+    {
+      "aussage": "ConnectionManager: Registrierung/Auslieferung/Abmeldung. Jede V1-Session genau einmal unter session_id; ALLE Folgen (Status/Timeline/Transkripte/Acks via publish) darueber. hello direkt via Socket (nach connect registriert, nicht via publish). connect accept + map; send send_text separators; Fehler Selbstabmeldung; publish_session run_coroutine_threadsafe; bind_loop; Endpunkt connect 9988, finally disconnect 10113. [R2 2026-11-09: vor/nach Registrierung korrigiert.]",
+      "beleg": "class ConnectionManager 1692-1748 (connect, disconnect, send, publish_session, bind_loop, Aufruf 7277); Test multi_user:1343-1365.",
+      "evidenz": "stark (Code+Test)",
+      "gueltigkeit": "V1; V2 bewusst nicht registriert (Kommentar 10133-10135; kein manager.connect 10121-10289).",
+      "id": "Z1-13"
+    },
+    {
+      "aussage": "Keine V2-Closes auf V1: keine 44xx. Nur 1008 (9928, 9949), 1013 (9985), 1011 (9968); 44xx nur protocol_v2/schema.py:202-206. Ablehnung Textframe error + Standard-Close: Config 1008, Limit 1013, Init 1011. Normaler Disconnect kein expliziter Close (nur finally).",
+      "beleg": "Close-Stellen; Grep 44xx nur protocol_v2/* + V2-Tests; Test multi_user:2640 (1008).",
+      "evidenz": "stark Absence/1008; mittel 1013 (kein Test, U1).",
+      "gueltigkeit": "nur V1; V2 44xx.",
+      "id": "Z1-14"
+    },
+    {
+      "aussage": "Abgrenzung V2: hello.accepted/command.ack/session_settings.patch/audio_availability.set/trigger_suppression.set/session.snapshot.request existieren auf V1 NICHT (-> Unbekannter Befehl); mitgesendetes sessionId/protocolVersion wirkungslos (Antwort V1-sessionId). V1-Antworten kein protocolVersion. Feedback status (3115-3135) + timeline (type timeline, event activation.started..., 5900-5920), nicht V2-Envelope eventSeq/stateVersion.",
+      "beleg": "schema.py:29-48, is_canonical_uuid 219-233; Dispatch 10074-10105; Tests boundary:92-153, 280-296, 392-406.",
+      "evidenz": "stark (Code+Tests)",
+      "gueltigkeit": "Grenze; V2 04.03-04.09.",
+      "id": "Z1-15"
+    },
+    {
+      "aussage": "V1 kein Settings-Mutationsbefehl WS: session_settings.patch/settings.patch NOT_IMPLEMENTED -> error command. V1-Settings read-only (settings/sessionConfig/activationConfig im hello), nur Query beim Aufbau. Server-Aenderung HTTP /api/config PATCH (nicht hier). apply_settings_patch existiert, nur V2-Aufrufer (ports.py:81, connection.py:366,505).",
+      "beleg": "Dispatch 10074-10105 (nur start/stop/clear/ping/metrics/trigger/audio_availability); apply_settings_patch 3261; Grep Aufrufer.",
+      "evidenz": "stark (Code+Grep-Absence V1).",
+      "gueltigkeit": "nur V1.",
+      "id": "Z1-16"
+    },
+    {
+      "aussage": "ready + Startup-Fehler nach hello: service.ready gesetzt -> zweiter Textframe type ready (sessionId, settings, sessionConfig, activationConfig, sessionCapabilities, limits, runtimeSettings, ok, models), danach je startup_errors eigener Frame. Noch nicht bereit -> entfallen (spaeter Status/Event-Kanal).",
+      "beleg": "server.py:10015-10020; ready_payload 7811-7824.",
+      "evidenz": "stark (Code; kein Reihenfolge-Test).",
+      "gueltigkeit": "nur V1 (V2 snapshot/Events).",
+      "id": "Z1-17"
+    },
+    {
+      "aussage": "sessionCapabilities kundigt genau implementierte V1-Befehle an: wakeWord.supported/backends [openwakeword]/availableWakeWords/queryParameters; activationTriggers supported true, version 2, sources, actions, commandType trigger, ackType trigger_ack, commandIdRequired true, commandIdIdempotent true, commandHistory session, activationIdValidated true, audioAvailabilityCommandType audio_availability, AckType audio_availability_ack, queryParameters (=Felder), activationEvents [started, refreshed, closed, watchdog.warning]. Bedingung Z1-10/11/12 (Kommentar 7743-7746). Keine deprecatedActionAliases/retiredQueryParameters.",
+      "beleg": "server.py:7716-7770; Test boundary:392-406.",
+      "evidenz": "stark (Code+Test)",
+      "gueltigkeit": "nur V1-hello.",
+      "id": "Z1-18"
+    },
+    {
+      "aussage": "Server V1 nur Textframes: Binaer nur Client->Server (Audio). Server->Client JSON-Text inkl. Fehler/Warnungen; kein send_bytes/send_json im Modul; Ausgaben send_text bzw. Manager.send (1719).",
+      "beleg": "Grep-Absence server.py; Manager.send 1710-1725; Tests receive_json.",
+      "evidenz": "mittel (Grep + Tests)",
+      "gueltigkeit": "V1 (V2 ebenso send_text).",
+      "id": "Z1-19"
+    },
+    {
+      "aussage": "Keine WS-Subprotokoll-Aushandlung: keine Treffer subprotocol/Sec-WebSocket-Protocol in api_fastapi_server/** und tests/**. Protokollwahl rein pfadbasiert (/ws/transcribe vs /ws/v2).",
+      "beleg": "Grep ohne Treffer.",
+      "evidenz": "mittel (Grep-Absence)",
+      "gueltigkeit": "beide Endpunkte.",
+      "id": "Z1-20"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "V1-Handshake, hello.accepted, protocolVersion-Verhandlung (nur handshake.py V2)."
+    },
+    {
+      "id": "N2",
+      "thema": "44xx-Closes auf V1; nur 1008/1011/1013."
+    },
+    {
+      "id": "N3",
+      "thema": "session_settings.patch/settings.patch/settings-Befehl V1; Dispatch nur 8 Typen."
+    },
+    {
+      "id": "N4",
+      "thema": "trigger_suppression.set, session.snapshot.request, command.ack, audio_availability.set auf V1 (-> Unbekannter Befehl)."
+    },
+    {
+      "id": "N5",
+      "thema": "extend-Aktion, auch Alias; invalid_action."
+    }
+  ],
+  "researcher_session": "ses_e429e972bffeENSlJO28nGQH5e",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Close 1013 nicht testabgesichert (nur Code); Test nur error admission."
+    },
+    {
+      "id": "U2",
+      "thema": "Frame-vor-Close-Ordnung ueber ASGI/Proxy nicht belegt."
+    },
+    {
+      "id": "U3",
+      "thema": "Doppel-start waehrend Streaming: kein Fehlerpfad, nur publish_status; keine Idempotenz-Zusage."
+    },
+    {
+      "id": "U4",
+      "thema": "maxSessions inkl. Reservierungen unter Nebenlaeufigkeit WS nicht belegt."
+    }
+  ],
+  "writer_notes": "Diagrammbrief fehlt -> NOT_REQUESTED; Kanten Vorschlag, nicht beauftragt. Notiz nur Geruest. Nur Code/Tests Evidenz. Nummernraum Z1-01..Z1-20. Fokus Altvertrag + V2-Abgrenzung; nicht duplizieren V2/Audio-Decoder/Log. Konsistenz 04.01 I1-12/I1-23, 04.03 W1-17, 04.05 B1-05/B1-12. Schreibhinweise: Hello-Feldsatz exakt (kein capabilities); V1 ohne protocolVersion; Binaer nur Client->Server; Fehler/Warnungen Textframes where admission/session_config/audio_packet/audio/command; Closes 1008/1011/1013 (44xx V2); keine Subprotokolle, pfadbasiert. U1-U4 Vorbehalt."
+}

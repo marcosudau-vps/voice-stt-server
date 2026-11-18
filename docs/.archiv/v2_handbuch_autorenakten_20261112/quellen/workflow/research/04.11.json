@@ -1,0 +1,327 @@
+{
+  "branch_note": "Registry-source_ref ist feat/v2-release-cleanup; Checkout detached, keine sichtbaren Branch-Refs. Belegt ausschliesslich Commit a8993c5c68042d996eab680d84a5b138a214bb5d.",
+  "chapter": "04.11",
+  "commit_verification": "Detached HEAD: .git/HEAD = a8993c5c68042d996eab680d84a5b138a214bb5d; .git/FETCH_HEAD derselbe SHA von https://github.com/marcosudau-vps/voice-stt-server; .git/logs/HEAD = checkout: moving from main to FETCH_HEAD; VERSION = 2.0.0.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "Doku-vs-Code: alte Audit-Berichte behaupten /ws/v2 liefere keinen logAccess; Code connection.py:330-343 liefert ihn. Code ist Autoritaet."
+    },
+    {
+      "id": "C2",
+      "thema": "Auth-Asymmetrie: HTTP-Historie Loopback-Admin ohne Key (inkl. testclient), /ws/logs ausdruecklich nicht (logs.py:74-76 vs 84-86)."
+    },
+    {
+      "id": "C3",
+      "thema": "log.hello.replayAvailable hart true nach Pruefung; logAccess.replayAvailable abgeleitet; sessionId erst in subscribed."
+    },
+    {
+      "id": "C4",
+      "thema": "Session-Token sieht system-Kanal nicht: still verworfen -> 200 data:[] statt Fehler; nicht-autorisiert vs keine-Events ununterscheidbar."
+    },
+    {
+      "id": "C5",
+      "thema": "Fehlercodes inkonsistent: WS-Auth/Cursor mit code, unbekannter Befehl ohne; HTTP 401 generisch."
+    },
+    {
+      "id": "C6",
+      "thema": "TestClient-Loopback-Falle: Tests ohne Header mit 200 laufen ueber TestClient=testclient-Loopback-Admin, kein Oeffentlichkeitsbeweis."
+    },
+    {
+      "id": "C7",
+      "thema": "1008 vs 1011: log_live_disabled -> 1008, event_store_unavailable -> 1011."
+    },
+    {
+      "id": "C8",
+      "thema": "__not_authorized__ ist SQL-Filterwert; Ergebnis 200 data:[] bzw. count:0, kein Fehler."
+    },
+    {
+      "id": "C9",
+      "thema": "replayAvailable hart true in log.hello vs abgeleitet in logAccess; sessionId erst in subscribed."
+    },
+    {
+      "id": "C10",
+      "thema": "Lesbar ungleich verfuegbar: erfolgreicher Read heilt offenen Schreibfehler nicht."
+    },
+    {
+      "id": "C11",
+      "thema": "Store disabled -> Historie 503 event_store_unavailable, obwohl absichtlich aus."
+    },
+    {
+      "id": "C12",
+      "thema": "HTTP hat kein Gap-Frame; Verlust nur aus retentionCursor ableitbar."
+    },
+    {
+      "id": "C13",
+      "thema": "available=false heisst nicht gesperrt: Historie ggf. Admin-lesbar; nur kein Token."
+    },
+    {
+      "id": "C14",
+      "thema": "replayAvailable true bei deaktiviertem Live moeglich (Store bereit)."
+    },
+    {
+      "id": "C15",
+      "thema": "logProtocolVersion 2 ist Logging-Versionsraum, nicht V2-Audio-Protokoll."
+    },
+    {
+      "id": "C16",
+      "thema": "Mirror nur nach Commit (sqlite_first); Append-Fehler -> Event verworfen."
+    },
+    {
+      "id": "C17",
+      "thema": "Fremde sessionId -> 401, nicht 403."
+    },
+    {
+      "id": "C18",
+      "thema": "Cursor/Wasserzeichen bei Lesefehler 0, Store degraded."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "Client -> GET /api/logs/events -> LogGate.http_scope (L1-02, L1-09, L1-10)",
+    "LogGate.http_scope -> 401 ohne WWW-Authenticate (L1-02, L1-11)",
+    "LogGate -> session-Scope: Token-Session, channels audit/performance/transcription (L1-09)",
+    "LogGate -> admin-Scope: alle Sessions/Kanaele (L1-10)",
+    "Scope -> query -> Antwort {data,nextCursor,oldestCursor,latestCursor,retentionCursor} (L1-07, L1-08)",
+    "Store weg -> 503 event_store_unavailable (L1-11)",
+    "V1 hello {logAccess} (L1-05)",
+    "V2 hello.accepted {snapshot, logAccess} (L1-05)",
+    "create_log_access -> available = live AND store.available (L1-06)",
+    "available=false -> ohne Token, code log_live_disabled | event_store_unavailable (L1-06)",
+    "available=true -> issue -> 64 Hex, 24 h, sessiongebunden (L1-04)",
+    "Client -> WS /ws/logs -> accept -> Pruefung live/Store (L1-12)",
+    "live aus -> log_live_disabled -> close 1008 (L1-12)",
+    "Store weg -> event_store_unavailable -> close 1011 (L1-12, L1-19)",
+    "Client -> subscribe {accessToken,sessionId,channels,afterCursor} (L1-13)",
+    "subscribe -> websocket_scope -> not_authorized -> close 1008 (L1-03)",
+    "subscribe -> afterCursor<0 invalid_cursor; >latest cursor_ahead -> close 1008 (L1-14)",
+    "Scope -> log.hello -> log.subscribed (L1-15)",
+    "retentionCursor>afterCursor -> log.gap retention (L1-16, L1-22)",
+    "Replay -> log.event replay:true (1000/Seite) -> replay_completed (L1-16)",
+    "Hub.emit -> SQLite-Append/Commit -> control wakeup (L1-17, L1-20)",
+    "Wakeup -> Rescan scan..committed -> log.event replay:false (L1-17)",
+    "30 s idle -> keepalive; ping -> pong (L1-17)",
+    "retention>scan (live) -> log.gap retention (L1-18)",
+    "store_error -> log.error event_store_unavailable -> close 1011; recovered -> Rescan (L1-19)",
+    "Ereignis -> sanitize -> payload (L1-23)",
+    "Prune -> watermarks -> retentionCursor (L1-22)"
+  ],
+  "facts": [
+    {
+      "aussage": "Genau drei HTTP-Routen (GET /api/logs/events, /api/logs/sessions/{id}, /api/logs/transcriptions/{transcription_id}) und ein Log-WS (/ws/logs); separat Logging-Config (GET/PUT /api/logging). Kein Sammel-/Download-/Tail-Endpunkt.",
+      "beleg": "server.py:9320, 9383, 9539, 9543, 9550, 9560; Registrierungs-Grep; tests browser_client_contract:54-60",
+      "evidenz": "stark",
+      "gueltigkeit": "gesamte App; /api/logging = Config, nicht Historie.",
+      "id": "L1-01"
+    },
+    {
+      "aussage": "HTTP-Historie drei Auth-Wege (LogGate.http_scope): (a) konfigurierter Admin-Key via X-VoiceSTT-Admin-Key oder Bearer (compare_digest), (b) ohne Key automatisch Admin fuer 127.0.0.1/::1/localhost/testclient, (c) Log-Token via X-VoiceSTT-Log-Token oder Bearer gegen sessionId. Kein Treffer -> 401 Logzugriff nicht autorisiert (auch falscher Key 401, nicht 403).",
+      "beleg": "security/logs.py:8, 67-81; security/admin.py:8, 15-22; server.py:9467-9472; tests multi_user:1413-1423; security_modularization:109-118",
+      "evidenz": "stark",
+      "gueltigkeit": "GET /api/logs/* alle drei Varianten.",
+      "id": "L1-02"
+    },
+    {
+      "aussage": "/ws/logs abweichend: websocket_scope KEIN Loopback-Admin ohne Key (Kommentar historischer Vertrag). Token im ersten subscribe-Frame als accessToken, alternativ Admin-Key. Fehlschlag log.error not_authorized + close 1008.",
+      "beleg": "security/logs.py:83-93; server.py:9590-9602; tests multi_user:1444-1451; security_modularization:119-130",
+      "evidenz": "stark",
+      "gueltigkeit": "/ws/logs; Gegenprobe HTTP-Loopback.",
+      "id": "L1-03"
+    },
+    {
+      "aussage": "TokenAuthority.issue 64 Hex (zwei uuid4().hex), expiresAt jetzt+86400 s (TOKEN_LIFETIME 24*60*60). Nur Prozessspeicher (dict), genau eine sessionId; validate Ablauf + Bindung, raeumt abgelaufene bei issue sowie ab 1024 Eintraegen bei validate. Neustart vernichtet alle; kein Widerruf.",
+      "beleg": "security/logs.py:9-59; tests security_modularization:97-106",
+      "evidenz": "stark",
+      "gueltigkeit": "alle Log-Tokens; V1+V2.",
+      "id": "L1-04"
+    },
+    {
+      "aussage": "create_log_access(session_id) pro akzeptierter Verbindung: V1 hello.logAccess, V2 hello.accepted.logAccess neben snapshot. V2-Kommentar: Bootstrap-Entitlement, nicht in Resync-Snapshots; keine log.*-Frames im V2-Wire (nur logAccess in hello.accepted).",
+      "beleg": "server.py:7772-7809, 10001-10014; connection.py:330-343; tests e2e:289-295, 321-324",
+      "evidenz": "stark",
+      "gueltigkeit": "Token-Verteilung; Client merkt aus Handshake.",
+      "id": "L1-05"
+    },
+    {
+      "aussage": "logAccess immer available, websocketPath /ws/logs, historyPath /api/logs/events, sessionId, logProtocolVersion 2, deliveryMode sqlite_first, replayAvailable, serverInstanceId, oldestCursor, latestCursor. available = live AND store.available. false -> kein Token/expiresAt, sondern code log_live_disabled bzw. event_store_unavailable + reason; replayAvailable/Cursor trotzdem gefuellt.",
+      "beleg": "server.py:7772-7806; tests e2e:289-295",
+      "evidenz": "stark",
+      "gueltigkeit": "beide Handshakes.",
+      "id": "L1-06"
+    },
+    {
+      "aussage": "GET /api/logs/events Query: sessionId, channels, events, transcriptionId, from, to, afterCursor, limit. channels/events Komma-Listen getrimmt/leer verworfen; afterCursor default 0, limit default 200. Store klemmt limit 1..1000, afterCursor >=0 (negativ still 0). Nicht-numerisch -> ValueError -> 400.",
+      "beleg": "server.py:9446-9515; event_logging.py:642-677, 660-675, 678-682",
+      "evidenz": "stark",
+      "gueltigkeit": "HTTP-Historie; from/to String-Vergleiche ISO.",
+      "id": "L1-07"
+    },
+    {
+      "aussage": "Antwort: {object:list, data, nextCursor, oldestCursor, latestCursor, retentionCursor, authorizationScope admin|session, allSessions, deliveryMode sqlite_first}. nextCursor = Cursor letztes Event oder null (nicht latest). authorizationScope admin|session; allSessions nur Admin ohne Session-Filter. oldest = MIN verblieben (0 leer), latest = High-Watermark, retention = Loesch-Wasserzeichen im Scope.",
+      "beleg": "server.py:9527-9537; event_logging.py:605-640, 957-967, 686-690; tests multi_user:1432-1441",
+      "evidenz": "stark",
+      "gueltigkeit": "alle drei HTTP-Routen.",
+      "id": "L1-08"
+    },
+    {
+      "aussage": "Mit Token darf sessionId fehlen (Token-Session); abweichende fuehrt validate -> 401. Kanaele auf audit/performance/transcription beschnitten; Fremde still verworfen, nichts uebrig -> intern __not_authorized__ -> 200 data:[] (kein 403). system der eigenen Session unsichtbar.",
+      "beleg": "security/logs.py:77-81; server.py:9473-9486; tests multi_user:2326-2337",
+      "evidenz": "stark",
+      "gueltigkeit": "Session-Scope HTTP.",
+      "id": "L1-09"
+    },
+    {
+      "aussage": "Admin-Scope: ohne sessionId alle (allSessions=true), mit genau diese; alle Kanaele/Namen erlaubt; channels leer = kein Filter. Form gleich, authorizationScope=admin.",
+      "beleg": "server.py:9473-9486, 9534-9535; tests multi_user:1424-1442",
+      "evidenz": "stark",
+      "gueltigkeit": "Admin-Key oder Loopback-ohne-Key.",
+      "id": "L1-10"
+    },
+    {
+      "aussage": "Fehler: ohne Scope 401 Logzugriff nicht autorisiert; Store weg 503 event_store_unavailable (vor Query und nach Query-Exception, mit Log); Typ/Wert 400 rohe Meldung; afterCursor ueber latest -> leere 200-Seite, kein Fehler.",
+      "beleg": "server.py:9467-9472, 9487-9494, 9516-9526, 9507-9515",
+      "evidenz": "stark",
+      "gueltigkeit": "alle HTTP-Routen; 503 kein Auth-Fehler.",
+      "id": "L1-11"
+    },
+    {
+      "aussage": "websocket_logs accept zuerst, dann: live false -> log.error log_live_disabled + close 1008; Store nicht ready -> event_store_unavailable + close 1011. Beide vor subscribe-Frame, Client ohne eigene Nachricht.",
+      "beleg": "server.py:9560-9580; tests multi_user:1941-1948",
+      "evidenz": "stark",
+      "gueltigkeit": "/ws/logs Aufbau.",
+      "id": "L1-12"
+    },
+    {
+      "aussage": "Erstes Frame muss JSON {type:subscribe, accessToken, sessionId?, channels[], afterCursor?}. Sonst log.error invalid_request + 1008 (auch JSON/Typfehler). Nur ein Abo pro Socket: weiteres subscribe/unbekannt -> log.error ohne code, offen.",
+      "beleg": "server.py:9582-9589, 9727-9745, 9825-9831",
+      "evidenz": "stark",
+      "gueltigkeit": "/ws/logs nach accept.",
+      "id": "L1-13"
+    },
+    {
+      "aussage": "afterCursor: negativ -> invalid_cursor + 1008; groesser latest -> cursor_ahead + afterCursor/latestCursor/serverInstanceId + 1008. afterCursor=0 Replay ab aeltestem (Gap gemeldet, nicht verschwiegen).",
+      "beleg": "server.py:9617-9651; tests multi_user:1495-1519",
+      "evidenz": "stark",
+      "gueltigkeit": "subscribe-Validierung.",
+      "id": "L1-14"
+    },
+    {
+      "aussage": "Nach Pruefung log.hello (schemaVersion 1, logProtocolVersion 2, deliveryMode sqlite_first, replayAvailable true hart, serverInstanceId, oldest/latest/retentionCursor) dann log.subscribed (channels sortiert, sessionId, afterCursor, authorizationScope, allChannels, allSessions).",
+      "beleg": "server.py:9652-9672; tests multi_user:1460-1467",
+      "evidenz": "stark",
+      "gueltigkeit": "WS-Rahmen.",
+      "id": "L1-15"
+    },
+    {
+      "aussage": "Replay: retentionCursor>afterCursor zuerst log.gap retention (lostFrom/lostTo/oldest/latest). Dann seitenweise 1000 log.event replay:true bis eingefrorenem latest, dann log.replay_completed cursor:latestCursor count. Test 1005 ueber zwei Seiten.",
+      "beleg": "server.py:9673-9708; tests multi_user:2247-2297, 2199-2212",
+      "evidenz": "stark",
+      "gueltigkeit": "Replay beim Aufbau.",
+      "id": "L1-16"
+    },
+    {
+      "aussage": "Live = Rescan: nach Wakeup (Commit-Control oder Keepalive-Timeout) latest/retention neu lesen, Events (scan,committed] 1000er-Seiten log.event replay:false, scan=committed. Control payload-frei, duerfen verloren (immer Rescan). Abo-Queue maxsize 1000: normale Wakeups bei vollem Puffer verworfen, nur store_error verdraengt aeltesten. [R1-F3 2026-11-08.]",
+      "beleg": "server.py:149, 9710-9810; event_logging.py:740-744, 987-990, 1183-1212; tests multi_user:1524-1642",
+      "evidenz": "stark",
+      "gueltigkeit": "/ws/logs Live.",
+      "id": "L1-17"
+    },
+    {
+      "aussage": "Retention live: retention_cursor(channels,session) > scan_cursor -> log.gap retention (lostFrom/lostTo/oldest/latest) vor neuen Events. Gap auf gefilterte Kanaele/Session, nicht global.",
+      "beleg": "server.py:9768-9781; event_logging.py:616-640; tests multi_user:2184-2212",
+      "evidenz": "stark",
+      "gueltigkeit": "Live mit aktiver Retention.",
+      "id": "L1-18"
+    },
+    {
+      "aussage": "Store-Zustand Lese-/Schreib-getrennt: disabled|ready|degraded, available nur ready. Erfolgreicher Read heilt Schreibfehler nicht; erst Append-Commit setzt ready. Uebergang degraded -> store_error Control (offene WS 1011 close); ready -> store_recovered nur Rescan.",
+      "beleg": "event_logging.py:1099-1153, 1268-1292; server.py:9756-9766; tests multi_user:1972-2048",
+      "evidenz": "stark",
+      "gueltigkeit": "Log-Datenschicht; Basis available/health.",
+      "id": "L1-19"
+    },
+    {
+      "aussage": "SQLiteEventStore: Datei <data_root>/logs/voicestt-events.sqlite3 (sonst logs/voicestt-events.sqlite3), WAL, synchronous NORMAL, busy 30 s, check_same_thread False. Tabelle events(cursor INTEGER PRIMARY KEY AUTOINCREMENT, event_id UNIQUE, timestamp, channel, event_name, severity, server_instance_id, transport, client_id, session_id, request_id, transcription_id, segment_id, payload_json) + 6 Indizes; retention_watermarks(channel, session_id, cursor).",
+      "beleg": "server.py:526; event_logging.py:438-493, 712-719",
+      "evidenz": "stark",
+      "gueltigkeit": "Persistenz Logzugriff.",
+      "id": "L1-20"
+    },
+    {
+      "aussage": "Cursor global monoton alle Kanaele/Sessions, nicht pro Session. latest = MAX(MAX(cursor), sqlite_sequence.seq), bleibt nach Loeschungen stabil. oldest = MIN verblieben (0 leer). retention = MAX Wasserzeichen gefiltert. Nur mit serverInstanceId + Wasserzeichen interpretierbar.",
+      "beleg": "event_logging.py:543-640; serverInstanceId 701,964; WS cursor_ahead 9648",
+      "evidenz": "stark",
+      "gueltigkeit": "SQLite-Store; ein Store pro Prozess/Datei.",
+      "id": "L1-21"
+    },
+    {
+      "aussage": "Retention pro Kanal in Tagen: audit (Setting request_*), performance, transcription, system (Setting system_event_*); 0/negativ keine Loeschung. Prune hoechstens 1x/UTC-Tag beim ersten Append. Loeschung timestamp < now-days; pro (channel,session) MAX entfernter Cursor monoton in watermarks, exakter Gap.",
+      "beleg": "event_logging.py:497-541, 769-891",
+      "evidenz": "stark",
+      "gueltigkeit": "Standard 0 = unbegrenzt (config.yaml:120-125, server.py:459-478).",
+      "id": "L1-22"
+    },
+    {
+      "aussage": "Sanitisierung vor Schreiben: Schluessel apiKey/authorization/cookie/credential/password/privateKey/secret/token verworfen, Audio-Rohfelder/Query-Strings verworfen; Bearer-/secret=...-Muster -> [REDACTED]. Transkripte transcript_log_mode: none nie, final nur completed transcription, full nur transcription; performance verwirft immer. Admin-Key nicht in Historie (Test).",
+      "beleg": "event_logging.py:60-179, 935-969; tests multi_user:1442",
+      "evidenz": "stark",
+      "gueltigkeit": "Inhalt aller gelieferten Events.",
+      "id": "L1-23"
+    },
+    {
+      "aussage": "Defaults: event_store_enabled=true, log_live_enabled=true, event_log_queue_size=10000 (Settings+config.yaml). CLI --[no-]event-store/--log-live/--event-log-queue-size. live true bei store false = Start-ValueError + Laufzeit invalid_dependency; store startup-only, live active_runtime. GET/PUT /api/logging (Admin) liveEnabled/replayAvailable/eventStore{...}; /health eventStore, ok=false wenn Live aktiv und Store weg.",
+      "beleg": "server.py:481-484, 519-543, 178-181, 283-285, 7857-7877, 9320-9381, 8885-8905, 10637-10649; config.yaml:126-131",
+      "evidenz": "stark",
+      "gueltigkeit": "Betrieb/Konfiguration Logzugriff.",
+      "id": "L1-24"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "NI-01",
+      "thema": "Kein Widerruf/Logout/Refresh Log-Tokens; bis Ablauf (24 h) oder Neustart."
+    },
+    {
+      "id": "NI-02",
+      "thema": "Keine Token-Persistenz (nur Speicher); Neustart vernichtet alle."
+    },
+    {
+      "id": "NI-03",
+      "thema": "Kein unsubscribe/resubscribe; nur ein Abo/Socket, weiteres subscribe = unbekannter Befehl."
+    },
+    {
+      "id": "NI-04",
+      "thema": "Kein Ping/Idle-Abbau; nur passiver keepalive 30 s."
+    },
+    {
+      "id": "NI-05",
+      "thema": "Kein SSE-/HTTP-Streaming der Historie, kein Export/Download."
+    },
+    {
+      "id": "NI-06",
+      "thema": "Keine Log-Events im V2-Wire; log.* nur /ws/logs."
+    }
+  ],
+  "researcher_session": "ses_e42b3a868ffeAwBXI0SpLKT6hi",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Maximale subscribe-Framegroesse/WS-Schutz nicht erkennbar (keine Grenze)."
+    },
+    {
+      "id": "U2",
+      "thema": "Viele Abonnenten/blockierendes Senden: live_queue 1000, kein Backpressure-Signal; ungetestet."
+    },
+    {
+      "id": "U3",
+      "thema": "Mehrprozess gleiche SQLite (busy 30 s) ungetestet."
+    },
+    {
+      "id": "U4",
+      "thema": "Token nach Sitzungsende: validate nur Ablauf/sessionId, nicht Session-Existenz; unbelegt ob gewollt."
+    }
+  ],
+  "writer_notes": "Kapitel nur Fakten. Wichtig: (1) Logkanal getrennt vom V2-Wire - keine log.*-Frames auf /ws/v2; V2 liefert nur logAccess in hello.accepted. (2) Beide Wege: HTTP-Historie (drei Routen, gleiche Huelle) und WS-Live (subscribe->hello->subscribed->gap?->Replay->completed->Live). (3) Auth: Admin-Key, Loopback nur HTTP, Session-Token; 24 h, kein Widerruf, Neustart ungueltig. KEINE index.html/client-Beispiele als Evidenz (nur *.py/Tests). (4) Closes: 1008 (live_disabled/not_authorized/invalid_cursor/cursor_ahead/invalid_request), 1011 (event_store). (5) Cursor global/monoton/nichtwiederverwendet; Gap = Retention. (6) Keine Defaults erfinden: Retention 0 unbegrenzt, limit max 1000, Keepalive 30 s. (8) /api/logging = Config (Admin), nicht Historie. Diagramme nur diagram_edges."
+}

@@ -1,0 +1,307 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup lokal nicht als Ref belegbar (kein .git/refs, keine packed-refs). Belegt ist ausschliesslich der Commit a8993c5c68042d996eab680d84a5b138a214bb5d.",
+  "chapter": "04.10",
+  "commit_verification": "Detached HEAD: .git/HEAD = a8993c5c68042d996eab680d84a5b138a214bb5d; .git/FETCH_HEAD derselbe SHA von https://github.com/marcosudau-vps/voice-stt-server; .git/logs/HEAD = checkout: moving from main to FETCH_HEAD.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "GET ignoriert openai_api_enabled, POST 404 bei false (Asymmetrie, vgl. 04.01 I1-16, 04.02 C4)."
+    },
+    {
+      "id": "C2",
+      "thema": "/v1/models listet ungeladene/nicht-available Kandidaten ohne Hinweis; Ablehnung erst POST 404/409."
+    },
+    {
+      "id": "C3",
+      "thema": "Fehlertyp inkonsistent: 500 type=server_error/code=transcription_failed vs SSE-error type=invalid_request_error/code=null."
+    },
+    {
+      "id": "C4",
+      "thema": "Default-Alias fast -> realtime-Lane auch bei use_main aktiv; realtime/<realtime_model> nur bei use_main=false. Zwei Regime."
+    },
+    {
+      "id": "C5",
+      "thema": "owner_by local vs voicestt (whisper-1); created immer 0."
+    },
+    {
+      "id": "C6",
+      "thema": "Override nur bei model=whisper-1, obwohl Liste weitere direkt nutzbare ids zeigt; zwei Wege."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "Client -> GET /v1/models -> Key-Gate -> ohne Key 200; falsch 401 (O1-02, O1-22)",
+    "model_catalog() -> {object:list,data[]} (O1-02, O1-03)",
+    "GET -> whisper-1 synthetisch Index 0 falls fehlend (O1-02)",
+    "Client -> POST /v1/audio/transcriptions -> X-Request-ID (O1-13)",
+    "POST -> enabled=false -> 404 + Audit rejected api_disabled (O1-23)",
+    "POST -> Key falsch -> 401 invalid_api_key + Audits (O1-22)",
+    "POST -> form -> file fehlt/kein Upload -> 400 file (O1-06)",
+    "POST -> Endung nicht Whitelist -> 400 file (O1-06)",
+    "POST -> parse_form -> model fehlt -> 400 model (O1-06, O1-07)",
+    "POST -> Format/Granularities/include/Sprecher ungueltig -> 400 (O1-08)",
+    "POST -> resolve -> 400 invalid_model_override (O1-11)",
+    "POST -> resolve -> 404 model_not_found (O1-12)",
+    "POST -> resolve -> 409 model_not_loaded (O1-12)",
+    "POST -> Header Requested/Resolved/Route (+Override) (O1-13)",
+    "POST -> Laenge > Limit -> 413 file_too_large (O1-09)",
+    "POST -> archive_audio nur save_audio_files (O1-24)",
+    "POST -> decode_float32 -> duration=len/16000 (O1-24)",
+    "POST -> Events accepted/started (O1-24)",
+    "POST sync -> transcribe_openai -> Queue -> InferenceResult (O1-24)",
+    "POST sync -> json/verbose/diarized -> JSONResponse (O1-15)",
+    "POST sync -> text/srt/vtt -> text/plain bzw. text/vtt (O1-16, O1-17)",
+    "POST stream -> StreamingResponse event-stream + no-cache + no-buffering (O1-18)",
+    "stream_callback -> delta segmentweise (O1-19, O1-25)",
+    "diarized+stream -> Segment-Events vor done (O1-18)",
+    "Scheduler -> InferenceResult -> SSE done (text, usage, logprobs?) (O1-18)",
+    "Fehler Stream -> SSE error, HTTP 200, kein done (O1-20)",
+    "Fehler sync -> 500 server_error/transcription_failed (O1-21)",
+    "Audit/Performance -> completed, first_text, completed, performance_summary (O1-24)"
+  ],
+  "facts": [
+    {
+      "aussage": "OpenAI-Router Fabrik ohne Zyklus: create_openai_router(service, settings, authenticate_openai, normalized_client_id, decode_audio_float32, process_memory_snapshot, sample_rate, logger) injiziert; APIRouter() ohne prefix; genau zwei Routen GET /v1/models, POST /v1/audio/transcriptions. server.py include_router ohne prefix.",
+      "beleg": "openai_routes.py:1-6, 28-41, 43, 67, 619; server.py:65, 9894-9910; tests security_modularization:166-194",
+      "evidenz": "stark",
+      "gueltigkeit": "gesamte OpenAI-Schicht; Inventar 04.01 I1-14/I1-17.",
+      "id": "O1-01"
+    },
+    {
+      "aussage": "GET /v1/models nur Key-Gate, NICHT enabled. Body {object:list, data:[...]}; Eintrag genau id, object=model, created=0, owned_by, engine, loaded, lanes. Registry: owned_by=local; fehlt whisper-1 -> synthetisch Index 0 {whisper-1, model, 0, voicestt, routing_alias, true, [final]}. Kein X-Request-ID/Header, keine Pagination/Query.",
+      "beleg": "openai_routes.py:43-65; tests openai_compatible_endpoint:501-515; security_modularization:183-186",
+      "evidenz": "stark",
+      "gueltigkeit": "/v1/models; Asymmetrie 04.01 I1-16, 04.02 H1-12.",
+      "id": "O1-02"
+    },
+    {
+      "aussage": "Liste ungefilterter Registry-Katalog: model_catalog() list_models() alle Kandidaten (Ladung/Validierung egal), loaded=(lanes und scheduler), lanes final/realtime via Alias-Schnittmengen engine+id/alias/name/folder/path. Serializer verwirft available/eligible/validationState/problems/path/folder. Kein enabled-Feld.",
+      "beleg": "openai_routes.py:48-58; server.py:7975-8013; stt_model_management.py:1300-1326",
+      "evidenz": "stark",
+      "gueltigkeit": "Katalog deploymentsabhaengig. Kein Test ungeladen in /v1/models.",
+      "id": "O1-03"
+    },
+    {
+      "aussage": "Modell-ids Kandidaten-ids: faster-whisper faster-whisper-<name>/Produkt-id; Kroko Dateiname/Produkt-id. Exakte Form datenabhaengig.",
+      "beleg": "stt_model_management.py:344-355, 448-455, 518-525; openai_routes.py:50-51",
+      "evidenz": "mittel",
+      "gueltigkeit": "Identitaet Liste; konkrete IDs 05.x.",
+      "id": "O1-04"
+    },
+    {
+      "aussage": "Feste POST-Reihenfolge: (1) request_id/Client/Start/Header, (2) enabled->404, (3) Key->401, (4) form(), (5) file, (6) Endung, (7) parse_form, (8) Override, (9) Aufloesung 400/404/409, (10) Groesse 413, (11) Archiv, (12) Decode+Dauer+Sprache, (13) Events, (14) Stream/Sync. Deaktiviert vor Auth, Datei vor Modell, Modell vor 413, 413 vor Decode.",
+      "beleg": "openai_routes.py:69-77, 93-103, 104-115, 117-121, 122, 123-136, 147-154, 155-162, 163-203, 211, 469-477; tests 401-vor-Erfolg, 400 override",
+      "evidenz": "stark",
+      "gueltigkeit": "/v1/audio/transcriptions; code-deterministisch.",
+      "id": "O1-05"
+    },
+    {
+      "aussage": "Multipart request.form(). file Pflicht Upload-Objekt mit read() (Textfeld ungenuegend) -> 400 file. model Pflicht -> 400 model. Endung nur Dateiname case-insensitiv gegen {.flac,.mp3,.mp4,.mpeg,.mpga,.m4a,.ogg,.wav,.webm}; fehlender Name -> 'audio' ohne Endung -> 400 file. Kein Sniffing/Content-Type-Check.",
+      "beleg": "openai_routes.py:117-122; openai_compat.py:9-11, 92-95, 150-157; tests 128-142",
+      "evidenz": "stark",
+      "gueltigkeit": "Multipart-Grundlagen 04.02 H1-10.",
+      "id": "O1-06"
+    },
+    {
+      "aussage": "Felder/Defaults: model Pflicht getrimmt; language None->settings.language Default de; prompt optional; response_format Default json lowercase; temperature Default 0.0 0..1; threshold Default 0.5 0..1 (VoiceSTT); stream Default false (true/false/1/0/yes/no/on/off); include nur logprobs; timestamp_granularities Default [segment] {segment,word}; known_speaker_names max 4, references gleiche Laenge. Listen: name, name[], JSON-Array, Komma (Referenzen ohne Split), dedup.",
+      "beleg": "openai_compat.py:24-36, 39-63, 66-89, 92-147; tests 100-118",
+      "evidenz": "stark",
+      "gueltigkeit": "Formfelder; threshold/speaker nicht offiziell OpenAI.",
+      "id": "O1-07"
+    },
+    {
+      "aussage": "Validierung alle 400 param gesetzt code null: unbekanntes response_format; unbekannte Granularitaet; !=[segment] ohne verbose_json; unbekanntes include; >4 names; Laengen-Mismatch names/references; nicht-boolescher stream; temperature/threshold ausser 0..1/nicht numerisch. Fehlend model 400 model.",
+      "beleg": "openai_compat.py:94-133, 39-63; tests 120-125, 288-300",
+      "evidenz": "stark",
+      "gueltigkeit": "Meldungen deutsch, nicht stabil.",
+      "id": "O1-08"
+    },
+    {
+      "aussage": "Limit: read(max+1); laenger -> 413 code file_too_large param file. Default 25*1024*1024 (25 MiB), Settings+CLI --openai-max-file-bytes. Ganzer Upload im Speicher. Kein Framework-Multipart-Limit (form() ohne max_files/max_part_size).",
+      "beleg": "openai_routes.py:117, 147-154; server.py:513, 318, 10526, 10770",
+      "evidenz": "stark",
+      "gueltigkeit": "413 code-belegt, ungetestet (Grep ohne Treffer).",
+      "id": "O1-09"
+    },
+    {
+      "aussage": "Alias-Tabelle Lane-Wahl: whisper-1/main/default/settings.model -> final; Registry-Aliasse Haupt -> final; realtime/<realtime_model> + Registry-Aliasse Realtime nur bei use_main=false; zusaetzlich openai_model_aliases Default {whisper-1:final, fast:realtime}, Ziel nur final/realtime/main. Ungueltiger Zielwert ValueError -> generisch 500. Rueckgabe lane/requested/override/Source/effective/resolved.",
+      "beleg": "server.py:8425-8491, 506-513, 8445-8454",
+      "evidenz": "stark",
+      "gueltigkeit": "Alias-Menge deploymentabhaengig; Konflikt C4.",
+      "id": "O1-10"
+    },
+    {
+      "aussage": "Override: voicestt_model vor model_override, dann Header X-VoiceSTT-Model; Source multipart.voicestt_model bzw. header.x-voicestt-model. Nur bei model case-insensitiv exakt whisper-1; sonst 400 invalid_model_override param voicestt_model. Effektiv = Override oder model.",
+      "beleg": "openai_routes.py:123-136; server.py:8426-8434; tests Header/Form 263-285, 400 288-300",
+      "evidenz": "stark",
+      "gueltigkeit": "Getestet whisper-1 + Header/Form.",
+      "id": "O1-11"
+    },
+    {
+      "aussage": "Unbekannt: effektives kein Alias -> registry.resolve(effective) ohne Engine-Praeferenz. available-Kandidat -> 409 model_not_loaded param model (Hinweis PUT /api/models/active). Sonst 404 model_not_found param model (Aliases sortiert). Beide code-belegt, ungetestet.",
+      "beleg": "server.py:8462-8478; stt_model_management.py:1359-1372",
+      "evidenz": "stark",
+      "gueltigkeit": "409 vs 404 Registry-Zustand (C2).",
+      "id": "O1-12"
+    },
+    {
+      "aussage": "Header Transkription: X-Request-ID 32-hex uuid4 jede Antwort (auch 400/404/413/500; 401 nachtraeglich try/except). Nach Aufloesung X-VoiceSTT-Requested/Resolved-Model, X-VoiceSTT-Route final|realtime, bei Override zusaetzlich Override-Model/Source. GET /v1/models keine dieser Header.",
+      "beleg": "openai_routes.py:69-77, 99-102, 104-115, 138-146, 552, 555, 586; tests 263-285, 544, 574; kroko_lifecycle 503-522",
+      "evidenz": "stark",
+      "gueltigkeit": "/v1/audio/transcriptions; wie 04.02 H1-17.",
+      "id": "O1-13"
+    },
+    {
+      "aussage": "Fehlerhuelle immer {error:{message,type,param,code}} (openai_error). type default invalid_request_error, param/code null. Codes: invalid_api_key 401, invalid_model_override 400, model_not_found 404, model_not_loaded 409, file_too_large 413; deaktiviert code null 404; unerwartet type server_error code transcription_failed 500. Deutsch.",
+      "beleg": "openai_compat.py:160-161; openai_routes.py:99-103, 148-154, 583-587, 613-616; server.py:8429-8433, 8466-8478; security/openai.py:31-35; tests 299-300",
+      "evidenz": "stark",
+      "gueltigkeit": "/v1/*; Texte nicht stabil. Wie 04.02 H1-20.",
+      "id": "O1-14"
+    },
+    {
+      "aussage": "Erfolg je format: json {text, usage} (+logprobs nur include=logprobs); verbose_json {task:transcribe, language, duration, text, segments, usage} (+words nur granularities=word); diarized_json {task, duration, text, segments[{type:transcript.text.segment, id:seg_001..., start, end, text, speaker}], usage, compatibility:{diarization:single_speaker, reason}} speaker erster Name oder A. usage immer {type:duration, seconds:ceil}. duration details sonst Samples/16000. Ohne Segmente Fallback 0..duration (leer gar keins).",
+      "beleg": "openai_compat.py:164-174, 182-183, 186-193, 196-233; tests 128-142",
+      "evidenz": "stark",
+      "gueltigkeit": "ohne stream; diarized nur Single-Speaker-Kompatibilitaet.",
+      "id": "O1-15"
+    },
+    {
+      "aussage": "text/srt/vtt aus Segmenten: text result.text; srt Bloecke 'n\\nHH:MM:SS,mmm --> ...\\n<text>' Leerzeile, \\n nur mit Bloecken; vtt Kopf WEBVTT, Bloecke '.'-Millis, Leerzeile, immer \\n. Zeitstempel gerundet, 0 geklemmt. Ohne Segmente srt '' und vtt 'WEBVTT\\n'. Wort-Zeiten nicht in srt/vtt.",
+      "beleg": "openai_compat.py:236-258, 164-174; openai_routes.py:549-552",
+      "evidenz": "stark",
+      "gueltigkeit": "text|srt|vtt; Test nur hello im Body.",
+      "id": "O1-16"
+    },
+    {
+      "aussage": "Media: json/verbose/diarized JSONResponse; text/srt text/plain; vtt text/vtt. Kein Accept/406; nur Formfeld response_format.",
+      "beleg": "openai_routes.py:549-556; openai_compat.py:244-258; 04.02 H1-15",
+      "evidenz": "stark",
+      "gueltigkeit": "Erfolg; Charset Framework, nicht Repo.",
+      "id": "O1-17"
+    },
+    {
+      "aussage": "Streaming bei stream=true VOR Formatwahl (ueberschreibt Transport fuer alle response_format-Werte; immer SSE; diarized_json steuert nur Segment-Events vor done). SSE text/event-stream + no-cache + X-Accel-Buffering no + response_headers. Framing data: + kompaktes JSON (ensure_ascii=False, (,)) + LF LF. [R1-F4 2026-11-08: Transport statt Format.] Events delta {type:transcript.text.delta, delta}, done {type:text.done, text, usage} (+logprobs wenn include+vorhanden), diarized zusaetzlich Segment-Objekte vor done. Kein DONE-Sentinel, kein event/id/retry. Poll intern 0.1s bis Task+Queue leer.",
+      "beleg": "openai_routes.py:211-219, 339, 341-357, 390-400, 457-467; openai_compat.py:261-262; tests 144-155",
+      "evidenz": "stark",
+      "gueltigkeit": "nur stream=true; wie 04.02 H1-18.",
+      "id": "O1-18"
+    },
+    {
+      "aussage": "Delta segmentweise: Callback pro Segment Segmenttext (faster-whisper stream_callback je nicht-leerem Segment), nicht kumuliert. done Gesamttext Leerzeichen-verbunden. Engines ohne transcribe_with_options (nur faster_whisper, z.B. Kroko nicht) kein Callback-Angebot; stream nur done.",
+      "beleg": "openai_routes.py:245-281, 339; faster_whisper_engine.py:85-105, 107-138; server.py:2045-2057",
+      "evidenz": "stark",
+      "gueltigkeit": "Delta engineabhaengig; Kroko-Aussage Grep (kein transcribe_with_options ausser faster_whisper).",
+      "id": "O1-19"
+    },
+    {
+      "aussage": "Fehler Stream: Inferenz-Ausnahme -> SSE {type:error, error:{message, type:invalid_request_error, param:null, code:null}}, Stream ohne done; HTTP 200 (Header gesendet). Vorher transcription.failed (Audit+Hub) mit error/latencyMs.",
+      "beleg": "openai_routes.py:356-383; openai_compat.py:160-161",
+      "evidenz": "stark",
+      "gueltigkeit": "nur stream=true; ungetestet. Konflikt C3.",
+      "id": "O1-20"
+    },
+    {
+      "aussage": "Fehler sync: OpenAIRequestError -> hinterlegter Status (Default 400) Hülle; sonst 500 server_error/transcription_failed + logger.exception. Darin Service-Fehler: Scheduler-Submit abgelehnt RuntimeError (z.B. Lizenz-Revocation), Engine-Worker RuntimeError, 600s-Timeout TimeoutError transcribe_openai.",
+      "beleg": "openai_routes.py:557-587, 588-617; server.py:8362-8413 (timeout 600 Default, reason->RuntimeError, TimeoutError)",
+      "evidenz": "stark",
+      "gueltigkeit": "ohne stream; Timeout ungetestet.",
+      "id": "O1-21"
+    },
+    {
+      "aussage": "Key-Gate: konfiguriert = settings.openai_api_key oder ENV; keiner -> frei ohne Audit. Sonst Authorization exakt 'Bearer <key>' (keine Toleranz Gross/Klein/Leer/Alt-Header). Abweichung 401 code invalid_api_key + WWW-Authenticate Bearer + authentication.failed (transport http, normalisierte clientId, path, invalid_api_key). Handler zusaetzlich transcription.rejected warning authentication_failed. Client-ID aus X-VoiceSTT-Client-ID normalisiert; ungueltig client-<uuid>, fehlend null.",
+      "beleg": "security/openai.py:14-35; security/service.py:27-30; openai_routes.py:70-75, 104-115; server.py:1362-1372, 9894-9897; tests security_modularization:66-94; openai_compatible_endpoint:179-197",
+      "evidenz": "stark",
+      "gueltigkeit": "/v1/*; wie 04.01 I1-15 / 04.02 H1-12.",
+      "id": "O1-22"
+    },
+    {
+      "aussage": "Deaktiviert: enabled=false nur POST 404 'OpenAI-kompatible API deaktiviert.' (type invalid_request_error, param/code null), X-Request-ID ja, keine VoiceSTT-Header; nur Hub-Event transcription.rejected/warning/api_disabled, kein Audit-Event (openai_routes.py:93-103). Flag Default true, CLI --disable-openai-api, STARTUP_ONLY (nicht PATCH /api/config laufzeit). Kein Test.",
+      "beleg": "openai_routes.py:93-103; server.py:506, 256-285, 10305, 10519, 10766",
+      "evidenz": "stark",
+      "gueltigkeit": "nur Transkription; models ignoriert. Runtime siehe 04.02.",
+      "id": "O1-23"
+    },
+    {
+      "aussage": "Inferenzweg teilt Queues mit WS-Clients: transcribe_openai baut InferenceJob (kind=lane, session_id=openai-<hex>, use_prompt, request_options), submittet Scheduler-Pfad inkl. Lazy-Load. Optional Archiv nur save_audio_files Default false -> None. Dauer len/16000; Sprache language/settings.language. Beobachtung: accepted, started (Audit responseFormat/stream/archivedAudio), completed, rejected, failed; Performance http.first_text (timeToFirstTextMs), http.completed, realtime_emitted (nur realtime_log_detail events), performance_summary.",
+      "beleg": "openai_routes.py:147-203, 221-243, 283-338, 402-455, 484-548; server.py:8362-8413; operations.py:354-362; tests 382-406, 518-608",
+      "evidenz": "stark",
+      "gueltigkeit": "stream+sync; Queue 04.05/04.06.",
+      "id": "O1-24"
+    },
+    {
+      "aussage": "Formoptionen nur wo Engine verarbeitet: faster_whisper prompt->initial_prompt (sonst Default), temperature->temperature, granularities word->word_timestamps, threshold->vad_parameters.threshold (nur vad_filter), stream_callback Segment-Callback. Andere Engines nur language+use_prompt; prompt/temperature/threshold/stream still ignoriert.",
+      "beleg": "faster_whisper_engine.py:85-105; server.py:2042-2057; openai_routes.py:204-209",
+      "evidenz": "stark",
+      "gueltigkeit": "engineabhaengig; Details 05.x.",
+      "id": "O1-25"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Keine echte Diarisierung: genau ein Sprecher (erster Name oder A), compatibility single_speaker."
+    },
+    {
+      "id": "N2",
+      "thema": "Kein DONE-Sentinel, kein event/id/retry; Ende = Schliessen nach done."
+    },
+    {
+      "id": "N3",
+      "thema": "Kein Realtime/Chat/Uebersetzung, kein models/{id}; nur zwei Routen (04.01 I1-17)."
+    },
+    {
+      "id": "N4",
+      "thema": "Keine Content-Negotiation (kein Accept/406), keine Pydantic-Schemata."
+    },
+    {
+      "id": "N5",
+      "thema": "Keine Wort-Zeiten in srt/vtt (nur Segmente), kein logprobs text/srt/vtt; words nur verbose, logprobs nur json/done."
+    },
+    {
+      "id": "N6",
+      "thema": "Kein Rate-Limit/Kontingent/Idempotency/Cancel/Fortschritt ausser usage.seconds."
+    },
+    {
+      "id": "N7",
+      "thema": "Kein X-Request-ID/VoiceSTT-Header auf GET /v1/models (nur Gate)."
+    },
+    {
+      "id": "N8",
+      "thema": "Kein Streaming-Upload: komplett lesen (max+1), Speicher-Dekodierung; kein Chunk-Weiterreichen."
+    }
+  ],
+  "researcher_session": "ses_e42c41ed4ffed45lwdz3XNFUth",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Multipart-Grenzen Framework: form() ohne max_files/max_part_size; Starlette-Verhalten vor 413 offen. fastapi>=0.115 unpinned."
+    },
+    {
+      "id": "U2",
+      "thema": "Exakte produkt-ids und sichtbare ids datenabhaengig, kein Test."
+    },
+    {
+      "id": "U3",
+      "thema": "Ob prompt/temperature/threshold je deployter Engine wirken (Kroko ignoriert vollstaendig)."
+    },
+    {
+      "id": "U4",
+      "thema": "Client-Disconnect mitten im SSE: kein Disconnect-Check; Inferenz fort? unbelegt."
+    },
+    {
+      "id": "U5",
+      "thema": "Proxy-SSE trotz X-Accel-Buffering no: Deployment, nicht Repo."
+    },
+    {
+      "id": "U6",
+      "thema": "logprobs aus avg_logprob/Whitespace, nicht Token-Logprobs."
+    },
+    {
+      "id": "U7",
+      "thema": "Kein Test 404-disabled/413/404-Modell/409/SSE-error/diarized-Stream/srt-vtt-Details."
+    }
+  ],
+  "writer_notes": "Aufbau Idee 1: (1) zwei Endpunkte+Auth, (2) GET reine Registry-Sicht (kein enabled-Filter, kein X-Request-ID), (3) POST-Sequenz feste Pruefreihenfolge (404 disabled VOR 401), (4) Multipart-Pflicht+Endungen, (5) Aufloesung Alias/Override 400/404/409, (6) Formatmatrix (json/verbose/diarized/text/srt/vtt + usage + compatibility), (7) Streaming Events/Deltas/kein DONE/HTTP200-bei-Fehler, (8) Header+Fehlerobjekt, (9) Grenzen (25MiB, 600s, ein Prozess, gleiche Queues). Warnen: keine Paritaet (keine Diarisierung, logprobs approximiert, deutsche Texte instabil, Liste auch unbenutzbar). Nur belegte Zahlen: 25MiB, 0.1s Poll, 600s Wartezeit, 32-Zeichen-ID, max 4 Sprecher, temp/thresh 0..1."
+}

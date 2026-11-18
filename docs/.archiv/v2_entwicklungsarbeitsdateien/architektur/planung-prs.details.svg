@@ -1,0 +1,39 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 863 846" width="863" height="846">
+<rect width="100%" height="100%" fill="#ffffff"/>
+<g fill="#202020" font-family="Consolas, DejaVu Sans Mono, monospace" font-size="15"><text x="16" y="26" xml:space="preserve">  main</text>
+<text x="16" y="48" xml:space="preserve">  │</text>
+<text x="16" y="71" xml:space="preserve">  ├── [Release V1.9]</text>
+<text x="16" y="93" xml:space="preserve">  │</text>
+<text x="16" y="116" xml:space="preserve">  ├───┐ release/v2</text>
+<text x="16" y="138" xml:space="preserve">  │   │</text>
+<text x="16" y="161" xml:space="preserve">  │   ├───┐ feat/graph</text>
+<text x="16" y="183" xml:space="preserve">  │   │   │</text>
+<text x="16" y="206" xml:space="preserve">  │   │   ╞══════════╤════════════════════╤══════════════════════════┐ AP1, AP2, AP3</text>
+<text x="16" y="228" xml:space="preserve">  │   │   │          │                    │                          │</text>
+<text x="16" y="251" xml:space="preserve">  │   │   │  b220dd0 ┼                    │                          │</text>
+<text x="16" y="273" xml:space="preserve">  │   │   │          │                    │                          │</text>
+<text x="16" y="296" xml:space="preserve">  │   │   │          │            a220cd1 ┼                          │</text>
+<text x="16" y="318" xml:space="preserve">  │   │   │          │                    │                          │</text>
+<text x="16" y="341" xml:space="preserve">  │   │   │          │                    │                  e8d1aaa ┼</text>
+<text x="16" y="363" xml:space="preserve">  │   │   │          │                    │                          │</text>
+<text x="16" y="386" xml:space="preserve">  │   │   │          ├──────┘             │                          │</text>
+<text x="16" y="408" xml:space="preserve">  │   │   │          │  PR #15 (offen)    │                          │</text>
+<text x="16" y="431" xml:space="preserve">  │   │   │          │                    │                          │</text>
+<text x="16" y="453" xml:space="preserve">  │   │   │          │                    │├──────┘                  │</text>
+<text x="16" y="476" xml:space="preserve">  │   │   │          │                    │  PR #16 (geschlossen)    │</text>
+<text x="16" y="498" xml:space="preserve">  │   │   │          │                    │                          │</text>
+<text x="16" y="521" xml:space="preserve">  │   │   ◄──────────┼──────────────┤├────┼──────────────────────────┘</text>
+<text x="16" y="543" xml:space="preserve">  │   │   │          │              PR #17│</text>
+<text x="16" y="566" xml:space="preserve">  │   │   │          │                    │</text>
+<text x="16" y="588" xml:space="preserve">  │   │   ◄──────────┼────────────────────┘ (Merge AP2 → feat/graph)</text>
+<text x="16" y="611" xml:space="preserve">  │   │   │          │</text>
+<text x="16" y="633" xml:space="preserve">  │   │   ◄──────────┘ (Merge AP1 → feat/graph)</text>
+<text x="16" y="656" xml:space="preserve">  │   │   │</text>
+<text x="16" y="678" xml:space="preserve">  │   ◄───┘ (Merge feat/graph → release/v2)</text>
+<text x="16" y="701" xml:space="preserve">  │   │</text>
+<text x="16" y="723" xml:space="preserve">  ◄───┘ (Merge release/v2 → main)</text>
+<text x="16" y="746" xml:space="preserve">  │</text>
+<text x="16" y="768" xml:space="preserve">  ├── [Release V2.0.0]</text>
+<text x="16" y="791" xml:space="preserve">  │</text>
+<text x="16" y="813" xml:space="preserve">  │</text></g>
+</svg>

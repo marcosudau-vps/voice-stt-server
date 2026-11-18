@@ -1,0 +1,284 @@
+{
+  "branch_note": "Branch im Checkout nicht als Ref belegbar (keine .git/refs/, keine packed-refs, Shallow-Fetch). Belegt ausschliesslich Commit-Bindung a8993c5c68042d996eab680d84a5b138a214bb5d.",
+  "chapter": "04.05",
+  "commit_verification": "Detached HEAD: .git/HEAD enthaelt exakt a8993c5c68042d996eab680d84a5b138a214bb5d; .git/FETCH_HEAD derselbe SHA, Herkunft https://github.com/marcosudau-vps/voice-stt-v2-src; Shallow-Clone, keine refs/ im Checkout.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "Gleiche Fehlerursache, zwei Oberflaechen: v1 sendet type=error, v2 verwirft still nach DEBUG-Log."
+    },
+    {
+      "id": "C2",
+      "thema": "Formatname pcm_s16le (LE) vs np.frombuffer int16 (nativ) - auf Nicht-x86 latent falsch."
+    },
+    {
+      "id": "C3",
+      "thema": "Fehlendes format still pcm_s16le, abweichendes harter Fehler."
+    },
+    {
+      "id": "C4",
+      "thema": "channels>1 gemittelt, nicht abgelehnt; Qualitaetsverlust ohne Hinweis."
+    },
+    {
+      "id": "C5",
+      "thema": "Zwei Fehlerstufen: Metadaten Decoder, Format/Groesse erst packet_to_server_samples."
+    },
+    {
+      "id": "C6",
+      "thema": "warning-Rueckgabe toter Pfad: _enforce_recording_duration immer None; Dauerwarnung nur v1-Manager."
+    },
+    {
+      "id": "C7",
+      "thema": "Vor hello 4400, nach Admission still - ungleiche Fehlerpolitik."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "Client -> /ws/v2 -> receive -> bytes -> handle_binary (B1-02)",
+    "Client -> /ws/transcribe -> receive -> bytes -> decode+ingest (B1-02)",
+    "Binaer vor accepted -> 4400 (B1-03)",
+    "accepted -> start_streaming -> Audio erlaubt (B1-04)",
+    "v1 start -> streaming True (B1-05)",
+    "handle_binary -> decode: 4B LE | JSON | PCM (B1-01)",
+    "decode -> AudioPacketError -> v2 DEBUG, kein Signal (B1-12)",
+    "AudioPacket -> ingest (B1-13)",
+    "ingest -> packet_to_server_samples: sampleRate/channels/format/frames/Groesse (B1-06..B1-10)",
+    "Downmix Mono (B1-08)",
+    "resample 16000 Hz (B1-07)",
+    "leer -> (True,None) vor Streaming (B1-13)",
+    "streaming False (nur v1) -> warning (B1-05)",
+    "samples -> feed_audio(16000) -> buffer (B1-16)",
+    "buffer>=1024 -> 512-Block -> queue (B1-16)",
+    "worker -> VAD/Wake -> Ereignisse (B1-14, B1-16)",
+    "queue>limit -> aelteste verwerfen (B1-17)",
+    "Dauerlimit -> flush/finalize (B1-18)",
+    "Warnung -> Manager (v1), v2 sieht nichts (B1-18)",
+    "v1 Fehler -> error audio_packet/audio (B1-12)",
+    "v2 nach Admission: Fehler keine ack/Close (B1-12)",
+    "Audio keine Version/Event (B1-14)",
+    "available=false -> Trigger nein, Fluss ja (B1-19)",
+    "Handshake 10s ohne hello -> 4408; danach keine Deadline (B1-20)"
+  ],
+  "facts": [
+    {
+      "aussage": "Frame: 4 Byte Laenge LE uint32, N Byte UTF-8-JSON, Rest PCM. Kein Magic/Version/Flags. encode/decode in protocol.py, gemeinsam v1+v2; einzige Kodierung.",
+      "beleg": "protocol.py:7, 40-49, 52-75; server.py:10028, 10243; connection.py:186-191",
+      "evidenz": "stark",
+      "gueltigkeit": "beide Endpunkte; Drahtformat.",
+      "id": "B1-01"
+    },
+    {
+      "aussage": "Weiche bytes vor text: message[bytes] nicht None -> Audio, sonst text -> JSON. Starlette unveraendert; kein Base64. Leerer Binaerframe b'' -> Binaer, scheitert Laenge.",
+      "beleg": "server.py:10024-10037 (v1), 10240-10245 (v2)",
+      "evidenz": "stark",
+      "gueltigkeit": "v1+v2; bytes vor text.",
+      "id": "B1-02"
+    },
+    {
+      "aussage": "Vor accepted Binaer verboten: handle_binary request_close(4400), False, keine Session. Test 4400 belegt.",
+      "beleg": "connection.py:181-185; schema.py:202; tests e2e:488-500",
+      "evidenz": "stark",
+      "gueltigkeit": "nur /ws/v2.",
+      "id": "B1-03"
+    },
+    {
+      "aussage": "v2 kein start: _activate_session ruft start_streaming() sofort nach Admission. Audio ab accepted ohne Kommando. Zweig 'sende Startbefehl' v2 unerreichbar (stop nur v1).",
+      "beleg": "connection.py:326-328; server.py:10075-10078 (nur v1), 2850-2873",
+      "evidenz": "stark",
+      "gueltigkeit": "v2-Lebenszyklus.",
+      "id": "B1-04"
+    },
+    {
+      "aussage": "v1 verlangt start-Textframe. Ohne: ingest (False, Startbefehl-Text), Endpunkt type=warning, rejectedAudioChunks+1, kein Close. Tests Warning/Jobs.",
+      "beleg": "server.py:3016-3018, 10047-10052; tests multi_user:1224-1233; browser_contract:178-186",
+      "evidenz": "stark",
+      "gueltigkeit": "nur v1.",
+      "id": "B1-05"
+    },
+    {
+      "aussage": "Nur pcm_s16le. Fehlend still pcm_s16le; anders -> AudioPacketError. Nutzdaten int16 LE benannt.",
+      "beleg": "server.py:7657-7665; protocol.py:49; tests protocol:605-618",
+      "evidenz": "stark",
+      "gueltigkeit": "beide; Pruefung packet_to_server_samples.",
+      "id": "B1-06"
+    },
+    {
+      "aussage": "sampleRate Pflicht, positiv int (kein bool). Keine Min/Max im Code. Resample auf 16000 (resample_poly gcd, Fallback interp, rint+Clip). ==16000 nur Kopie. Test 48000 int16.",
+      "beleg": "server.py:147, 7657, 8682-8701; protocol.py:78-82; tests protocol:593-603",
+      "evidenz": "stark",
+      "gueltigkeit": "beide; Ziel 16000.",
+      "id": "B1-07"
+    },
+    {
+      "aussage": "channels optional Default 1, positiv <=8 (kein bool). >1 gemittelt Mono + int16-Cast. Laenge Vielfaches 2*channels, sonst Ausrichtungsfehler.",
+      "beleg": "server.py:7658-7668, 7677-7683; tests protocol:605-618",
+      "evidenz": "stark",
+      "gueltigkeit": "beide; Downmix ohne Zusicherung.",
+      "id": "B1-08"
+    },
+    {
+      "aussage": "frames optional. Vorhanden: positiv int, exakt frames*2*channels Bytes, sonst Fehler. 0/negativ ungueltig. Fehlt: nur Ausrichtung, keine Dauerpruefung.",
+      "beleg": "server.py:7669-7675; protocol.py:78-82; tests protocol:620-628",
+      "evidenz": "stark",
+      "gueltigkeit": "beide; nur Konsistenz.",
+      "id": "B1-09"
+    },
+    {
+      "aussage": "Grenzen: Metadaten <=65536 (Encode+Decode), Audio <=max_audio_packet_bytes Default 524288 (CLI-/laufzeit aenderbar; keine Untergrenzenpruefung im Code gefunden, R1-F2 2026-11-08). Groesster Frame 4+65536+524288=589828. Audio erst packet_to_server_samples.",
+      "beleg": "protocol.py:7, 46-48, 60-62; server.py:449, 7653-7655, 10484, 1243-1254, 183, 309",
+      "evidenz": "stark",
+      "gueltigkeit": "beide; pro Frame.",
+      "id": "B1-10"
+    },
+    {
+      "aussage": "decode lehnt ab: nicht-binaer, <4B, Prefix>65536, Prefix>Rest, kein UTF-8/JSON, JSON kein Objekt (leer scheitert Parser). Alles AudioPacketError; keine Feldpruefung.",
+      "beleg": "protocol.py:52-75; tests protocol:67-90",
+      "evidenz": "stark",
+      "gueltigkeit": "Decoder, endpunktfrei.",
+      "id": "B1-11"
+    },
+    {
+      "aussage": "Nach Admission Fehler v2 nur DEBUG: AudioPacketError+generisch -> False, keine Nachricht/Close, nutzbar; Rueckgabe ignoriert. v1: error audio_packet/audio + continue.",
+      "beleg": "connection.py:181-198; server.py:10242-10245, 10030-10046; tests browser_contract:188-195",
+      "evidenz": "stark",
+      "gueltigkeit": "v2 stumm, v1 meldend; nach accepted.",
+      "id": "B1-12"
+    },
+    {
+      "aussage": "Leer akzeptiert: samples.size==0 -> (True,None) vor Streaming-Pruefung. Frame 4B+{}+0B auch bei gestopptem v1 ok, keine Warning.",
+      "beleg": "server.py:3011-3014",
+      "evidenz": "stark",
+      "gueltigkeit": "beide; leerer PCM-Rand.",
+      "id": "B1-13"
+    },
+    {
+      "aussage": "Audio reine Daten: keine ack/Sequenz/Zeit/Empfangsbestaetigung. Kein Version/Event-Anstieg; Ereignisse nur indirekt Recorder/VAD (z.B. recording_started nach Sprachpaket).",
+      "beleg": "connection.py:181-198; tests e2e:1219-1237; contract:186-189",
+      "evidenz": "stark",
+      "gueltigkeit": "v2; v1 nur Fehler/Warnung.",
+      "id": "B1-14"
+    },
+    {
+      "aussage": "Eine Schleife pro Verbindung; Text/Binaer sequenziell Ankunftsreihenfolge (receive, synchron handle). Konvertierung inline Event-Loop an Recorder; keine Endpoint-Queue. Langsamer Recorder = Backpressure.",
+      "beleg": "server.py:10194-10247, 3011-3020",
+      "evidenz": "mittel",
+      "gueltigkeit": "pro Verbindung; kein Jitter-Urteil.",
+      "id": "B1-15"
+    },
+    {
+      "aussage": "Nach Konvertierung recorder.feed_audio(samples, 16000). buffer sammelt, schneidet 1024B-Bloecke (BUFFER 512 Samples = 32ms@16k) in audio_queue. Kein zweites Resampling (bereits 16000).",
+      "beleg": "server.py:3020; manual_audio_input.py:9-34; initialization.py:189-192; audio_recorder.py:83, 702-710",
+      "evidenz": "stark",
+      "gueltigkeit": "beide; Recorder-Default.",
+      "id": "B1-16"
+    },
+    {
+      "aussage": "Server-Sessions audio_queue unbeschraenkt queue.Queue (kein Mikro). Worker trimmt pro Block auf allowed_latency_limit Bloecke; Server setzt =audio_queue_size Default 128, overflow True. Rueckstand ~128*32ms=4,096s; aeltere verworfen, keine Client-Meldung.",
+      "beleg": "initialization.py:189-191, 666-676; recording.py:159-209; server.py:2816-2817, 448",
+      "evidenz": "mittel",
+      "gueltigkeit": "manuell; Queue formal unbeschraenkt.",
+      "id": "B1-17"
+    },
+    {
+      "aussage": "Dauerlimit max_audio_queue_seconds_per_session Default 30.0s: drueber Zwangs-Finalize (flush), Paket accepted True, keine Ablehnung. Warnung via v1-Manager, v2 sieht nichts.",
+      "beleg": "server.py:489, 6011-6029, 6061-6085; tests multi_user:1235-1247; server.py:10133-10135",
+      "evidenz": "stark",
+      "gueltigkeit": "beide; sichtbar nur v1.",
+      "id": "B1-18"
+    },
+    {
+      "aussage": "available=false blockiert Pfad nicht: ingest prueft _audio_available nicht, Frames weiter konvertiert/Rekorder. Wirkt nur Trigger-Annahme (Wake/Manual nein) + Snapshot-Feld audioAvailable.",
+      "beleg": "server.py:3011-3042, 2612, 3691, 3776-3797; snapshot.py:74",
+      "evidenz": "stark",
+      "gueltigkeit": "Codepfad; kein Test Audio-bei-Unavailable.",
+      "id": "B1-19"
+    },
+    {
+      "aussage": "Nur Handshake-Deadline: 10.0s, Ablauf 4408. Danach keine Empfangs-/Audio-Deadline, kein Timeout, kein Ping/Keepalive im Repo; uvicorn ohne ws_*.",
+      "beleg": "schema.py:204-209; server.py:10229-10239, 10830-10835",
+      "evidenz": "stark",
+      "gueltigkeit": "v2; Framework-Defaults nicht festgelegt.",
+      "id": "B1-20"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Keine Sequenz/Zeit im Frame; Reihenfolge nur WebSocket-Zustellung."
+    },
+    {
+      "id": "N2",
+      "thema": "Keine Quittung/Fehlermeldung pro Frame v2; Empfang unbestaetigt."
+    },
+    {
+      "id": "N3",
+      "thema": "Kein Rate-Limit/Frames-/Bytes-Limit."
+    },
+    {
+      "id": "N4",
+      "thema": "Keine Codecs/Container ausser pcm_s16le."
+    },
+    {
+      "id": "N5",
+      "thema": "Keine Pruefsumme/CRC."
+    },
+    {
+      "id": "N6",
+      "thema": "Keine Fragmentierung/Reassembly: ein Frame = ein Paket."
+    },
+    {
+      "id": "N7",
+      "thema": "Kein Retry/Dedup/Wiederaufnahme."
+    },
+    {
+      "id": "N8",
+      "thema": "Kein Jitter-Buffer/Umsortierung."
+    },
+    {
+      "id": "N9",
+      "thema": "Keine Client-Warnung bei Drops v2; nur audioAvailable, keine Zaehler."
+    },
+    {
+      "id": "N10",
+      "thema": "Kein ws-Maximum im Repo; nur 64KiB Meta + 512KiB Audio."
+    }
+  ],
+  "researcher_session": "ses_e4322e6f0ffe69rQD84sHOLkGG",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "uvicorn ws_max_size/ping Defaults nicht belegt."
+    },
+    {
+      "id": "U2",
+      "thema": "Latenz/Backpressure voller Puffer ungemessen."
+    },
+    {
+      "id": "U3",
+      "thema": "Client-Kadenz nicht spezifiziert; Tests 0,2s."
+    },
+    {
+      "id": "U4",
+      "thema": "Big-Endian: pcm_s16le vs np.int16 nativ; ungetestet."
+    },
+    {
+      "id": "U5",
+      "thema": "Resampling-Fallback ohne scipy ungetestet."
+    },
+    {
+      "id": "U6",
+      "thema": "Audio in closing_input ungetestet."
+    },
+    {
+      "id": "U7",
+      "thema": "CPU/Speicher kleine/viele Frames ungemessen."
+    },
+    {
+      "id": "U8",
+      "thema": "Queue-Trim-Ankunft Client nicht untersucht."
+    }
+  ],
+  "writer_notes": "Aufbau: (1) Anatomie (4B LE, JSON, PCM) + Beispiel; (2) Weiche bytes/text v1/v2; (3) Reihenfolge: v2 nach accepted ohne start, v1 nach start; (4) Felder sampleRate/channels/format/frames + Defaults/Fehler; (5) Grenzen 64KiB/512KiB/589828; (6) Verarbeitung: Resample 16k, Downmix, 1024B-Bloecke, Queue, Trim 128 (~4,1s), Dauer 30s; (7) Fehler v1 meldend vs v2 stumm; (8) fehlt: Sequenz/Quittung/Limit/Codecs. Zahlen: 4, 65536, 524288, 589828, 16000, 512, 1024, 32ms, 128, 4,096s, 30,0s, 4400, 4408. Fallen: bestaetigt!=ack (B1-14); v2 stumm (B1-12/C1); Default vs Strenge (C3); channels gemischt (C4); leer ok (B1-13); available stoppt nicht (B1-19); Dauer finalisiert (B1-18). Querverweise: 04.01, 04.03/04.07, 04.04, 02.x, 03.x. Keine Timeouts/Kadenz/ws_max raten."
+}

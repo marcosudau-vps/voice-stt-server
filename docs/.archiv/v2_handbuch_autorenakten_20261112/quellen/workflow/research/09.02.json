@@ -1,0 +1,268 @@
+{
+  "branch_note": "Branch nicht verifizierbar (detached HEAD, kein ref); nur Commit bindend.",
+  "chapter": "09.02",
+  "commit_verification": ".git/HEAD eine Zeile exakt Hash, Commit stimmt.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "ASR/STT gleiche Funktion ohne Abgrenzung."
+    },
+    {
+      "id": "C2",
+      "thema": "VAD drei Instanzen nicht eine."
+    },
+    {
+      "id": "C3",
+      "thema": "UUID hypheniert vs hex."
+    },
+    {
+      "id": "C4",
+      "thema": "CLI kanonisch + 3 Aliasse."
+    },
+    {
+      "id": "C5",
+      "thema": "TFLite/LiteRT zwei Namen ein Wert."
+    },
+    {
+      "id": "C6",
+      "thema": "CUDA benannt aber abgelehnt."
+    },
+    {
+      "id": "C7",
+      "thema": "Nur pcm_s16le + 16-Bit-WAV."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "STT = Speech-to-Text; Code schreibt aus.",
+      "beleg": "stt_server.py:2,4",
+      "evidenz": "E1",
+      "gueltigkeit": "Produkt",
+      "id": "AB9-01"
+    },
+    {
+      "aussage": "ASR = Automatic Speech Recognition; nur Token.",
+      "beleg": "setup.py:102; model_resolver.py:1",
+      "evidenz": "E2",
+      "gueltigkeit": "Engine/OpenAI",
+      "id": "AB9-02"
+    },
+    {
+      "aussage": "VAD = Voice Activity Detection; Silero/WebRTC + Wake-Threshold-Gate (keine dritte Engine am Beleg).",
+      "beleg": "stt_server.py:4,10; settings_control.py:86",
+      "evidenz": "E1",
+      "gueltigkeit": "Recorder/Settings",
+      "id": "AB9-03"
+    },
+    {
+      "aussage": "PCM nur pcm_s16le 16 Bit LE akzeptiert.",
+      "beleg": "api_fastapi_server/server.py:7663-7668",
+      "evidenz": "E1",
+      "gueltigkeit": "WS-Audio/WAV",
+      "id": "AB9-04"
+    },
+    {
+      "aussage": "WAV via wave nur 16 Bit.",
+      "beleg": "server.py:8654-8662",
+      "evidenz": "E2",
+      "gueltigkeit": "Datei/Upload",
+      "id": "AB9-05"
+    },
+    {
+      "aussage": "SSE data json + text/event-stream.",
+      "beleg": "openai_compat.py:261-262; openai_routes.py:461",
+      "evidenz": "E2",
+      "gueltigkeit": "Nur OpenAI-Streaming",
+      "id": "AB9-06"
+    },
+    {
+      "aussage": "WebSocket ausgeschrieben, Kuerzel nur Pfad /ws/*.",
+      "beleg": "server.py:9560,9912,10121",
+      "evidenz": "E1",
+      "gueltigkeit": "Alle Sockets",
+      "id": "AB9-07"
+    },
+    {
+      "aussage": "WSS = WebSocket Secure; wss:// Build-Kommentar UND produktiver Kroko-Lizenz-WS-Client wss://license.kroko.ai.",
+      "beleg": "VoiceSTT/install_kroko.py:1025; VoiceSTT/kroko/license_api.py:59-60",
+      "evidenz": "E3",
+      "gueltigkeit": "Build-Kommentar + produktiver Lizenz-WS-Client; kein Server-TLS",
+      "id": "AB9-08"
+    },
+    {
+      "aussage": "JSON Metadaten-Header Laengenpraefix-Framing.",
+      "beleg": "api_fastapi_server/protocol.py:40-75; api_fastapi_server/server.py:10069 (WS-Command, kein Header)",
+      "evidenz": "E2",
+      "gueltigkeit": "WS/SSE/HTTP/Settings",
+      "id": "AB9-09"
+    },
+    {
+      "aussage": "UUID v2 hypheniert, v1 hex.",
+      "beleg": "api_fastapi_server/protocol_v2/schema.py:214-230; api_fastapi_server/security/logs.py:25; api_fastapi_server/openai_routes.py:69",
+      "evidenz": "E2",
+      "gueltigkeit": "v2/Token",
+      "id": "AB9-10"
+    },
+    {
+      "aussage": "SQLite Event-/Log-Historie sqlite3.",
+      "beleg": "event_logging.py:438-450; server.py:526",
+      "evidenz": "E1",
+      "gueltigkeit": "Historie",
+      "id": "AB9-11"
+    },
+    {
+      "aussage": "WAL SQLite-Pragma Eventstore.",
+      "beleg": "event_logging.py:450",
+      "evidenz": "E3",
+      "gueltigkeit": "Nur Store",
+      "id": "AB9-12"
+    },
+    {
+      "aussage": "YAML Startconfig safe_load Version 1.",
+      "beleg": "server.py:10333,10348,10355",
+      "evidenz": "E2",
+      "gueltigkeit": "Start --config",
+      "id": "AB9-13"
+    },
+    {
+      "aussage": "CLI = Command-Line Interface; kanonisch voice-stt-server + 3 Kompat-Aliasse + Dev-Helper stt-install-kroko.",
+      "beleg": "stt_server.py:13; server.py:10394; setup.py:409-423",
+      "evidenz": "E1",
+      "gueltigkeit": "Einstiegspunkte",
+      "id": "AB9-14"
+    },
+    {
+      "aussage": "Env VOICESTT_* + Env-Datei Secrets.",
+      "beleg": "api_fastapi_server/server.py:10396-10398",
+      "evidenz": "E1",
+      "gueltigkeit": "Prozess/Datei",
+      "id": "AB9-15"
+    },
+    {
+      "aussage": "HTTP REST/OpenAI-Routen.",
+      "beleg": "openai_routes.py:1,4,43,67",
+      "evidenz": "E1",
+      "gueltigkeit": "HTTP getrennt WS",
+      "id": "AB9-16"
+    },
+    {
+      "aussage": "HTTPS Pflicht fuer Download-URLs.",
+      "beleg": "kroko/catalog.py:71,77-78",
+      "evidenz": "E1",
+      "gueltigkeit": "Kroko-Plan",
+      "id": "AB9-17"
+    },
+    {
+      "aussage": "ASGI nur Token Docstring.",
+      "beleg": "openai_routes.py:1",
+      "evidenz": "E2",
+      "gueltigkeit": "App-Fabrik",
+      "id": "AB9-18"
+    },
+    {
+      "aussage": "API Pfade /api/* und /v1/*.",
+      "beleg": "server.py:8874; openai_routes.py:43,67",
+      "evidenz": "E2",
+      "gueltigkeit": "HTTP",
+      "id": "AB9-19"
+    },
+    {
+      "aussage": "ONNX Laufzeit onnxruntime.",
+      "beleg": "audio_recorder.py:396; silero_vad.py:3,441",
+      "evidenz": "E1",
+      "gueltigkeit": "Wake/Silero",
+      "id": "AB9-20"
+    },
+    {
+      "aussage": "TFLite Wert exakt tflite (LiteRT Folgetitel).",
+      "beleg": "audio_recorder.py:397; settings_control.py:97,99",
+      "evidenz": "E1",
+      "gueltigkeit": "Wake-Wahl",
+      "id": "AB9-21"
+    },
+    {
+      "aussage": "CPU-only Build, CUDA abgelehnt.",
+      "beleg": "VoiceSTT/core/silero_vad.py:126-127; engineering/tools/cpu_only.py:96-120",
+      "evidenz": "E1",
+      "gueltigkeit": "Build/Laufzeit",
+      "id": "AB9-22"
+    },
+    {
+      "aussage": "GPU-Runtime-Pakete muessen fehlen.",
+      "beleg": "cpu_only.py:42-47,118",
+      "evidenz": "E2",
+      "gueltigkeit": "Distribution",
+      "id": "AB9-23"
+    },
+    {
+      "aussage": "CUDA benannt, hart abgelehnt.",
+      "beleg": "silero_vad.py:107,125-128",
+      "evidenz": "E2",
+      "gueltigkeit": "Silero/Build",
+      "id": "AB9-24"
+    },
+    {
+      "aussage": "ROCm nur Build-Regex.",
+      "beleg": "cpu_only.py:17,45",
+      "evidenz": "E2",
+      "gueltigkeit": "Nur Build",
+      "id": "AB9-25"
+    },
+    {
+      "aussage": "RMS sqrt(mean(x*x)) pro Frame.",
+      "beleg": "voice_activity.py:340-351; preroll.py:339-346",
+      "evidenz": "E1",
+      "gueltigkeit": "Stille/Energie",
+      "id": "AB9-26"
+    },
+    {
+      "aussage": "HMAC-SHA256-Digest statt Klartext.",
+      "beleg": "native_guard.py:13,122",
+      "evidenz": "E2",
+      "gueltigkeit": "Kroko Guard",
+      "id": "AB9-27"
+    },
+    {
+      "aussage": "TLS nur linked library Build-Text.",
+      "beleg": "install_kroko.py:1011",
+      "evidenz": "E2",
+      "gueltigkeit": "Nur Windows-Build",
+      "id": "AB9-28"
+    },
+    {
+      "aussage": "SSL kein Token, nur OpenSSL-Name.",
+      "beleg": "install_kroko.py:1004,1024",
+      "evidenz": "E3",
+      "gueltigkeit": "Kein Serverbegriff",
+      "id": "AB9-29"
+    },
+    {
+      "aussage": "TTS nur Beispiel/Test, nicht Kern.",
+      "beleg": "ui_openai_voice_interface.py:457; realtime_loop_test.py:56",
+      "evidenz": "E3",
+      "gueltigkeit": "Nur Beispiele",
+      "id": "AB9-30"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-SSL",
+      "thema": "SSL kein eigener Begriff, nur OpenSSL-Name."
+    }
+  ],
+  "researcher_session": "ses_e3426d51effeRWkyYDOsnZDywK",
+  "solver_notes": [
+    "30 Abkuerzungen AB9-01..30; Kern/Transport/Betrieb/Laufzeit/Mess-Sicherheit."
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U",
+      "thema": "ASR/WAV/SSE/WS/JSON/UUID/WAL/YAML/HTTP/ASGI/API/GPU/CUDA/ROCm/RMS/HMAC/TLS nur Token, Aufloesung Standard."
+    }
+  ],
+  "writer_notes": "Gliederung Kern/Transport/Betrieb/Laufzeit/Sicherheit. SSL nicht fuehren. Keine Defaults/Timeouts/Branch."
+}

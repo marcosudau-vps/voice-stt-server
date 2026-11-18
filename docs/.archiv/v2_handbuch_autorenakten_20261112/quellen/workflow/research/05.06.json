@@ -1,0 +1,246 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup im Checkout nicht als Ref verifizierbar; nur Commit bindend.",
+  "chapter": "05.06",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached); FETCH_HEAD derselbe SHA; shallow vorhanden; kein refs/heads.",
+  "conflicts": [
+    {
+      "id": "C5-01",
+      "thema": "Admin compare_digest vs OpenAI == (Timing theoretisch)."
+    },
+    {
+      "id": "C5-02",
+      "thema": "POST 404, GET ignoriert Schalter."
+    },
+    {
+      "id": "C5-03",
+      "thema": "404 vs 401 vs 200 unterscheidbar."
+    },
+    {
+      "id": "C5-04",
+      "thema": "Disabled nicht auditiert, Auth-Fehler schon."
+    },
+    {
+      "id": "C5-05",
+      "thema": "Test-Normalizer lowercased vs Produktion Case-erhalt."
+    },
+    {
+      "id": "C5-06",
+      "thema": "Persistiertes enabled kann CLI überstimmen."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "[Client] -->|Bearer| [authenticate_openai] --> [OpenAIGate]",
+    "[settings.openai_api_key] --> [configured_key]",
+    "[ENV VOICESTT_API_KEY] --> [configured_key nur wenn Settings leer]",
+    "[leer] --> [kein Fehler, kein Audit] --> [Handler]",
+    "[falsch] --> [401 invalid_api_key + WWW-Authenticate]",
+    "[401] --> [Audit authentication.failed]",
+    "[POST enabled=false] --> [404 code null + transcription.rejected/api_disabled]",
+    "[POST 401] --> [zusätzlich transcription.rejected + X-Request-ID]",
+    "[GET] --> [nur Key-Gate, 200 auch bei enabled=false]",
+    "[OpenAI-Key] -keine Wirkung-> [WS/Admin/Logs/Kroko]"
+  ],
+  "facts": [
+    {
+      "aussage": "Optionales pro-Handler-Gate authenticate_openai -> openai_http_error -> OpenAIGate.http_error; kein Depends/Middleware; genau zwei Aufrufe (GET Z.45, POST Z.104).",
+      "beleg": "security/openai.py Z.10-35; service.py Z.13-19, 27-30; server.py Z.9894-9910; openai_routes.py Z.45, 104",
+      "evidenz": "A",
+      "gueltigkeit": "gesamte /v1-Fläche",
+      "id": "P5-01"
+    },
+    {
+      "aussage": "Quellen settings.openai_api_key (Default None, CLI --openai-api-key ohne ENV-Default) vor ENV VOICESTT_API_KEY (pro Request gelesen); Settings gewinnt; ENV live nur wenn Settings falsy.",
+      "beleg": "security/openai.py Z.14-15; server.py Z.507, 10520, 10767-10768",
+      "evidenz": "A",
+      "gueltigkeit": "Key-Auflösung je Request",
+      "id": "P5-02"
+    },
+    {
+      "aussage": "Kein YAML-Key (SystemExit), keine Persistenz, kein Laden aus runtime.json, kein Key in public_dict; config.yaml nur enabled/Aliase/Bytes.",
+      "beleg": "server.py Z.10301, 10366-10370, 7959-7969, 8827-8839, 545-553",
+      "evidenz": "A",
+      "gueltigkeit": "Konfiguration/Ausgabe",
+      "id": "P5-03"
+    },
+    {
+      "aussage": "Deployment via Compose VOICESTT_API_KEY/env_file; kein .env-Lader im Python-Code.",
+      "beleg": "docker-compose.yml Z.36-42; vps compose Z.21-23; Negativsuche dotenv",
+      "evidenz": "A/B",
+      "gueltigkeit": "Deployment",
+      "id": "P5-04"
+    },
+    {
+      "aussage": "Exakter == Vergleich 'Bearer <key>'; ein Leerzeichen, case-sensitiv, kein Trim/Folding, kein x-api-key/zweiter Träger; kein compare_digest; Header-Name case-insensitiv.",
+      "beleg": "security/openai.py Z.21; Tests 77-90",
+      "evidenz": "A",
+      "gueltigkeit": "beide /v1-Routen",
+      "id": "P5-05"
+    },
+    {
+      "aussage": "Ohne Key offen, ohne Audit, ohne Challenge (Gate None).",
+      "beleg": "security/openai.py Z.18-20; Tests 66-75, 183-194",
+      "evidenz": "A",
+      "gueltigkeit": "Default ohne Key",
+      "id": "P5-06"
+    },
+    {
+      "aussage": "401 + WWW-Authenticate: Bearer, Body {error:{message deutsch,invalid_request_error,null,invalid_api_key}}; kein Key-Echo; POST zusätzlich X-Request-ID.",
+      "beleg": "security/openai.py Z.31-35; openai_compat.py Z.160-161; openai_routes.py Z.111-114; Tests Z.90",
+      "evidenz": "A",
+      "gueltigkeit": "beide Routen (Texte nicht stabil)",
+      "id": "P5-07"
+    },
+    {
+      "aussage": "Genau ein Audit authentication.failed pro Ablehnung (Kanal audit, severity error, deutsch); path ohne Query, kein Key-Log; kein Erfolgs-Audit.",
+      "beleg": "security/openai.py Z.23-30; operations.py Z.351-352; event_logging.py Z.1340-1352; Tests 91-94",
+      "evidenz": "A",
+      "gueltigkeit": "beide Routen",
+      "id": "P5-08"
+    },
+    {
+      "aussage": "clientId = normalisierter X-VoiceSTT-Client-ID oder None; strip, 1-128 [A-Za-z0-9._:-], Case bleibt, ungültig -> client-<uuid>; Test-Normalizer lowercased beweist nicht Produktion.",
+      "beleg": "security/openai.py Z.23-29; server.py Z.1362-1372; Tests Z.70",
+      "evidenz": "A",
+      "gueltigkeit": "Audit-Feld",
+      "id": "P5-09"
+    },
+    {
+      "aussage": "POST enabled=false immer 404 (auch mit Key), nur X-Request-ID, kein Auth, kein Audit; Body code null.",
+      "beleg": "openai_routes.py Z.93-103; kein Test",
+      "evidenz": "A/B",
+      "gueltigkeit": "nur POST",
+      "id": "P5-10"
+    },
+    {
+      "aussage": "Disabled nur Transkriptions-Event rejected/warning/api_disabled (nicht Audit-Kanal).",
+      "beleg": "openai_routes.py Z.93-98; event_logging.py",
+      "evidenz": "B",
+      "gueltigkeit": "404-Pfad",
+      "id": "P5-11"
+    },
+    {
+      "aussage": "POST-401 erzeugt Audit + Hub-Event transcription.rejected/authentication_failed + X-Request-ID; GET nur Audit.",
+      "beleg": "openai_routes.py Z.104-115; security/openai.py Z.23-30",
+      "evidenz": "A/B",
+      "gueltigkeit": "POST-401",
+      "id": "P5-12"
+    },
+    {
+      "aussage": "GET nur Key-Gate, kein enabled-Check; 200 auch bei enabled=false; 401 ohne X-Request-ID/rejected, nur Audit.",
+      "beleg": "openai_routes.py Z.43-65; Tests 501-515, 183-194",
+      "evidenz": "A",
+      "gueltigkeit": "/v1/models",
+      "id": "P5-13"
+    },
+    {
+      "aussage": "Default true, nur CLI --disable-openai-api / YAML, startup-only, nicht PATCHbar, nicht in v2-Registry, kein ENV für enabled.",
+      "beleg": "server.py Z.506, 10519, 10766, 10305, 10655, 256-285, 7835-7840; settings_control.py ohne openai",
+      "evidenz": "A",
+      "gueltigkeit": "Freigabe-Schalter",
+      "id": "P5-14"
+    },
+    {
+      "aussage": "Sticky: erster PATCH pinnt enabled in runtime.json und überstimmt später CLI; setzt data_root_path voraus.",
+      "beleg": "server.py Z.7959-7969; operations.py Z.432-449; server.py Z.8827-8839, 528-532",
+      "evidenz": "C",
+      "gueltigkeit": "Deployment-Sequenz",
+      "id": "P5-15"
+    },
+    {
+      "aussage": "Keine Wirkung auf WS/Admin/Logs/Kroko; Keys nicht austauschbar (Docstring).",
+      "beleg": "Negativsuche Gate-Nutzung; server.py WS; security/kroko.py; service.py Z.1-5",
+      "evidenz": "A",
+      "gueltigkeit": "Grenzen",
+      "id": "P5-16"
+    },
+    {
+      "aussage": "Kein Rate-Limit/Lockout/Mehrfach-Key/Rotation/Ablauf/Hash; kein 403 (nur 401/404).",
+      "beleg": "OpenAIGate nur 2 Methoden; Negativsuche 429/rate/lockout",
+      "evidenz": "B",
+      "gueltigkeit": "gesamte Fläche",
+      "id": "P5-17"
+    },
+    {
+      "aussage": "Leer \"\" falsy -> ENV/kein Key (offen); Whitespace truthy -> exakt 'Bearer  '; kein Trim/Mindestlänge.",
+      "beleg": "security/openai.py Z.15, 19; server.py Z.1267-1270",
+      "evidenz": "C",
+      "gueltigkeit": "Key-Konfiguration",
+      "id": "P5-18"
+    },
+    {
+      "aussage": "Kein öffentliches Signal Auth-erforderlich (kein openaiAuthRequired); nur openai_api_enabled sichtbar; Client muss 401 handhaben.",
+      "beleg": "server.py Z.8907-8916; public_dict; Negativsuche openaiAuthRequired",
+      "evidenz": "A",
+      "gueltigkeit": "Client-Integration",
+      "id": "P5-19"
+    },
+    {
+      "aussage": "Belegt: offen ohne Key, 401-Mechanik + Audit, POST-401->200, GET-Katalog. Nicht belegt: 404-enabled, GET-401, ENV-Rotation, 404-vor-401-Test, POST-Event, Sticky.",
+      "beleg": "Tests 66-94, 183-194, 179-197, 501-515",
+      "evidenz": "A",
+      "gueltigkeit": "Abdeckung",
+      "id": "P5-20"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N5-01",
+      "thema": "Kein Rate-Limit/Lockout/Backoff"
+    },
+    {
+      "id": "N5-02",
+      "thema": "Keine Mehrfach-Keys/Rotation/Ablauf/Hash"
+    },
+    {
+      "id": "N5-03",
+      "thema": "Kein Erfolgs-Audit/Zähler"
+    },
+    {
+      "id": "N5-04",
+      "thema": "Kein 403/Loopback auf OpenAI-Fläche"
+    },
+    {
+      "id": "N5-05",
+      "thema": "Kein Alternativ-Träger (nur Authorization)"
+    },
+    {
+      "id": "N5-06",
+      "thema": "Kein realm/error in Challenge; kein Schema-Hinweis"
+    },
+    {
+      "id": "N5-07",
+      "thema": "Kein Laufzeit-Schalter (PATCH) "
+    },
+    {
+      "id": "N5-08",
+      "thema": "Keine Scopes in Fläche"
+    }
+  ],
+  "researcher_session": "ses_e421f2657ffeIpXQsYG84ii7uq",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U5-01",
+      "thema": "Env-Datei-Ladung Nicht-Container"
+    },
+    {
+      "id": "U5-02",
+      "thema": "Mehrfach-Authorization/nicht-ASCII"
+    },
+    {
+      "id": "U5-03",
+      "thema": "Proxy reicht Authorization weiter?"
+    },
+    {
+      "id": "U5-04",
+      "thema": "Audit bei request_logging_enabled=false"
+    },
+    {
+      "id": "U5-05",
+      "thema": "Sticky-Wirkung real ungetestet"
+    }
+  ],
+  "writer_notes": "Kern: optionale Fläche – drei Zustände (offen / 401-Gate / POST-404). enabled=false schützt GET nicht. Key nur CLI/ENV, nie YAML/Persistenz/Ausgabe. Header exakt. Audit nur Fehler. Keine Wirkung fremde Flächen. P5-15 Sticky als Warnung."
+}

@@ -1,0 +1,220 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD, kein git-Binary). Nur Commit bindend.",
+  "chapter": "07.12",
+  "commit_verification": ".git/HEAD direkt a8993c5c68042d996eab680d84a5b138a214bb5d (detached). Quellen: .github/workflows/*.yml, engineering/release/*.py, engineering/tools/*.py (Producer), _build_identity + build_identity_support (require_complete/sourceDate), kroko-redistribution.json, tests/**.",
+  "conflicts": [
+    {
+      "id": "SC7-C1",
+      "thema": "candidateRun leer im Workflow (kein --candidate-run); Run-Bezug nur candidateId+manifestSha256."
+    },
+    {
+      "id": "SC7-C2",
+      "thema": "sourceTree uebergeben, nicht neu berechnet (Docstring: keine eigene Identitaet)."
+    },
+    {
+      "id": "SC7-C3",
+      "thema": "actions/cache nur # v4 ohne Patchlevel (testkonform, schwaecher auditierbar)."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [
+    "SC7-07 commit/tree/VERSION/clean --> SC7-09",
+    "SC7-08 require_complete --> SC7-07",
+    "SC7-09 manifest --> SC7-10 state resume",
+    "SC7-19 inventory bindet Manifest --> SC7-09",
+    "SC7-11 require-qualified/evidence --> SC7-12",
+    "SC7-13 BLOCKED verhindert Engine --> SC7-12",
+    "SC7-12 REAL engine gate --> SC7-20",
+    "SC7-05 per-job perms --> SC7-06",
+    "SC7-01 SHA-Pin --> SC7-02",
+    "SC7-15 assert_no_secrets --> SC7-16",
+    "SC7-17 SOURCE_DATE_EPOCH --> SC7-18",
+    "SC7-14 Credentials --> SC7-20",
+    "SC7-21 Env-Vererbung (NI) --> SC7-14 Risiko",
+    "SC7-22 fehlende Signatur (NI) --> SC7-19 Luecke"
+  ],
+  "facts": [
+    {
+      "aussage": "Alle Third-Party-Actions @40-Hex + Versionskommentar per Test; cache nur # v4 (testkonform, groeber).",
+      "beleg": "ci:54,59; RC:65-450; publish:65-278; test_release_workflows:34,264-282",
+      "evidenz": "A",
+      "gueltigkeit": "alle Workflows statisch",
+      "id": "SC7-01"
+    },
+    {
+      "aussage": "Inventar geschlossen genau 3 yml; vierte bricht Test; YAML parsbar.",
+      "beleg": "test_release_workflows:57-67",
+      "evidenz": "A",
+      "gueltigkeit": "repo-weit",
+      "id": "SC7-02"
+    },
+    {
+      "aussage": "CI voll lesend contents read + kein Publishing-Kommando (twine/docker/gh/git/imagetools/release.py publish).",
+      "beleg": "ci:28-30,47-48; test_release_workflows:168-174,286-292",
+      "evidenz": "A",
+      "gueltigkeit": "ci alle Jobs",
+      "id": "SC7-03"
+    },
+    {
+      "aussage": "Candidate nur linux packages write (privates Staging); sonst read; kein contents write; einzige Remote-Schreibung --push-staging.",
+      "beleg": "RC:36-37,56-59,170-171,250-251,305-306; test_release_workflows:176-183",
+      "evidenz": "A",
+      "gueltigkeit": "RC",
+      "id": "SC7-04"
+    },
+    {
+      "aussage": "Publish Default {} ; tag actions+contents write; pypi +id-token (einzig); registries packages (ohne contents); finalize beide; alle actions read + contents.",
+      "beleg": "release-publish:36,58-60,107-111,184-187,248-251; test_release_workflows:185-239",
+      "evidenz": "A",
+      "gueltigkeit": "je Job",
+      "id": "SC7-05"
+    },
+    {
+      "aussage": "Jeder Publish-Job environment release (Settings/Reviewer dort); CI/RC keins; beide Release nur dispatch; kein PR-target; Concurrency je Gruppe.",
+      "beleg": "publish:57,106,183,247; ci:19-26; RC:28-34; test_release_workflows:142-164,242-260",
+      "evidenz": "A",
+      "gueltigkeit": "alle Workflows",
+      "id": "SC7-06"
+    },
+    {
+      "aussage": "Identitaet im Runner: commit/tree/VERSION + clean sonst Abbruch; VERSION 2.0.0; Tree als --source-tree.",
+      "beleg": "RC:96-103,201-207,341-348; test_release_workflows:426-428",
+      "evidenz": "A",
+      "gueltigkeit": "RC Jobs",
+      "id": "SC7-07"
+    },
+    {
+      "aussage": "require_complete: Commit+Tree+DirtyFalse+Date+provenance git sonst IdentityError; candidate_source vergleicht Tree sonst CandidateError.",
+      "beleg": "_build_identity:42-48,163-173; release_candidate:61-68; qualify:38,104,230; build_distribution:141; build_production:247,265",
+      "evidenz": "A",
+      "gueltigkeit": "offizieller Pfad",
+      "id": "SC7-08"
+    },
+    {
+      "aussage": "Manifest bindet 40-Hex Commit/Tree/oci.revision, candidateId-Muster, genau pro/voice-stt-server beide Plattformen; Schema2/Doppel abgelehnt; Tree uebergeben.",
+      "beleg": "rc_manifest:28,32,40,186-187,197-221; candidate:254-258; test_unified_product:60-68",
+      "evidenz": "A/C",
+      "gueltigkeit": "Schema 3",
+      "id": "SC7-09"
+    },
+    {
+      "aussage": "Resume an Kandidat: candidateIdentity runId/attempt + manifestSha256 + State-Identitaet exakt sonst StateError; ohne --candidate-run leer (nur candidateId).",
+      "beleg": "rc_manifest:312-375; state:164-237; cli:359-382; RC:353-361; release_candidate:106-123",
+      "evidenz": "A/B",
+      "gueltigkeit": "Release-State",
+      "id": "SC7-10"
+    },
+    {
+      "aussage": "Quali-Gate --require-qualified: QUALIFIED ohne gueltige evidenceRef FAIL; nicht-qualifiziert mit Flag FAIL sonst WARN; vor --until TAGGED testfixiert.",
+      "beleg": "preflight:267-304; cli:462,91; publish:77-83; test_release_workflows:443-456; test_release_preflight:251-296",
+      "evidenz": "A",
+      "gueltigkeit": "Preflight+Publish",
+      "id": "SC7-11"
+    },
+    {
+      "aussage": "Publish dreifach: CLI --manifest/--yes/QUALIFIED/evidence/Version; Preflight require_qualified mit Commit/Tree (Workflow ohne --commit/--tree nur Version/Quali); Engine REAL Redistribution/Readiness/evidence/Commit/Tree.",
+      "beleg": "cli:303-357; engine:192-215; preflight:87-109,256-264; test suites",
+      "evidenz": "A",
+      "gueltigkeit": "Publish-Pfad",
+      "id": "SC7-12"
+    },
+    {
+      "aussage": "Redistribution Default BLOCKED (Datei, Fallback missing); VERIFIED nur status+Revision+evidence, kein Override; Version 8657e65; Manifest BLOCKED/VERIFIED+evidence; Preflight FAIL/Engine ManifestError vor Adaptern.",
+      "beleg": "config:179-194; redistribution.json:1-6; rc_manifest:212-267; preflight:307-318; engine:192-195; test_unified_product:71-81",
+      "evidenz": "A",
+      "gueltigkeit": "gesamter Pfad",
+      "id": "SC7-13"
+    },
+    {
+      "aussage": "Credentials: GHCR GITHUB_TOKEN (actor, kein PAT); DockerHub VAR+TOKEN kein Delete; GH_TOKEN finalize; kein PYPI/KROKO/echo; PyPI OIDC (id-token pypi); Twine liest TWINE_* nie.",
+      "beleg": "RC:124-129; publish:48,208-285; config:56-145; adapters:115-174; test_release_workflows:338-378",
+      "evidenz": "A",
+      "gueltigkeit": "Workflows+Adapter",
+      "id": "SC7-14"
+    },
+    {
+      "aussage": "Secret-Erkennung: Marker key/token/secret/password/passwd/credential + Allowlist + present-Suffix; Werte pypi-/ghp_/github_pat/dckr_pat/sk-/BEGIN KEY; assert rekursiv (nur nicht-leer String verboten); redact in stderr/Exceptions; vor Schreiben (State/Manifest).",
+      "beleg": "redaction:21-108; state:96-110,181-188; rc_manifest:241; adapters/remote_checks; tests redaction/state/rc_manifest",
+      "evidenz": "A",
+      "gueltigkeit": "State/Manifest/Logs",
+      "id": "SC7-15"
+    },
+    {
+      "aussage": "Atomar tmp+replace (payload erst nach assert; kein halber Leser); Manifest dito.",
+      "beleg": "state:181-188; rc_manifest:302-309; tests state/rc_manifest",
+      "evidenz": "A",
+      "gueltigkeit": "release_state + rc-manifest",
+      "id": "SC7-16"
+    },
+    {
+      "aussage": "Repro: sourceDate aus git show %cI UTC; SOURCE_DATE_EPOCH nur nach require_complete; OCI created aus Committer-Datum (vorher now); Variant-Env entfernt/gesetzt.",
+      "beleg": "build_identity_support:61-67; build_distribution:138-145; build_production:195-253",
+      "evidenz": "B",
+      "gueltigkeit": "Wheel+OCI",
+      "id": "SC7-17"
+    },
+    {
+      "aussage": "Byte-Identitaet getestet (2 Builds fix 1792445641 identisch; stale Ressource ignoriert, tree clean); OCI nur Code.",
+      "beleg": "identity_installation:58-68,218-228; _build_identity:196-207; test_build_identity:252-257",
+      "evidenz": "A/B",
+      "gueltigkeit": "Wheel getestet",
+      "id": "SC7-18"
+    },
+    {
+      "aussage": "Inventar rekursiv ohne sich (rel posix bytes sha256); nach Quali gebaut, verifiziert (existiert/bytes/sha/rc drin/QUALIFIED); Reihenfolge Test: Qualify<Inventar<Verify<Upload.",
+      "beleg": "release_candidate:80-85,425-439; RC:423-447; test_release_root_corrections:132-161; test_release_workflows:112-133",
+      "evidenz": "A",
+      "gueltigkeit": "Candidate-Assembly",
+      "id": "SC7-19"
+    },
+    {
+      "aussage": "Kein Trust-on-First-Use: Unavailable REAL Stop DRY weiter; Conflict Stop beide; ABSENT publish+re-verify nur MATCH advance+persis sonst unverified; VERIFY_ONLY nicht-MATCH REAL Stop DRY pending.",
+      "beleg": "engine:232-294; remote_checks:82-293; gitinfo:85-128; adapters:469-488; tests engine/remote/root",
+      "evidenz": "A",
+      "gueltigkeit": "Engine+Remote",
+      "id": "SC7-20"
+    },
+    {
+      "aussage": "Build erbt volle Env (dict os.environ + Variant/SOURCE_DATE_EPOCH, keine Allowlist/Pruefung; Schutz nur ephemere Runner + Login-Scope).",
+      "beleg": "build_distribution:138-145; build_production:249-253",
+      "evidenz": "B",
+      "gueltigkeit": "Builder (NI Allowlist)",
+      "id": "SC7-21"
+    },
+    {
+      "aussage": "Keine Signaturen/Attestation/SBOM/hash-gepinnten Python-Installs (0 Treffer); Kette auf SHA-Pin+Inventar+Remote-Abgleich; Cache-Restore-Verifikation UNKNOWN (artifacts.py ausserhalb).",
+      "beleg": "Grep .github/*.txt; RC:84-89,273,327; ci:70,175-179",
+      "evidenz": "A",
+      "gueltigkeit": "gesamte Kette (NI+U)",
+      "id": "SC7-22"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "SC7-N1",
+      "thema": "Env-Allowlist/Scrub Build-Subprozesse (SC7-21)."
+    },
+    {
+      "id": "SC7-N2",
+      "thema": "Signaturen/SLSA/SBOM (SC7-22)."
+    },
+    {
+      "id": "SC7-N3",
+      "thema": "Hash-gepinnte Python-Deps (SC7-22)."
+    }
+  ],
+  "researcher_session": "ses_e36ef2fa1ffepgE7reHVC4CCnL",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "SC7-U1",
+      "thema": "Branch detached; kein git-Binary (nur HEAD)."
+    },
+    {
+      "id": "SC7-U2",
+      "thema": "Cache-Restore Byte-Verifikation (artifacts.py ausserhalb)."
+    }
+  ],
+  "writer_notes": "Nicht duplizieren: 07.09 Runner/Gates, 07.10 Candidate/Manifest, 07.11 Publish/RC, 07.05-08 Build/Native. Nur Gate/Identitaet/Provenienz-Sicht. NOT_REQUESTED: edges nur Belegrelation."
+}

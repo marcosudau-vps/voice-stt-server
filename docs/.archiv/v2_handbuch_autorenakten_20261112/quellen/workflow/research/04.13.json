@@ -1,0 +1,258 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD, kein refs/); nur Commit bindend. docs/client-development NICHT als Evidenz verwendet.",
+  "chapter": "04.13",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (kein ref:). .git/FETCH_HEAD derselbe SHA von https://github.com/marcosudau-vps/voice-stt-server.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "Auftrag 'Client-Bibliotheken' – keine im Repo; compatibility-Test bindet externes Produkt (env-gated). Nur schwacher Beleg, keine Doku/Beispielquelle."
+    },
+    {
+      "id": "C2",
+      "thema": "4409 zwei reasons (invalid_requested_session, session_limit_reached) + errors[] getrennt darstellen."
+    },
+    {
+      "id": "C3",
+      "thema": "Timeout 10,0 s nur vor Acceptance; danach kein Timeout – Praezisierung, kein Widerspruch."
+    },
+    {
+      "id": "C4",
+      "thema": "Header real x-voicestt-log-token (oder Bearer); WS ohne Loopback-Fallback (anders als HTTP)."
+    },
+    {
+      "id": "C5",
+      "thema": "Kein inhaltlicher Widerspruch zu 04.08; 04.13 liefert Ablauf, 04.08 Semantik."
+    },
+    {
+      "id": "C6",
+      "thema": "Docstrings connection.py/snapshot.py stimmen mit Code; kein Konflikt wie 04.12 C1."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "Client -> GET /api/v2/info -> {serverVersion, serverCommit, serverInstanceId, protocolVersion} [J1-01, J1-19]",
+    "Client -> WS /ws/v2 (accept, kein Subprotokoll/Auth) [J1-01]",
+    "Client -> hello (Text) -> Server; Server -> hello.accepted | protocol.incompatible+4406 | session.rejected+4409 | leer+4400 | leer+4408 | leer+1011 [J1-02]",
+    "hello.accepted -> {sessionId, protocolVersion, serverVersion, serverCommit, snapshot ohne type, logAccess} [J1-04]",
+    "Client -> Kommando (2, sessionId, commandId kanonisch) -> command.ack genau 1 [J1-05, J1-06]",
+    "activation.command -> Domain-Events -> Client -> command.ack [J1-07]",
+    "Client -> Binaerframes (4B LE + JSON + PCM) -> decode -> resample 16k -> Recorder [J1-08]",
+    "activate -> started -> audio -> recording_started -> interim -> finish -> input_closed -> accepted/completed -> completed [J1-09]",
+    "session.snapshot.request -> command.ack -> session.snapshot [J1-11]",
+    "Fehler: 4400 Huelle/Audio-vor-hello [J1-12]; 4406 keine Version, mit Payload [J1-13]; 4409 Admission/Errors[] [J1-14]; 4408 10 s nur vor Accept [J1-15]; 1011 terminal/Writer/Exception [J1-16]",
+    "Ablehnung -> ack false -> nutzbar [J1-17]",
+    "1011/Verlust -> Cleanup (finally) -> neuer hello -> NEUE sessionId, Zaehler 0/0, Cache leer [J1-18]",
+    "hello.accepted.logAccess -> GET /api/logs/events (Token) -> 200|401 [J1-19]",
+    "logAccess -> WS /ws/logs -> subscribe -> hello -> subscribed -> replay -> completed -> live/keepalive [J1-19]",
+    "Grenze: /ws/v2 Echtzeit kein Replay || /ws/logs cursorfaehig [J1-16, J1-19]"
+  ],
+  "facts": [
+    {
+      "aussage": "/ws/v2 eigene Route; accept sofort ohne Subprotokoll/Auth. clientId optional (?clientId/Header, nur Metadatum). Server->Client nur Textframes kompaktes JSON; Client->Server Text oder Binaer. Ein Writer-Task + Queue: Reihenfolge = Erzeugung.",
+      "beleg": "server.py websocket_protocol_v2 10121-10169 (accept 10137, clientId 10138-10141, Sink/Queue 10147-10169), Writer 10171-10190; connection.py send 129-138",
+      "evidenz": "stark (Code). Ordnung W1-02.",
+      "gueltigkeit": "nur /ws/v2; nicht /ws/transcribe, nicht /ws/logs.",
+      "id": "J1-01"
+    },
+    {
+      "aussage": "Handshake sechs Ausgaenge: hello.accepted (Erfolg); protocol.incompatible + 4406; session.rejected + 4409; keine Nachricht + 4400; keine Nachricht + 4408 (Timeout); keine Nachricht + 1011 (Admission-Fehler). Reihenfolge Huelle -> Version -> Session.",
+      "beleg": "handshake.py Docstring 8-21, parse_hello 83-178; connection.py 218-255, 284-295; tests e2e 363-518, 510-518",
+      "evidenz": "stark (Code+Tests).",
+      "gueltigkeit": "nur vor Acceptance; danach nur 1011.",
+      "id": "J1-02"
+    },
+    {
+      "aussage": "hello erstes und einziges Vor-Accept-Kommando. Jedes andere erste Textframe (auch activation.command), unparsebares JSON, jedes Binaerframe -> 4400 ohne Nachricht/Session/Recorder. Zweites hello nach Acceptance wirkungslos (kein Ack/Version).",
+      "beleg": "connection.py handle_text 168-179, handle_binary 181-198; handshake.py 85-89; Tests e2e 363-377, 436-449, 488-500, 533-544",
+      "evidenz": "stark (Code+Tests).",
+      "gueltigkeit": "V2; V1-Kontrast Z1-01.",
+      "id": "J1-03"
+    },
+    {
+      "aussage": "hello.accepted einzige Quelle Session-Identitaet + Log-Token. sessionId nicht waehlbar; uebernehmen aus accepted: protocolVersion, sessionId, serverVersion, serverCommit, eingebetteter Snapshot (ohne inneres type), logAccess. logAccess ohne accessToken bei available:false (+code). clientRunId nicht zurueckgespiegelt.",
+      "beleg": "connection.py _activate_session 307-343 (Suppression, Observer, start_streaming 328, Snapshot 330, logAccess 331, send 332-343); snapshot.py embedded_snapshot 82-89; server.py create_log_access 7772-7806; Tests e2e 269-296, 297-361",
+      "evidenz": "stark (Code+Tests). Felder W1-09/W1-12, Y1-01, L1-05/06.",
+      "gueltigkeit": "einmal je Verbindung; spaetere Snapshots mit type.",
+      "id": "J1-04"
+    },
+    {
+      "aussage": "Kommando-Huelle bei jedem Kommando: type aus 5 Typen, protocolVersion exakt 2 (bool zaehlt nicht), sessionId kanonisch und gleich aktuell, commandId kanonisch UUID (36, Bindestriche, lowercase). Falsch Version/nicht-kanonisch/Feld -> invalid_payload; fremde gueltige -> stale_session (wirkungslos, ack aktuelle ID). Nicht-kanonische commandId -> gar keine Antwort. Unbekannter type -> still ignoriert.",
+      "beleg": "commands.py parse_command 90-138 (101-131), Validatoren 143-194; schema.py normalize_command_id 236-244, is_canonical_uuid 219-233, COMMAND_TYPES 51-57; Tests e2e 811-833, 835-848, 630-649, 850-860",
+      "evidenz": "stark (Code+Tests). Q1-01/02/03, W1-13.",
+      "gueltigkeit": "nach Acceptance; hello ohne protocolVersion (W1-06).",
+      "id": "J1-05"
+    },
+    {
+      "aussage": "Ack-Korrelation NACH commandId, nicht Position. Jedes erkennbare Kommando genau eine command.ack mit derselben ID – auch abgelehnt/Replay (wortgleich inkl. alter Version). Parallele gleiche ID -> identische Acks, eine Wirkung. Filtern auf (type==command.ack && commandId==X); nicht naechste-Nachricht-annehmen.",
+      "beleg": "connection.py 347-369, 408-450, 594-616, 620-652, 654-661; server.py handle_trigger_command 3500-3572; Test races 343-394; e2e 700-742",
+      "evidenz": "stark (Code+Tests). Q1-07/14/18.",
+      "gueltigkeit": "jede Session; Session-Cache.",
+      "id": "J1-06"
+    },
+    {
+      "aussage": "Events koennen VOR zugehoeriger Ack eintreffen. activation.command: Domain publiziert waehrend Ausfuehrung vor Ack-Rueckgabe; Ack danach Connection-Schicht. activation.started (phase_changed/input_closed) VOR command.ack derselben ID. Outbound-Queue/Writer erhalten Ordnung = harte Zusage. Ausnahme snapshot.request: erst ack, dann snapshot.",
+      "beleg": "server.py 3564-3572, _publish_timeline_event, _notify_protocol_observer 5950/5976-5991; connection.py 373-390, 688-716, 681-687, 584-592",
+      "evidenz": "stark (Code, synchroner Pfad, eine Queue; kein eigener Ordnungstest Event-vs-Ack).",
+      "gueltigkeit": "alle Domain-Kommandos; Ausnahme Snapshot.",
+      "id": "J1-07"
+    },
+    {
+      "aussage": "Audio Binaerframe = pack(<I,len) + UTF-8-JSON + PCM (kein Magic/Version/Flags). Metadaten: sampleRate Pflicht positiv int, channels Default 1 (1-8, >1 gemittelt), format nur pcm_s16le (fehlend = pcm_s16le), frames optional exakt. Resample 16 kHz. KEIN Startkommando V2 (start_streaming atomar Admission), Audio ab accepted zulaessig. Fehler danach still: verworfen, kein Ack/Meldung/Close. Audio nie direkte Antwort.",
+      "beleg": "protocol.py encode/decode 40-75; server.py packet_to_server_samples 7653-7683, ingest 3011-3018, start_streaming 2850-2863; connection.py 181-198; Test controlled_e2e speech_packet 289-303, e2e 1219-1237",
+      "evidenz": "stark (Code+Tests). B1-01, B1-04, B1-06..12, B1-14.",
+      "gueltigkeit": "V2 (kein Start, stille Fehler); V1 Z1-07/08.",
+      "id": "J1-08"
+    },
+    {
+      "aussage": "Referenz-Ablauf (Test-Vorlage, kein SDK): hello -> accepted -> activate{source:manual} -> (activation.started mit Id/Seq/phase waiting_first_speech) + ack{applied, Id, Phase, Version, Revision} -> Binaerframes -> recording_started{segmentId,Seq} -> interim (ohne Versionsanstieg) -> finish{activationId} -> ack + input_closed{causedByCommandId} -> transcription.accepted/completed (gleiche segment/activationId) -> Terminal completed|cancelled|failed (aus drained). Controls: activationId kanonisch + source verboten; activate: source manual + kein Id; extend fehlt.",
+      "beleg": "Tests e2e 1057-1076, 553-564, 1116-1154, 1219-1275, 1524-1606; events.py 54-73, 76-80, 114-162; commands.py 143-167",
+      "evidenz": "stark Start/Close/Segment/Transkription; mittel Terminal Socket (nur Projektor-Test + opt-in).",
+      "gueltigkeit": "V2-Ablauf; Felder B1-14, E1, Q1-04.",
+      "id": "J1-09"
+    },
+    {
+      "aussage": "Events nur 18 kanonische + hello.accepted/command.ack/snapshot. Hülle type/protocolVersion/sessionId/eventId/eventSeq/stateVersion/occurredAtUnixMs. seq ab 1 strikt monoton lueckenlos je Verbindung; Version nur sichtbare (NON_STATE: watchdog.warning, activation.trigger_suppressed, transcription.interim). Legacy-Namen (timeline/status/trigger_ack) nie V2.",
+      "beleg": "schema.py 148-197; session.py mint_event 105-144; events.py 54-92; Tests e2e 1078-1101, 1181-1201, 1239-1259, 1203-1217",
+      "evidenz": "stark (Code+Tests). W1-16/17.",
+      "gueltigkeit": "pro Session; neu pro Verbindung.",
+      "id": "J1-10"
+    },
+    {
+      "aussage": "Resync: kein Puffer/kein Replay. Einzig snapshot.request mit frischer kanonischer ID: Antwort ack applied UND danach Vollsnapshot (stateVersion, lastEventSeq, settingsRevision, input, pendingActivations, trigger, audioAvailable, requested/effective, wakeWordCapabilities). Wiederholbar ohne Mutation; Client setzt Basis lastEventSeq/Version, verwirft seq<=lastEventSeq.",
+      "beleg": "connection.py 584-592; snapshot.py build_snapshot 36-79; Tests e2e 1327-1338, 1103-1114, 1284-1296; session.py 51-53",
+      "evidenz": "stark (Code+Tests). Y1-01..10, T1-14.",
+      "gueltigkeit": "kein Resume; kein resyncFrom-Feld.",
+      "id": "J1-11"
+    },
+    {
+      "aussage": "Fehlerast 4400: erstes Frame kein hello; unparsebar; Pflichtfeld falsch (Liste leer/nicht-Liste/bool-Element; Version/Commit leer; RunId nicht kanonisch; requestedSession/trigger/Ids/Suppression falsch); Binaer vor Acceptance. Nichts gesendet, Close 4400. Keine Session/Recorder. Kein Close-Reason-Text.",
+      "beleg": "handshake.py parse_hello 83-153; connection.py 218-234, 181-185; schema.py 202; Tests e2e 363-392, 463-500, terminal_recovery 322-339",
+      "evidenz": "stark (Code+Tests). Client-Regel: nur Zahlencode.",
+      "gueltigkeit": "vor Acceptance.",
+      "id": "J1-12"
+    },
+    {
+      "aussage": "Fehlerast 4406: supportedProtocolVersions gueltig aber ohne gemeinsame Version (z.B. [1,3]): Textframe protocol.incompatible{reason no_common_protocol_version, serverVersion, serverCommit, supportedProtocolVersions:[2]} + Close 4406, ohne sessionId/Session. Leere Liste = 4400 (Huelle), nicht 4406.",
+      "beleg": "handshake.py 70-73, 181-187, 155-165; schema.py 32; Tests e2e 393-404, 390-391, 463-482",
+      "evidenz": "stark (Code+Test). Regel: Liste schneiden, nur gemeinsam neu versuchen.",
+      "gueltigkeit": "Version nur 2 verhandelbar.",
+      "id": "J1-13"
+    },
+    {
+      "aussage": "Fehlerast 4409: Huelle+Version ok, Session nicht admittierbar: session.rejected{reason, serverVersion, serverCommit, supportedProtocolVersions:[2], errors[{field,code,message}]} + Close 4409, keine ID/halbe Session. Codes: activation_trigger_required, wake_word_selection_required/not_allowed, wake_word_unavailable, session_limit_reached; ConfigError -> invalid_requested_session + field/code/message.",
+      "beleg": "handshake.py 76-80, 201-247; connection.py 297-305, 247-252; Tests e2e 406-434, 476-477",
+      "evidenz": "stark (Code+Tests); limit stark Code, kein Socket-Test.",
+      "gueltigkeit": "Admission-Fehler inkl. Limit.",
+      "id": "J1-14"
+    },
+    {
+      "aussage": "Fehlerast 4408 + Zeit danach: vor Acceptance pro Versuch 10,0 s (Default, Connection ueberschreibbar) -> request_close(4408). Nach Acceptance KEIN Lese-Timeout, KEIN Ping/Pong/Heartbeat /ws/v2: Schleife wartet receive() ODER Close-Signal. Halboffen nicht beendet. Kontrast /ws/logs 30,0 s Keepalive + ping->pong.",
+      "beleg": "schema.py 208-209; connection.py 74-78; server.py 10229-10247, 10194-10228, 149, 9713-9737, 9805-9810; Tests e2e 502-508, terminal_recovery 380-404",
+      "evidenz": "stark (Code+Tests). Wiedererkennung Client-Sache (Transport/Netz), nicht Server.",
+      "gueltigkeit": "Applikation; Transport-Pings nicht Repo (U2).",
+      "id": "J1-15"
+    },
+    {
+      "aussage": "Fehlerast 1011 (einzig serverinitiiert nach Acceptance): (a) terminale Recovery (fail_closed_for_recovery -> __session_terminal__, reason recovery_failed, ohne Wire-Nachricht), (b) fataler Writer-Fehler, (c) Endpoint-Exception. Danach Abbau (close_session -> remove_session), Slot im finally frei, neuer Handshake andere sessionId; snapshot.request neu normal.",
+      "beleg": "connection.py 688-702; server.py 4246-4324 (4311-4322), 10180-10190, 10248-10258, 10259-10288; Test terminal_recovery 168-198, 200-248, 444-456",
+      "evidenz": "stark (Code+Tests).",
+      "gueltigkeit": "nach Acceptance.",
+      "id": "J1-16"
+    },
+    {
+      "aussage": "Kommando-Fehler schliessen nie: invalid_payload, stale_session, stale_activation, command_id_conflict, activation_locked, not_active, invalid_phase, closing_input, trigger_suppressed, audio_unavailable, settings_revision_conflict, settings_rejected -> accepted:false + result, nutzbar; Version/Phase unveraendert (Ausnahme trigger_suppressed Diagnose-Event danach). Unparsebar/unbekannt/keine kanonische ID -> still. Audiofehler still.",
+      "beleg": "connection.py 172-179, 347-369, 448-449; server.py 10025-10052 (V1-Kontrast); Tests e2e 520-531, 566-628, 630-698, 744-773, 835-848",
+      "evidenz": "stark (Code+Tests). Codes Q1-08/09; Replay Q1-14..17.",
+      "gueltigkeit": "V2-Kommandos.",
+      "id": "J1-17"
+    },
+    {
+      "aussage": "Neuaufbau = neue Session, keine Fortsetzung: hello ohne sessionId/seq/Cursor. Frische kanonische sessionId; Version/seq 0/0; Settings-Revision neu; Replay-Cache leer (alte ID kein Replay); Activation Teardown session_closed nicht fortsetzbar. Alte sessionId -> ack stale_session aktuelle ID, wirkungslos. Nach accepted Snapshot neu ableiten, Zustand mit NEUEN IDs senden. Zu frueh bei Limit -> 4409 session_limit_reached.",
+      "beleg": "connection.py 276-282, 307-317; commands.py 120-126; server.py 10259-10288, 2891-2948; Tests e2e 630-649, terminal_recovery 200-248; compatibility identity 196-200",
+      "evidenz": "stark (Code+Tests). T1-01..03/09/12/13/15/19.",
+      "gueltigkeit": "V2; nicht V1. 04.08 voll.",
+      "id": "J1-18"
+    },
+    {
+      "aussage": "Log-Zugriff aus hello.accepted (einzig wiederanlauffaehiger Kanal): logAccess websocketPath /ws/logs, historyPath /api/logs/events, sessionId, ServerInstance, Cursor, ab available accessToken+expiresAt (24 h, sessiongebunden). HTTP GET events?sessionId mit x-voicestt-log-token/Bearer -> 200 object:list/data/nextCursor + scope session; falsch/fremd -> 401 Logzugriff nicht autorisiert. WS subscribe{accessToken,sessionId,channels,afterCursor} -> hello/subscribed (scope session) -> replay true -> replay_completed -> live false/keepalive; Gap retention; Fehler error+1008 (not_authorized/invalid_cursor/cursor_ahead/log_live_disabled) bzw. 1011 (event_store). Kanaele Session-Scope audit|performance|transcription.",
+      "beleg": "security/logs.py http_scope 67-81, websocket_scope 83-93, issue 24-38; server.py create_log_access 7772-7806, _log_events_response 9456-9537, /api/logs/events 9539-9541, /ws/logs 9560-9847; Tests e2e 297-361, 289-295",
+      "evidenz": "stark (Code+Tests). L1-02..09, W1-12.",
+      "gueltigkeit": "Log-Kanal cursorfaehig; Session kein Pendant (T1-20).",
+      "id": "J1-19"
+    },
+    {
+      "aussage": "Beispiel-Payloads Vertragsvektoren, keine erfundene Bibliothek: hello_v2, manual_activate(+replay), refresh_active_activation, activation_started_event, transcription_interim_event, idle_snapshot, wake_enabled_without_selection, client_claims_wake_word, activate_with_activation_id, refresh_without_activation_id, command_id_conflict. IDs Platzhalter, Tests binden an lebende Session (_bind). Datei byte-identisch Planungsvektoren; VOICESTT_PROTOCOL_V2_VECTORS gesetzt -> Drift hart.",
+      "beleg": "vectors.json 1-272; contract.py 44-104, 107-120",
+      "evidenz": "stark (Datei+Test). Kein lauffaehiges SDK. Kein Client-Paket (N1).",
+      "gueltigkeit": "Beispiele; IDs illustrativ.",
+      "id": "J1-20"
+    },
+    {
+      "aussage": "Test-/Ausfuehrungskontext: Default pytest testpaths tests/unit (e2e/contract/races/terminal_recovery laufen mit); tests/compatibility ausserhalb, env-gated (VOICESTT_CLIENT_V2_ROOT/COMMIT + Checkout) -> Standard skip. CI vorhanden: .github/workflows/ci.yml (Matrix ubuntu-24.04 + windows-latest; pytest tests/unit tests/compatibility; tests/packaging) plus Release-Workflows. [R1-F1 2026-11-08: Glob-Absence korrigiert.]",
+      "beleg": "pytest.ini 1-3; test_client_v2_identity.py 28-47, 109-110; Glob-Absence Repo-Wurzel",
+      "evidenz": "stark (Datei+Grep-Absence); CI-Aussage unbelegbar (U3).",
+      "gueltigkeit": "lokaler pytest-Scope.",
+      "id": "J1-21"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Kein Client/SDK/Beispielcode im Repo. Beispiele schematisch; Bibliotheks-API erfunden."
+    },
+    {
+      "id": "N2",
+      "thema": "Kein Resume/Reattach: hello ohne sessionId/seq/Cursor; keine Fortsetzung."
+    },
+    {
+      "id": "N3",
+      "thema": "Kein V2-Event-Replay/History-Puffer; Resync nur Vollsnapshot (T1-14, NI-02)."
+    },
+    {
+      "id": "N4",
+      "thema": "Kein Ping/Heartbeat/Idle-Timeout /ws/v2 nach Acceptance (J1-15)."
+    },
+    {
+      "id": "N5",
+      "thema": "Kein Close-Reason-Text: nur Zahlen (close(code=...))."
+    },
+    {
+      "id": "N6",
+      "thema": "Keine CI-Aussage ueber Runner/Ergebnis; nur Workflow-Definition (ci.yml) + lokaler pytest-Scope belegt. [R1-F1 2026-11-08.]"
+    },
+    {
+      "id": "N7",
+      "thema": "Kein warning/status/timeline-Frame V2 (bewusst; J1-10)."
+    }
+  ],
+  "researcher_session": "ses_e428ed630ffe4GI6EO2dDCXYZf",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Transport-Keepalive (Ping/Intervalle) uvicorn/websockets nicht konfiguriert; Proxy/Idle/halb-offen unbelegbar. Keine Timeout-Werte erfinden."
+    },
+    {
+      "id": "U2",
+      "thema": "Ordnung Event-vor-Ack zwingend, kein dedizierter Socket-Test (J1-07)."
+    },
+    {
+      "id": "U3",
+      "thema": "CI-Lauf/Runner/Ergebnis unbelegt (nur Definition + lokaler Scope); keine Gruen-Aussage. [R1-F1 2026-11-08.]"
+    },
+    {
+      "id": "U4",
+      "thema": "Slot-Freigabe nach 1011/Disconnect bei Netz-Latenz nur Test-Warteschleifen (bis 10 s), keine Zusage."
+    },
+    {
+      "id": "U5",
+      "thema": "activation.completed echter /ws/v2-Socket nur opt-in-Test (externer Checkout), nicht tests/unit."
+    },
+    {
+      "id": "U6",
+      "thema": "Client-Close eigener Code: Schleife bricht ab, finally close(code or 1000); Erhalt unbelegt/ungetestet."
+    }
+  ],
+  "writer_notes": "Beispiele schema-basiert, nie SDK-Aufruf. Zeigen: (a) sessionId aus accepted; (b) commandId frische UUID4; (c) Ack per ID korrelieren, nicht Position; (d) Events vor Ack (J1-07), Snapshot NACH Ack (J1-11); (e) nach 1011/Disconnect NEUE Session + Snapshot (J1-18); (f) Audio still, kein Start; (g) keine Timeout/Backoff-Zahlen (nur 10,0 s Handshake; U1). Diagramm NOT_REQUESTED - Kanten Vorschlag."
+}

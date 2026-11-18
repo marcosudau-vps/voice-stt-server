@@ -1,0 +1,265 @@
+{
+  "branch_note": "Kein Branch-Ref vorhanden: refs/heads und refs/tags leer, HEAD detached auf Commit; 'main' nur Reflog-Eintrag, kein Ref. Kein zweiter Vergleichsstand; Aussagen nur fuer diesen Commit. Pfade relativ zum Checkout.",
+  "chapter": "04.07",
+  "commit_verification": "Verifiziert am Checkout C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src: .git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached). .git/FETCH_HEAD dieselbe SHA (Fetch https://github.com/marcosudau-vps/voice-stt-server). .git/shallow genau diese SHA. Reflog: checkout moving from main to FETCH_HEAD.",
+  "conflicts": [
+    {
+      "id": "CF-01",
+      "thema": "Snapshot liefert immer requestedSettings; Vektor idle_snapshot + Feldpruefung fuehren es nicht. Vektor-Tests nur Teilmengen; additive Erweiterung, nicht vollstaendig frozen."
+    },
+    {
+      "id": "CF-02",
+      "thema": "Kommentar 'nach event gap' beschreibt Client-Absicht, keine Serverfunktion; Server erkennt/kommuniziert keine Luecken. Kein Diagramm-Schritt 'Luecke erkannt'."
+    },
+    {
+      "id": "CF-03",
+      "thema": "closeRequested aus phase==closing_input abgeleitet, nicht aus Close-Kontext (closeReason/ByCommandId/ByAction nicht im Snapshot). Kein 'Close angefordert' hineinlesen."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "D1: Client -> GET /ws/v2 ; akzeptiert Transport, keine Session [Y1-10, Y1-12]",
+    "D2: Client -> Server: hello (erstes Textframe) [Y1-10, Y1-11]",
+    "D3: Server -> Client: hello.accepted mit Snapshot ohne inneres type + logAccess [Y1-10, Y1-11]",
+    "D4: Server -> Client: session.snapshot nur auf Anforderung, nie spontan [Y1-10]",
+    "D5: build_snapshot -> ActivationController.snapshot() fuer input/trigger [Y1-02, Y1-03, Y1-07]",
+    "D6: build_snapshot -> SegmentLedger.snapshot() fuer pendingActivations (nur inputClosed, sortiert) [Y1-02, Y1-04]",
+    "D7: build_snapshot -> SettingsPort.settings_projection() atomar (revision+requested+effective) [Y1-02, Y1-08]",
+    "D8: build_snapshot -> WakeWordPort.capabilities() [Y1-02]",
+    "D9: Controller-Deadline (monoton) -> deadlineAtUnixMs/remainingMs (ein Zeitpunkt) [Y1-06]",
+    "D10: Client -> Server: session.snapshot.request (Huellae: 2, eigene sessionId, commandId) [Y1-12]",
+    "D11: Server -> Client: command.ack(applied) VOR Snapshot [Y1-13]",
+    "D12: Snapshot-Bau unter _event_dispatch_lock; linearisiert Patch und Mint/Send [Y1-09]",
+    "D13: Funnel -> project -> mint_event -> seq/Version -> Outbound [Y1-17, Y1-21, Y1-22]",
+    "D14: sichtbare Aenderung ohne Event -> advance_state [Y1-19]",
+    "D15: logischer Schluessel -> identisches Envelope bei Retry [Y1-20]",
+    "D16: Terminal pro Segment -> spaeteres interim verworfen, keine Luecke [Y1-23]",
+    "D17: erster (segmentId,seq,activationId) autoritativ; Widerspruch gezaehlt [Y1-24]",
+    "D18: wiederholte Anforderung -> Memo-Ack + frischer Snapshot (Read) [Y1-14, Y1-15]"
+  ],
+  "facts": [
+    {
+      "aussage": "session.snapshot einzige vollstaendige Zustandsnachricht V2. Nur build_snapshot erzeugt; Felder: type, protocolVersion, serverVersion, serverCommit, sessionId, stateVersion, lastEventSeq, settingsRevision, input, pendingActivations, trigger, audioAvailable, requestedSettings, effectiveSettings, wakeWordCapabilities.",
+      "beleg": "snapshot.py:36-79; tests contract:975-986 (ohne requestedSettings); vectors:132-177",
+      "evidenz": "stark (Code+Test+Vektor); Abweichung requestedSettings siehe CF-01",
+      "gueltigkeit": "V2 /ws/v2, eine Session; nicht V1.",
+      "id": "Y1-01"
+    },
+    {
+      "aussage": "Snapshot reine Projektion ohne Zustand/Cache/Persistenz. Jeder Block aus zustaendiger Autoritaet: input/trigger Controller, pendingActivations Ledger, audioAvailable Session-Flag, settings Revision/requested/effective einatomar, wakeWordCapabilities Wake-Port; Version/seq ProtocolSessionState.",
+      "beleg": "snapshot.py:1-28, 53-78; ports.py:36-81, 84-117",
+      "evidenz": "stark (Code, Docstring=Implementierung)",
+      "gueltigkeit": "build_snapshot zustandslos.",
+      "id": "Y1-02"
+    },
+    {
+      "aussage": "input nur fuenf Phasen (idle, waiting_first_speech, segment_active, followup_wait, closing_input); unbekannt -> idle. idle: activationId/primarySource/deadline/remaining null, closeRequested false. Sonst IDs aus Controller, closeRequested = phase==closing_input (Phasenableitung).",
+      "beleg": "snapshot.py:92-123; schema.py:83-102; tests contract:243-260",
+      "evidenz": "stark (Code+Test)",
+      "gueltigkeit": "nur V2; closeReason/ByCommandId nicht im Snapshot.",
+      "id": "Y1-03"
+    },
+    {
+      "aussage": "pendingActivations nur Ledger mit inputClosed==true. Offene Foreground in input, nicht dort. Eintrag: activationId, activationSequence, inputClosedReason, processingState (state oder draining), acceptedSegmentCount, terminalSegmentCount; sortiert aufsteigend.",
+      "beleg": "snapshot.py:142-165; segment_ledger.py:428-460",
+      "evidenz": "stark (Code+Test)",
+      "gueltigkeit": "pro Snapshot; Anzahl unbegrenzt (UN-03).",
+      "id": "Y1-04"
+    },
+    {
+      "aussage": "Offene Foreground nicht in pendingActivations, auch bei drainenden parallel. Test: drei Records (zwei geschlossen, eine offen) -> pending [1,2], input.phase segment_active. idle-Foreground mit drainenden darstellbar (kein globaler Zeiger).",
+      "beleg": "snapshot.py:142-148; tests contract:953-973",
+      "evidenz": "stark Testfall; idle-Variante nur Kommentar",
+      "gueltigkeit": "Snapshot-Konsistenz, nicht Ledger.",
+      "id": "Y1-05"
+    },
+    {
+      "aussage": "Deadline: monotone Domain-Deadline nur hier in Wire-Werte: remainingMs=round(max(0,deadline-monotonic)*1000); deadlineAtUnixMs=round(wall*1000)+remainingMs, ein Messzeitpunkt. None -> (None,None). Keine neue Timer-Autoritaet.",
+      "beleg": "snapshot.py:22-28, 126-139",
+      "evidenz": "stark (Code)",
+      "gueltigkeit": "nur Anzeige; Autoritaet monoton Controller.",
+      "id": "Y1-06"
+    },
+    {
+      "aussage": "trigger drei Sektionen configured/suppressed/effective, je manual/wakeWord bool. Ohne Controller alle sechs false.",
+      "beleg": "snapshot.py:168-184; activation.py:403-439",
+      "evidenz": "stark (Code); Felder Vektor:153-166",
+      "gueltigkeit": "V2-Snapshot.",
+      "id": "Y1-07"
+    },
+    {
+      "aussage": "settingsRevision/requested/effective aus EINEM atomaren Buendel (settings_projection -> for_wire), keine gemischten Revisionen. requested/effective duerfen differieren: laufende Aktivierung latcht effektives Fenster (Test requested 8000/effective 3000).",
+      "beleg": "snapshot.py:53-58, 68, 75-76; ports.py:67-73; server.py:3302-3327; tests settings:1202-1225",
+      "evidenz": "stark (Code+Test)",
+      "gueltigkeit": "pro Session; nicht Server-Revision.",
+      "id": "Y1-08"
+    },
+    {
+      "aussage": "Snapshot unter _event_dispatch_lock. Derselbe Lock linearisiert Settings-Patch (Mutation+Spiegel+changed) und Event-Mint/Send. Kein Snapshot mitten in Transaktion/Block.",
+      "beleg": "connection.py:83-86, 505-521, 681-686, 781-797",
+      "evidenz": "stark (Code); Race-Test Invarianten, nicht Lock",
+      "gueltigkeit": "beide Sendewege (Y1-10).",
+      "id": "Y1-09"
+    },
+    {
+      "aussage": "Snapshot an genau zwei Stellen: (1) eingebettet hello.accepted bei Admission, (2) direkt auf session.snapshot.request. Kein periodischer/ereignisgetriebener/automatischer Snapshot.",
+      "beleg": "connection.py:307-343, 584-592; Volltextsuche SESSION_SNAPSHOT/_snapshot_payload nur diese",
+      "evidenz": "stark (Code, Trefferliste)",
+      "gueltigkeit": "V2; nicht V1.",
+      "id": "Y1-10"
+    },
+    {
+      "aussage": "Eingebettet hello.accepted derselbe Payload ohne inneres type (embedded_snapshot entfernt nur type). logAccess daneben in hello.accepted, kein Snapshot-Feld, nicht autoritativ; nicht in spaeteren Snapshots.",
+      "beleg": "snapshot.py:82-89; connection.py:330-343; tests e2e:269-295",
+      "evidenz": "stark (Code+Test)",
+      "gueltigkeit": "nur hello.accepted; spaetere mit type.",
+      "id": "Y1-11"
+    },
+    {
+      "aussage": "snapshot.request regulaeres Command geschlossenes Set, strikte Huelle: 2, eigene kanonische sessionId, kanonische commandId. Typ-Validator akzeptiert alles (None), keine Pflichtfelder/Pruefung; Zusatzfelder erlaubt, aendern Replay-Key. Ohne brauchbare ID still verworfen (kein Ack/Snapshot); falsche Version/fremde Session nur Ack.",
+      "beleg": "schema.py:44-57; commands.py:90-138, 193-194; connection.py:347-369",
+      "evidenz": "stark (Code)",
+      "gueltigkeit": "jede Anforderung nach accepted hello.",
+      "id": "Y1-12"
+    },
+    {
+      "aussage": "Reihenfolge gueltig: erst ack applied (aktuelle Version/Revision), dann session.snapshot. Nie Snapshot vor Ack.",
+      "beleg": "connection.py:584-592, 594-616, 620-652",
+      "evidenz": "stark (Code); Helfer e2e:204-211",
+      "gueltigkeit": "nicht-Replay/-Konflikt; siehe Y1-15/16.",
+      "id": "Y1-13"
+    },
+    {
+      "aussage": "Snapshot Read ohne Mutation: Version/Revision steigen nicht, kein seq/Event.",
+      "beleg": "connection.py:584-592 (Kommentar Read, not mutation); tests settings:1253-1264 (drei Snapshots identisch)",
+      "evidenz": "stark (Code+Test)",
+      "gueltigkeit": "auch verschiedene commandIds.",
+      "id": "Y1-14"
+    },
+    {
+      "aussage": "Wiederholung gleiche ID/Payload: Memo-Original-Ack (alte Versionen) + trotzdem frischer Snapshot. Replay verhindert nur Zweitwirkung, nicht Lieferung.",
+      "beleg": "connection.py:584-592, 594-616, 427-433, 654-661",
+      "evidenz": "stark (Code)",
+      "gueltigkeit": "pro Verbindung/Session.",
+      "id": "Y1-15"
+    },
+    {
+      "aussage": "Gleiche ID abweichender Payload Snapshot-Request: command_id_conflict (false) + dennoch Snapshot (Versand ausserhalb Cache-Pfad).",
+      "beleg": "connection.py:584-592, 594-616 (CONFLICT), 605-608",
+      "evidenz": "mittel (Code, kein Test)",
+      "gueltigkeit": "nur v2-Cache; nicht Domain.",
+      "id": "Y1-16"
+    },
+    {
+      "aussage": "Event-Huelle: type, protocolVersion, sessionId, eventId (UUID), eventSeq, stateVersion, occurredAtUnixMs. seq pro State strikt monoton lueckenlos (ab 0, +1 Mint unter Lock); IDs eindeutig. Viele Events gleiche Version; Version nicht-fallend, nicht seq-gekoppelt.",
+      "beleg": "session.py:29-53, 105-144; tests contract:547-554, 582-611; e2e:1078-1101",
+      "evidenz": "stark (Code+Tests inkl. 8 Threads/160)",
+      "gueltigkeit": "pro Session; neu pro Verbindung.",
+      "id": "Y1-17"
+    },
+    {
+      "aussage": "Version nur sichtbare Aenderungen. NON_STATE (watchdog.warning, activation.trigger_suppressed, transcription.interim): seq ja, Version nein. Version kleiner als lastEventSeq moeglich (Vektor 8 bei 12); kein fester Abstand.",
+      "beleg": "schema.py:189-197; session.py:118-127; tests contract:556-567, 648-683; vectors:141-142",
+      "evidenz": "stark (Code+Test+Vektor)",
+      "gueltigkeit": "Kernregel Client-Reducer; nur drei Ausnahmen.",
+      "id": "Y1-18"
+    },
+    {
+      "aussage": "Sichtbar ohne Event: advance_state() +1. Belegt: Suppression, audioAvailable, closing-Eintritt (Closing-Observer dedup je (Id,Seq)). Token Settings-Transaktion nur erstes changed +1, alle gleiche Revision.",
+      "beleg": "session.py:86-101; connection.py:452-479, 483-503, 544-582, 718-750",
+      "evidenz": "stark (Code); state_version:640-672, settings:205-220",
+      "gueltigkeit": "Wire-Version; nicht Controller.",
+      "id": "Y1-19"
+    },
+    {
+      "aussage": "Event-Identitaet idempotent logische Schluessel: gleicher Key gleiches Envelope (ID/seq/Version), keine Zaehler. Schluessel: (input_closed, activationId), (transcription.terminal, segmentId), (activation.terminal, activationId), (settings.changed, revision, policy). Retry sendet Gleiches erneut.",
+      "beleg": "session.py:51-53, 105-150; events.py:285-304, 459-463; connection.py:567-570; tests contract:569-580, 716-731",
+      "evidenz": "stark (Code+Test)",
+      "gueltigkeit": "nur natuerliche Identitaet; Rest frisch.",
+      "id": "Y1-20"
+    },
+    {
+      "aussage": "Server-Reducer EventProjector: Legacy->18 kanonische Namen, Unmapped verworfen (kein Legacy auf Leitung), drained nach Terminalzustand completed/cancelled/failed. Nummeriert Entschiedenes via ProtocolSessionState.",
+      "beleg": "events.py:1-27, 51-80, 95-162, 453-475; schema.py:146-187; tests contract:637-646, 733-746",
+      "evidenz": "stark (Code+Test)",
+      "gueltigkeit": "eine Funnel-Subscription pro V2-Verbindung.",
+      "id": "Y1-21"
+    },
+    {
+      "aussage": "phase_changed abgeleitet, nicht geliefert: Phase seit letztem Event bewegt + gemapptes kuendigt nicht selbst an -> genau ein phase_changed mit previousPhase/inputPhase/deadline/remaining. Refresh mit Deadline gleichphasig. Katalog nie. started->waiting_first_speech, input_closed->idle.",
+      "beleg": "events.py:17-27, 82-92, 170-207, 321-332",
+      "evidenz": "stark (Code)",
+      "gueltigkeit": "Projektion; Wahrheit Controller.",
+      "id": "Y1-22"
+    },
+    {
+      "aussage": "Spaetes interim nach projiziertem Terminal verworfen: keine ID/seq/Luecke. Zweite quellferne Grenze zusaetzlich Session. lueckenlose Folge belegbar.",
+      "beleg": "events.py:108-110, 123-130, 151-159; tests races:666-746",
+      "evidenz": "stark (Code+Test, Folge lueckenlos)",
+      "gueltigkeit": "je segmentId Connection/Session.",
+      "id": "Y1-23"
+    },
+    {
+      "aussage": "Erste bestaetigte Segmentkorrelation (Id->(seq, activationId)) nie mit spaeterer Vordergrund ersetzt; Widerspruch nur gezaehlt. Nur mit activationId+Sequenz; Vordergrund nie erfunden.",
+      "beleg": "events.py:100-110, 211-281; tests races:535-663",
+      "evidenz": "stark (Code+Test)",
+      "gueltigkeit": "Memo Projektor-Lebensdauer.",
+      "id": "Y1-24"
+    },
+    {
+      "aussage": "Invarianten: seq je Session strikt aufsteigend/eindeutig, IDs eindeutig, Version nicht-fallend; Snapshot lastEventSeq >= letztes Event seq, Version >= dessen Version; voller Finish-Zyklus Version == lastEventSeq+1 (genau eine eventlose sichtbare Aenderung closing-Eintritt); parallel finish+request intern konsistent (Phase gueltig, pending sortiert, idle->Id null).",
+      "beleg": "tests e2e:1078-1114; state_version:640-672; races:470-532",
+      "evidenz": "stark (Tests, Barrier)",
+      "gueltigkeit": "Gleichung nur beschriebener Zyklus, nicht allgemein.",
+      "id": "Y1-25"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "NI-01",
+      "thema": "Keine eventSeq-Lueckenerkennung serverseitig; kein resyncRequired. Luecke nur Client."
+    },
+    {
+      "id": "NI-02",
+      "thema": "Keine Historie/Replay-Puffer: Resync = Vollsnapshot, keine Deltas."
+    },
+    {
+      "id": "NI-03",
+      "thema": "Kein Resume ueber Verbindungen: hello ohne sessionId/lastEventSeq; jede Verbindung neue Session/Zaehler."
+    },
+    {
+      "id": "NI-04",
+      "thema": "Kein automatischer Snapshot nach Aenderungen; nur hello.accepted + Anforderung."
+    },
+    {
+      "id": "NI-05",
+      "thema": "Keine Snapshot-Persistenz: nur In-Memory; kein Speichern/Wiederherstellen."
+    },
+    {
+      "id": "NI-06",
+      "thema": "Kein Resync-Fehler-/Close-Code: Set 4400/4406/4408/4409/1011 ohne Resync-Code."
+    }
+  ],
+  "researcher_session": "ses_e430278e0ffeMgYxtaC0KGOQev",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "UN-01",
+      "thema": "Linearisierung eventlose closing-Erhöhung: advance_state nicht unter Dispatch-Lock, Snapshot haelt ihn; Einzelwerte atomar, Enthaltensein ungetestet."
+    },
+    {
+      "id": "UN-02",
+      "thema": "Startwerte hello.accepted-Snapshot: Zaehler ab 0, kein mint vor Bau; kein Test 0/0."
+    },
+    {
+      "id": "UN-03",
+      "thema": "Keine Limits/Pagination pendingActivations; viele drainende ungetestet."
+    },
+    {
+      "id": "UN-04",
+      "thema": "Client-Semantik conflict auf Snapshot: Server sendet Snapshot, Verwendung Client weder Code noch Test."
+    }
+  ],
+  "writer_notes": "Kapitel V2 only; V1 aussen. Nur belegte Kanten diagram_edges. Sequenz: hello.accepted (ohne type) -> request -> ack VOR snapshot. KEIN 'Luecke erkannt'/verpasste Events (NI-01/02, CF-02); Luecke Clientpflicht. Kein Resume (NI-03; 04.08). Punkte: (a) Version!=seq (Y1-18), eventlos +1 (Y1-19); kein fester Abstand. (b) Read ohne Sprung (Y1-14); Replay Memo+frisch (Y1-15). (c) requested/effective differieren (Y1-08). (d) pending nur geschlossen, offene in input (Y1-04/05). (e) closeRequested Phasenableitung (CF-03). (f) Eingebettet ohne type; logAccess kein Feld (Y1-11). (g) CF-01 Hinweis. Reducer Y1-17..25; Zahlenbeispiele kontextiert (Version==seq+1 nur Finish-Zyklus Y1-25). Diagramme: Resync-Roundtrip (D2/D3/D10/D11/D4) + Projektionskette (D13-17), keine fremden Pfeile."
+}

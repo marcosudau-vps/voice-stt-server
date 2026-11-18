@@ -1,0 +1,252 @@
+{
+  "branch_note": "Registry nennt feat/v2-release-cleanup; aus .git/HEAD nicht ableitbar, daher nicht verifizierbar. Bindend ist nur der Commit a8993c5c68042d996eab680d84a5b138a214bb5d. Notiz nur Vorlage, keine Wünsche; diagram_brief null → NOT_REQUESTED.",
+  "chapter": "06.03",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached, keine ref-Zeile).",
+  "conflicts": [
+    {
+      "id": "CW6-01",
+      "thema": "ps1 ist Quellbaum-/venv-Weg (editable), kein Produkt-Installer; kein CI-Job führt es aus. Kapitel muss Quellbaum/venv sagen."
+    },
+    {
+      "id": "CW6-02",
+      "thema": "Zwei Skripte unterschiedlicher Garantie: ps1 mit CPU-Index+Extras vs requirements-Skript ohne Index/Constraint/Server-Stack. Nur ps1 ist CPU-Index-Weg."
+    },
+    {
+      "id": "CW6-03",
+      "thema": "wakewords-Extra im ps1 vs tflite-Begründung setup.py Z.326-330: Risiko, kein Fehler."
+    },
+    {
+      "id": "CW6-04",
+      "thema": "Kroko-Laufzeitfehlertext verweist Upstream (kroko_onnx_engine.py Z.72-81), überholt gegenüber gepinnter Revision (buildinputs Z.30-36); belegter Weg stt-install-kroko --build."
+    },
+    {
+      "id": "CW6-05",
+      "thema": "ps1 ohne Constraint-Pin vs CI/Qualifier/Image mit PIP_CONSTRAINT; nicht als gepinnt formulieren."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "Host Windows amd64 -> py -3.12 -> .venv\\Scripts\\python.exe [W6-01]",
+    ".venv -> pip install torch --index-url /whl/cpu -> CPU-Torch [W6-02]",
+    "CPU-Torch -> pip install -e [6 Extras] -> Legacy voicestt [W6-02/W6-04]",
+    "ps1 -> Hinweis lokales Kroko-Wheel nachinstallieren [W6-06]",
+    "stt-install-kroko --build -> preflight (git, 3.12 x64, amd64, docker) -> Docker/WSL2 -> cp312-win_amd64 -> pip install [W6-13/W6-14]",
+    "voice-stt-server -> Defaults 0.0.0.0:8010/cpu/int8 -> uvicorn.run [W6-10]",
+    "--config YAML (VOICESTT_CONFIG) -> device != cpu -> SystemExit [W6-12]",
+    "requirements-Pfad -> requirements.txt -> kein Server-Stack -> Hinweis [W6-08/W6-09]",
+    "CI windows-latest 3.12 -> cpu_only install-torch + CONSTRAINT -> check [W6-16/W6-17]"
+  ],
+  "facts": [
+    {
+      "aussage": "Skript legt .venv nur bei Fehlen an, aktiviert sie nicht (direkter Interpreter-Aufruf).",
+      "beleg": "install_windows_cpu.ps1 Z.2-3/5-7/9-11, kein Activate.ps1.",
+      "evidenz": "A",
+      "gueltigkeit": "Windows-Quellbaum-Setup (vgl. K6-19)",
+      "id": "W6-01"
+    },
+    {
+      "aussage": "CPU-Torch aus PyTorch-CPU-Index vor editable Install; Reihenfolge funktional.",
+      "beleg": "ps1 Z.10 torch --index-url https://download.pytorch.org/whl/cpu, dann Z.11 editable; torch in base_requirements setup.py Z.232-242/237; Test Z.119-127 (Index, kein torchaudio).",
+      "evidenz": "A+B",
+      "gueltigkeit": "Windows-CPU-Pfad",
+      "id": "W6-02"
+    },
+    {
+      "aussage": "Skript schreibt keine Constraints, setzt kein PIP_CONSTRAINT (anders CI/Quali/Image).",
+      "beleg": "ps1 Z.1-14 nur Upgrade/Torch/editable; Gegenbeispiele cpu_only.py Z.130-145, ci.yml Z.103-105/176-178, qualify_build_identity.py Z.200-213.",
+      "evidenz": "A",
+      "gueltigkeit": "Skript vs CI/Docker/Quali (vgl. K6-12/K6-13)",
+      "id": "W6-03"
+    },
+    {
+      "aussage": "Editable mit genau sechs Extras; recommended/default/all nicht verwendet.",
+      "beleg": "ps1 Z.11 [faster-whisper,silero-onnx-cpu,wakewords,kroko-builder,server,example-app]; setup.py extras Z.280-317 (244-251/255-258/261-278/282/286/288/294-296/300-301); recommended/default Z.302-307, all Z.308-316 fehlen.",
+      "evidenz": "A",
+      "gueltigkeit": "Windows-Setup (example-app zieht GUI/LLM)",
+      "id": "W6-04"
+    },
+    {
+      "aussage": "Spannung: wakewords-Extra trotz tflite-Nicht-Pflicht-Begründung derselben setup.py.",
+      "beleg": "ps1 Z.11 wakewords; setup.py Z.326-330 tflite kein Wheel auf Zielen; kein Test der Extra-Liste.",
+      "evidenz": "A",
+      "gueltigkeit": "Skript; Restrisiko (CW6-03)",
+      "id": "W6-05"
+    },
+    {
+      "aussage": "Keine Versions-/Bitness-/Arch-/CPU-Prüfung, kein Kroko-Bau; endet mit Hinweistext.",
+      "beleg": "ps1 Z.1-14 ohne Prüfung/Aufruf; Z.13-14 Hinweise; Kontrast install_kroko.py ensure_windows_host Z.1388-1437; nur py -3.12 bei Neuanlage Z.6.",
+      "evidenz": "A",
+      "gueltigkeit": "Skript (vorhandene .venv ungeprüft)",
+      "id": "W6-06"
+    },
+    {
+      "aussage": "Schwache Fehlerbehandlung: Stop ohne LASTEXITCODE/throw.",
+      "beleg": "ps1 Z.1 ErrorActionPreference Stop, kein Check/throw; Gegenbeispiel activate_venv_install_reqs.ps1 Z.78-80/88-90; PS5.1-Semantik (C).",
+      "evidenz": "A/C",
+      "gueltigkeit": "Skript (NW6-04)",
+      "id": "W6-07"
+    },
+    {
+      "aussage": "requirements-Pfad schwächer: verlangt venv, installiert requirements.txt ohne Index/Constraint.",
+      "beleg": "activate_venv_install_reqs.ps1 Kandidaten Z.24-28, Activate-Suche Z.32-40, throw Z.42-54, Aktivierung Z.64-68, pip Z.76/86, Checks Z.78-80/88-90, Versionen Z.99-104; kein Index/Constraint/cpu_only; Header setup_venv.ps1 Z.4-5 abweichend.",
+      "evidenz": "A",
+      "gueltigkeit": "Requirements-Variante (CW6-02)",
+      "id": "W6-08"
+    },
+    {
+      "aussage": "requirements.txt ohne Server-Stack; reiner Requirements-Weg nicht startfähig.",
+      "beleg": "requirements.txt Z.1-17 (torch Z.10 unpinned), kein fastapi/uvicorn/PyYAML/tzdata; Laufzeithinweis server.py Z.8804-8813/10822-10828; Server-Stack api_fastapi_server/requirements.txt Z.1-6.",
+      "evidenz": "A",
+      "gueltigkeit": "Requirements vs Extras (W6-04)",
+      "id": "W6-09"
+    },
+    {
+      "aussage": "Kanonischer Start voice-stt-server/stt-server → main; Defaults 0.0.0.0/8010/cpu/int8; ein uvicorn ohne workers.",
+      "beleg": "setup.py entry_points Z.409-424 (415-418/422); VoiceSTT_server/server.py Z.8-14 Re-Export; parse_args Z.10409/10410/10452/10453; uvicorn.run Z.10830-10835; keine Testabsicherung host/port.",
+      "evidenz": "A",
+      "gueltigkeit": "beide Distributionen (Ref B6-11)",
+      "id": "W6-10"
+    },
+    {
+      "aussage": "--device per argparse cpu-fixiert + App-Bau-Enforcement.",
+      "beleg": "server.py Z.10453 choices cpu; enforce_cpu_model_policy Z.8764-8767 via create_app Z.8843 (nicht settings_from_args Z.10684-10810); Test Z.184-190.",
+      "evidenz": "A+B",
+      "gueltigkeit": "jeder Start (Ref B6-13/K6-15)",
+      "id": "W6-11"
+    },
+    {
+      "aussage": "YAML via --config/VOICESTT_CONFIG; device != cpu → SystemExit (plus weitere Exits).",
+      "beleg": "server.py Z.10394-10401/10333-10391 (fehlend Z.10339-10340, kein PyYAML Z.10343-10346, version Z.10353-10355, unbekannt Z.10373-10374, device Z.10379-10380); Test Z.167-180.",
+      "evidenz": "A+B",
+      "gueltigkeit": "Windows wie Linux (Ref B6-12)",
+      "id": "W6-12"
+    },
+    {
+      "aussage": "Kroko-Builder nur Windows/Linux; Windows exakt 3.12/64-Bit/AMD64 + git + Docker Linux-Engine.",
+      "beleg": "install_kroko.py build_wheel Z.1788-1800 (sonst macOS-Fehler); ensure_windows_host Z.1388-1437 (3.12 Z.1393-1407, maxsize Z.1408-1415, machine Z.1416-1421, docker Z.1422-1426, version Z.1427-1437); preflight Z.378-396 (git Z.383, Windows Z.387-388); Epilog Z.154-161.",
+      "evidenz": "A",
+      "gueltigkeit": "nur --build (Ref B6-27/K6-21-22)",
+      "id": "W6-13"
+    },
+    {
+      "aussage": "Windows-Build via Docker/WSL2 build_windows.bat → cp312-win_amd64 → pip force-reinstall; ohne --build Exit.",
+      "beleg": "install_windows Z.1467-1482 (ensure/checkout Z.1474-1478, find Z.1479, pip Z.1481-1482); find_windows_wheel Z.1440-1464 (cp312-win_amd64 Z.1445-1451); main Z.2172-2173; workdir LOCALAPPDATA Z.314-329, Fallback Z.332-355.",
+      "evidenz": "A",
+      "gueltigkeit": "Windows-Builder",
+      "id": "W6-14"
+    },
+    {
+      "aussage": "Docker nur Builder-Voraussetzung; Betrieb braucht kein Docker.",
+      "beleg": "ps1 Z.1-14 ohne Docker; api_fastapi_server ohne Docker-Bezug; Zwang nur install_kroko.py Z.1422-1437 hinter --build.",
+      "evidenz": "A (negativ)",
+      "gueltigkeit": "Serverstart Windows",
+      "id": "W6-15"
+    },
+    {
+      "aussage": "Windows in CI/Quali abgedeckt (windows-latest/3.12/Wheel-Smoke/Pins/packaging-Tests); ps1 nicht ausgeführt.",
+      "beleg": "ci.yml Z.36-37/44-46/87-97/100-105/110-111/132-144/173-185/190-191; release-candidate.yml Z.246-285; qualify Z.190-224; ps1 nur Textprüfung test_cpu_only_contract Z.124-127.",
+      "evidenz": "B",
+      "gueltigkeit": "Wheel-Pfad, nicht ps1",
+      "id": "W6-16"
+    },
+    {
+      "aussage": "CPU-Vertrag eigenständiges Werkzeug, maschinell prüfbar; ps1 ruft es nicht auf.",
+      "beleg": "cpu_only.py Z.20-21/40/43-52/78-89/92-127/130-162; Aufrufer ci.yml Z.104/111/177/185, qualify Z.210-213; kein ps1-Aufruf; Test Z.45-101.",
+      "evidenz": "A+B",
+      "gueltigkeit": "CI/Quali/Dev (Ref K6-12/K6-14)",
+      "id": "W6-17"
+    },
+    {
+      "aussage": "Kein Service-Installer/Self-Update/Autostart.",
+      "beleg": "Grep nssm/New-Service/win32service/sc/pywin32/auto-update/schtasks/Task Scheduler/Startup/Dienst 0 Treffer; ps1 endet Z.13-14.",
+      "evidenz": "N",
+      "gueltigkeit": "Repo-Stand (vgl. K6-19)",
+      "id": "W6-18"
+    },
+    {
+      "aussage": "Kein Plattform-/Arch-Guard im Start, keine ps1-Versionsprüfung.",
+      "beleg": "main Z.10813-10835 ohne sys.platform/machine; ps1 Z.1-14 ohne Prüfung; nur python_requires setup.py Z.42-43/378-380 (vgl. N6-12/N6-04/N6-05).",
+      "evidenz": "N",
+      "gueltigkeit": "Windows wie Linux",
+      "id": "W6-19"
+    },
+    {
+      "aussage": "Interaktiver pip-Prompt nur Legacy-Einstieg, nicht kanonisch.",
+      "beleg": "install_packages.py Z.5-55 input/pip Z.30-44; nur stt_server.py Z.79/115 hinter stt-server-legacy (setup.py Z.417); server.py Z.8-14 ohne Import.",
+      "evidenz": "A",
+      "gueltigkeit": "Legacy-Abgrenzung",
+      "id": "W6-20"
+    },
+    {
+      "aussage": "Testfreier Zweiteinstieg install_cpu.bat ruft ps1 mit Bypass auf.",
+      "beleg": "install_cpu.bat Z.3 Bypass -File ..\\..\\install_windows_cpu.ps1; kein Test (nur test_project_config.py Z.9 Import); ps1 ohne Policy.",
+      "evidenz": "A/kein Test",
+      "gueltigkeit": "Beispiel-/Dev-Nebenbefund",
+      "id": "W6-21"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "NW6-01",
+      "thema": "Kein Windows-Service/Autostart/Self-Update [W6-18]."
+    },
+    {
+      "id": "NW6-02",
+      "thema": "Keine ps1-Versions-/Archprüfung; vorhandene .venv ungeprüft [W6-06]."
+    },
+    {
+      "id": "NW6-03",
+      "thema": "Keine ps1-CPU-Verifikation (kein check) [W6-17]."
+    },
+    {
+      "id": "NW6-04",
+      "thema": "Keine ps1-Failure-Propagation (kein LASTEXITCODE/throw) [W6-07]."
+    },
+    {
+      "id": "NW6-05",
+      "thema": "Kein Plattform-/Arch-Guard Laufzeit [W6-19]."
+    },
+    {
+      "id": "NW6-06",
+      "thema": "Kein Modell-Download als Installationsschritt."
+    },
+    {
+      "id": "NW6-07",
+      "thema": "Keine Firewall/Adminrechte/Dienstkonto-Thematik im Code."
+    },
+    {
+      "id": "NW6-08",
+      "thema": "Kein stt-install-kroko im ps1; Kroko manueller Folgeschritt (Z.14)."
+    }
+  ],
+  "researcher_session": "ses_e3e5313d1ffe9R1bF6XPlyJWgl",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "UW6-01",
+      "thema": "py.exe mit 3.12 vorausgesetzt, ungeprüft (ps1 Z.6)."
+    },
+    {
+      "id": "UW6-02",
+      "thema": "Requirements-Variante CPU-Torch-Ergebnis unbelegt (kein Index/Constraint/Check)."
+    },
+    {
+      "id": "UW6-03",
+      "thema": "wakewords-Installierbarkeit auf win/3.12 wegen tflite unentschieden (setup.py Z.326-330)."
+    },
+    {
+      "id": "UW6-04",
+      "thema": "PyAudio 0.2.14 cp312-win_amd64-Verfügbarkeit unbelegt."
+    },
+    {
+      "id": "UW6-05",
+      "thema": "PS7 vs 5.1-Wirkung undefiniert."
+    },
+    {
+      "id": "UW6-06",
+      "thema": "Modell-/Kroko-Größen Windows nicht Scope (B6-26)."
+    }
+  ],
+  "writer_notes": "Reihenfolge venv→CPU-Torch→editable→Kroko→Start (Torch vor editable begründet); ps1 als Quellbaum/venv nicht Installer, kein gepinnt; zwei Skripte trennen (requirements nicht servervollständig); Kroko nur --build mit 4 Voraussetzungen, Laufzeittext nicht zitieren; Start ohne erfundene Flags; Lücken NW6-01..08; kein Diagramm."
+}

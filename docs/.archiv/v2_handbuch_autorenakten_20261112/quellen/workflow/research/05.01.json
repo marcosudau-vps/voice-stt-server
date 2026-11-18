@@ -1,0 +1,242 @@
+{
+  "branch_note": "Task-Registry-Branch feat/v2-release-cleanup im Klon NICHT als Ref verifizierbar: kein .git/refs/heads, keine packed-refs. Belegt ausschliesslich Commit a8993c5c68042d996eab680d84a5b138a214bb5d.",
+  "chapter": "05.01",
+  "commit_verification": "Checkout C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src. .git/HEAD Zeile 1 exakt a8993c5c68042d996eab680d84a5b138a214bb5d (Detached HEAD). .git/logs/HEAD: checkout moving from main to FETCH_HEAD. .git/FETCH_HEAD: derselbe SHA, Herkunft https://github.com/marcosudau-vps/voice-stt-server. Shallow (.git/shallow), kein refs/heads, keine packed-refs, config ohne Remote.",
+  "conflicts": [
+    {
+      "id": "C-1",
+      "thema": "Bewusste Asymmetrie: HTTP-Logzugriff Loopback-ohne-Key implizit Admin, WS-Log nicht. Nicht verallgemeinern."
+    },
+    {
+      "id": "C-2",
+      "thema": "Inkonsistent: Admin compare_digest, OpenAI == auf Bearer-String."
+    },
+    {
+      "id": "C-3",
+      "thema": "GET /api/config adminAuthRequired=false bei 403 Remote-Admin: kein Key heisst nicht offen."
+    },
+    {
+      "id": "C-4",
+      "thema": "Log-Token 24 h ueberlebt Session-Ende; Bindung = Scope, nicht Lebensdauer."
+    },
+    {
+      "id": "C-5",
+      "thema": "Statuscodes: Admin 401 (Key gesetzt)/403 (kein Key remote); Log immer 401."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "V1-02: [Client] -->|Admin-Header| [AdminGate]; [Client] -->|Bearer| [OpenAIGate]; [Client] -->|accessToken| [LogGate]; [Betreiber] -->|expliziter Check| [KrokoLicenseGate]",
+    "V1-04: [x-voicestt-admin-key] --Vorrang--> [Authorization: Bearer] --Vorrang--> [x-admin-key] --> AdminGate",
+    "V1-04: [AdminGate] --compare_digest ok--> [21 Admin-Routen]",
+    "V1-04: [AdminGate] --Schluessel falsch/fehlt bei konfiguriertem Key--> [401 + WWW-Authenticate]",
+    "V1-05: [AdminGate] --kein Key und Loopback--> [21 Admin-Routen]",
+    "V1-05: [AdminGate] --kein Key und Remote--> [403]",
+    "V1-06: [PATCH /api/config] --> [update_settings] --> [runtime.json]; [PATCH /api/v2/settings/server] --> [settingsControlOverlay]",
+    "V1-07: [Client ohne Token] --> [/], [/health], [/api/config GET], [/api/metrics], [/ws/transcribe], [/ws/v2]",
+    "V1-08: [Client] -->|Bearer == configured| [OpenAIGate] --> [/v1/models, /v1/audio/transcriptions]",
+    "V1-08: [OpenAIGate] --ungueltig--> [401 invalid_api_key] --> [Audit authentication.failed]",
+    "V1-10: [Session-Client] <--issue 64-hex/24h-- [LogTokenAuthority]",
+    "V1-11: [HTTP-Logrequest] --> [LogGate.http_scope] --> {admin | session | None->401}",
+    "V1-12: [/ws/logs accept] --> [erste Nachricht subscribe] --> [LogGate.websocket_scope] --None--> [close 1008]",
+    "V1-13: [Nicht-Admin-Scope] --> [audit|performance|transcription]; [Admin-Scope] --> [alle Kanaele inkl. system]",
+    "V1-14: [hello / hello.ack] --> [logAccess.accessToken]; [log_live_enabled=false oder Store fehlt] --> [kein accessToken]",
+    "V1-15: [Session-Ende] -.keine Invalidierung.-> [LogTokenAuthority]",
+    "V1-17: [Admin-Route /api/kroko/license/refresh] --> [KrokoLicenseGate] --explizit und Key und ohne force--> [Lizenzserver]",
+    "NICHT ZEICHNEN: [Kroko-Lizenz] --> [Endpoint-Auth]; [Log-Token] --> [Admin-Rechte]; [Loopback] --> [Admin beim WebSocket-Log]; [OpenAI-Key] --> [/ws/transcribe]; [Client] --> [TLS/CORS] (nicht implementiert)"
+  ],
+  "facts": [
+    {
+      "aussage": "Metafakt Quellenbindung: geprueft genau Commit a8993c5c68042d996eab680d84a5b138a214bb5d. Kein Branch-Ref; Checkout von main auf FETCH_HEAD. Aussagen gelten fuer diesen Commit, nicht Branch-Stand.",
+      "beleg": ".git/HEAD Z. 1; .git/logs/HEAD Z. 1; .git/FETCH_HEAD Z. 1; .git/shallow; kein refs/heads, keine packed-refs, config ohne [remote].",
+      "evidenz": "A",
+      "gueltigkeit": "gesamtes Kapitel 05.01",
+      "id": "V1-01"
+    },
+    {
+      "aussage": "Vier getrennte, nicht austauschbare Autoritaeten in Fassade SecurityService: (1) AdminGate HTTP-Admin, (2) OpenAIGate OpenAI-Bearer, (3) LogTokenAuthority/LogGate sessiongebundene Log-Tokens, (4) KrokoLicenseGate externe Produktlizenz. Docstring verbietet Gleichsetzung. Fassade einmal pro VoiceSTTService mit Settings-Referenz.",
+      "beleg": "security/service.py Z. 1-19 (Docstring 1-5, Attribute 15-19), Z. 21-36; server.py Z. 6249.",
+      "evidenz": "A",
+      "gueltigkeit": "Vertrauensgrenzen insgesamt.",
+      "id": "V1-02"
+    },
+    {
+      "aussage": "Admin-Key pro Anfrage aus settings.admin_api_key oder leer ENV VOICESTT_ADMIN_API_KEY (configured_key()). Umgebung je Pruefung neu; Rotation ohne Neustart solange kein Settings-Wert. CLI --admin-api-key Default os.getenv(...), --openai-api-key Default None.",
+      "beleg": "security/admin.py Z. 15-16; server.py Z. 10520-10521, Z. 10767-10768; tests security_modularization Z. 57-63.",
+      "evidenz": "A",
+      "gueltigkeit": "Admin-HTTP-Auth; Startkonfiguration.",
+      "id": "V1-03"
+    },
+    {
+      "aussage": "AdminGate drei Traeger Prioritaet: x-voicestt-admin-key > Authorization: Bearer > x-admin-key. Falscher erster gewinnt gegen gueltigen Bearer -> 401. Vergleich secrets.compare_digest; 401 mit WWW-Authenticate: Bearer, ohne Key im Body. Admin-Fehler kein Audit (anders als OpenAI).",
+      "beleg": "security/admin.py Z. 18-22 (compare_digest 22), Z. 24-39; tests security_modularization Z. 34-48.",
+      "evidenz": "A",
+      "gueltigkeit": "alle 21 admin-Routen.",
+      "id": "V1-04"
+    },
+    {
+      "aussage": "Ohne konfigurierten Key Loopback-Vertrauenszone: client.host in {127.0.0.1, ::1, localhost, testclient} -> Admin ohne Key; sonst 403 Remote-Verwaltung deaktiviert bis VOICESTT_ADMIN_API_KEY. Nur request.client.host; keine X-Forwarded-For/Proxy-Auswertung im Paket; testclient Testartefakt im Produktions-Frozenset.",
+      "beleg": "security/admin.py Z. 8, Z. 24-46; tests security_modularization Z. 50-54; Volltextsuche x-forwarded|Forwarded|proxy_headers|trusted_host ohne Treffer.",
+      "evidenz": "A",
+      "gueltigkeit": "Admin-HTTP ohne Key; Deployment-Grenze 05.02.",
+      "id": "V1-05"
+    },
+    {
+      "aussage": "Genau 21 HTTP-Routen rufen admin_auth_error als erste Aktion: PATCH /api/config; GET /api/models; GET /api/models/management; POST /api/models/refresh; POST /api/kroko/license/refresh; GET+PUT /api/models/lifecycle; POST /api/models/load|unload; GET+PUT /api/models/active; GET+PUT /api/language; GET+PUT /api/wake-word; PATCH /api/v2/settings/server; POST /api/v2/wake-words/refresh; GET+PUT /api/logging; POST /api/config/validate|reload. Lesende Verwaltungsrouten ebenfalls geschuetzt.",
+      "beleg": "server.py Z. 8921-8925, 8943-8947, 8959-8963, 8966-8970, 8979-8987, 9029-9034, 9036-9040, 9074-9078, 9084-9088, 9094-9098, 9101-9105, 9115-9119, 9122-9126, 9138-9142, 9159-9163, 9244-9248, 9303-9309, 9320-9324, 9383-9387, 9849-9853, 9870-9874.",
+      "evidenz": "A",
+      "gueltigkeit": "HTTP-Administration.",
+      "id": "V1-06"
+    },
+    {
+      "aussage": "Ohne Key oeffentlich: GET / (index.html), /health, /api/config, /api/metrics, /api/v2/info, /api/v2/settings/schema (secretsExposed False), /api/v2/settings/server (nur non-secrets), /api/v2/wake-words, WS /ws/transcribe + /ws/v2. GET /api/config public_dict (host, port, Pfade, Limits, openai_api_enabled) + adminAuthRequired. Log-Routen token-geschuetzt.",
+      "beleg": "server.py Z. 8874-8880, 8881-8883, 8885-8905, 8907-8916, 8939-8941, 9223-9233, 9235-9242, 9294-9301, 9539-9558, 9560-9602, 9912, 10121-10137.",
+      "evidenz": "A",
+      "gueltigkeit": "unauthentifizierte Oberflaeche.",
+      "id": "V1-07"
+    },
+    {
+      "aussage": "OpenAIGate optional: ohne settings.openai_api_key und ohne ENV offen, kein Audit. Mit Key nur exakt 'Bearer <configured>' (keine Toleranz/Alt-Header). Sonst 401 code invalid_api_key + WWW-Authenticate + Audit authentication.failed (transport http, normalisierte clientId, Pfad, invalid_api_key). Deaktiviert (openai_api_enabled=false) -> 404 vor Auth.",
+      "beleg": "security/openai.py Z. 14-35; openai_routes.py Z. 43-47, Z. 93-104; tests security_modularization Z. 66-94.",
+      "evidenz": "A",
+      "gueltigkeit": "/v1/models und /v1/audio/transcriptions.",
+      "id": "V1-08"
+    },
+    {
+      "aussage": "Schluesselvergleiche unterschiedlich: Admin secrets.compare_digest, OpenAI == auf 'Bearer <key>' (nicht konstante Zeit). Nur Authorization fuer OpenAI, kein x-api-key.",
+      "beleg": "security/openai.py Z. 21; security/admin.py Z. 22; tests security_modularization Z. 78-81.",
+      "evidenz": "A",
+      "gueltigkeit": "Vergleich; Hinweis Timing.",
+      "id": "V1-09"
+    },
+    {
+      "aussage": "LogToken fluechtig 64 Hex (uuid4+uuid4), 24*60*60 s, nur Prozess-Dict unter RLock, keine Persistenz. validate Ablauf + optionale Session-Bindung (abweichend None), Sweep beim Ausstellen + ab 1024 beim Validieren. Ablauf loescht.",
+      "beleg": "security/logs.py Z. 9, 11-13, 16-38, 40-59; tests security_modularization Z. 97-106.",
+      "evidenz": "A",
+      "gueltigkeit": "Log-Token-Lebenszyklus.",
+      "id": "V1-10"
+    },
+    {
+      "aussage": "HTTP-Logscope: konfigurierter Admin-Key (Header/Bearer) -> admin true + angefragte Session. Ohne Key Loopback -> implizit Admin. Sonst Token (x-voicestt-log-token/Bearer) -> admin false + gebundene Session. Fehlend/ungueltig None -> 401 Logzugriff nicht autorisiert (nicht 403).",
+      "beleg": "security/logs.py Z. 67-81; server.py Z. 9453-9472; tests security_modularization Z. 109-130.",
+      "evidenz": "A",
+      "gueltigkeit": "GET /api/logs/* drei Routen.",
+      "id": "V1-11"
+    },
+    {
+      "aussage": "WS-Logscope bewusst anders: KEIN Loopback-Admin ohne Key. Nur Token exakt Admin-Key (admin true + angefragte Session) oder sessiongebundenes Token mit passender Session (admin false). Endpoint accept zuerst, erste Nachricht subscribe, scope None -> log.error not_authorized + close 1008.",
+      "beleg": "security/logs.py Z. 83-93; server.py Z. 9560-9602; tests security_modularization Z. 119-130; multi_user Z. 1444-1451.",
+      "evidenz": "A",
+      "gueltigkeit": "/ws/logs; Asymmetrie HTTP.",
+      "id": "V1-12"
+    },
+    {
+      "aussage": "Nicht-Admin auf audit/performance/transcription verengt. Fremde/unbekannte verworfen; nichts uebrig -> __not_authorized__ (kein Fehler): HTTP 200 leere data, WS hello/subscribed count 0. Admin behaelt inkl. system, allSessions true ohne Session-Filter.",
+      "beleg": "server.py Z. 9478-9486, 9527-9536, 9605-9616, 9663-9664; tests multi_user Z. 2326-2360.",
+      "evidenz": "A",
+      "gueltigkeit": "Kanalfilter/Datenabgrenzung.",
+      "id": "V1-13"
+    },
+    {
+      "aussage": "Token nur wenn live UND Store verfuegbar; sonst logAccess available false + code log_live_disabled|event_store_unavailable, kein Token. Im v1-hello und v2-hello.ack; V2 aus spaeteren Resync-Snapshots ausgeschlossen.",
+      "beleg": "server.py Z. 7772-7806 (7819-7806), Z. 10001-10013; connection.py Z. 331-342.",
+      "evidenz": "A",
+      "gueltigkeit": "Token-Auslieferung v1+v2.",
+      "id": "V1-14"
+    },
+    {
+      "aussage": "Kein Widerruf/Invalidierung: weder Endpoint noch bei Session-Ende (remove_session/disconnect ohne Token). Gueltig bis Ablauf (24 h) oder Sweep; Bindung = Scope, nicht Lebensdauer.",
+      "beleg": "security/logs.py Z. 16-59 (nur issue/validate); server.py Z. 10111-10113; Suche revoke/invalidate ohne Treffer.",
+      "evidenz": "B (Negativ Codeinspektion).",
+      "gueltigkeit": "Log-Token nach Ende.",
+      "id": "V1-15"
+    },
+    {
+      "aussage": "Secrets: public_dict entfernt Keys/resolved Modelle/Engine-Options + redact drop True. YAML lehnt admin/openai Key mit SystemExit ab (nur Env). Persistenz/Reload nimmt admin/openai/data_root_path aus (+ runtime_config_path/device/host/port). Schema secretsExposed false; server_public nur Metadaten redacted true (aktuell keine secret=True).",
+      "beleg": "server.py Z. 545-553, 7959-7969, 8827-8839, 9223-9233, 10301-10370; credential_redaction Z. 10-79; settings_control Z. 646-648, 1407-1437; Tests openai_compatible 371-379, protocol_v2_settings 744-766, protocol 169.",
+      "evidenz": "A",
+      "gueltigkeit": "Redaktion/Persistenz/Quellen.",
+      "id": "V1-16"
+    },
+    {
+      "aussage": "KrokoLicenseGate KEINE Endpoint-Auth, keine fremde Modell-ID/Loader-Freigabe. Konstruktion/Entscheidung ohne Netz; Netzwerk nur explizit Check mit effektivem Key ohne force_community. Andere model_uuid -> CHECK_FAILED/scope_mismatch; veraltete Generation stale -> keine alte Freigabe. Timeout 5,0 s, kein Retry; Admin-Route begrenzt (0,60], to_thread.",
+      "beleg": "security/kroko.py Z. 1-17, 27, 41-69, 73-136, 202-239; server.py Z. 8979-9000; tests security_modularization Z. 133-163.",
+      "evidenz": "A",
+      "gueltigkeit": "Kroko-Lizenz/Pro; keine Auth.",
+      "id": "V1-17"
+    },
+    {
+      "aussage": "Transport/Deployment nicht im Code abgesichert: host 0.0.0.0, port 8010; uvicorn ohne ssl_*; keine CORS/TrustedHost/HTTPS-Redirect/Cookie-Session/CSRF/Origin-WS-Pruefung. Verschluesselung/Origin/Exposition ausserhalb Repos.",
+      "beleg": "server.py Z. 405-406, 8815-8870 (kein add_middleware), 10830-10835; Suche add_middleware|CORSMiddleware|TrustedHost|HTTPSRedirect|cookie|csrf|Origin ohne Treffer (ausser unrelated).",
+      "evidenz": "A",
+      "gueltigkeit": "Netz/Transport; Uebergang 05.02.",
+      "id": "V1-18"
+    },
+    {
+      "aussage": "UI unauthentifiziert: GET / liest static/index.html je Anfrage als HTMLResponse; kein StaticFiles-Mount. Admin-Key-Feld vorhanden (nur Seiten-Arbeitsspeicher), Browser-Client-ID in localStorage; Log via accessToken, Session-Log via hello/hello.ack-Token. [Nur aus server.py + Feld-Existenz belegt; kein HTML-Verhalten als Vertrag.]",
+      "beleg": "server.py Z. 139-140, Z. 8881-8883.",
+      "evidenz": "B (Code; HTML-Details NICHT als Fakt).",
+      "gueltigkeit": "Web-UI als Admin-/Log-Client.",
+      "id": "V1-19"
+    },
+    {
+      "aussage": "Registry 19 Definitionen: 16 scope session/auth session (Timings/Tuning/Suppression), 3 scope server/auth admin (inferenceBackend, globalDisabled, forceCommunity). auth=admin nur Metadaten Schema; Durchsetzung nur HTTP-Admin-Gate PATCH /api/v2/settings/server. Lesen (Schema/Server) oeffentlich; Schreiben admin. Overlay weist secret-Keys mit secret_not_allowed ab.",
+      "beleg": "settings_control.py Z. 38-43, 196-198, 278-609, 1205-1216, 1300-1315; server.py Z. 9223-9248; tests protocol_v2_settings Z. 759-766.",
+      "evidenz": "A",
+      "gueltigkeit": "Settings-Domaene.",
+      "id": "V1-20"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-1",
+      "thema": "TLS/HTTPS im Server: uvicorn ohne ssl_*; nicht im Repo."
+    },
+    {
+      "id": "N-2",
+      "thema": "CORS/TrustedHost/HTTPS-Redirect/Origin-WS-Pruefung fehlen."
+    },
+    {
+      "id": "N-3",
+      "thema": "Rate-Limit/Fehlversuch/Lockout Admin-/OpenAI-Keys nicht implementiert."
+    },
+    {
+      "id": "N-4",
+      "thema": "Widerruf/Invalidierung Log-Tokens (kein Revoke, keine Ende-Bindung)."
+    },
+    {
+      "id": "N-5",
+      "thema": "Transport-Auth /ws/transcribe und /ws/v2: keine Pruefung vor Admission."
+    },
+    {
+      "id": "N-6",
+      "thema": "Persistenz admin/openai Keys bewusst nicht (nur Settings/Env, nie Datei)."
+    }
+  ],
+  "researcher_session": "ses_e427b2db1ffe95oPCmC63bqP4W",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-1",
+      "thema": "Reverse Proxy: nur client.host geprueft; Proxy macht alle zu 127.0.0.1 -> implizites Loopback-Admin; Proxy ausserhalb Repos."
+    },
+    {
+      "id": "U-2",
+      "thema": "TLS/CORS/Segmentierung Deployment nicht im Code belegbar."
+    },
+    {
+      "id": "U-3",
+      "thema": "Admin-Key gesetzt? Deploymentspezifisch; Defaults leer."
+    },
+    {
+      "id": "U-4",
+      "thema": "Cross-Site-WebSocket ohne Origin-Pruefung nicht getestet; nur Abwesenheit belegt."
+    },
+    {
+      "id": "U-5",
+      "thema": "Token-Map Last: Sweep 1024, keine harte Grenze/Lasttest."
+    }
+  ],
+  "writer_notes": "Kern: Vier getrennte Mechanismen, keine gemeinsame Auth-Schicht. (1) Admin-HTTP: drei Header Prioritaet, compare_digest, 401/403, ohne Key nur Loopback. (2) OpenAI: optional, nur Authorization, 401 invalid_api_key, Audit. (3) Logs: 64-Hex/24h/fluechtig, HTTP mit Loopback-Admin, WS ohne; Kanaele audit/performance/transcription, Unbekannte still verworfen (200/leer). (4) Kroko: Lizenz, keine Endpoint-Auth. Wichtig: WS-Audio NICHT authentifiziert; Admin-Key schuetzt keine Transkription. Keine Aussagen TLS/CORS/Rate-Limit/Lockout als vorhanden - nur N. 'Kurzlebig' vermeiden: exakt 24 h. Loopback-Admin nur HTTP-Admin/HTTP-Logs, nie /ws/logs. UI-Key nur Seiten-Arbeitsspeicher (server.py; kein HTML-Vertrag). Schema oeffentlich, auth=admin Metadaten. Statuscodes/Header exakt. Diagramm nur belegte Kanten, Loopback-Pfeil nur Admin-Routen + HTTP-Logs."
+}

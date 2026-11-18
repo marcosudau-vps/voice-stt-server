@@ -1,0 +1,384 @@
+{
+  "branch_note": "Branch-V2 nur Orchestrator-Angabe; .git/refs/heads leer (Shallow-Fetch Einzel-Commit). Nur Commit verifiziert.",
+  "chapter": "02.08",
+  "commit_verification": ".git/HEAD = a8993c5c68042d996eab680d84a5b138a214bb5d (detached, keine ref-Zeile); FETCH_HEAD identisch; logs: moving from main to FETCH_HEAD",
+  "correction_round": 0,
+  "diagram_edges": [
+    "U-Client/Recorder -->|Q-21,Q-22 job built (created_at, deadline_at)| Submit[submit_inference_job]",
+    "Submit -->|Q-25 admission+lock| SchedulerSubmit[InferenceScheduler.submit]",
+    "SchedulerSubmit -->|Q-01 kind=realtime & separate lane| RTQueue[realtime queue]",
+    "SchedulerSubmit -->|Q-01 sonst| MainQueue[main queue]",
+    "MainQueue -->|Q-07 closed| RejectStopped[reject: gestoppt]",
+    "MainQueue -->|Q-07 final & depth>=8| RejectSession[reject: Sitzung voll]",
+    "MainQueue -->|Q-07 total>=64| RejectGlobal[reject: global voll]",
+    "MainQueue -->|Q-08 realtime slot belegt| Coalesce[replace + drop(coalesced)]",
+    "MainQueue -->|Q-07 sonst| Enqueue[enqueue]",
+    "Enqueue -->|Q-11 notify| RoundRobin[get(): Session-Runde]",
+    "RoundRobin -->|Q-09 final zuerst| FinalJob[final job]",
+    "RoundRobin -->|Q-09 sonst realtime| StaleCheck{deadline < now?}",
+    "StaleCheck -->|Q-10 ja| Stale[drop(stale)]",
+    "StaleCheck -->|Q-10 nein| RTJob[realtime job]",
+    "FinalJob --> Worker[SharedEngineWorker._worker]",
+    "RTJob --> Worker",
+    "Worker -->|Q-17 engine None / exception| ErrResult[InferenceResult(error)]",
+    "Worker -->|Q-17 Erfolg| OkResult[InferenceResult(text)]",
+    "ErrResult -->|02.05| ResultCb[result_callback]",
+    "OkResult -->|02.05| ResultCb",
+    "Settings[ServerSettings] -->|Q-03 gleiche Engine+Modell| Shared[use_main_model_for_realtime=true]",
+    "Settings -->|Q-03 Guard ok, ungleiche Modelle| Balanced[use_main_model_for_realtime=false]",
+    "Shared -->|Q-01,Q-02| OneLane[1 Queue main + 1 Worker]",
+    "Balanced -->|Q-01,Q-02| TwoLanes[2 Queues + 2 Worker]",
+    "OneLane -->|Q-04| Serial[Final und Realtime serialisiert]",
+    "TwoLanes -->|Q-04| Parallel[je 1 Thread pro Lane]",
+    "Shared -->|Q-05| InitLock[shared engine_initialization_lock]",
+    "Balanced -->|Q-05| InitLock",
+    "Created -->|Q-15 start()| InitEngine",
+    "InitEngine -->|Q-05 Lock| Created2[Engine erzeugt]",
+    "Created2 -->|Q-16 model_warmup| Warmup",
+    "Warmup -->|Q-15 finally| Ready[ready.set()]",
+    "InitEngine -->|Q-15 Exception| LoadError[load_error + error_callback]",
+    "LoadError -->|Q-15 finally| Ready",
+    "Ready -->|Q-15| Loop[queue.get()]",
+    "Loop -->|Q-17 Job| Run[transcribe]",
+    "Run -->|Q-17| Result[result_callback]",
+    "Result -->|Q-15| Loop",
+    "Loop -->|Q-13 close/get None| Exit",
+    "Loop -->|Q-18 stop(): stop_event+queue.close| Stopping[join 10s]",
+    "Stopping -->|Q-18 Thread tot| CloseEngine[engine.close()]",
+    "Stopping -->|Q-18 Thread lebt| Leak[Engine bleibt offen]",
+    "SessionClose[Session close Q-28] --> Cancel[cancel_scheduler_session]",
+    "ClientClear[client_clear Q-28] --> Cancel",
+    "HttpTimeout[HTTP 600s Q-22] --> Cancel",
+    "Cancel -->|Q-12| DropCancelled[drop(cancelled)]",
+    "Coalesce -->|Q-08| DropCoalesced[drop(coalesced)]",
+    "Stale -->|Q-10| DropStale[drop(stale)]",
+    "DropCancelled -->|Q-26| ApiHolder[HTTP-Holder error]",
+    "DropCoalesced -->|Q-26| ApiHolder",
+    "DropStale -->|Q-26| ApiHolder",
+    "DropCancelled -->|Q-26| SessionCounter[Session-Zaehler + Ledger-Terminal]",
+    "DropCoalesced -->|Q-26| SessionCounter",
+    "DropStale -->|Q-26| SessionCounter",
+    "S_A[Session A] -->|Q-11 1 Slot/Runde| RR[Round-Robin deque]",
+    "S_B[Session B] -->|Q-11 1 Slot/Runde| RR",
+    "S_C[Session C] -->|Q-11 1 Slot/Runde| RR",
+    "RR -->|Q-04 1 Worker/Lane| Inference",
+    "Inference -->|Q-34 Messung p95-Skew| FairnessBound"
+  ],
+  "facts": [
+    {
+      "aussage": "Genau eine Main-Lane + optional separate Realtime-Lane. realtime_queue = main_queue wenn use_main_model_for_realtime sonst eigene Queue realtime; main_worker immer, realtime_worker nur nicht-shared. Beide Worker teilen engine_initialization_lock.",
+      "beleg": "server.py InferenceScheduler.__init__ 2111-2149 (2124-2129,2130-2149,2123,2137,2148)",
+      "evidenz": "B (Code)",
+      "gueltigkeit": "serverweit, pro Scheduler (Neubau bei Wechsel)",
+      "id": "Q-01"
+    },
+    {
+      "aussage": "Modi nur im Snapshot benannt: low-memory-one-model (shared) bzw balanced-main-plus-realtime; bei shared keine realtime-Eintraege. Service mode unloaded ohne Scheduler.",
+      "beleg": "server.py snapshot 2190-2204 (2200-2203); metrics 7691-7695",
+      "evidenz": "B",
+      "gueltigkeit": "pro Scheduler (metrics)",
+      "id": "Q-02"
+    },
+    {
+      "aussage": "Shared erzwungen bei identischer Engine+identischem Modell (use_main True); danach Speicher-Guard (allow_two_medium -> 1|2 Aequivalente). Aufruf u.a. create_app, switch, Settings-Patch/Route. Modell-/Engine-Aenderung ohne explizites Flag setzt Shared zurueck.",
+      "beleg": "enforce_cpu_model_policy 8764-8801 (8777-8781,8784-8801); 8843,8074,9067,9865; Reset 8066-8073",
+      "evidenz": "B",
+      "gueltigkeit": "Start/Wechsel (Modellwechsel 02.07)",
+      "id": "Q-03"
+    },
+    {
+      "aussage": "Genau EIN OS-Thread pro Lane (Thread VoiceSTT-<name>-Inference, daemon); Engine im Thread erzeugt. Bei geteilter Queue nur ein Worker -> Final+Realtime voll serialisiert. Keine Session-Threads hier (01.06/02.01).",
+      "beleg": "SharedEngineWorker.start 1973-1979; _worker erzeugt Engine 2012-2022",
+      "evidenz": "B",
+      "gueltigkeit": "pro Lane",
+      "id": "Q-04"
+    },
+    {
+      "aussage": "Engine-Init prozessweit serialisiert (shared Lock beider Worker); Kommentar: Allocator-Korruption nativer CPU-Engines. Test misst maximum_parallel_initializers==1.",
+      "beleg": "server.py _worker 2014-2022; Scheduler uebergibt einen Lock 2123,2137,2148",
+      "evidenz": "A (Test :170-206 misst 1)",
+      "gueltigkeit": "prozessweit",
+      "id": "Q-05"
+    },
+    {
+      "aussage": "Queue-Zustand pro Session: {final: deque, realtime: Slot|None} (setdefault), _ordered_sessions deque, _queued_session_ids set, _total_queued, Condition.",
+      "beleg": "FairInferenceQueue.__init__ 1756-1769 (1777-1780,1763-1765,1761)",
+      "evidenz": "A (implizit Tests :630-651 + snapshot :1898-1915)",
+      "gueltigkeit": "pro Queue (=Lane), alle Sessions",
+      "id": "Q-06"
+    },
+    {
+      "aussage": "Submit-Reihenfolge: (1) closed -> gestoppt (ohne Zaehler); (2) final: pro-Session-Tiefe >= max_final_queue_depth_per_session -> Sitzung voll; danach global >= max_global_inference_queue_depth -> global voll; sonst append+notify; (3) unbekannter kind; (4) realtime: Slot belegt -> ersetzen+Coalesce-Drop; sonst globaler Check; sonst einreihen. _rejected_jobs ausser closed erhoeht.",
+      "beleg": "submit 1771-1818 (1774-1775,1783-1793,1795-1797,1799-1815)",
+      "evidenz": "A (Annahme/Coalesce :630-651) + B (Strings)",
+      "gueltigkeit": "pro Queue",
+      "id": "Q-07"
+    },
+    {
+      "aussage": "Nur Realtime koalesziert: alter ersetzt, _coalesced_realtime++, QueueSubmitResult(True, coalesced=True). Drop-Callback AUSSERHALB Locks (_notify_drops; Fehler geloggt). _total_queued unveraendert (Slot belegt).",
+      "beleg": "submit 1799-1806,1817,1932-1939",
+      "evidenz": "A (Test [(1,coalesced)] :651)",
+      "gueltigkeit": "pro Session+Queue",
+      "id": "Q-08"
+    },
+    {
+      "aussage": "KEIN priority-Feld (nur recovery_priority CLI-Hilfetext, nicht schedulerwirksam). Ordnung allein: Final-FIFO/Session, Final-vor-Realtime, Round-Robin, Realtime-Coalescing.",
+      "beleg": "InferenceJob 1618-1634 (kein priority); :1836-1838,1828-1861,1799-1806; nur Hilfetext 10450",
+      "evidenz": "A (Round-Robin :653-665 a,b,a; Coalesce :648-650)",
+      "gueltigkeit": "global pro Lane",
+      "id": "Q-09"
+    },
+    {
+      "aussage": "Staleness NUR Realtime, NUR beim Dequeue: deadline_at != None und < now -> total--, stale++ , Drop stale, Session-Cleanup, weiter naechste Session. Final kein Deadline-Feld (Erzeugung setzt nur realtime).",
+      "beleg": "get 1838-1850; Erzeugung 8298-8302",
+      "evidenz": "A (stale a verworfen, b geliefert :667-677)",
+      "gueltigkeit": "pro Realtime-Job",
+      "id": "Q-10"
+    },
+    {
+      "aussage": "Round-Robin: Session-ID pro Runde einmal in deque (wenn nicht queued), pop+discard, Wiederanstellung nur bei Restarbeit, sonst Cleanup. Leerlauf wait(timeout=0.2) -> Dequeue bis 200ms verzoegert. Fairness = Einheit/Runde, nicht zeitbasiert.",
+      "beleg": "_ensure 1917-1920, get 1828-1831, Restarbeit 1857-1860,1922-1926, Cleanup 1928-1930, wait 1867",
+      "evidenz": "A (:653-665) + B",
+      "gueltigkeit": "pro Queue",
+      "id": "Q-11"
+    },
+    {
+      "aussage": "cancel_session leert NUR Wartendes (Deque vollstaendig, Slot leeren, total--, cancelled, notify_all, Callbacks ausserhalb Locks). Laufende Inferenz NICHT unterbrochen (kein Cancel-Handle im Worker).",
+      "beleg": "cancel_session 1876-1891; Worker 2012-2099 ohne Cancel; Aufrufer close/clear/HTTP-Timeout",
+      "evidenz": "B",
+      "gueltigkeit": "pro Session",
+      "id": "Q-12"
+    },
+    {
+      "aussage": "close setzt _closed + notify_all; get bricht ab -> None OHNE verbleibende zu drainen/Drop-Callbacks. Absichtliches Nicht-Drain (Code-Pfad).",
+      "beleg": "close 1893-1896; get 1869-1870",
+      "evidenz": "B",
+      "gueltigkeit": "pro Queue",
+      "id": "Q-13"
+    },
+    {
+      "aussage": "Snapshot: name, queued, sessions, perSession (final-Laenge, realtime 0/1), coalescedRealtime, staleRealtimeDropped, rejectedJobs. Via Scheduler.snapshot -> Service.metrics()[scheduler].",
+      "beleg": "snapshot 1898-1915; Scheduler 2190-2204; metrics 7685-7695",
+      "evidenz": "B",
+      "gueltigkeit": "pro Lane",
+      "id": "Q-14"
+    },
+    {
+      "aussage": "Lifecycle: erzeugen -> Warmup -> ready.set() IM finally (auch bei Fehler); dann Schleife get. wait_ready kann True bei kranker Lane (health separat).",
+      "beleg": "_worker 2012-2035 (ready.set 2029-2030, Fehler 2024-2028)",
+      "evidenz": "B",
+      "gueltigkeit": "pro Lane",
+      "id": "Q-15"
+    },
+    {
+      "aussage": "Warmup optional (nur settings.model_warmup + vorhandene Engine); WAV warmup_audio.wav; Fehler nur Debug-log, geschluckt.",
+      "beleg": "_warmup 2101-2108; Asset 141-146",
+      "evidenz": "B",
+      "gueltigkeit": "pro Worker-Start",
+      "id": "Q-16"
+    },
+    {
+      "aussage": "Kein Lane-Abbruch bei Job-Fehler: engine None -> RuntimeError; Transkriptions-Exception -> failed_jobs++ + error-String + Log; IMMER result_callback mit queue_delay/inference_duration/total_latency/audio_duration(len/rate).",
+      "beleg": "_worker 2042-2099 (2043-2044,2061-2074)",
+      "evidenz": "A (Test :778-801) + B",
+      "gueltigkeit": "pro Job",
+      "id": "Q-17"
+    },
+    {
+      "aussage": "Stop kooperativ 10-s-Join; Engine close NUR wenn Thread tot (is_alive-Check). Haengender Job -> Engine offen (kein Zwang, kein zweiter Versuch).",
+      "beleg": "stop 1981-1996",
+      "evidenz": "B",
+      "gueltigkeit": "pro Lane; NICHT erzwungenes Beenden = N",
+      "id": "Q-18"
+    },
+    {
+      "aussage": "Snapshot: ready, healthy = load_error is None, completed/failedJobs, busyRatio min(1.0,busy/elapsed) + QueueDelay/Inferenz/Total (RunningStats Fenster 256).",
+      "beleg": "snapshot 1998-2010; RunningStats 1580-1615",
+      "evidenz": "B",
+      "gueltigkeit": "pro Lane, kumulativ seit Start",
+      "id": "Q-19"
+    },
+    {
+      "aussage": "Readiness = Konjunktion beider Lanes (gemeinsame Deadline, sequentiell); healthy = Konjunktion load_error. ensure_models_loaded startet Ersatz, prueft wait_ready AND healthy sonst RuntimeError (inkl stop im Fehlerpfad). _ready_worker setzt ready NACH wait_ready + server.ready mit healthy-Flag.",
+      "beleg": "wait_ready 2161-2171; healthy 2173-2178; ensure 7393-7456 (Fehler 7418-7426); _ready_worker 8521-8530; metrics ok 7690",
+      "evidenz": "B",
+      "gueltigkeit": "serverweit",
+      "id": "Q-20"
+    },
+    {
+      "aussage": "Realtime-Deadline = Erzeugung + max_realtime_queue_age_ms/1000 (Default 1500; CLI). Eingefroren bei Erzeugung, nicht neu beim Enqueue.",
+      "beleg": "transcribe_for_recorder 8283-8302; Default 491; CLI 10489",
+      "evidenz": "A (Queue-Test) + B Formel",
+      "gueltigkeit": "pro Realtime-Job",
+      "id": "Q-21"
+    },
+    {
+      "aussage": "HTTP = synthetische Session openai-<id>, kind = lane, deadline None, request_options. Warten wait(timeout=timeout) Default 600.0s. Timeout -> cancel_scheduler_session (nicht echte Session), Holder weg, TimeoutError. Routen ohne timeout-Arg -> Default gilt. Jede HTTP-Anfrage eigener Round-Robin-Slot. Proxy/ASGI >600s unbekannt.",
+      "beleg": "transcribe_openai 8362-8413 (8375,8385-8398,8404-8408); Routen 341-350,469-477",
+      "evidenz": "B",
+      "gueltigkeit": "pro HTTP-Request",
+      "id": "Q-22"
+    },
+    {
+      "aussage": "wait(timeout=0.1)-Schleife auf Holder-Event; Abbruch stop_event/Session-weg/Generation -> leeres TranscriptionResult; danach ERNEUT Generation-Check.",
+      "beleg": "transcribe_for_recorder 8307-8325 (Holder 8280-8281, submit; Ablehnung sofort RuntimeError 8307-8310)",
+      "evidenz": "B",
+      "gueltigkeit": "pro Job/Aufrufer",
+      "id": "Q-23"
+    },
+    {
+      "aussage": "InferenceJob.sequence IMMER 0 (beide Erzeugungen); nur durchgereicht. Queue-Ordnung nutzt Deque/Slots.",
+      "beleg": "Job 1627; gesetzt 8295,8393; durchgereicht 2080",
+      "evidenz": "B",
+      "gueltigkeit": "N (keine Sequenz-Ordnung)",
+      "id": "Q-24"
+    },
+    {
+      "aussage": "Ablehnung erkannt via 'voll' in reason.lower() -> events scheduler.overloaded (warning, +Session/Client/Request/Transkription/Lane/Reason) + performance queue.limit_reached. Austausch stale -> Retry. Zuverlaessigkeit: Heuristik, Implementierungsdetail.",
+      "beleg": "_submit_scheduler_job 7458-7526 (Admission unter Locks 7462-7496; stale-Retry 7491-7498; overloaded 7499-7525)",
+      "evidenz": "B",
+      "gueltigkeit": "serverweit",
+      "id": "Q-25"
+    },
+    {
+      "aussage": "Drops: HTTP-Holder zuerst (error kind transcription was reason + Event), sonst session.on_job_dropped (Zaehler coalesced/stale/cancelled; Final mit Kontext Ledger cancelled|failed scheduler_<reason>), sonst Pending-Recorder-Fehler. Exactly-once (1x failed, 0x cancelled). Ledger-Routing -> 02.05.",
+      "beleg": "_on_scheduler_drop 8613-8627; session 3050-3068 (Zaehler/Terminals); Test :742-776",
+      "evidenz": "A (Test Exactly-once) + B",
+      "gueltigkeit": "pro Job",
+      "id": "Q-26"
+    },
+    {
+      "aussage": "Submit-Ablehnung: accepted -> Zaehler; abgelehnt realtime_rejected / final_rejected (Final+Kontext: Ledger failed scheduler_rejected + Pending-Fehler). Realtime fängt Exception -> None (Realtime skipped; Streaming-Zielwahl). Verworfene Realtime = ausbleibendes Interim, KEIN Client-Fehler.",
+      "beleg": "on_submit_result 3070-3091; realtime.py 285-295,318-334",
+      "evidenz": "B+B+A (Final :742-776)",
+      "gueltigkeit": "pro Session/Job",
+      "id": "Q-27"
+    },
+    {
+      "aussage": "Session-Ende raeumt beide Ebenen: close (generation++, closed, Ledger cancel_all, cancel_scheduler_session, cancel_pending_recorder (error Sitzung abgebrochen), deactivate_speaker, Recorder-Shutdown). Client-Clear analog + deactivate. Genau-1x (Test: beide requestIds cancelled, pending 0).",
+      "beleg": "close 2895-2932; Clear 2984-2996; cancel_pending 8505-8515; Test :803-825",
+      "evidenz": "A (Test) + B",
+      "gueltigkeit": "pro Session",
+      "id": "Q-28"
+    },
+    {
+      "aussage": "Vorgelagerte Backpressure: Recorder-Queue auf Final-Tiefe kuerzen (max(0,int(limit))); je Eintrag mit Kontext Ledger discarded/recorded_audio_queue_trimmed; dropped-/final_rejected-Zaehler; Warnung. Tests: 3->1 dropped 2; Kontext-Treue; Tiefe 0.",
+      "beleg": "_trim_recorded_audio_queue 6087-6130 (6092,6105-6129); Tests :1266-1284,718-740,719",
+      "evidenz": "A (Tests)",
+      "gueltigkeit": "pro Session",
+      "id": "Q-29"
+    },
+    {
+      "aussage": "Limits live aenderbar ohne Neubau: ACTIVE_RUNTIME_SETTINGS enthaelt Tiefen/Alter/Degradation (178-221); setattr aufs SELBE Objekt (Queue 1759, Worker 1954 referenzieren es); wirkt ab naechster Entscheidung. limits_dict veroeffentlicht maxSessions/maxActiveSpeakers/maxAudioQueue/maxRealtimeAge/maxFinalDepth/maxGlobalDepth/realtimeDegradationThreshold.",
+      "beleg": "setattr 7879-7892; limits_dict 7702-7711",
+      "evidenz": "B",
+      "gueltigkeit": "serverweit",
+      "id": "Q-30"
+    },
+    {
+      "aussage": "realtime_degradation_threshold_ms NUR Definition/LIMITS/limits_dict/CLI/Konfig - KEIN Lesezugriff in Queue/Worker/Scheduler/Planung. Degradationsplanung NICHT implementiert; veroeffentlicht, nicht wirksam.",
+      "beleg": "Definition 494; 217,316; 7710; CLI 10756; Repo-volltextsuche Negativbeleg",
+      "evidenz": "B (Negativ)",
+      "gueltigkeit": "—",
+      "id": "Q-31"
+    },
+    {
+      "aussage": "Lane-Fehler -> serverweites worker.failed (error, component lane_engine) + startup_errors.append + publish_all (V1-Broadcast).",
+      "beleg": "_on_scheduler_error 8629-8645",
+      "evidenz": "B",
+      "gueltigkeit": "serverweit",
+      "id": "Q-32"
+    },
+    {
+      "aussage": "Deterministische Tests: Coalesce (630-651), Round-Robin (653-665), Stale-Drop (667-677), Helper 720-733; Klasse importiert FairInferenceQueue (27).",
+      "beleg": "protocol-Tests",
+      "evidenz": "A (CI-laufend)",
+      "gueltigkeit": "pro Queue",
+      "id": "Q-33"
+    },
+    {
+      "aussage": "Real-Engine-Fairness-Test existiert, standardmaessig UEBERSPRUNGEN (skipUnless Gate-Env). Mehrere Sessions parallel Referenz-WAV (759-798), finalCompleted>0 (861), Fairness-Schranke max-min p95 <= max_latency_skew_ms Default 30000 + Env-Override (698,863-864). Limits Test: global max(64,clients*16), final 8, realtime 1500 (719-727). Nur Messung, KEINE Produktionsgarantie.",
+      "beleg": "multi_user_asr_integration 683-864",
+      "evidenz": "C (nicht aktiv in CI)",
+      "gueltigkeit": "Messung existiert, Garantie nicht",
+      "id": "Q-34"
+    },
+    {
+      "aussage": "Test-Double definiert genutzten Scheduler-Umfang (start/stop/wait_ready/healthy/submit/cancel_session/snapshot); AutoScheduler antwortet asynchron. Implementierung bleibt InferenceScheduler.",
+      "beleg": "multi_user 202-231,256-264; Service-Nutzung 7377-7387,2161-2204",
+      "evidenz": "C (Vertragssicht)",
+      "gueltigkeit": "Vertrag",
+      "id": "Q-35"
+    },
+    {
+      "aussage": "CI fuehrt Unit-Suite (tests/unit tests/compatibility) + packaging; KEIN Sonderlauf Integrations-Test.",
+      "beleg": "ci.yml 188,191",
+      "evidenz": "B",
+      "gueltigkeit": "Repo",
+      "id": "Q-36"
+    },
+    {
+      "aussage": "CLI-Parsing Queue-Parameter getestet (--900/2/17, shared, no-warmup -> Felder).",
+      "beleg": "multi_user :327-351",
+      "evidenz": "A",
+      "gueltigkeit": "Startkonfiguration",
+      "id": "Q-37"
+    }
+  ],
+  "investigated_sources": [
+    "server.py (Scheduler-Kern 1618-2271, Submit 7377-7526, Drop/Error 8613-8645, Job-Erzeugung 8251-8423)",
+    "openai_routes.py (HTTP-Submit), realtime.py (Realtime-Fehlerpfad)",
+    "Tests (protocol Queue-Tests, multi_user Drops/Reject/Trim/Test-Double, asr_integration Init/Fairness, protocol CLI-Parsing)",
+    "ci.yml (Testlauf)"
+  ],
+  "not_implemented": [
+    {
+      "id": "N-01",
+      "thema": "Keine numerischen Prioritaeten/Gewichte/Deadline-Sortierung (nur strukturell)"
+    },
+    {
+      "id": "N-02",
+      "thema": "Kein Abbruch laufender Inferenz (kein Cancel-Handle im Worker)"
+    },
+    {
+      "id": "N-03",
+      "thema": "Kein Queue-Drain beim Shutdown (get->None ohne Nachlauf)"
+    },
+    {
+      "id": "N-04",
+      "thema": "Keine Degradationsplanung (threshold nur veroeffentlicht)"
+    },
+    {
+      "id": "N-05",
+      "thema": "Keine Sequenz-/Ordering-Auswertung (sequence immer 0)"
+    },
+    {
+      "id": "N-06",
+      "thema": "Kein erzwungenes Beenden haengender Worker bei stop() (join 10s, kein Kill)"
+    }
+  ],
+  "researcher_session": "ses_e46739e65ffeTOzXSXBXiR4BpU",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-01",
+      "thema": "Ablehnung/Timeout oberhalb 600s-HTTP-Wait (Proxy/ASGI)"
+    },
+    {
+      "id": "U-02",
+      "thema": "Warmup-Fehlschlag vs spaetere Latenz (Fehler geschluckt, keine Messung)"
+    },
+    {
+      "id": "U-03",
+      "thema": "drop_callback-Ausnahme verliert Job? (nur geloggt; Freigabe im Callback)"
+    },
+    {
+      "id": "U-04",
+      "thema": "Branch Commit-Zugehoerigkeit (refs leer, Shallow)"
+    }
+  ],
+  "writer_notes": [
+    "Ein Scheduler, 1-2 Lanes, ein OS-Thread pro Lane mit serialisierter Engine-Init; per-Session-Fairness Round-Robin statt Prioritaeten; Realtime Ein-Slot mit Coalescing + 1.5-s-Staleness; harte Limits 8/Session + 64 global mit Ablehnung + overloaded; Drops -> Ledger-Terminals/HTTP-Fehler; Shutdown kooperativ nicht drainend."
+  ]
+}

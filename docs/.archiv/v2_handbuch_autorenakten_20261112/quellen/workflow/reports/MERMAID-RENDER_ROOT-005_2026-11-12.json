@@ -1,0 +1,752 @@
+{
+  "date": "2026-11-12",
+  "commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "renderer": "mermaid 11 (jsdelivr) + headless Chromium via Playwright, no npm, EALLOWSCRIPTS untouched",
+  "blocks": 106,
+  "ok": 106,
+  "failed": 0,
+  "results": [
+    {
+      "idx": 0,
+      "file": "docs\\v2-handbuch\\01-grundlagen\\01.02-architekturuebersicht.md",
+      "ok": 1,
+      "svg_len": 82057,
+      "err": null
+    },
+    {
+      "idx": 1,
+      "file": "docs\\v2-handbuch\\01-grundlagen\\01.03-komponenten-und-schichten.md",
+      "ok": 1,
+      "svg_len": 89550,
+      "err": null
+    },
+    {
+      "idx": 2,
+      "file": "docs\\v2-handbuch\\01-grundlagen\\01.04-gesamter-datenfluss.md",
+      "ok": 1,
+      "svg_len": 52685,
+      "err": null
+    },
+    {
+      "idx": 3,
+      "file": "docs\\v2-handbuch\\01-grundlagen\\01.04-gesamter-datenfluss.md",
+      "ok": 1,
+      "svg_len": 40150,
+      "err": null
+    },
+    {
+      "idx": 4,
+      "file": "docs\\v2-handbuch\\01-grundlagen\\01.05-betriebs-und-funktionsmodi.md",
+      "ok": 1,
+      "svg_len": 29314,
+      "err": null
+    },
+    {
+      "idx": 5,
+      "file": "docs\\v2-handbuch\\01-grundlagen\\01.05-betriebs-und-funktionsmodi.md",
+      "ok": 1,
+      "svg_len": 21341,
+      "err": null
+    },
+    {
+      "idx": 6,
+      "file": "docs\\v2-handbuch\\01-grundlagen\\01.05-betriebs-und-funktionsmodi.md",
+      "ok": 1,
+      "svg_len": 19245,
+      "err": null
+    },
+    {
+      "idx": 7,
+      "file": "docs\\v2-handbuch\\01-grundlagen\\01.06-serverweite-und-sitzungsbezogene-ressourcen.md",
+      "ok": 1,
+      "svg_len": 55119,
+      "err": null
+    },
+    {
+      "idx": 8,
+      "file": "docs\\v2-handbuch\\01-grundlagen\\01.07-identitaeten.md",
+      "ok": 1,
+      "svg_len": 42896,
+      "err": null
+    },
+    {
+      "idx": 9,
+      "file": "docs\\v2-handbuch\\01-grundlagen\\01.09-architekturdiagramme.md",
+      "ok": 1,
+      "svg_len": 20781,
+      "err": null
+    },
+    {
+      "idx": 10,
+      "file": "docs\\v2-handbuch\\01-grundlagen\\01.09-architekturdiagramme.md",
+      "ok": 1,
+      "svg_len": 37214,
+      "err": null
+    },
+    {
+      "idx": 11,
+      "file": "docs\\v2-handbuch\\01-grundlagen\\01.09-architekturdiagramme.md",
+      "ok": 1,
+      "svg_len": 33990,
+      "err": null
+    },
+    {
+      "idx": 12,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.01-session-management.md",
+      "ok": 1,
+      "svg_len": 42175,
+      "err": null
+    },
+    {
+      "idx": 13,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.01-session-management.md",
+      "ok": 1,
+      "svg_len": 33529,
+      "err": null
+    },
+    {
+      "idx": 14,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.01-session-management.md",
+      "ok": 1,
+      "svg_len": 30568,
+      "err": null
+    },
+    {
+      "idx": 15,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.02-audioverarbeitung.md",
+      "ok": 1,
+      "svg_len": 56428,
+      "err": null
+    },
+    {
+      "idx": 16,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.02-audioverarbeitung.md",
+      "ok": 1,
+      "svg_len": 17049,
+      "err": null
+    },
+    {
+      "idx": 17,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.02-audioverarbeitung.md",
+      "ok": 1,
+      "svg_len": 17196,
+      "err": null
+    },
+    {
+      "idx": 18,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.03-activation.md",
+      "ok": 1,
+      "svg_len": 56490,
+      "err": null
+    },
+    {
+      "idx": 19,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.03-activation.md",
+      "ok": 1,
+      "svg_len": 43018,
+      "err": null
+    },
+    {
+      "idx": 20,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.04-wake-word.md",
+      "ok": 1,
+      "svg_len": 41916,
+      "err": null
+    },
+    {
+      "idx": 21,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.04-wake-word.md",
+      "ok": 1,
+      "svg_len": 22141,
+      "err": null
+    },
+    {
+      "idx": 22,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.04-wake-word.md",
+      "ok": 1,
+      "svg_len": 16326,
+      "err": null
+    },
+    {
+      "idx": 23,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.05-transcription.md",
+      "ok": 1,
+      "svg_len": 317023,
+      "err": null
+    },
+    {
+      "idx": 24,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.05-transcription.md",
+      "ok": 1,
+      "svg_len": 80385,
+      "err": null
+    },
+    {
+      "idx": 25,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.05-transcription.md",
+      "ok": 1,
+      "svg_len": 38114,
+      "err": null
+    },
+    {
+      "idx": 26,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.06-engines.md",
+      "ok": 1,
+      "svg_len": 45228,
+      "err": null
+    },
+    {
+      "idx": 27,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.06-engines.md",
+      "ok": 1,
+      "svg_len": 35977,
+      "err": null
+    },
+    {
+      "idx": 28,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.07-modelle-und-modellverwaltung.md",
+      "ok": 1,
+      "svg_len": 16826,
+      "err": null
+    },
+    {
+      "idx": 29,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.07-modelle-und-modellverwaltung.md",
+      "ok": 1,
+      "svg_len": 40947,
+      "err": null
+    },
+    {
+      "idx": 30,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.07-modelle-und-modellverwaltung.md",
+      "ok": 1,
+      "svg_len": 31630,
+      "err": null
+    },
+    {
+      "idx": 31,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.07-modelle-und-modellverwaltung.md",
+      "ok": 1,
+      "svg_len": 30158,
+      "err": null
+    },
+    {
+      "idx": 32,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.08-scheduler-und-nebenlaeufigkeit.md",
+      "ok": 1,
+      "svg_len": 160731,
+      "err": null
+    },
+    {
+      "idx": 33,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.08-scheduler-und-nebenlaeufigkeit.md",
+      "ok": 1,
+      "svg_len": 76229,
+      "err": null
+    },
+    {
+      "idx": 34,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.08-scheduler-und-nebenlaeufigkeit.md",
+      "ok": 1,
+      "svg_len": 162461,
+      "err": null
+    },
+    {
+      "idx": 35,
+      "file": "docs\\v2-handbuch\\02-funktionsweise\\02.08-scheduler-und-nebenlaeufigkeit.md",
+      "ok": 1,
+      "svg_len": 30424,
+      "err": null
+    },
+    {
+      "idx": 36,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.01-konfigurationsarchitektur.md",
+      "ok": 1,
+      "svg_len": 31198,
+      "err": null
+    },
+    {
+      "idx": 37,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.01-konfigurationsarchitektur.md",
+      "ok": 1,
+      "svg_len": 36001,
+      "err": null
+    },
+    {
+      "idx": 38,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.01-konfigurationsarchitektur.md",
+      "ok": 1,
+      "svg_len": 16493,
+      "err": null
+    },
+    {
+      "idx": 39,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.02-scopes.md",
+      "ok": 1,
+      "svg_len": 29226,
+      "err": null
+    },
+    {
+      "idx": 40,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.02-scopes.md",
+      "ok": 1,
+      "svg_len": 21337,
+      "err": null
+    },
+    {
+      "idx": 41,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.03-benennungskonventionen.md",
+      "ok": 1,
+      "svg_len": 53987,
+      "err": null
+    },
+    {
+      "idx": 42,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.03-benennungskonventionen.md",
+      "ok": 1,
+      "svg_len": 18333,
+      "err": null
+    },
+    {
+      "idx": 43,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.04-datentypen-und-validierung.md",
+      "ok": 1,
+      "svg_len": 35371,
+      "err": null
+    },
+    {
+      "idx": 44,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.04-datentypen-und-validierung.md",
+      "ok": 1,
+      "svg_len": 22487,
+      "err": null
+    },
+    {
+      "idx": 45,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.04-datentypen-und-validierung.md",
+      "ok": 1,
+      "svg_len": 42216,
+      "err": null
+    },
+    {
+      "idx": 46,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.04-datentypen-und-validierung.md",
+      "ok": 1,
+      "svg_len": 23724,
+      "err": null
+    },
+    {
+      "idx": 47,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.05-quellen-und-prioritaeten.md",
+      "ok": 1,
+      "svg_len": 27124,
+      "err": null
+    },
+    {
+      "idx": 48,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.05-quellen-und-prioritaeten.md",
+      "ok": 1,
+      "svg_len": 15261,
+      "err": null
+    },
+    {
+      "idx": 49,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.06-server-einstellungen.md",
+      "ok": 1,
+      "svg_len": 28530,
+      "err": null
+    },
+    {
+      "idx": 50,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.06-server-einstellungen.md",
+      "ok": 1,
+      "svg_len": 19924,
+      "err": null
+    },
+    {
+      "idx": 51,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.06-server-einstellungen.md",
+      "ok": 1,
+      "svg_len": 27574,
+      "err": null
+    },
+    {
+      "idx": 52,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.07-session-einstellungen.md",
+      "ok": 1,
+      "svg_len": 23639,
+      "err": null
+    },
+    {
+      "idx": 53,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.07-session-einstellungen.md",
+      "ok": 1,
+      "svg_len": 23490,
+      "err": null
+    },
+    {
+      "idx": 54,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.07-session-einstellungen.md",
+      "ok": 1,
+      "svg_len": 19860,
+      "err": null
+    },
+    {
+      "idx": 55,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.08-runtime-aenderungen.md",
+      "ok": 1,
+      "svg_len": 40928,
+      "err": null
+    },
+    {
+      "idx": 56,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.08-runtime-aenderungen.md",
+      "ok": 1,
+      "svg_len": 42033,
+      "err": null
+    },
+    {
+      "idx": 57,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.08-runtime-aenderungen.md",
+      "ok": 1,
+      "svg_len": 28967,
+      "err": null
+    },
+    {
+      "idx": 58,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.09-wirksamkeitszeitpunkt.md",
+      "ok": 1,
+      "svg_len": 29428,
+      "err": null
+    },
+    {
+      "idx": 59,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.09-wirksamkeitszeitpunkt.md",
+      "ok": 1,
+      "svg_len": 19518,
+      "err": null
+    },
+    {
+      "idx": 60,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.09-wirksamkeitszeitpunkt.md",
+      "ok": 1,
+      "svg_len": 29694,
+      "err": null
+    },
+    {
+      "idx": 61,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.10-persistenz.md",
+      "ok": 1,
+      "svg_len": 35777,
+      "err": null
+    },
+    {
+      "idx": 62,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.10-persistenz.md",
+      "ok": 1,
+      "svg_len": 23419,
+      "err": null
+    },
+    {
+      "idx": 63,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.11-secrets.md",
+      "ok": 1,
+      "svg_len": 28288,
+      "err": null
+    },
+    {
+      "idx": 64,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.11-secrets.md",
+      "ok": 1,
+      "svg_len": 29750,
+      "err": null
+    },
+    {
+      "idx": 65,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.11-secrets.md",
+      "ok": 1,
+      "svg_len": 15539,
+      "err": null
+    },
+    {
+      "idx": 66,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.11-secrets.md",
+      "ok": 1,
+      "svg_len": 21235,
+      "err": null
+    },
+    {
+      "idx": 67,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.12-abhaengigkeiten.md",
+      "ok": 1,
+      "svg_len": 29586,
+      "err": null
+    },
+    {
+      "idx": 68,
+      "file": "docs\\v2-handbuch\\03-konfiguration\\03.12-abhaengigkeiten.md",
+      "ok": 1,
+      "svg_len": 36722,
+      "err": null
+    },
+    {
+      "idx": 69,
+      "file": "docs\\v2-handbuch\\04-schnittstellen\\04.01-schnittstellenuebersicht.md",
+      "ok": 1,
+      "svg_len": 45625,
+      "err": null
+    },
+    {
+      "idx": 70,
+      "file": "docs\\v2-handbuch\\04-schnittstellen\\04.02-http-grundlagen.md",
+      "ok": 1,
+      "svg_len": 38230,
+      "err": null
+    },
+    {
+      "idx": 71,
+      "file": "docs\\v2-handbuch\\04-schnittstellen\\04.03-websocket-v2.md",
+      "ok": 1,
+      "svg_len": 41445,
+      "err": null
+    },
+    {
+      "idx": 72,
+      "file": "docs\\v2-handbuch\\04-schnittstellen\\04.04-commands-acknowledgements.md",
+      "ok": 1,
+      "svg_len": 46413,
+      "err": null
+    },
+    {
+      "idx": 73,
+      "file": "docs\\v2-handbuch\\04-schnittstellen\\04.05-audiotransport.md",
+      "ok": 1,
+      "svg_len": 53706,
+      "err": null
+    },
+    {
+      "idx": 74,
+      "file": "docs\\v2-handbuch\\04-schnittstellen\\04.06-eventtransport.md",
+      "ok": 1,
+      "svg_len": 35404,
+      "err": null
+    },
+    {
+      "idx": 75,
+      "file": "docs\\v2-handbuch\\04-schnittstellen\\04.07-snapshot-synchronisierung.md",
+      "ok": 1,
+      "svg_len": 26341,
+      "err": null
+    },
+    {
+      "idx": 76,
+      "file": "docs\\v2-handbuch\\04-schnittstellen\\04.07-snapshot-synchronisierung.md",
+      "ok": 1,
+      "svg_len": 24387,
+      "err": null
+    },
+    {
+      "idx": 77,
+      "file": "docs\\v2-handbuch\\04-schnittstellen\\04.08-reconnect.md",
+      "ok": 1,
+      "svg_len": 28641,
+      "err": null
+    },
+    {
+      "idx": 78,
+      "file": "docs\\v2-handbuch\\04-schnittstellen\\04.08-reconnect.md",
+      "ok": 1,
+      "svg_len": 36348,
+      "err": null
+    },
+    {
+      "idx": 79,
+      "file": "docs\\v2-handbuch\\04-schnittstellen\\04.08-reconnect.md",
+      "ok": 1,
+      "svg_len": 17549,
+      "err": null
+    },
+    {
+      "idx": 80,
+      "file": "docs\\v2-handbuch\\04-schnittstellen\\04.09-client-zustandsmodell.md",
+      "ok": 1,
+      "svg_len": 26659,
+      "err": null
+    },
+    {
+      "idx": 81,
+      "file": "docs\\v2-handbuch\\04-schnittstellen\\04.10-openai-kompatible-api.md",
+      "ok": 1,
+      "svg_len": 39939,
+      "err": null
+    },
+    {
+      "idx": 82,
+      "file": "docs\\v2-handbuch\\04-schnittstellen\\04.10-openai-kompatible-api.md",
+      "ok": 1,
+      "svg_len": 26064,
+      "err": null
+    },
+    {
+      "idx": 83,
+      "file": "docs\\v2-handbuch\\04-schnittstellen\\04.11-logzugriff.md",
+      "ok": 1,
+      "svg_len": 26245,
+      "err": null
+    },
+    {
+      "idx": 84,
+      "file": "docs\\v2-handbuch\\04-schnittstellen\\04.11-logzugriff.md",
+      "ok": 1,
+      "svg_len": 45097,
+      "err": null
+    },
+    {
+      "idx": 85,
+      "file": "docs\\v2-handbuch\\04-schnittstellen\\04.12-legacy-v1.md",
+      "ok": 1,
+      "svg_len": 30685,
+      "err": null
+    },
+    {
+      "idx": 86,
+      "file": "docs\\v2-handbuch\\04-schnittstellen\\04.13-integrationsbeispiele.md",
+      "ok": 1,
+      "svg_len": 46428,
+      "err": null
+    },
+    {
+      "idx": 87,
+      "file": "docs\\v2-handbuch\\05-administration\\05.01-sicherheitsarchitektur.md",
+      "ok": 1,
+      "svg_len": 51598,
+      "err": null
+    },
+    {
+      "idx": 88,
+      "file": "docs\\v2-handbuch\\05-administration\\05.01-sicherheitsarchitektur.md",
+      "ok": 1,
+      "svg_len": 29864,
+      "err": null
+    },
+    {
+      "idx": 89,
+      "file": "docs\\v2-handbuch\\05-administration\\05.03-admin-authentifizierung.md",
+      "ok": 1,
+      "svg_len": 35112,
+      "err": null
+    },
+    {
+      "idx": 90,
+      "file": "docs\\v2-handbuch\\05-administration\\05.05-log-authentifizierung.md",
+      "ok": 1,
+      "svg_len": 29406,
+      "err": null
+    },
+    {
+      "idx": 91,
+      "file": "docs\\v2-handbuch\\05-administration\\05.07-kroko-lizenzierung.md",
+      "ok": 1,
+      "svg_len": 28086,
+      "err": null
+    },
+    {
+      "idx": 92,
+      "file": "docs\\v2-handbuch\\05-administration\\05.07-kroko-lizenzierung.md",
+      "ok": 1,
+      "svg_len": 23745,
+      "err": null
+    },
+    {
+      "idx": 93,
+      "file": "docs\\v2-handbuch\\05-administration\\05.08-native-guard.md",
+      "ok": 1,
+      "svg_len": 23549,
+      "err": null
+    },
+    {
+      "idx": 94,
+      "file": "docs\\v2-handbuch\\05-administration\\05.08-native-guard.md",
+      "ok": 1,
+      "svg_len": 16076,
+      "err": null
+    },
+    {
+      "idx": 95,
+      "file": "docs\\v2-handbuch\\06-betrieb\\06.05-docker-betrieb.md",
+      "ok": 1,
+      "svg_len": 30272,
+      "err": null
+    },
+    {
+      "idx": 96,
+      "file": "docs\\v2-handbuch\\06-betrieb\\06.07-serverstart-stopp.md",
+      "ok": 1,
+      "svg_len": 63370,
+      "err": null
+    },
+    {
+      "idx": 97,
+      "file": "docs\\v2-handbuch\\06-betrieb\\06.10-monitoring-und-metriken.md",
+      "ok": 1,
+      "svg_len": 53014,
+      "err": null
+    },
+    {
+      "idx": 98,
+      "file": "docs\\v2-handbuch\\07-entwicklung\\07.08-native-kroko-build.md",
+      "ok": 1,
+      "svg_len": 44056,
+      "err": null
+    },
+    {
+      "idx": 99,
+      "file": "docs\\v2-handbuch\\07-entwicklung\\07.10-release-candidate.md",
+      "ok": 1,
+      "svg_len": 44707,
+      "err": null
+    },
+    {
+      "idx": 100,
+      "file": "docs\\v2-handbuch\\07-entwicklung\\07.11-veroeffentlichung.md",
+      "ok": 1,
+      "svg_len": 23161,
+      "err": null
+    },
+    {
+      "idx": 101,
+      "file": "docs\\v2-handbuch\\08-referenzen\\08.05-zustands-phasenkatalog.md",
+      "ok": 1,
+      "svg_len": 32640,
+      "err": null
+    },
+    {
+      "idx": 102,
+      "file": "docs\\v2-handbuch\\08-referenzen\\08.06-timing-katalog.md",
+      "ok": 1,
+      "svg_len": 48268,
+      "err": null
+    },
+    {
+      "idx": 103,
+      "file": "docs\\v2-handbuch\\09-anhaenge\\09.03-v1-v2-unterschiede.md",
+      "ok": 1,
+      "svg_len": 31642,
+      "err": null
+    },
+    {
+      "idx": 104,
+      "file": "docs\\v2-handbuch\\09-anhaenge\\09.04-client-migration.md",
+      "ok": 1,
+      "svg_len": 32904,
+      "err": null
+    },
+    {
+      "idx": 105,
+      "file": "docs\\v2-handbuch\\09-anhaenge\\09.06-beispielszenarien.md",
+      "ok": 1,
+      "svg_len": 35787,
+      "err": null
+    }
+  ]
+}

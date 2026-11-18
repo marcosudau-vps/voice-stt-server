@@ -1,0 +1,256 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD, kein Ref). Nur Commit a8993c5c68042d996eab680d84a5b138a214bb5d bindend.",
+  "chapter": "07.02",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (kein ref:).",
+  "conflicts": [
+    {
+      "id": "C7-01",
+      "thema": "Registry-Scope (11 Dirs) nennt release_tooling + .github nicht; beide strukturbestimmend."
+    },
+    {
+      "id": "C7-02",
+      "thema": "Drei ähnliche Namen, klare Rollen: VoiceSTT_server (Fassade/CLI) vs voice_stt_server (öffentliches Importpaket) vs api_fastapi_server (Implementierung)."
+    },
+    {
+      "id": "C7-03",
+      "thema": "docker/ nur Stub (docker/vps/voice/README → build/vps); reale Deploy-Artefakte in engineering/deployment/** + build/vps/**."
+    },
+    {
+      "id": "C7-04",
+      "thema": "Root-__init__.py (44 Zeilen, relative Imports) dupliziert VoiceSTT-Exporte, ohne Packaging-Rolle (Stray-Artefakt)."
+    },
+    {
+      "id": "C7-05",
+      "thema": "Checkout-__pycache__/.pyc = Artefakt-Rauschen, kein Architekturteil (Wheel verbietet es)."
+    }
+  ],
+  "correction_round": 2,
+  "diagram_edges": [
+    "root -> 13 Top-Level-Dirs",
+    "setup.py:packages -> 4 Pakete",
+    "console_script -> VoiceSTT_server.server:main -> api_fastapi_server.server:main",
+    "tools/<stem> <-> engineering/tools/<stem>",
+    "release_tooling.<m> == engineering.release.<m>",
+    "release.py -> engineering.release.cli:main",
+    "build/vps -> exec -> engineering/deployment/vps",
+    "pytest.ini/ci.yml -> tests/{unit,compatibility,packaging}"
+  ],
+  "facts": [
+    {
+      "aussage": "13 Top-Level-Verzeichnisse (nicht 10/11): api_fastapi_server, VoiceSTT, VoiceSTT_server, voice_stt_server, tests, engineering, tools, build, docker, docs, examples, release_tooling, .github. Root 37 Einträge.",
+      "beleg": "Root-Listing.",
+      "evidenz": "A",
+      "gueltigkeit": "Commit (C7-01)",
+      "id": "R7-01"
+    },
+    {
+      "aussage": "Root-Dateien: setup.py/pyproject/MANIFEST/pytest.ini/requirements(+dev)/VERSION/config/Dockerfile/compose/dockerignore/gitattributes/gitignore/LICENSE/README/RELEASE_NOTES/release.py/build_identity/wakeword_resources/ps1-Skripte/AGENTS + Root-__init__.py. Kein setup.cfg/tox/nox/Makefile/Root-conftest. 11 Root-Einträge per Test gepinnt.",
+      "beleg": "Root-Listing; Tests Z.106-121.",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "R7-02"
+    },
+    {
+      "aussage": "Genau 4 Pakete via find_packages-Include (VoiceSTT+VoiceSTT_server+api_fastapi_server+voice_stt_server, je mit .*). engineering/tools/release_tooling/tests/examples/docs bewusst draußen (+prune). Kein find_namespace_packages.",
+      "beleg": "setup.py Z.359-373; MANIFEST Z.29-30; Tests Z.67/75.",
+      "evidenz": "A",
+      "gueltigkeit": "Wheel (sdist-tests U)",
+      "id": "R7-03"
+    },
+    {
+      "aussage": "14 Marker: Root, VoiceSTT(+core/kroko/engines), VoiceSTT_server, voice_stt_server, api_fastapi_server(+security/protocol_v2), tests, tests/unit, release_tooling, engineering/release. Ohne (bewusst): engineering*, tools, examples/*, tests/{packaging,compatibility,contracts}. Folge: engineering/tools = Namespace (PEP-420), release/release_tooling = regulär.",
+      "beleg": "Glob **/__init__.py; Tests Z.140-143/156-163.",
+      "evidenz": "A",
+      "gueltigkeit": "Commit (N7-01/02)",
+      "id": "R7-04"
+    },
+    {
+      "aussage": "VoiceSTT (12 Einträge): 7 Top-Module (inkl. _build_identity/_version/audio/install_kroko) + core (28 + __init__) + kroko (9: artifacts/buildinputs/catalog/credentials/fingerprint/license_api/license_state/models/native_guard) + transcription_engines (__init__+5) + assets (wav/kroko/build_inputs/wakeword_models). Nur 2 *_engine*.py (Test+Wheel-Assert).",
+      "beleg": "Listings; Tests Z.146-148/56-64.",
+      "evidenz": "A",
+      "gueltigkeit": "Struktur (Funktion → 02.x/04.x)",
+      "id": "R7-05"
+    },
+    {
+      "aussage": "voice_stt_server = 2 Dateien: Re-Export-Fassade (__all__/get_version/lazy __getattr__/__dir__) + _embedded (Manifest-Name/Pfad/kroko). Lazy ohne torch/PyAudio; Version via resolve_version. CI nutzt import+get_version.",
+      "beleg": "voice_stt_server/__init__.py Z.1-53; _embedded.py Z.1-40; ci.yml Z.120-129.",
+      "evidenz": "A",
+      "gueltigkeit": "öffentliche Import-Oberfläche",
+      "id": "R7-06"
+    },
+    {
+      "aussage": "VoiceSTT_server = CLI-/Legacy-Paket (12 Einträge, __init__ leer); server.py re-exportiert Settings/create_app/main/parse_args/settings_from_args aus api_fastapi_server (Docstring benennt Implementierung). C7-02: Fassade, nicht Implementierung.",
+      "beleg": "VoiceSTT_server/server.py Z.1-26; Tests Z.123-139.",
+      "evidenz": "A",
+      "gueltigkeit": "Entry-Points (Funktion → 02.x)",
+      "id": "R7-07"
+    },
+    {
+      "aussage": "api_fastapi_server (17 Einträge): Module (server/activation*/kroko_runtime/openai_routes/protocol/segment_ledger/settings_control/wake_admission/README/requirements/run_multi_user_perf) + protocol_v2 (9) + security (5) + static. Symbole: ServerSettings Z.404, create_app Z.8816, parse_args Z.10394, settings_from_args Z.10684, main Z.10813.",
+      "beleg": "Listing + Symbol-Grep.",
+      "evidenz": "A",
+      "gueltigkeit": "Struktur/Positionen (Routen → 05.x/06.x)",
+      "id": "R7-08"
+    },
+    {
+      "aussage": "engineering = 4 Achsen: release (Paket, __init__ + 14 Module) + tools (12 .py + 1 ps1, kein __init__) + deployment/docker (nginx/Dockerfile.pro-upgrade) + deployment/vps (5 Dateien + build-area) + drafts/transcription_engines (5 Drafts, markerfrei).",
+      "beleg": "Listings; Tests Z.170-184/33-39/156-163.",
+      "evidenz": "A",
+      "gueltigkeit": "Layout (Deploy → 10.x; N7-02/03)",
+      "id": "R7-09"
+    },
+    {
+      "aussage": "tools/ = 12 Shims 1:1 zu engineering/tools (Docstring+exakter Import+sys.modules-Selbstersetzung, <30 Zeilen, bidirektional getestet). ps1 ohne Shim. Historische Pfade laufen (Test).",
+      "beleg": "tools/compose.py Z.1-21; Tests Z.186-229.",
+      "evidenz": "A",
+      "gueltigkeit": "Entry-Points",
+      "id": "R7-10"
+    },
+    {
+      "aussage": "release_tooling/ = nur __init__.py (39 Zeilen): _SUBMODULES 14 Namen; importiert engineering.release.* + identisches Objekt (assertIs-Test). Nicht distribuiert.",
+      "beleg": "release_tooling/__init__.py Z.9-39; Tests Z.213-217; Glob.",
+      "evidenz": "A",
+      "gueltigkeit": "Kompatibilität",
+      "id": "R7-11"
+    },
+    {
+      "aussage": "Root-release.py = dünne Fassade auf engineering.release.cli:main (SystemExit(main)); kein zweiter Pfad. Beide Release-Workflows rufen python release.py auf.",
+      "beleg": "release.py Z.1-34; Tests Z.73-104; Workflows.",
+      "evidenz": "A",
+      "gueltigkeit": "Release-Oberfläche (Ablauf → 10.x)",
+      "id": "R7-12"
+    },
+    {
+      "aussage": "tests/ (31 Einträge): tests/__init__ (nur hier+unit); unit 102 (3 Dirs, 6 Nicht-Test-Module inkl. conftest, 93 test_*.py); packaging 2 ohne Marker; compatibility 1 ohne Marker; contracts nur Daten (vectors.json); Wurzel 25 manuelle Skripte (nicht test_*). Sammlung: testpaths=tests/unit; CI explizit unit+compat/packaging. Wurzelskripte nie automatisch gesammelt.",
+      "beleg": "Listings; pytest.ini Z.1-4; ci.yml Z.188/191.",
+      "evidenz": "A",
+      "gueltigkeit": "Layout (Details → 11.x; N7-04)",
+      "id": "R7-13"
+    },
+    {
+      "aussage": "MANIFEST: 7 includes (requirements/README/RELEASE_NOTES/LICENSE/VERSION/build_identity/wakeword-Channel-JSON/wakeword_resources) + 9 prunes (Dev-Docs/roadmap/Caches/Privates/engineering/examples) + 3 global-exclude. Wakeword via package_data-Liste, kein Glob. Jede include-Zeile getestet.",
+      "beleg": "MANIFEST.in Z.1-30; Tests Z.268-273.",
+      "evidenz": "A",
+      "gueltigkeit": "sdist (tests-Aufnahme U)",
+      "id": "R7-14"
+    },
+    {
+      "aussage": "build/: BUILD/kroko-builder/redistribution + vps (Skript/README/Anleitung/build-area). gitignore ignoriert build/* mit Allowlist (BUILD/Dockerfile/vps/**) + redistribution-Whitelist. Tests: Autorität/Struktur/exec-Wrapper-Vertrag.",
+      "beleg": "Listing; .gitignore Z.63-69/255; Tests Z.147-238.",
+      "evidenz": "A",
+      "gueltigkeit": "Struktur (Ablauf → 10.x)",
+      "id": "R7-15"
+    },
+    {
+      "aussage": "Container/Deploy: Root-Dockerfile/-compose/.dockerignore; engineering/deployment/docker (nginx/pro-upgrade, Test-kanonisch); engineering/deployment/vps (5 Dateien+build-area, Test-kanonisch); root/docker nur Stub-README → build/vps (0 py-Referenzen).",
+      "beleg": "Dockerfile Z.1-80; Listings; Grep 0; Tests Z.174-178.",
+      "evidenz": "A/B",
+      "gueltigkeit": "Struktur (C7-03)",
+      "id": "R7-16"
+    },
+    {
+      "aussage": "docs/ 31 Einträge (5 Dirs + 26 md); nur Struktur, kein Inhalt als Quelle. docs/engines existiert nicht (Link-Verbot).",
+      "beleg": "Listing; Tests Z.20-36.",
+      "evidenz": "A",
+      "gueltigkeit": "Struktur (N7-05)",
+      "id": "R7-17"
+    },
+    {
+      "aussage": "examples/ 3 Apps mit Pflichtdateien; Root-Altordner verboten; nicht in .gitignore; prune aus Dist.",
+      "beleg": "Listing; Tests Z.170-189/240-241; MANIFEST Z.30.",
+      "evidenz": "A",
+      "gueltigkeit": "Beispiele (Nutzung, nicht Paketierung)",
+      "id": "R7-18"
+    },
+    {
+      "aussage": "CI: 3 Workflows. ci.yml: Trigger PR/push-main-feat-work/dispatch; read-only; Matrix ubuntu/windows + 3.12; SHA-Actions; build+outdir/twine/smoke-venv/cpu-check/5-Scripts/Assets/Tests/diff-check.",
+      "beleg": "ci.yml Z.1-194; Grep; Tests Z.73-96.",
+      "evidenz": "A",
+      "gueltigkeit": "Struktur (Ablauf → 10.x)",
+      "id": "R7-19"
+    },
+    {
+      "aussage": "Root-__init__.py (44 Zeilen) dupliziert VoiceSTT-Exporte mit relativen Imports; nicht in packages/py_modules, kein Test → wirkungslos/Kopie-Artefakt. Nicht als Architektur darstellen.",
+      "beleg": "Datei Z.1-44; setup.py Z.359-373; Grep Tests.",
+      "evidenz": "A/U",
+      "gueltigkeit": "Arbeitsbaum (C7-04/U7-02)",
+      "id": "R7-20"
+    },
+    {
+      "aussage": "pyproject = nur [build-system] (3 Zeilen); keine [project]-Sektion → Nachweise gegen setup.py führen.",
+      "beleg": "pyproject.toml Z.1-3; setup.py Z.345-425.",
+      "evidenz": "A",
+      "gueltigkeit": "Build (→ 07.03/10.x)",
+      "id": "R7-21"
+    },
+    {
+      "aussage": "package_data: VoiceSTT (warmup/kroko-models.json/licenses/Channel-JSON + wakeword-Liste, kein Glob) + api_fastapi_server/static/index.html; include_package_data. Kroko-Gewichte nicht im Paket.",
+      "beleg": "setup.py Z.78-88/387-407; ci.yml Z.158-167.",
+      "evidenz": "A",
+      "gueltigkeit": "Wheel-Daten (Inhalte → 04.x/08.x)",
+      "id": "R7-22"
+    },
+    {
+      "aussage": "Drafts isoliert: markerfrei, nicht in Produktpfad, kein engineering-Import aus Produkt (AST-Test); prune + Wheel/Sdist-Assert.",
+      "beleg": "Tests Z.33-39/156-184/165-184; MANIFEST Z.29; Tests Z.67/75.",
+      "evidenz": "A",
+      "gueltigkeit": "Grenze (Semantik → 04.x)",
+      "id": "R7-23"
+    },
+    {
+      "aussage": "Eine Versionsquelle: setup.py→resolve_version; VoiceSTT._version + voice_stt_server.get_version + CI lesen dieselbe Funktion; Root-VERSION im sdist.",
+      "beleg": "setup.py Z.16-27; _version; __init__.py Z.24-26; ci.yml Z.122-129; MANIFEST Z.9.",
+      "evidenz": "A",
+      "gueltigkeit": "Kopplung (Auflösung → 07.03/10.x)",
+      "id": "R7-24"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N7-01",
+      "thema": "Kein __init__ in engineering/tools + tools (Namespace, PEP-420)."
+    },
+    {
+      "id": "N7-02",
+      "thema": "Kein engineering/__init__ (bewusst, verboten)."
+    },
+    {
+      "id": "N7-03",
+      "thema": "ps1-Shim fehlt (nur *.py-Vertrag)."
+    },
+    {
+      "id": "N7-04",
+      "thema": "Kein tests/conftest; keine Marker packaging/compatibility/contracts (nur Daten)."
+    },
+    {
+      "id": "N7-05",
+      "thema": "Kein docs/engines-Baum."
+    },
+    {
+      "id": "N7-06",
+      "thema": "Kein api_fastapi_server-console_script (immer Fassade)."
+    },
+    {
+      "id": "N7-07",
+      "thema": "Kein setup.cfg/tox/nox/Makefile/root-conftest; kein [project]."
+    }
+  ],
+  "researcher_session": "ses_e3d531016fferpJSeYBn8K4DDp",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U7-01",
+      "thema": "sdist-tests-Aufnahme ungeprüft."
+    },
+    {
+      "id": "U7-02",
+      "thema": "Root-__init__ Tracking/Absicht."
+    },
+    {
+      "id": "U7-03",
+      "thema": "Branch nicht verifizierbar."
+    }
+  ],
+  "writer_notes": "Diagrammbrief null → kein Diagramm, nur Reserve-Kanten. Nicht duplizieren: 02.x/03.x/04.x/06.x/10.x/11.x (nur Grenzen/Verweise); 07.01 nur Struktur keine Funktion (C7-02 beachten). Nicht darstellen: Root-__init__ als Architektur; docker/ als Deploy-Ort; 3 Namen vermischen; __pycache__."
+}

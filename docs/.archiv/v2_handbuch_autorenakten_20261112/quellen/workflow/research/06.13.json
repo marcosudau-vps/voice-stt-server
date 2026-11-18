@@ -1,0 +1,248 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (kein Ref). Nur Commit a8993c5c68042d996eab680d84a5b138a214bb5d bindend; VERSION 2.0.0.",
+  "chapter": "06.13",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached); nur *.py/Docker/Compose/workflows als Evidenz.",
+  "conflicts": [
+    {
+      "id": "C6-01",
+      "thema": "409-Zweig 'keine WebSocket-Sitzungen' tot (nur Z.9112); real 400/500. Kein 409-Verhalten dokumentieren."
+    },
+    {
+      "id": "C6-02",
+      "thema": "switch ohne busy-Guard, refresh/quiesce mit: nicht vereinheitlichen."
+    },
+    {
+      "id": "C6-03",
+      "thema": "Build-Arg VOICESTT_GIT_COMMIT vs ENV VOICESTT_SERVER_COMMIT: Abbildung nennen, nicht gleichsetzen."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [
+    "kein Restart-Call; Operator->Prozess/Container",
+    "finally->stop: event/sessions/scheduler/joins/audit-perf/stopping/close",
+    "scheduler.stop->Worker je Lane: close->join10s->engine",
+    "Idle(min(30,t/4))->unload idle_timeout; RuntimeError->retry",
+    "POST /api/models/unload->busy?409:unloaded (ok true, state unloaded)",
+    "start->scheduler->ReadyThread wait_ready-ohne-Timeout->ready/publish/replay",
+    "PATCH model->startup_only-reject; PUT /api/models/active->switch (400/toter-409/500)",
+    "switch: ready.clear->old.stop/close->new.start/wait180/healthy->ok ready+schreiben / fail->LKG+Rollback (ready evtl aus)",
+    "no-change->200 false; loading->Fehler; unbekannt->400; lokal-fehlt->ValueError",
+    "POST /api/models/refresh->Lizenz->quiesced (busy->LKG+409)->swap/rollback (409)",
+    "POST /api/config/reload->load->runtime-Updates+Modell-Updates+skipped (400)",
+    "refresh->CONCURRENT_IDENTITY? busy->Fehler : unload+refresh; pro/key->restart",
+    "Wheel+Digest+Args->Image; Tausch+Neustart; /api/v2/info Status",
+    "identity->override->VERSION->Metadaten; SemVerError nie Fallback",
+    "write->cleanup/Tag; älter-cutoff->unlink; rmdir",
+    "append->prune/Tag->Watermark->DELETE (kein VACUUM)",
+    "PATCH retention->configure->Sink+Store live",
+    "saveAudio->Dateien; kein Cleanup",
+    "provision .part->Verify->replace->finally-unlink; discover skip .part",
+    "Queues/Session/Hub-Drops (Sink intern); SQLite-vor-Enqueue",
+    "GET /health Felder; ok=metrics+logging_ready; 200 immer",
+    "startupErrors append-only->publish->/health (kein Clear)",
+    "state disabled/degraded/ready; gap->lostToCursor",
+    "PATCH klassifiziert; startup_only reject; model_refresh->refresh_required"
+  ],
+  "facts": [
+    {
+      "aussage": "Kein In-Process-Restart/Update-Endpunkt; Neustart nur Prozess/Container.",
+      "beleg": "server.py Z.8874-9870/10813-10835.",
+      "evidenz": "B",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-01"
+    },
+    {
+      "aussage": "Stop-Reihenfolge: event/sessions/scheduler/joins-5/audit-perf/stopping/close; Stop-Fehler nur geloggt (kein Maskieren). Facades teilen Hub → emit nach close wirksam.",
+      "beleg": "server.py Z.7304-7323/8852-8866; event_logging Z.1334-1362.",
+      "evidenz": "B",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-02"
+    },
+    {
+      "aussage": "Scheduler-Stop je Lane: close (closed+notify), join 10s, engine-close nur beendet. Kein Drain/Re-Enqueue.",
+      "beleg": "server.py Z.1893-1896/1981-1996/2111-2159.",
+      "evidenz": "B",
+      "gueltigkeit": "2.0.0 (U: eingereihte Jobs)",
+      "id": "A6-03"
+    },
+    {
+      "aussage": "Idle-Unload: Intervall min(30,timeout/4); nur wenn idle-an; RuntimeError→retry; Lifecycle-Response inkl. Limits (2/1).",
+      "beleg": "server.py Z.7599-7639; Tests.",
+      "evidenz": "A",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-04"
+    },
+    {
+      "aussage": "Manuell unload: verweigert bei loading/busy (Speaker/offene); scheduler=None, unloading→unloaded, stop+Rollback, gc; ready bleibt → ok true + state unloaded; 409 bei RuntimeError.",
+      "beleg": "server.py Z.7537-7573/9084-9092; Tests.",
+      "evidenz": "A",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-05"
+    },
+    {
+      "aussage": "Ready eigener Thread: wait_ready ohne Timeout → ready.set + server.ready + loaded/load_failed + ready-Publish + startupErrors-Replay.",
+      "beleg": "server.py Z.7275-7302/8521-8545.",
+      "evidenz": "B",
+      "gueltigkeit": "2.0.0 (U: Dauer-nicht-ready)",
+      "id": "A6-06"
+    },
+    {
+      "aussage": "Modellwechsel nur PUT /api/models/active (to_thread); PATCH lehnt Modell/Engine/Sprache (startup_only) ab. Fehler 400/500 (409-Zweig tot C6-01).",
+      "beleg": "server.py Z.8053-8061/9101-9113/7835-7840; Tests.",
+      "evidenz": "A",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-07"
+    },
+    {
+      "aussage": "Switch: Allowlist+Coerce (use_main-Default False bei Änderung) → Policy → Kroko-Bindung → Quiesce (minimum_ready sonst LKG+ValueError) → Snapshot → lokal-Verfügbar (sonst ValueError) → Diff (redigiert) leer=No-Op false; Lock: ready.clear, loading→LKG+ready+RuntimeError, scheduler-None→übernehmen+ready+schreiben+false; sonst old.stop/close → new.start/wait180/healthy; fail→LKG+Rollback (gesund→ready+RuntimeError, sonst RuntimeError-ohne-ready); ok→ready+switched+Perf+persist+true.",
+      "beleg": "server.py Z.8042-8249; Tests.",
+      "evidenz": "A",
+      "gueltigkeit": "2.0.0 (C6-02: kein busy-Guard)",
+      "id": "A6-08"
+    },
+    {
+      "aussage": "Kein-Wechsel explizit: leer→200 false; unbekannt→400; loading→RuntimeError; lokal-fehlt→ValueError.",
+      "beleg": "server.py Z.8060-8061/8130-8151/8157-8164; Tests.",
+      "evidenz": "A",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-09"
+    },
+    {
+      "aussage": "Refresh zweiter Pfad: Lizenz→Quiesce; Fehler→LKG+refreshRequired+RuntimeError; gleiche Revision ohne READY→LKG+Fehler; busy→LKG+RuntimeError (während Sessions); sonst swap/wait; fail→LKG+Rollback/evtl unloaded; 409 bei Runtime/ValueError.",
+      "beleg": "server.py Z.7065-7179/8966-8977; Tests.",
+      "evidenz": "A",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-10"
+    },
+    {
+      "aussage": "POST /api/config/reload: load→model-/runtime-/skipped-Trennung; Updates sofort + switch via Thread; Antwort {runtime,models,skipped}; Fehler→400.",
+      "beleg": "server.py Z.9870-9892.",
+      "evidenz": "B",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-11"
+    },
+    {
+      "aussage": "Kroko-Quiesce: refresh→probe CONCURRENT_IDENTITY; busy→RuntimeError (unload-Text); frei→unload(kroko_transition)+refresh; pro/key→Conflict vor Änderung (restart). Status restartRequired/Reason/Pro-Felder.",
+      "beleg": "server.py Z.6778-7042; Tests.",
+      "evidenz": "A",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-12"
+    },
+    {
+      "aussage": "Update = Wheel+Digest+Args→Image; Tausch+Neustart (Compose local+restart-unless-stopped+Bind); Identität gecacht ohne Git; /api/v2/info Felder.",
+      "beleg": "Dockerfile Z.1-102; compose Z.13-90; identity.py Z.1-139; server.py Z.8874-8879; Tests.",
+      "evidenz": "A",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-13"
+    },
+    {
+      "aussage": "Version: Identität→ENV-Override→VERSION→Metadaten; kein Commit/Branch; SemVerError hart. release nur engineering.cli.",
+      "beleg": "_version.py Z.100-184; release.py Z.1-34; Tests.",
+      "evidenz": "A",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-14"
+    },
+    {
+      "aussage": "JSONL-Retention opt-in/kanalweise/lazy pro Tag (retention=max(0,int); cutoff current-day − days; nur *.jsonl<cutoff ohne offene; rmdir).",
+      "beleg": "event_logging.py Z.317-412; Tests.",
+      "evidenz": "A",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-15"
+    },
+    {
+      "aussage": "SQLite-Prune lazy append/UTC-Tag (nur days>0): Watermark-UPSERT MAX je (channel,session) → DELETE<cutoff → commit. Kein VACUUM (Datei schrumpft nicht).",
+      "beleg": "event_logging.py Z.438-541/616-635.",
+      "evidenz": "A",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-16"
+    },
+    {
+      "aussage": "Retention live umstellbar: PATCH retention → configure (neue Sinks+set_retention, alte schließen).",
+      "beleg": "server.py Z.7906-7947; event_logging.py Z.855-893; Tests.",
+      "evidenz": "A",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-17"
+    },
+    {
+      "aussage": "Kein Audio-Cleanup: nur Schreiben (Tag-Ordner), nie Löschen; /api/logging ohne Retention-Parameter.",
+      "beleg": "operations.py Z.343-362; server.py Z.486/527/9340-9341.",
+      "evidenz": "B",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-18"
+    },
+    {
+      "aussage": "Provisionierung atomar (.part→Verify→replace→finally-unlink; verifizierte wiederverwendet); Discovery skippt .-/.part/.staging (+snapshots).",
+      "beleg": "stt_model_management.py Z.64-72/411-424/512/546-625/142.",
+      "evidenz": "A",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-19"
+    },
+    {
+      "aussage": "Zähler: Queue (queued/sessions/perSession/coalesced/stale/rejected) + Session (Audio/Realtime/Final/Drops) + Hub drop_counts intern (nicht /health). SQLite-vor-Enqueue.",
+      "beleg": "server.py Z.1898-1939/3050-3091/4630-4666/8613-8627; event_logging Z.1294-1296.",
+      "evidenz": "A",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-20"
+    },
+    {
+      "aussage": "/health Felder + ok=metrics+logging_ready (live-oder-Store); 200 immer; Docker nur Statuscode. startupErrors→/health.|",
+      "beleg": "server.py Z.7685-7700/8885-8905; Dockerfile Z.88-96; Tests.",
+      "evidenz": "A",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-21"
+    },
+    {
+      "aussage": "startupErrors append-only (nur _on_scheduler_error): worker.failed+append+publish→/health; nie Clear (bis Neustart).",
+      "beleg": "server.py Z.6254/7699/8543-8545/8629-8645.",
+      "evidenz": "B",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-22"
+    },
+    {
+      "aussage": "Store-Zustände disabled/degraded/ready (Schreibfehler bleibt bis Append); status mit Cursorn; Retention-gap→lostToCursor; sqlite_first.",
+      "beleg": "event_logging.py Z.1099-1288; server.py Z.9374/9512-9778.",
+      "evidenz": "A",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-23"
+    },
+    {
+      "aussage": "Klassen: ACTIVE sofort, NEW_SESSION neu, STARTUP_ONLY reject; MODEL_MANAGEMENT → refresh_required→POST /api/models/refresh.",
+      "beleg": "server.py Z.178-291/7883-7892; Tests.",
+      "evidenz": "A",
+      "gueltigkeit": "2.0.0",
+      "id": "A6-24"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "U6-03",
+      "thema": "Kein VACUUM/ANALYZE (nur Zeilen löschen)."
+    },
+    {
+      "id": "U6-04",
+      "thema": "Kein Audio-Cleanup."
+    },
+    {
+      "id": "U6-05",
+      "thema": "Kein In-Process-Restart/Update-Endpunkt."
+    }
+  ],
+  "researcher_session": "ses_e3d9268c1ffe8DoZ97FAXOu9Dy",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U6-01",
+      "thema": "Eingereihte-nicht-gestartete Jobs bei close (kein Requeue/Test)."
+    },
+    {
+      "id": "U6-02",
+      "thema": "Dauer-nicht-ready ohne Timeout undefiniert."
+    },
+    {
+      "id": "U6-06",
+      "thema": "Idle-vs-Switch-Kopplung ungetestet."
+    }
+  ],
+  "writer_notes": "Abgrenzung: 06.07 Sequenz (nur Reihenfolge); 06.08 Audio/Puffer (nur Verweis); 06.09 Hub/Sinks (nur Retention); 06.10 Snapshots (nur Prüfpunkte); Modell/Kroko dort vertieft (nur Vollzug). Konsistenz: nur Code-Pfade, gleiche Positionen; keine Widersprüche. C1/C2 nicht glätten; Uns offen, N als nicht-implementiert. Brief null → NOT_REQUESTED, nur Kanten."
+}

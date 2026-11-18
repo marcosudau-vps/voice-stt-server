@@ -1,0 +1,330 @@
+{
+  "branch_context": "feat/v2-release-cleanup (Auftragskontext; keine refs/heads/**, keine packed-refs im Checkout)",
+  "chapter": "01.07",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached HEAD)",
+  "conflicts": [
+    {
+      "auflösung": "Code ist Autoritaet: extend existiert nicht (02.03-konsistent).",
+      "beleg": "activation_commands.py Z.74-76 vs Z.204-210, commands.py Z.143-148",
+      "id": "C-01",
+      "thema": "Docstring extend->refresh vs invalid_action"
+    },
+    {
+      "auflösung": "Nur Format-Gate; keine Bindung/Wiederaufnahme. R-03b praezisiert.",
+      "beleg": "handshake.py Z.111-177 vs connection.py Z.257-282,332-343",
+      "id": "C-02",
+      "thema": "clientRunId ohne Funktion nach Validierung"
+    },
+    {
+      "auflösung": "Zwei Raeume: Wire-UUID pro Sitzung vs Log-hex pro Event; nicht gleichsetzen.",
+      "beleg": "session.py Z.129-141 vs event_logging.py Z.957-967",
+      "id": "C-03",
+      "thema": "eventId Wire vs Log"
+    },
+    {
+      "auflösung": "Controller=Alias activationSequence; Session=Turn-Zaehler (transcriptionId); Wake=Detektorlauf. Nicht austauschbar.",
+      "beleg": "activation.py Z.407-410; server.py Z.2352/5827; wake_detection.py Z.322-380",
+      "id": "C-04",
+      "thema": "generation dreifach"
+    },
+    {
+      "auflösung": "Route-ID oeffentlich (X-Request-ID/Telemetrie), Service-ID intern (Holder/job), openai-<Service-ID> scheduler-intern.",
+      "beleg": "openai_routes.py Z.69 vs server.py Z.8374-8375",
+      "id": "C-05",
+      "thema": "Zwei request_id im HTTP-Pfad"
+    },
+    {
+      "auflösung": "Bewusste Invariante: v1 kompakt, v2 kanonisch, keine Umformatierung (invalid_payload/stale_session).",
+      "beleg": "server.py Z.9938 vs 10138-10146; schema.py Z.214-233; boundary-Test Z.229-278",
+      "id": "C-06",
+      "thema": "sessionId-Format transportabhaengig, ein Feldname"
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "create_app -> RuntimeIdentity | resolve_runtime_identity() einmalig [I-01]",
+    "RuntimeIdentity -> /ws/v2 | serverVersion/serverCommit als Konstruktorargs [I-01]",
+    "RuntimeIdentity -> /api/v2/info | public_info + server_instance_id [I-01,I-02]",
+    "StructuredEventHub -> serverInstanceId | uuid4().hex bei Konstruktion [I-02]",
+    "Hub -> Log-Payload | serverInstanceId + eventId(hex) + Kontextfelder [I-02,I-04]",
+    "Query/Header -> clientId | normalisiert (sonst client-<hex>) [I-08]",
+    "Client -> hello | clientRunId (kanonische UUID) [I-09]",
+    "hello -> ParsedHello | clientRunId geprueft, danach ungenutzt [I-09]",
+    "/ws/transcribe -> Session | sessionId = uuid4().hex [I-05]",
+    "/ws/v2 -> Session | sessionId = new_canonical_id() [I-05]",
+    "Session -> ActivationController | id_factory injiziert [I-10]",
+    "ActivationController -> activationId | _id_factory() bei activate [I-10]",
+    "ActivationController -> activationSequence | +1 pro Admittierung [I-11]",
+    "Controller -> Recorder-Gate | (activationId, generation=sequence) [I-14]",
+    "Controller -> TimerToken | (id, seq, revision, phase, kind, segmentToken) [I-13]",
+    "Controller -> segmentToken | +1 bei recording_started [I-12]",
+    "Session -> SegmentState | segmentId (int v1, UUID v2) [I-15]",
+    "SegmentState -> Ledger | segmentId + segmentSequence + requestId [I-15,I-16,I-17]",
+    "Client -> commandId | v2 kanonische UUID, sonst keine Antwort [I-19]",
+    "Session -> CommandReplayCache | commandId -> Antwort [I-19]",
+    "command.ack -> commandId + activationId [I-19,I-10]",
+    "input_closed -> causedByCommandId | nur finish/cancel akzeptiert [I-20]",
+    "ProtocolSessionState -> eventId/eventSeq | mint_event (logical_key memo) [I-03]",
+    "Segment -> transcriptionId | sessionId:generation:segmentId [I-18]",
+    "Session -> Hub | client/session/request/segment/transcription-IDs [I-04,I-18]",
+    "HTTP-Request -> requestId = sessionId = transcriptionId | Routen-uuid [I-22]",
+    "HTTP-Request -> job.session_id | openai-<Service-ID> [I-22]",
+    "hello -> wakeWordIds | exakt kanonische Katalog-IDs [I-23]",
+    "Wake-Detektion -> wakeword.detected | wakeWordId + activationId [I-23]",
+    "WakeTracker -> detectorGeneration | reset/new_generation [I-25]",
+    "hello.accepted -> logAccess.accessToken | sitzungsgebunden [I-26]"
+  ],
+  "facts": [
+    {
+      "aussage": "RuntimeIdentity (version, commit, distribution, kroko_variant, source_*) einmalig in create_app via resolve_runtime_identity; als app_identity an /api/v2/info, OpenAPI, Settings-Endpunkte und jede ProtocolV2Connection. Spaeterer Umgebungswechsel wirkungslos.",
+      "beleg": "identity.py Z.74-138; server.py Z.8822-8824,8870,8874-8878,10142-10146",
+      "evidenz": "A+TEST (server_info :58-81)",
+      "gueltigkeit": "pro Prozess/App; pro Verbindung nur kopiert",
+      "id": "I-01"
+    },
+    {
+      "aussage": "serverInstanceId KEINE Konfiguration/Sitzung: pro Hub-Instanz uuid4().hex (32). In /api/v2/info, jedem Log-Payload, hello.accepted nur als Teil von logAccess. NICHT im session.snapshot.",
+      "beleg": "event_logging.py Z.697-701,957-967; server.py Z.7772-7788,8874-8878",
+      "evidenz": "A+TEST (:84-95)",
+      "gueltigkeit": "pro App/Prozess",
+      "id": "I-02"
+    },
+    {
+      "aussage": "Jedes v2-Event: kanonische UUID eventId + lueckenlose monotone eventSeq pro Sitzung (auch NON_STATE_EVENTS) via mint_event. Gleicher logical_key -> gleiches Envelope. stateVersion nur bei sichtbaren Aenderungen.",
+      "beleg": "protocol_v2/session.py Z.105-155; events.py Z.286-304 (Felder type/version/sessionId/eventId/eventSeq/stateVersion/occurredAtUnixMs)",
+      "evidenz": "A+TEST (contract :547-590, :569-580)",
+      "gueltigkeit": "pro v2-Sitzung (Wire)",
+      "id": "I-03"
+    },
+    {
+      "aussage": "Log-eventId ANDERER Typ als Wire-eventId: Hub.emit uuid4().hex (32). Payload: schemaVersion/eventId/timestamp/channel/event/severity/serverInstanceId/Kontext(clientId/requestId/segmentId/sessionId/transcriptionId/transport)/data.",
+      "beleg": "event_logging.py Z.21-28,946-967",
+      "evidenz": "A (kein Format-Test)",
+      "gueltigkeit": "pro Log-Event",
+      "id": "I-04"
+    },
+    {
+      "aussage": "Eine Sitzungsidentitaet, zwei Schreibweisen: v1 uuid4().hex (32); v2 new_canonical_id() gehyphaelt via admit_session(canonical_ids=True). ProtocolSessionState verweigert nicht-kanonische mit ValueError.",
+      "beleg": "server.py Z.9938,10138-10146,7325-7361; schema.py Z.214-233; session.py Z.41-43; connection.py Z.276-282",
+      "evidenz": "A+TEST (boundary :229-238; contract :543-545; e2e :1454-1459)",
+      "gueltigkeit": "pro Verbindung; Format transportgebunden",
+      "id": "I-05"
+    },
+    {
+      "aussage": "v2-Envelope prueft: commandId kanonisch (sonst keine Antwort), version==2, sessionId kanonisch (sonst invalid_payload), sessionId exakt aktuell (sonst stale_session). Gehyphaelte v1-Hex bleibt fremd (keine Umformatierung).",
+      "beleg": "commands.py Z.90-138 (120-126)",
+      "evidenz": "A+TEST (boundary :240-278, :317-331)",
+      "gueltigkeit": "pro v2-Kommando",
+      "id": "I-06"
+    },
+    {
+      "aussage": "KEINE Verbindungsidentitaet (kein connectionId-Feld/Typ, 0 Treffer). v1: sessionId im Manager-Dict. v2: ProtocolV2Connection-Objekt pro Socket mit lokalen Hilfszustaenden (_ack_memo, _closing_versions), NICHT im Manager.",
+      "beleg": "server.py Z.1692-1708; connection.py Z.59-101; Z.10121-10146 (kein Manager)",
+      "evidenz": "A (+C-08/C-09)",
+      "gueltigkeit": "pro Verbindung",
+      "id": "I-07"
+    },
+    {
+      "aussage": "clientId Transportangabe, keine Serveridentitaet: ?clientId=/x-voicestt-client-id, normalisiert 1..128 [A-Za-z0-9._:-], sonst client-+hex. v1 gibt sie im Server-hello zurueck; v2 kein clientId-Feld (nur Sessionobjekt/Telemetrie).",
+      "beleg": "server.py Z.1362-1372,9914-9917,10002-10004,2336; connection.py Z.69,279; grep protocol_v2 clientId: 0",
+      "evidenz": "A (kein Test Grenzen)",
+      "gueltigkeit": "pro Verbindung; v2 nicht wire-sichtbar",
+      "id": "I-08"
+    },
+    {
+      "aussage": "clientRunId Pflicht-UUID im v2-hello: fehlt/nicht-kanonisch -> Close 4400 invalid_client_run_id. Danach UNGENUTZT: nicht an admit, nicht in accepted/Snapshot/Events, kein Mapping (keine Wiederaufnahme).",
+      "beleg": "handshake.py Z.30-41,111-116,167-177; connection.py Z.257-282,307-343",
+      "evidenz": "A+TEST (e2e :379-388; R-03b)",
+      "id": "I-09",
+      "klasse": "Client"
+    },
+    {
+      "aussage": "activationId ausschliesslich serverseitig bei Admittierung (_id_factory). v1 Default uuid4().hex, v2 str(uuid4()) kanonisch via canonical_ids=True. Unveraendert durch Controller/Ack/Events/Snapshot/Ledger.",
+      "beleg": "activation.py Z.241-242,492; server.py Z.2340-2343,2440,7360",
+      "evidenz": "A+TEST (e2e :1454-1472)",
+      "gueltigkeit": "pro Aktivierung; Format sitzungsgebunden",
+      "id": "I-10"
+    },
+    {
+      "aussage": "activationSequence sitzungsweiter Zaehler +1 pro Admittierung; generation im Snapshot Alias (kein zweiter Zaehler). v2: in activation.started + pendingActivations[].activationSequence, NICHT in ack (nur ID+Phase). reset beendet, setzt nicht zurueck.",
+      "beleg": "activation.py Z.245,403-429,493; events.py Z.308-319; snapshot.py Z.142-165; connection.py Z.637-648",
+      "evidenz": "A+TEST (contract :967-973; R-Fakten)",
+      "gueltigkeit": "pro Sitzung",
+      "id": "I-11"
+    },
+    {
+      "aussage": "segmentToken controller-eigen: Start 0, +1 nur in recording_started (nicht already_recording). Im Snapshot + TimerToken, KEINE v2-Wire-Nachricht (grep protocol_v2: 0).",
+      "beleg": "activation.py Z.248,386-394,403-429,572-596",
+      "evidenz": "A (bewusst nicht auf Leitung)",
+      "gueltigkeit": "pro Sitzung/Segmentstart",
+      "id": "I-12"
+    },
+    {
+      "aussage": "Timer-Callback nur bei exaktem TimerToken (activation_id, sequence, timer_revision, phase, kind, segment_token). timerRevision allein unzureichend (beginnt je Aktivierung neu).",
+      "beleg": "activation.py Z.127-144,356-399",
+      "evidenz": "A (+R-Fakten)",
+      "gueltigkeit": "pro Aktivierung/Timer",
+      "id": "I-13"
+    },
+    {
+      "aussage": "Gate prueft unabhaengige Kopie: open/close an (activationId, generation=sequence). Altes open verworfen, fremdes/aelteres close wirkungslos, close idempotent. Spaetes close(A) schliesst B nicht.",
+      "beleg": "activation_control.py Z.11-12,70-144,169-226",
+      "evidenz": "A (+R-06)",
+      "gueltigkeit": "pro Sitzung/Recorder",
+      "id": "I-14"
+    },
+    {
+      "aussage": "segmentId autoritativ in SegmentState: v1 Integer ab 1, v2 kanonische UUID via Fabrik. Ledger normalisiert (int/numerisch->int, sonst opaque String, leer verweigert). v2 kanonisch, v1 numerisch.",
+      "beleg": "server.py Z.1308-1351,2347; segment_ledger.py Z.46-65",
+      "evidenz": "A+TEST (e2e :1477-1504)",
+      "gueltigkeit": "pro Segment; Format sitzungsgebunden",
+      "id": "I-15"
+    },
+    {
+      "aussage": "segmentSequence Ledger-Zaehler ab 1 pro accept (unabhaengig Aktivierung/segmentToken). SegmentContext bindet session/activation/sequence/segment/sequence/settings/request/created_at; Ledger nur eigene session_id.",
+      "beleg": "segment_ledger.py Z.68-79,133-148,232-260,475-488",
+      "evidenz": "A+TEST (segment_ledger; D-Fakten)",
+      "gueltigkeit": "pro Sitzung/Segment",
+      "id": "I-16"
+    },
+    {
+      "aussage": "requestId interne Korrelation pro Segment: uuid4().hex, Ledger-Default-Fabrik (auch v2). Telemetrie + Ruecklookup; KEIN v2-Wire-Feld (grep: 0).",
+      "beleg": "segment_ledger.py Z.136-139,254,421-426; server.py Z.2372,4845,4881",
+      "evidenz": "A",
+      "gueltigkeit": "pro Segment; Interna",
+      "id": "I-17"
+    },
+    {
+      "aussage": "transcriptionId abgeleitet f'{sessionId}:{generation}:{segmentId}' (generation = Sitzungs-Turn-Zaehler aus close/clear, NICHT activationSequence). Final-Job uebernimmt ledger-requestId als job.request_id.",
+      "beleg": "server.py Z.5826-5827,5845-5875,2352,2891-2957,8266-8271",
+      "evidenz": "A (Ableitung im Code)",
+      "gueltigkeit": "pro Segment; Telemetrie (v1)",
+      "id": "I-18"
+    },
+    {
+      "aussage": "commandId gehoert Client. v1 jeder nicht-leere getrimmte String; v2 kanonische UUID (sonst keine Antwort/kein Slot). Idempotenz sitzungsgebunden (ReplayCache pro Session, setdefault, nur close() leert); v2 merkt ersten Ack pro commandId (urspruengliche Versionen bei Replay).",
+      "beleg": "activation_commands.py Z.295-329,67-79; schema.py Z.236-244; commands.py Z.105-114; connection.py Z.96-101,594-661; server.py Z.3472-3478",
+      "evidenz": "A+TEST (boundary :134-191; R-03/R-03b)",
+      "gueltigkeit": "pro Sitzung",
+      "id": "I-19"
+    },
+    {
+      "aussage": "Korrelation v2: commandId im Ack + causedByCommandId in activation.input_closed (nur akzeptiertes finish/cancel, sonst null). Ack ohne activationSequence.",
+      "beleg": "events.py Z.334-342; connection.py Z.637-648; activation.py Z.154-168",
+      "evidenz": "A+TEST (e2e :1130-1172)",
+      "gueltigkeit": "pro Aktivierung/Befehl",
+      "id": "I-20"
+    },
+    {
+      "aussage": "Legacy synthetisch legacy-<sessionId>-<n> aus _legacy_activation_sequence. Keine UUIDs, Ledger-Identitaet, nie auf v2 (immer controlled).",
+      "beleg": "server.py Z.4748-4757,5369-5376,2384",
+      "evidenz": "A (+R-06)",
+      "gueltigkeit": "nur v1-Legacy",
+      "id": "I-21"
+    },
+    {
+      "aussage": "OpenAI synthetisch ohne Objekt: (a) Routen-request_id uuid4().hex = X-Request-ID = Telemetrie sessionId/requestId/transcriptionId; (b) Service-request_id uuid4().hex = Holder/job.request_id; (c) job.session_id = openai-<Service-ID>. Nichts im Store; clientId optional aus Header (None ohne Header, kein Fallback).",
+      "beleg": "openai_routes.py Z.69-92,175-178; server.py Z.8362-8398",
+      "evidenz": "A (kein ID-Test HTTP)",
+      "gueltigkeit": "pro HTTP-Request",
+      "id": "I-22"
+    },
+    {
+      "aussage": "wakeWordId katalogdeklariert (Manifest id; Normalisierung id/displayName/alias), keine UUID. v2 nur exakt kanonische Katalog-IDs (Alias -> not_canonical; ein Fehler verwirft ganze Auswahl). In wakeword.detected + hello wakeWordIds.",
+      "beleg": "wakeword_catalog.py Z.542-587,968-1001; ports.py Z.119-147; events.py Z.428-437",
+      "evidenz": "A+TEST (contract :1119-1140)",
+      "gueltigkeit": "serverweit (Katalog), pro Sitzung gewaehlt",
+      "id": "I-23"
+    },
+    {
+      "aussage": "catalogRevision REVISION kein ID: zaehlt Katalogwechsel, in Capabilities + wakeword.availability_changed, ohne activationId. Trennen von settingsRevision/stateVersion/eventSeq.",
+      "beleg": "wakeword_catalog.py Z.374,500-515; ports.py Z.103-111; events.py Z.439-449; snapshot.py Z.77",
+      "evidenz": "A+TEST (contract :1142-1148)",
+      "gueltigkeit": "serverweit",
+      "id": "I-24"
+    },
+    {
+      "aussage": "generation DREIFACH: (1) Alias activationSequence im Snapshot; (2) Sitzungs-Turn-Zaehler (transcriptionId); (3) Detektor-Generation des Wake-Trackers (reset/new_generation, stale-Verwurf).",
+      "beleg": "activation.py Z.407-410; server.py Z.2352,2896,2957; wake_detection.py Z.322-380,624-633; wake_admission.py Z.259,382-386",
+      "evidenz": "A+TEST (wake_detection stale)",
+      "gueltigkeit": "je Kontext",
+      "id": "I-25"
+    },
+    {
+      "aussage": "logAccess.accessToken sitzungsgebunden fluechtig (hex+hex, 64 Zeichen) + Ablauf; validate bindet session_id. Nur in hello.accepted (nicht in spaeteren snapshot-Antworten). Keine Sitzungsidentitaet.",
+      "beleg": "security/logs.py Z.17-57; server.py Z.7772-7804; connection.py Z.331-343",
+      "evidenz": "A+TEST (multi_user Log-Scope)",
+      "gueltigkeit": "pro Sitzung/Verbindungsaufbau",
+      "id": "I-26"
+    },
+    {
+      "aussage": "KEINE IDs obwohl aehnlich: manual/wake_word (Enums), legacy/controlled (Modus), 15 Resultcodes/Reasons (Vokabular), stateVersion/lastEventSeq/settingsRevision/timerRevision/catalogRevision/Interim-sequence (Zaehler/Revisionen). Modus entscheidet nur OB Controller existiert.",
+      "beleg": "schema.py Z.60-143; server.py Z.1012-1208; activation.py Z.246-247",
+      "evidenz": "A+TEST (contract :323-342; boundary :392-406)",
+      "gueltigkeit": "gesamt",
+      "id": "I-27"
+    }
+  ],
+  "investigated_sources": [
+    "protocol_v2/{identity,schema,handshake,connection,session,commands,events,snapshot,ports}.py",
+    "server.py, activation.py, activation_commands.py, segment_ledger.py, openai_routes.py, security/logs.py",
+    "event_logging.py, _build_identity.py, core/{activation_control,wake_detection,wakeword_catalog}.py",
+    "Tests (v1_v2_boundary, v2_e2e, v2_contract, server_info, client_v2_identity)"
+  ],
+  "not_implemented": [
+    {
+      "id": "N-01",
+      "thema": "Keine Verbindungsidentitaet (0 Treffer connectionId; Manager nur session->WS; V2-Objekt ohne Id)"
+    },
+    {
+      "id": "N-02",
+      "thema": "Keine Client-ID-Erzeugung im Repo (externe Tests brauchen VOICESTT_CLIENT_V2_ROOT)"
+    },
+    {
+      "id": "N-03",
+      "thema": "Keine Wiederaufnahme per clientRunId (nur gespeichert, kein Lookup, immer new_canonical_id)"
+    },
+    {
+      "id": "N-04",
+      "thema": "Keine Formatvalidierung v1-IDs (hex ohne Pruefung, commandId beliebig, activationId nur gleich)"
+    },
+    {
+      "id": "N-05",
+      "thema": "requestId/segmentToken keine Wire-Felder (grep 0)"
+    },
+    {
+      "id": "N-06",
+      "thema": "Keine Client-ID-Pflicht (still client-+hex statt Verweigerung)"
+    }
+  ],
+  "researcher_session": "ses_e46eb52d9ffeuiCglVKwUrt3BQ",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-01",
+      "thema": "Client-Konstanz clientRunId ueber Reconnects (nur Format-Gate, keine Gegenstelle)"
+    },
+    {
+      "id": "U-02",
+      "thema": "Auseinanderlaufen segmentToken/segmentSequence (Code erlaubt, kein Test)"
+    },
+    {
+      "id": "U-03",
+      "thema": "Interim-sequence pro Segment vs Sitzung (nur Passthrough belegt)"
+    },
+    {
+      "id": "U-04",
+      "thema": "generation-Zusammenfuehrung (nur Kommentar, Evidenz C)"
+    }
+  ],
+  "writer_guidance": [
+    "Drei Schichten: Server/Prozess, Transport/Sitzung, Fachobjekte; nur sessionId verbindet.",
+    "Formatwechsel v1(hex/int) vs v2(UUID) als Invariante + Negativtests.",
+    "Vier Zaehler trennen (sequence/segmentToken/segmentSequence/timerRevision), nicht mit stateVersion/eventSeq verwechseln.",
+    "generation x3 + eventId x2 als Verwechslungskaesten.",
+    "Synthetische IDs sichtbar (legacy-, openai-, client-, transcriptionId).",
+    "clientRunId NICHT als Reconnect-ID.",
+    "Keine Zeiten/Garantien; Handshake-Timeout 10s gehoert 02.03/04.x."
+  ]
+}

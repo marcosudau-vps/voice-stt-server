@@ -1,0 +1,263 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup lokal NICHT als Ref belegbar (.git/refs/ existiert nicht, keine packed-refs). Belegt ausschließlich Commit-Bindung.",
+  "chapter": "04.01",
+  "commit_verification": ".git/HEAD (Datei, detached) = a8993c5c68042d996eab680d84a5b138a214bb5d; .git/FETCH_HEAD derselbe SHA, Herkunft https://github.com/marcosudau-vps/voice-stt-server; .git/logs/HEAD = checkout: moving from main to FETCH_HEAD.",
+  "correction_round": 1,
+  "diagram_edges": [
+    "Client -> GET / (index.html) -> statisches UI",
+    "Client -> GET /health (oeffentlich) -> Metrics + EventStore-Status",
+    "Client -> GET /api/v2/info (oeffentlich) -> app_identity.public_info",
+    "Client -> GET /api/config (oeffentlich) -> public_dict + adminAuthRequired",
+    "Admin -> PATCH /api/config -> AdminGate -> update_settings",
+    "Admin -> /api/models* (9 Routen) -> AdminGate -> Modell-Registry/Lifecycle",
+    "Admin -> PATCH /api/v2/settings/server -> AdminGate -> settings_control.patch_server",
+    "Oeffentlich -> GET /api/v2/settings/schema|server -> settings_registry Projektion",
+    "Oeffentlich -> GET /api/v2/wake-words -> wakeword_catalog.public_payload",
+    "Admin -> POST /api/v2/wake-words/refresh -> AdminGate -> refresh_wake_word_catalog",
+    "Admin -> GET|PUT /api/logging -> AdminGate -> Log-Konfiguration",
+    "Log-Client -> GET /api/logs/events|sessions/{id}|transcriptions/{id} -> LogGate -> SQLite-Eventstore",
+    "Log-Client -> WS /ws/logs -> subscribe{accessToken} -> LogGate -> Replay + Live",
+    "Session (V1/V2) -> hello -> create_log_access -> logAccess{accessToken, historyPath}",
+    "Audioclient -> WS /ws/transcribe -> Query-Admission -> Server-hello (V1)",
+    "Audioclient -> WS /ws/v2 -> Client-hello -> hello.accepted (V2, protocolVersion=2)",
+    "OpenAI-Client -> GET /v1/models|POST /v1/audio/transcriptions -> OpenAIGate (optional) -> Service",
+    "PATCH /api/logging (logProtocolVersion=2) != WS-Protokoll v2 (Abgrenzungskante)"
+  ],
+  "facts": [
+    {
+      "aussage": "Zentrale Registrierung in EINER App-Factory: create_app() erzeugt einzige FastAPI-Instanz (nur title/version/lifespan); OpenAI-Router präfixlos eingehängt. Vollständiges Inventar: 37 Routen (34 HTTP + 3 WS) plus /openapi.json,/docs,/redoc.",
+      "beleg": "server.py:8816,8868-8872,9899-9910; openai_routes.py:28-41; Test test_server_security_modularization.py:166-194.",
+      "evidenz": "stark",
+      "gueltigkeit": "gesamter Prozess; Auth: Admin=AdminGate, LogGate=Admin ODER Session-Token, OpenAI=Key falls konfiguriert",
+      "id": "I1-01"
+    },
+    {
+      "aussage": "Legacy-REST (20 Routen): Config, Metrics, Modell-Familie (9), Kroko-Refresh, Sprache, Wake-Word, Validate/Reload, Logging. Alle Admin außer GET /api/config, GET /api/metrics (öffentlich).",
+      "beleg": "server.py:8907,8921,8939,8943,8959,8966,8979,9029,9036,9074,9084,9094,9101,9115,9122,9138,9159,9320,9383,9849,9870.",
+      "evidenz": "stark",
+      "gueltigkeit": "REST unversioniert; nicht V2-Protokoll",
+      "id": "I1-02"
+    },
+    {
+      "aussage": "GET /api/config öffentlich (public_dict, limits, Engines, adminAuthRequired); PATCH Admin (bei rejected 400 mit rejected-Ergebnis).",
+      "beleg": "server.py:8907-8916 (kein Guard, :8915), 8921-8937; Tests protocol:270, openai_compatible:328.",
+      "evidenz": "stark",
+      "gueltigkeit": "REST, Lesen bewusst offen",
+      "id": "I1-03"
+    },
+    {
+      "aussage": "AdminGate: Key aus settings.admin_api_key ODER VOICESTT_ADMIN_API_KEY; Header x-voicestt-admin-key > Bearer > x-admin-key; konfiguriert: falsch/fehlend=401+WWW-Authenticate; kein Key: nur Loopback (127.0.0.1,::1,localhost,testclient), sonst 403.",
+      "beleg": "security/admin.py:8,15-46; service.py:21-22; Tests protocol_v2_settings:827-843,845-877; openai_compatible:327-329.",
+      "evidenz": "stark",
+      "gueltigkeit": "alle 21 Admin-HTTP-Routen; NICHT /v1/*, NICHT /ws/logs",
+      "id": "I1-04"
+    },
+    {
+      "aussage": "Modell-Familie + Kroko-Refresh vollständig Admin (erste Anweisung Guard). 9 Modell-Routen + license/refresh.",
+      "beleg": "server.py:8943-8957,8959-8964,8966-8977,8979-9027,9029-9034,9036-9072,9074-9082,9084-9092,9094-9099,9101-9113; Tests openai_compatible:327-329,386-404.",
+      "evidenz": "stark",
+      "gueltigkeit": "Modellverwaltung nicht öffentlich",
+      "id": "I1-05"
+    },
+    {
+      "aussage": "Sprache + Wake-Word Legacy Admin: GET/PUT /api/language (appliesTo neue_requests_and_sessions), GET/PUT /api/wake-word (appliesTo new_sessions; Deaktivieren leert Backend+Wörter).",
+      "beleg": "server.py:9115-9136,9138-9216 (:9156,:9136,:9167-9168); Tests openai_compatible:337-343, protocol_v2_settings:767-772.",
+      "evidenz": "stark",
+      "gueltigkeit": "REST-Legacy; nicht V2-Registry",
+      "id": "I1-06"
+    },
+    {
+      "aussage": "V2-Settings: Lesen öffentlich (Schema secretsExposed:false sortiert; Server non-secrets + Revision), PATCH Admin (200/409/422/500). protocolVersion 2 in Schema. Klarstellung: Revision nur bei /server (server_public), Schema ohne Revisionszähler (Version/Commit).",
+      "beleg": "server.py:9223-9233,9235-9242,9244-9292 (Status 9287-9292, Lock 9264-9280); Tests protocol_v2_settings:827-843,845-857,1275-1297,1313-1314.",
+      "evidenz": "stark",
+      "gueltigkeit": "REST V2",
+      "id": "I1-07",
+      "review_fix": "2026-11-08 R1-F3: Schema/Server-Revision getrennt."
+    },
+    {
+      "aussage": "Wake-Katalog V2: GET /api/v2/wake-words öffentlich (ohne Pfad, mit Revision+Verfügbarkeit); POST refresh Admin (200 ok / 422, letzter guter Katalog bleibt).",
+      "beleg": "server.py:9294-9301,9303-9318; Tests catalog_api:21-24,58-63,79-87,89-100.",
+      "evidenz": "stark",
+      "gueltigkeit": "REST V2",
+      "id": "I1-08"
+    },
+    {
+      "aussage": "Logging-Config Admin mit eigenem Versionsraum: logProtocolVersion=2, deliveryMode sqlite_first, replayAvailable; Pfade abgeleitet, nicht einzeln setzbar (400+fields). NICHT WS-Protokoll v2.",
+      "beleg": "server.py:9320-9381 (:9373-9375),9383-9444 (:9388-9403); Test openai_compatible:330-336.",
+      "evidenz": "stark",
+      "gueltigkeit": "REST-Legacy Log-Config",
+      "id": "I1-09"
+    },
+    {
+      "aussage": "Log-Historie drei Routen mit LogGate (Admin ODER Session-Token, kein reines AdminGate): events, sessions/{id}, transcriptions/{id}. Ohne Scope 401; Nicht-Admin auf audit/performance/transcription beschnitten; Antwort authorizationScope/allSessions/deliveryMode.",
+      "beleg": "server.py:9453-9477,9478-9486,9495-9526,9527-9537; security/logs.py:67-81; Tests multi_user:1413-1434,2326-2337.",
+      "evidenz": "stark",
+      "gueltigkeit": "REST-Logs, Scope pro Request",
+      "id": "I1-10"
+    },
+    {
+      "aussage": "WS /ws/logs: Verbindung annehmen, erste Nachricht zwingend subscribe{accessToken,sessionId?,channels[],afterCursor}. live aus→log_live_disabled/Close1008; kein Store→event_store_unavailable/1011; Token falsch→not_authorized/1008; Cursor negativ→invalid_cursor/1008; Cursor voraus→cursor_ahead. KEIN Loopback-Admin (anders als HTTP).",
+      "beleg": "server.py:9560-9602,9603-9648,9845-9847; security/logs.py:83-93; Tests multi_user:1444-1452,2280-2297,2339-2360.",
+      "evidenz": "stark",
+      "gueltigkeit": "WS-Logs; Live nur bei Logging an",
+      "id": "I1-11"
+    },
+    {
+      "aussage": "WS /ws/transcribe = Protokoll V1 (Legacy): Admission via Query (clientId, wakeWordEnabled, ...), KEIN Client-Handshake, SERVER-hello zuerst, 32-Hex-Session-IDs; hello mit settings/sessionConfig/activationConfig/capabilities/limits/logAccess. Limit → error + Close 1013.",
+      "beleg": "server.py:9912-9937,9938-9986,10001-10014; boundary-Test:6-9; multi_user:2263-2269.",
+      "evidenz": "stark",
+      "gueltigkeit": "nur /ws/transcribe; required compatibility path",
+      "id": "I1-12"
+    },
+    {
+      "aussage": "WS /ws/v2 = Protokoll V2: technisch annehmen, NICHTS admitten bis Client-hello; erst hello.accepted liefert protocolVersion, kanonische UUID-sessionId, Snapshot, logAccess. Nur Version 2 verhandelbar; nicht im gemeinsamen ConnectionManager; Ablehnung 4400/4406/4409. Ablehnungs-Codes 4400/4406/4408 (Handshake-Timeout)/4409; zusätzlich interner Fehler 1011.",
+      "beleg": "server.py:10121-10146,10147-10200; schema.py:29-32,37-42; handshake.py:1-21; connection.py:307-343; Tests boundary:303-340, e2e, terminal_recovery:98-102.",
+      "evidenz": "stark",
+      "gueltigkeit": "nur /ws/v2; IDs kanonisch mit Bindestrichen",
+      "id": "I1-13",
+      "review_fix": "2026-11-08 R1-F1: 4408 (Handshake-Timeout, schema.py:202-206, server.py:10236-10238) ergänzt; 1011 als interner Fehler abgegrenzt."
+    },
+    {
+      "aussage": "OpenAI exakt zwei Pfade ohne Präfix: GET /v1/models (43, Gate optional), POST /v1/audio/transcriptions (67, Gate optional + enabled). include_router ohne prefix.",
+      "beleg": "openai_routes.py:41-43,67; server.py:9899-9910; Test security_modularization:183-194.",
+      "evidenz": "stark",
+      "gueltigkeit": "Kompatibilitätsschicht; unabhängig v1/v2",
+      "id": "I1-14"
+    },
+    {
+      "aussage": "OpenAI-Auth optional key-basiert (nicht Admin): Key oder VOICESTT_API_KEY erzwingt Bearer; sonst 401 invalid_api_key + Audit. Kein Key → ohne Auth erreichbar. Beide Endpunkte authenticate_openai.",
+      "beleg": "security/openai.py:14-35; openai_routes.py:44-47,104-115; server.py:9894-9897; Test openai_compatible:179-197.",
+      "evidenz": "stark",
+      "gueltigkeit": "/v1/*; unabhängig AdminGate",
+      "id": "I1-15"
+    },
+    {
+      "aussage": "openai_api_enabled (Default true) nur für Transkription: POST deaktiviert → 404 OpenAI-Fehlerobjekt; GET /v1/models prüft Flag NICHT (nur key-gated).",
+      "beleg": "openai_routes.py:93-103 vs 43-65; server.py:506; kein Test für Disabled-Pfad (Grep ohne Treffer).",
+      "evidenz": "mittel",
+      "gueltigkeit": "Asymmetrie implementiert, ungetestet",
+      "id": "I1-16"
+    },
+    {
+      "aussage": "Negativ: keine /api/v1/*, /ws/v1, /v1/audio/translations, /v1/chat/completions, /v1/realtime, /v1/models/{id}, /api/sessions. /v1 = nur OpenAI, nicht VoiceSTT-v1.",
+      "beleg": "Voll-Grep Registrierung (nur server.py + openai_routes.py); openai_routes.py:41-67.",
+      "evidenz": "stark",
+      "gueltigkeit": "gesamte App (Negativ bei Vollständigkeit)",
+      "id": "I1-17"
+    },
+    {
+      "aussage": "GET / liefert gebündelte Browser-Oberfläche (index.html pro Request als HTML; Paketdatum deklariert).",
+      "beleg": "server.py:139-140,8881-8883; setup.py:405; Test protocol:284.",
+      "evidenz": "stark",
+      "gueltigkeit": "UI-Fläche öffentlich",
+      "id": "I1-18"
+    },
+    {
+      "aussage": "GET /api/v2/info öffentlich, no-store: Identitätsprojektion (schemaVersion, protocolVersion 2, Versionen, Commit, Build, InstanceId).",
+      "beleg": "server.py:8874-8879; Test server_info:44-55,58-71,111-120.",
+      "evidenz": "stark",
+      "gueltigkeit": "REST V2 öffentlich",
+      "id": "I1-19"
+    },
+    {
+      "aussage": "GET /health öffentlich: ok, ready, Zähler, Scheduler/Modelle, startupErrors, eventStore; ok nur wenn Metriken UND (bei Live-Log) Eventstore bereit (logging_ready).",
+      "beleg": "server.py:8885-8905 (8889-8892,8894); Tests server_info:118, openai_compatible:393,448,489, multi_user:1521.",
+      "evidenz": "stark",
+      "gueltigkeit": "Betriebsendpunkt öffentlich",
+      "id": "I1-20"
+    },
+    {
+      "aussage": "GET /api/metrics OHNE Guard öffentlich (Sessions, Speaker, Scheduler, Modelle, Startup-Fehler) – auch remote lesbar.",
+      "beleg": "server.py:8939-8941 (kein Guard); Nutzung ohne Header multi_user:2547.",
+      "evidenz": "stark",
+      "gueltigkeit": "REST öffentlich; Sicherheitsrelevanz 05.x",
+      "id": "I1-21"
+    },
+    {
+      "aussage": "Config-Validate/Reload Admin: validate prüft Kandidat (unbekannt/DERIVED → 400); reload lädt persistiert, teilt Modell/Runtime/skipped. Beide Admin.",
+      "beleg": "server.py:9849-9868,9870-9892; Test protocol:276-279.",
+      "evidenz": "stark",
+      "gueltigkeit": "REST-Legacy",
+      "id": "I1-22"
+    },
+    {
+      "aussage": "Admission = einzige WS-Kontrolle: keine Identität. V1 Limit → error + Close 1013; V2 strukturiert (4400/4406/4409).",
+      "beleg": "server.py:9970-9986; handshake.py:8-21; schema Close-Codes; Tests terminal_recovery:323-341, multi_user:2463-2464,2647-2649.",
+      "evidenz": "stark",
+      "gueltigkeit": "WS-Audio; kein Key/Token",
+      "id": "I1-23"
+    },
+    {
+      "aussage": "logAccess-Token: 32Hex×2, 24h, Speicher, in hello (V1) bzw. hello.accepted (V2) mit historyPath=/api/logs/events, sessionId, logProtocolVersion 2, deliveryMode, Cursors, expiresAt. Keine Persistenz; Neustart ungültig.",
+      "beleg": "server.py:7772-7806 (7780,7782,7801-7805),10001-10013; connection.py:331-342; logs.py:9,16-38; Test multi_user:2266-2287.",
+      "evidenz": "stark",
+      "gueltigkeit": "pro Session/Prozess",
+      "id": "I1-24"
+    },
+    {
+      "aussage": "/openapi.json,/docs,/redoc als FastAPI-Defaults (keine URL-Overrides); /openapi.json mit App-Version.",
+      "beleg": "server.py:8868-8872 (Grep docs_url/redoc_url/openapi_url ohne Treffer); Tests client_v2_identity:161, server_info:71.",
+      "evidenz": "mittel",
+      "gueltigkeit": "öffentlich; /docs//redoc Framework-Default ungetestet",
+      "id": "I1-25"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "/api/v1/* und /ws/v1 existieren nicht; V1 nur /ws/transcribe."
+    },
+    {
+      "id": "N2",
+      "thema": "Nur zwei OpenAI-Pfade; kein translations/chat/realtime/models/{id}."
+    },
+    {
+      "id": "N3",
+      "thema": "Kein /api/sessions, kein /api/wake-words (ohne v2)."
+    },
+    {
+      "id": "N4",
+      "thema": "Kein Static-Mount; UI nur GET /."
+    }
+  ],
+  "researcher_session": "ses_e438c7a0affebxYxzFxhRhs7HM",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Ob /docs//redoc produktiv erreichbar (nur Framework-Default, kein Test/Proxy-Code)."
+    },
+    {
+      "id": "U2",
+      "thema": "Ob /api/config + /api/metrics bewusst offen oder Guard fehlt (keine Begründung im Code)."
+    },
+    {
+      "id": "U3",
+      "thema": "Reverse-Proxy/Pfadpräfix (root_path nicht gesetzt) außerhalb Repo."
+    }
+  ],
+  "writer_notes": "Reine Inventarisierung: keine Schemas, keine Timeouts/Defaults, keine Felder (04.02+). Auth-Legende: öffentlich, AdminGate (Key/Loopback), LogGate (Admin/Token), OpenAI optional. Drei Versionsräume trennen (protocolVersion 2 / logProtocolVersion 2 / OpenAI /v1). Loopback-Asymmetrie + offene Leseendpunkte benennen (05.03/05.10). Konsistenz 03.06 G1-06 bestätigt.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "v1 doppelt: /v1/* OpenAI vs /ws/transcribe VoiceSTT-v1."
+    },
+    {
+      "id": "C2",
+      "thema": "Drei 2-Räume: protocolVersion 2 / logProtocolVersion 2 / WS-v2 getrennt."
+    },
+    {
+      "id": "C3",
+      "thema": "Testkommentar behauptet nur /ws/logs+/ws/transcribe; /ws/v2 existiert (nur Client-URL-Assertion)."
+    },
+    {
+      "id": "C4",
+      "thema": "Loopback-Asymmetrie: /api/logs/* ohne Key lokal Admin, /ws/logs nie."
+    },
+    {
+      "id": "C5",
+      "thema": "Admin remote 403, aber /api/metrics + GET /api/config remote 200."
+    }
+  ]
+}

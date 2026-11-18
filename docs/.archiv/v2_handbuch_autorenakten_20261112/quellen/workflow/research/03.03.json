@@ -1,0 +1,334 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup NICHT verifizierbar: Shallow-Checkout (.git/shallow vorhanden), .git/refs/heads leer, keine packed-refs; FETCH_HEAD enthält nur einen Commit-SHA, keinen Branchnamen. Der Commit bindet, der Branchname nicht.",
+  "chapter": "03.03",
+  "commit_verification": "Verifiziert: .git/HEAD enthält a8993c5c68042d996eab680d84a5b138a214bb5d; .git/logs/HEAD zeigt Checkout von main auf FETCH_HEAD; .git/FETCH_HEAD nennt denselben SHA von https://github.com/marcosudau-vps/voice-stt-server. Detached HEAD.",
+  "correction_round": 0,
+  "diagram_edges": [
+    "E1: YAML-Key wake_words_sensitivity → CLI-Dest wake_words_sensitivity (1:1, kein Sonderfall) [B1-11, B1-12]",
+    "E2: YAML-Key model_warmup → CLI-Dest no_model_warmup (invertiert, not) [B1-12]",
+    "E3: YAML-Key vad_filter → CLI-Dest no_vad_filter (invertiert, not) [B1-12]",
+    "E4: YAML-Key openai_api_enabled → CLI-Dest disable_openai_api (invertiert, not) [B1-12]",
+    "E5: YAML-Key performance_logging_enabled → CLI-Dest performance_logging (Suffix entfällt) [B1-12]",
+    "E6: YAML-Key realtime_transcription_use_syllable_boundaries → CLI-Dest realtime_use_syllable_boundaries (Wort entfällt) [B1-12]",
+    "E7: YAML-Key mit '-' → Feldname mit '_' (strip/replace) [B1-11]",
+    "E8: CLI --config → Env VOICESTT_CONFIG (Env als Default) [B1-15]",
+    "E9: Env VOICESTT_DATA_ROOT → Feld data_root_path (Suffix ergänzt) [B1-15]",
+    "E10: Env VOICESTT_TRANSCRIPT_MODE → Feld transcript_log_mode (Wort ergänzt) [B1-10]",
+    "E11: Env VOICESTT_MODEL_IDLE_UNLOAD → Feld model_idle_unload_enabled (Suffix entfällt) [B1-15]",
+    "E12: CLI --wake-words-sensitivity → Feld wake_words_sensitivity (1:1) [B1-01, B1-13]",
+    "E13: Feld wake_words_sensitivity → WakeAttemptPolicy.sensitivity (FALLBACK) [B1-05]",
+    "E14: Registry wakeWord.sensitivity → WakeAttemptPolicy.sensitivity (PRIMÄR, Session-Bundle) [B1-05, B1-03]",
+    "E15: Query wakeWordSensitivity → Feld wake_words_sensitivity (Tabellen-Mapping) [B1-08]",
+    "E16: Query wakeWordBackend → Feld wakeword_backend [B1-08]",
+    "E17: Query wakeWordInferenceFramework → Feld openwakeword_inference_framework (Präfixwechsel) [B1-08]",
+    "E18: Admin-JSON sensitivity → Feld wake_words_sensitivity (Kurzname) [B1-09]",
+    "E19: Admin-JSON transcriptMode → Feld transcript_log_mode [B1-10]",
+    "E20: Engine-Name beliebiger Schreibweise → faster_whisper/kroko_onnx (strip/lower/-→_) [B1-16]",
+    "E21: Backend-String oww/open-wakeword → openwakeword (Alias-Set) [B1-17]",
+    "E22: Human-Name 'Hey Jarvis' → hey_jarvis (Token-Normalisierung, Config-Pfad) [B1-18]",
+    "E23: Human-Name auf v2-Wire → session.rejected not_canonical (ABGELEHNT) [B1-19]",
+    "E24: Manifest-id hey_jarvis → model_key aus Dateiname (jarvis_v2.onnx → hey_jarvis) [B1-20]",
+    "E25: Modellname faster-whisper-large-v3-turbo → Token large-v3-turbo (Präfix-Strip) [B1-21]",
+    "E26: OpenAI model=fast → Lane realtime (Default-Alias) [B1-22]",
+    "E27: OpenAI model=main → Lane final (main→final) [B1-22]",
+    "E28: Registry-Key activation.followupTimeoutMs → Controller-Sekunden (/1000.0) [B1-29]",
+    "E29: Domain-Grund trigger_disabled → Wire trigger_suppressed [B1-25]",
+    "E30: vad_filter → Options-Key faster_whisper_vad_filter [B1-26]",
+    "E31: model_warmup → Options-Key warmup_vad [B1-26]",
+    "E32: example_app-YAML-Nest → Env UPPER_SNAKE (flatten+upper, Dublette=Fehler) [B1-27]"
+  ],
+  "facts": [
+    {
+      "aussage": "Derselbe logische Wert 'Wake-Word-Empfindlichkeit' hat sechs Schreibweisen: Settings-Feld wake_words_sensitivity (snake_case), CLI --wake-words-sensitivity (kebab-case, Plural 'words'), YAML-Key wake_words_sensitivity, v1-Query wakeWordSensitivity (camelCase), v1-Admin-JSON sensitivity (Kurzname), Registry-Key wakeWord.sensitivity (dotted, camelCase, Singular 'wakeWord').",
+      "beleg": "server.py:442 (ServerSettings.wake_words_sensitivity), :251, :351, :10477 (--wake-words-sensitivity), :571, :9198 (PUT-Mapping); config.yaml:64; settings_control.py:78. Test test_protocol_v2_settings.py:798.",
+      "evidenz": "stark",
+      "gueltigkeit": "V2-Commit; 'sensitivity' nur v1-Admin-REST, 'wakeWord.sensitivity' nur Control-Plane",
+      "id": "B1-01"
+    },
+    {
+      "aussage": "Alle öffentlichen Settings-Keys folgen <namespace>.<feld> und sind eine geschlossene Menge (19 Keys): activation.* (6), wakeWord.* session (8), wakeWord.* server (2), kroko.forceCommunity, runtimeSuppression.* (2). Namespace und Feld camelCase; Einheiten-Suffix nur wo nötig (…Ms).",
+      "beleg": "settings_control.py:71-93, :663-669 (schema_payload sortiert). Test test_protocol_v2_settings.py:790-814 (exakte Mengen-Gleichheit).",
+      "evidenz": "stark",
+      "gueltigkeit": "V2-Wire/REST-v2; nicht identisch mit ServerSettings-Feldnamen",
+      "id": "B1-02"
+    },
+    {
+      "aussage": "Kein automatischer Namensabgleich Registry-Key ↔ ServerSettings-Feld: die Control-Plane wird ohne ServerSettings konstruiert; Registry-Defaults plus Overlay sind die einzige Quelle.",
+      "beleg": "server.py:6288-6294 (ServerSettingsState ohne settings-Argument); settings_control.py:672-673.",
+      "evidenz": "stark",
+      "gueltigkeit": "V2, Serverstart",
+      "id": "B1-03"
+    },
+    {
+      "aussage": "runtime.json trägt parallel: version, updatedAt, settings (Legacy, snake_case) sowie settingsControlOverlay und settingsRevision (camelCase, dotted Registry-Werte). Beide Familien müssen sich gegenseitig erhalten (read-modify-write).",
+      "beleg": "operations.py:401-449, :451; server.py:528-532, :7959-7973. Test test_settings_runtime_persistence.py:48.",
+      "evidenz": "stark",
+      "gueltigkeit": "V2, Dateiformat runtime.json",
+      "id": "B1-04"
+    },
+    {
+      "aussage": "Namensfalle mit zwei Autoritäten: Detektion liest wakeWord.sensitivity aus dem Session-Bundle; ServerSettings.wake_words_sensitivity liefert nur den Fallback-Default ohne Bundle. Da settings_state pro Session immer gebaut wird, ist der Registry-Wert im Betrieb maßgeblich; CLI/YAML wirken nicht als Live-Override.",
+      "beleg": "server.py:2529-2552 (_wake_attempt_policy), :3176-3181 (Docstring), :2479-2487, :2376; settings_control.py:367-381 (Default 0.5).",
+      "evidenz": "stark",
+      "gueltigkeit": "V2; kein Test bindet diese Brücke (U-01)",
+      "id": "B1-05"
+    },
+    {
+      "aussage": "Drei Alias-Kategorien: (a) Methoden-Alias (_wake_runtime_policy = _wake_attempt_policy), (b) Property-Alias mit Historien-Kommentar (framework→backend, model_key vs. id), (c) Config-Key-Alias paths → custom_paths (lesend akzeptiert, intern nur custom_paths).",
+      "beleg": "server.py:2568-2569; wakeword_catalog.py:93-95, :180-191; stt_model_management.py:195-207.",
+      "evidenz": "stark",
+      "gueltigkeit": "V2; Alias lesend, nicht schreibend",
+      "id": "B1-06"
+    },
+    {
+      "aussage": "Wire durchgängig camelCase, Python snake_case, ohne generischen Konverter (manuelle Literal-Dicts): supportedProtocolVersions, requestedSession{trigger{manual,wakeWord},wakeWordIds}, runtimeSuppression, settingsRevision, requestedSettings/effectiveSettings, baseSettingsRevision, changes, changedKeys, applyPolicy, stateVersion.",
+      "beleg": "handshake.py:62-67, 91-176; snapshot.py:68-76; connection.py:544-580; commands.py:183-190.",
+      "evidenz": "stark",
+      "gueltigkeit": "V2-Wire + REST-v2",
+      "id": "B1-07"
+    },
+    {
+      "aussage": "v1-Query → Settings-Feld ist eine explizite Daten-Tabelle, keine Regel: wakeWordSensitivity→wake_words_sensitivity, wakeWordActivationDelay→wake_word_activation_delay, wakeWordTimeout→wake_word_timeout, wakeWordBufferDuration→wake_word_buffer_duration, wakeWordFollowupWindow→wake_word_followup_window, wakeWordBackend→wakeword_backend, wakeWords→wake_words, wakeWordInferenceFramework→openwakeword_inference_framework, wakeWordEnabled→abgeleitet wake_word_enabled().",
+      "beleg": "server.py:559-582, :655-753, :552.",
+      "evidenz": "stark",
+      "gueltigkeit": "v1-Session-Pfad (Query), nicht v2-Wire",
+      "id": "B1-08"
+    },
+    {
+      "aussage": "GET /api/wake-word mischt Kurznamen (enabled, backend, words, sensitivity, timeout) und camelCase (bufferDuration, followupWindow, openwakewordModelPaths) im selben Objekt. PUT akzeptiert genau diese Kurznamen und schreibt snake_case-Felder.",
+      "beleg": "server.py:9138-9157 (GET), :9159-9216 (PUT, Mapping :9197-9202).",
+      "evidenz": "stark",
+      "gueltigkeit": "Legacy-Admin-API (v1), nicht v2-Settings",
+      "id": "B1-09"
+    },
+    {
+      "aussage": "Logging-REST: enabled→request_logging_enabled, stdout→request_log_stdout, transcripts→request_log_transcripts, transcriptMode→transcript_log_mode, maxBytes→request_log_max_bytes, performanceEnabled→performance_logging_enabled, systemEnabled→system_event_logging_enabled, liveEnabled→log_live_enabled, calendarTimezone→log_calendar_timezone. /api/models/lifecycle akzeptiert camelCase UND snake_case gleichzeitig.",
+      "beleg": "server.py:9404-9431 (Mapping, unknown-Prüfung); :9041-9050 (Lifecycle Dual-Akzeptanz).",
+      "evidenz": "stark",
+      "gueltigkeit": "Legacy-Admin-REST; Dual-Akzeptanz nur dort",
+      "id": "B1-10"
+    },
+    {
+      "aussage": "YAML-Keys sind ServerSettings-Feldnamen, normalisiert mit strip/replace('-','_'), geprüft gegen Dataclass-Felder. version/settings übersprungen; Secrets und abgeleitete Pfade abgelehnt; unbekannte Keys → SystemExit; device nur 'cpu'; tuning_profile validiert.",
+      "beleg": "server.py:10333-10391; Tests test_fastapi_server_protocol.py:167-180, :126-165.",
+      "evidenz": "stark",
+      "gueltigkeit": "YAML-Startkonfiguration (--config/VOICESTT_CONFIG)",
+      "id": "B1-11"
+    },
+    {
+      "aussage": "YAML→CLI-Ausnahmetabelle YAML_CONFIG_TO_ARG_DEST: model_warmup→(no_model_warmup, not), vad_filter→(no_vad_filter, not), openai_api_enabled→(disable_openai_api, not), performance_logging_enabled→performance_logging, u. a.; Dicts werden zu JSON-Strings. Alle übrigen Keys 1:1 als dest.",
+      "beleg": "server.py:10303-10330 (Tabelle), :10716, :10760, :10766, :10655. Ende-zu-Ende: config.yaml:86 model_warmup:false → no_model_warmup → False.",
+      "evidenz": "stark",
+      "gueltigkeit": "YAML→CLI→Settings-Kette",
+      "id": "B1-12"
+    },
+    {
+      "aussage": "CLI-Muster --<feld-mit-bindestrichen>; Aliase --profile/--tuning-profile, --engine/--transcription-engine, --realtime-engine/--realtime-transcription-engine; abweichende dest (--data-root→data_root_path, --transcript-mode→transcript_log_mode, --stt-auto-download→stt_auto_download_enabled, --event-store, --log-live, --log-calendar-timezone). --wakeword-backend vs. --wake-words.",
+      "beleg": "server.py:10411-10433, :10436-10441, :10496, :10538-10556, :10637-10649. Test :196-236.",
+      "evidenz": "stark",
+      "gueltigkeit": "CLI",
+      "id": "B1-13"
+    },
+    {
+      "aussage": "Drei Negationskonventionen: (a) invertiertes --no-…/--disable-… mit store_true + not, (b) BooleanOptionalAction (auto --no-<flag>), (c) Felder ohne Negation.",
+      "beleg": "server.py:10458, :10496, :10519, :10497-10502, :10513-10517, :10527-10536, :10637-10642.",
+      "evidenz": "stark",
+      "gueltigkeit": "CLI",
+      "id": "B1-14"
+    },
+    {
+      "aussage": "Env = Default des CLI-Arguments, VOICESTT_<verkürzt> oft ohne Endung (MODEL_IDLE_UNLOAD→model_idle_unload_enabled, DATA_ROOT→data_root_path, TRANSCRIPT_MODE→transcript_log_mode u. a.); VOICESTT_CONFIG→--config. Zwei Namen ohne Feld: VOICESTT_API_KEY (Request-Fallback), VOICESTT_WAKEWORD_ASSET_ROOT. Bool nur {1,true,yes,on}.",
+      "beleg": "server.py:10294-10298, :10398, :10500-10653; security/openai.py:15; security/admin.py:16; wakeword_catalog.py:89; docker-compose.yml:24-38.",
+      "evidenz": "stark",
+      "gueltigkeit": "Prozess-Env",
+      "id": "B1-15"
+    },
+    {
+      "aussage": "Engine-Namen: strip/lower/-→_, kanonisch faster_whisper und kroko_onnx; 'no alias mapping'. Leer/None → faster_whisper (nur Factory); normalize_engine_name(None) → None. 'whisper'/'fasterwhisper' werden nicht gemappt.",
+      "beleg": "protocol.py:20-23; factory.py:16-36; stt_model_management.py:54-55; server.py:10695-10696. Test :296-298.",
+      "evidenz": "stark",
+      "gueltigkeit": "V2; CLI/YAML/Interna",
+      "id": "B1-16"
+    },
+    {
+      "aussage": "Wake-Backend: openwakeword/open_wakeword/oww gültig (normalisiert); ungültiger v1-Query-Wert → fallbacks[]/warnings[] mit source 'server' (kein Fehler); PUT dagegen harter 400er.",
+      "beleg": "server.py:578-582, :712-729, :9170-9176.",
+      "evidenz": "stark",
+      "gueltigkeit": "v1-Query/Admin; v2 nutzt wakeWord.inferenceBackend (C-03)",
+      "id": "B1-17"
+    },
+    {
+      "aussage": "Wake-Word-Normalisierung: NFKC, strip, Separatoren→_, _+→_, strip(_), casefold. Manifest-id muss gleich Normalform sein, sonst WakeWordManifestError. 'exact after normalisation', kein Fuzzy. Kollisionen = Katalogfehler.",
+      "beleg": "wakeword_catalog.py:145-156, :999-1006, :530-540, :980-994.",
+      "evidenz": "stark",
+      "gueltigkeit": "V2-Katalog (Core); Config-Toleranz, nicht Wire",
+      "id": "B1-18"
+    },
+    {
+      "aussage": "v2-Wire nur kanonische IDs (canonical_only=True): Alias/Anzeigename → reason not_canonical (abgelehnt); Unbekanntes → unknown. Fehlerfeld 'requestedSession.wakeWordIds'. Toleranz nur config-seitig.",
+      "beleg": "wakeword_catalog.py:542-587, :111-114, :682-684; ports.py:119-131.",
+      "evidenz": "stark",
+      "gueltigkeit": "V2-Wire; Config-Pfade toleranter",
+      "id": "B1-19"
+    },
+    {
+      "aussage": "Vier Namen je Wake Word: id (hey_jarvis), displayName ('Hey Jarvis'), alias ('jarvis'), Artefaktdatei (jarvis_v2.onnx/.tflite). Manifest-Kopf camelCase; Pflichtfelder id/displayName/artifactVersion/artifacts.",
+      "beleg": "models.json:2-5, 32-50, 177-194; wakeword_catalog.py:968-1024, :185-191.",
+      "evidenz": "stark",
+      "gueltigkeit": "V2-Katalog; Artefaktnamen keine API-Namen",
+      "id": "B1-20"
+    },
+    {
+      "aussage": "Modell-Token: strip/lower/_→-, Basename, models--X--Y→Y, faster-whisper-→Rest. Dateisuche zusätzlich models--Systran--faster-whisper-<n>/faster-whisper-<n>. resolve matcht id/name/folder/path (+alias); deterministisch, kein Fuzzy.",
+      "beleg": "stt_model_management.py:1328-1372; operations.py:212-240; model_resolver.py:49-63.",
+      "evidenz": "stark",
+      "gueltigkeit": "Modellverwaltung/Discovery",
+      "id": "B1-21"
+    },
+    {
+      "aussage": "OpenAI-Aliasse: strip/lower, 'main'→'final', sonst ValueError. Eingebaut: whisper-1, main, default, settings.model, realtime, settings.realtime_model + Registry-Aliasse + openai_model_aliases (Default {whisper-1:final, fast:realtime}). Override nur bei model='whisper-1'. /v1/models fügt ggf. Pseudo-Modell whisper-1 (routing_alias) ein.",
+      "beleg": "server.py:8435-8491, :509-513; openai_routes.py:59-64, :123-146.",
+      "evidenz": "stark",
+      "gueltigkeit": "OpenAI-HTTP-Schicht",
+      "id": "B1-22"
+    },
+    {
+      "aussage": "Gleiche Werte, andere Container: REST-v2 pro Key {requestedValue,effectiveValue,…}; Wire-Snapshot Maps requestedSettings/effectiveSettings; Patch-Result values/effectiveValues/changedKeys. Drei Feldnamen für 'wirksamer Wert'.",
+      "beleg": "settings_control.py:1407-1444, :250-264; server.py:9223-9249. Test :816-825.",
+      "evidenz": "stark",
+      "gueltigkeit": "REST-v2 vs. WS-v2",
+      "id": "B1-23"
+    },
+    {
+      "aussage": "Wire-Namen dot.separated (hello, hello.accepted, command.ack, session.snapshot, activation.command, trigger_suppression.set, session_settings.patch u. a.); Segmente teils klein (command.ack), teils underscore (trigger_suppression.set, wakeword.detected). Result-Codes underscore-only, Phasen ebenso, Aktionen nicht (activate).",
+      "beleg": "schema.py:37-57, :148-166, :107-143 (closed set), :62-89.",
+      "evidenz": "stark",
+      "gueltigkeit": "V2-Wire",
+      "id": "B1-24"
+    },
+    {
+      "aussage": "Domain-Gründe → Wire-Results per Tabelle: activated/…→applied, already_idle/…→no_change, trigger_disabled→trigger_suppressed, invalid_*→invalid_payload, controlled_activation_disabled/…→internal_error. Unbekannt → UnmappedDomainReason (lauter Testfehler).",
+      "beleg": "commands.py:206-277.",
+      "evidenz": "stark",
+      "gueltigkeit": "V2-Acks; Domain-Vokabular intern",
+      "id": "B1-25"
+    },
+    {
+      "aussage": "Engine-Options-Rename: vad_filter→faster_whisper_vad_filter, model_warmup→warmup_vad. Nur Options-Map/example_app, keine Server-Felder.",
+      "beleg": "server.py:2776, :2792; config.yaml:192, :233 (nur example_app).",
+      "evidenz": "stark",
+      "gueltigkeit": "Engine-Options-Grenze",
+      "id": "B1-26"
+    },
+    {
+      "aussage": "Namensraum example_app: liest nur payload['example_app'], flacht Nester zu UPPER_SNAKE-Env (strip/-→_/upper), Dubletten → ValueError; überschreibt os.environ, Prozess-Env gewinnt. Eigenes Vokabular (stt_backend, wake_word:-Nest) neben Server-settings:.",
+      "beleg": "example_app_config.py:150-166, :129-147, :169-186; config.yaml:172-265.",
+      "evidenz": "stark",
+      "gueltigkeit": "Beispiel-App (Client), nicht Server",
+      "id": "B1-27"
+    },
+    {
+      "aussage": "public_dict enthält Nicht-Felder (wake_word_enabled abgeleitet) und lässt Felder weg (*_engine_options, Keys, _resolved_stt_models). Abgeleitete Pfade field(init=False), YAML-unzulässig.",
+      "beleg": "server.py:545-556, :519-543.",
+      "evidenz": "stark",
+      "gueltigkeit": "öffentliche Settings-Sicht (REST/v1)",
+      "id": "B1-28"
+    },
+    {
+      "aussage": "activation.*-Keys tragen 'Ms' und Millisekunden im Wire; Umrechnung /1000.0 an genau einer Stelle. wakeWord.sensitivity ohne Suffix (0..1), cooldownMs/preRollMs mit.",
+      "beleg": "settings_control.py:125-134, :1111-1119.",
+      "evidenz": "stark",
+      "gueltigkeit": "V2-Settings; Werte → 03.04",
+      "id": "B1-29"
+    },
+    {
+      "aussage": "Fehlertexte nennen je nach Pfad Query-Namen, Feldnamen oder Registry-Key (z. B. 'wake_word_timeout muss null oder größer sein', lifecycle 'idleTimeoutSeconds', Query 'wakeWordEnabled'); Registry-Pfade den Registry-Key. Keine stabile API-Garantie.",
+      "beleg": "server.py:9054, :9063, :9210-9212, :676-687; settings_control.py:685-758.",
+      "evidenz": "mittel",
+      "gueltigkeit": "Fehlertexte; keine Tests auf Textform",
+      "id": "B1-30"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-01",
+      "thema": "Kein generischer Namens-Mapper zwischen Ebenen (kein snake↔camel-Konverter, kein Feld↔Registry-Mapping); manuelle Literale (B1-03, B1-07)."
+    },
+    {
+      "id": "N-02",
+      "thema": "workflow/diagram-notes/03.03.md fehlt; workflow/notes/03.03.md ohne inhaltliche Wünsche (Orchestrator-Hinweis, keine Code-Aussage)."
+    },
+    {
+      "id": "N-03",
+      "thema": "Kein Env-Name für wake_words, wake_words_sensitivity, wakeword_backend, model, realtime_model, language, device – nur CLI/YAML (os.getenv-Liste server.py:10295-10653)."
+    }
+  ],
+  "researcher_session": "ses_e46217ae1ffeIVjqFiYNlBdvWn",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-01",
+      "thema": "Ob CLI-/YAML-wake_words_sensitivity das v2-Detektionsverhalten je beeinflusst: kein Test, nur Fallback-Pfad (B1-05)."
+    },
+    {
+      "id": "U-02",
+      "thema": "Kein Test für YAML_CONFIG_TO_ARG_DEST (Inversion model_warmup/vad_filter/openai_api_enabled) (B1-12)."
+    },
+    {
+      "id": "U-03",
+      "thema": "Kein Test für OpenAI-Alias-Tabelle (main/default/fast) (B1-22)."
+    },
+    {
+      "id": "U-04",
+      "thema": "Branch feat/v2-release-cleanup nicht verifizierbar (Shallow, detached, leere refs)."
+    },
+    {
+      "id": "U-05",
+      "thema": "wakeWord.inferenceBackend='auto' über v1-Query nicht erreichbar; Rückschreibung auf Wire offen (B1-08)."
+    }
+  ],
+  "writer_notes": "Mapping-Graph je Ebene (YAML→CLI→ServerSettings→Engine-Options; Query/Admin-JSON→Feld; Registry→Wire); Kanten mit E-Nummern; Sonderfälle visuell markieren. C-02 als 'Falle' (wake_words_sensitivity vs. wakeWord.sensitivity), B1-12 als Sonderfall-Tabelle. Nicht duplizieren: Ebenen (03.01), Scopes (03.02), Werte (03.04), Prioritäten (03.05). Konsistenz zu K1-10, K1-23, 02.06, 02.07. Lücken U-01..U-05.",
+  "conflicts": [
+    {
+      "id": "C-01",
+      "thema": "Vier Schreibweisen Wake Word: Namespace wakeWord, Feld wakeword_backend, Quelle wake_word, Event wakeword.detected (B1-01/02/08/24)."
+    },
+    {
+      "id": "C-02",
+      "thema": "wake_words_sensitivity (Plural, CLI/YAML/Feld/Query) vs. wakeWord.sensitivity (Singular, Registry): zwei Autoritäten, gleiche Wertebereiche (B1-05). Zentrale Namensfalle."
+    },
+    {
+      "id": "C-03",
+      "thema": "openwakeword_inference_framework (Default onnx, Query nur onnx|tflite) vs. wakeWord.inferenceBackend ([auto,onnx,tflite], auto mit Plattformpräferenz) (B1-02, B1-08)."
+    },
+    {
+      "id": "C-04",
+      "thema": "/api/wake-word GET mischt Kurznamen und camelCase im selben Objekt (B1-09)."
+    },
+    {
+      "id": "C-05",
+      "thema": "REST-v2 requestedValue/effectiveValue vs. Wire requestedSettings/effectiveSettings vs. Result values/effectiveValues (B1-23)."
+    },
+    {
+      "id": "C-06",
+      "thema": "/api/models/lifecycle akzeptiert camelCase UND snake_case, andere Endpunkte lehnen Unbekanntes hart ab (B1-10)."
+    },
+    {
+      "id": "C-07",
+      "thema": "Drei Negationsstile in der CLI (B1-14)."
+    },
+    {
+      "id": "C-08",
+      "thema": "public_dict: abgeleitetes wake_word_enabled neben Feldern wie wakeword_backend (B1-28)."
+    },
+    {
+      "id": "C-09",
+      "thema": "Fehlertexte nennen je nach Pfad Query-/Feld-/Registry-Namen; nicht API-vertraglich (B1-30)."
+    },
+    {
+      "id": "C-10",
+      "thema": "example_app-Vokabular neben Server-Vokabular in derselben config.yaml (B1-27)."
+    }
+  ]
+}

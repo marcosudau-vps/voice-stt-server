@@ -1,0 +1,317 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD). Nur Commit bindend.",
+  "chapter": "08.01",
+  "commit_verification": ".git/HEAD Zeile 1 direkt a8993c5c68042d996eab680d84a5b138a214bb5d (detached, keine Ref). Quellen nur *.py + tests/contracts/*.json.",
+  "conflicts": [
+    {
+      "id": "C-1",
+      "thema": "Interne Namen != v2-Namen (activation.closed/refreshed, transcription.recording_*); Trennung noetig."
+    },
+    {
+      "id": "C-2",
+      "thema": "Auftrag nennt overloaded; implementiert scheduler.overloaded."
+    },
+    {
+      "id": "C-3",
+      "thema": "settings.changed scope immer session (auch next_session/server_restart)."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [
+    "L(activation_started)->E(activation.started)",
+    "L(activation_refreshed)->E(activation.phase_changed)",
+    "phase_move->E(activation.phase_changed) vor Ziel-Event",
+    "L(activation_closed)->E(activation.input_closed)",
+    "L(drained:completed/cancelled/failed)->E(completed/cancelled/failed)",
+    "L(recording_started/ended)->E(segment.recording_*)",
+    "L(transcription_started)->E(accepted)",
+    "L(realtime_transcript)->E(interim)",
+    "L(final_transcript)->E(completed)",
+    "L(discarded/cancelled)->E(discarded 2:1)",
+    "L(failed)->E(failed)",
+    "L(watchdog_warning)->E(watchdog.warning)",
+    "L(wakeword_detected)->E(wakeword.detected)",
+    "L(availability_changed)->E(availaibility_changed)",
+    "ack(trigger_suppressed)->E(trigger_suppressed)",
+    "patch(applied)->E(settings.changed 1..4 Gruppen)",
+    "5 Wait/Followup/Timeout->X verworfen",
+    "__input_closing__->advance_state kein Event",
+    "__session_terminal__->close(1011) kein Event",
+    "E(v2)->/ws/v2-Client",
+    "I(intern)->SQLite->/ws/logs"
+  ],
+  "facts": [
+    {
+      "aussage": "v2-Envelope geschlossen zentral mint_event: type/protocolVersion=2/sessionId/eventId UUID/eventSeq ab 1/stateVersion/occurredAt; logical_key Deduplikation.",
+      "beleg": "session.py:105-144; schema new_canonical_id; vectors:90-109; contract:547-611; state_version:669-672",
+      "evidenz": "hoch",
+      "gueltigkeit": "pro /ws/v2-Verbindung",
+      "id": "EV8-01"
+    },
+    {
+      "aussage": "stateVersion nur sichtbare Aenderungen; NON_STATE watchdog.warning/trigger_suppressed/interim; advance_state ohne Event.",
+      "beleg": "session.py:86-101,118-127; schema:191-197",
+      "evidenz": "hoch",
+      "gueltigkeit": "v2-Wire",
+      "id": "EV8-02"
+    },
+    {
+      "aussage": "activation.started: activationId/Sequence/primarySource/inputPhase=waiting_first_speech/effectiveSettings; Trigger Legacy nur reason==activated.",
+      "beleg": "events.py:194-198,308-319; server.py:4346-4349; vectors:90-109",
+      "evidenz": "hoch",
+      "gueltigkeit": "v2",
+      "id": "EV8-03"
+    },
+    {
+      "aussage": "phase_changed 2 Wege (abgeleitet vor Ziel-Event; refresh same-phase neuer Deadline); Felder Id/previous/input/deadline/remaining; keine Ableitung bei ANNOUNCING/CATALOG.",
+      "beleg": "events.py:84-92,134-150,170-192,321-332",
+      "evidenz": "hoch",
+      "gueltigkeit": "v2 (deadline null zulaessig)",
+      "id": "EV8-04"
+    },
+    {
+      "aussage": "input_closed: Id/reason Default/ causedByCommandId nur finish|cancel /acceptedSegmentCount; genau-einmal via Registrierung+logical_key Republish identisch.",
+      "beleg": "events.py:292-294,334-342; server.py:3994-4051",
+      "evidenz": "hoch",
+      "gueltigkeit": "v2",
+      "id": "EV8-05"
+    },
+    {
+      "aussage": "Terminals aus activation_drained gefaechert (completed ohne reason, cancelled/failed mit Ledger-Default); logical_key terminal; unbekannt still verworfen.",
+      "beleg": "events.py:76-80,453-475; server.py:4559-4567; segment_ledger:16",
+      "evidenz": "hoch",
+      "gueltigkeit": "v2",
+      "id": "EV8-06"
+    },
+    {
+      "aussage": "trigger_suppressed diagnostisch nur nach Ack result==trigger_suppressed; Felder source/reason konstant; kein stateVersion.",
+      "beleg": "connection.py:448-449,483-503,663-677; schema:117",
+      "evidenz": "hoch",
+      "gueltigkeit": "v2 (Setzen selbst kein Event)",
+      "id": "EV8-07"
+    },
+    {
+      "aussage": "Segment-Identitaet dreifach; started nur 3, ended +reason Default; ohne Id/Korrelation Builder None (kein Fallback); erste Zuordnung memoisiert.",
+      "beleg": "events.py:211-281,344-352",
+      "evidenz": "hoch",
+      "gueltigkeit": "v2",
+      "id": "EV8-08"
+    },
+    {
+      "aussage": "Transkription: accepted Ids; interim/completed +text Default; discarded/failed +reason Default; interim 21 optionale Passthrough-Felder nur wenn vorhanden/nicht None; kein cancelled (discarded).",
+      "beleg": "events.py:64-67,354-412; vectors:110-131",
+      "evidenz": "hoch",
+      "gueltigkeit": "v2 (interim NON_STATE)",
+      "id": "EV8-09"
+    },
+    {
+      "aussage": "Spaetes Interim nach Terminal verworfen (project []): kein Id/Seq/Luecke.",
+      "beleg": "events.py:110,123-131,151-159",
+      "evidenz": "mittel (Code klar, indirekt E2E)",
+      "gueltigkeit": "letzte Grenze",
+      "id": "EV8-10"
+    },
+    {
+      "aussage": "watchdog.warning Ids optional null + deadline/remaining immer; Trigger Legacy Entscheidungsebene; NON_STATE.",
+      "beleg": "events.py:414-426; server.py:3907-3911,4326-4344",
+      "evidenz": "hoch",
+      "gueltigkeit": "v2",
+      "id": "EV8-11"
+    },
+    {
+      "aussage": "wakeword.detected Id/wakeWordId(+Fallback)/score unveraendert/primarySource wake_word; nur zugelassene Admission (abgelehnt nichts).",
+      "beleg": "events.py:428-437; server.py:2665-2682,5764-5782; wake_admission",
+      "evidenz": "hoch/mittel",
+      "gueltigkeit": "v2 (score unvalidiert)",
+      "id": "EV8-12"
+    },
+    {
+      "aussage": "availability_changed Katalogebene catalogRevision int + availableWakeWordIds list, kein activationId; fehlend/falsch -> None; kein Phasen-Event; bei jeder Revision an alle Live.",
+      "beleg": "events.py:92,439-449; server.py:2721-2728,7214-7242",
+      "evidenz": "hoch/mittel",
+      "gueltigkeit": "v2 katalogweit",
+      "id": "EV8-13"
+    },
+    {
+      "aussage": "settings.changed revision int + scope session konstant + changedKeys sortiert + applyPolicy; Gruppen live>next_activation>next_session>server_restart, nur erste state_change; key (revision,policy); nur applied (kein no_change/conflict/rejected).",
+      "beleg": "connection.py:523-582; settings_control:51-60; settings:120-209",
+      "evidenz": "hoch",
+      "gueltigkeit": "v2 (scope hart session)",
+      "id": "EV8-14"
+    },
+    {
+      "aussage": "Legacy-Projektion verwerfend: ausserhalb LEGACY_EVENT_TYPES -> []; 5 Wait/Followup/Timeout nur v1 timeline.",
+      "beleg": "events.py:54-73,119-121; server.py:5649-5820; contract:637-646; e2e:1181-1201",
+      "evidenz": "hoch",
+      "gueltigkeit": "v2 (bewusste Luecke)",
+      "id": "EV8-15"
+    },
+    {
+      "aussage": "Marker nie Wire: __input_closing__ nur Versionsbildung (einmal je Id/Seq), __session_terminal__ close 1011 ohne Nachricht/Code; closing_input sichtbar ohne Event.",
+      "beleg": "server.py:5952-5963; connection.py:695-740",
+      "evidenz": "hoch",
+      "gueltigkeit": "v2 Marker keine Events",
+      "id": "EV8-16"
+    },
+    {
+      "aussage": "Interne transcription-Namen != v2 (recording_started/ended, refreshed, closed, drained-Faecher); intern vor v2-Observer.",
+      "beleg": "server.py:5921-5950",
+      "evidenz": "hoch",
+      "gueltigkeit": "Kanal transcription (Terminologie-Trennung)",
+      "id": "EV8-17"
+    },
+    {
+      "aussage": "Kanal+Name orthogonal: transcription.completed auf audit+transcription; transcription.* auch performance (realtime_emitted/performance_summary); Filter channel+event (/ws/logs).",
+      "beleg": "openai_routes:81-92,263,303,402,484,536,558; server.py:9605-9616",
+      "evidenz": "hoch/mittel",
+      "gueltigkeit": "intern (Schluessel Paar)",
+      "id": "EV8-18"
+    },
+    {
+      "aussage": "Sanitisierung Vertragsbestandteil: emit schemaVersion1/eventId/timestamp/channel/event/severity/instanceId/Kontext(6)/data/meldung?; Drops Secrets/Token/Cookie/Audio/Query/Transkripte je mode (final nur transcription+completed).",
+      "beleg": "event_logging:21-28,116-186,916-1006,144-155",
+      "evidenz": "hoch/mittel",
+      "gueltigkeit": "intern (nicht v2; Queue-Verlust UNKNOWN)",
+      "id": "EV8-19"
+    },
+    {
+      "aussage": "system 6: starting(host,port)/stopping(message)/ready(healthy,models)/overloaded(warning+Ids/lane/reason)/worker.failed(error+component)/recorder.failed(error+transport/Ids); 2 Lifecycle 2 Fehler + Ingest.",
+      "beleg": "server.py:3024,7278,7318,7505,8524,8635",
+      "evidenz": "hoch/mittel",
+      "gueltigkeit": "Kanal system (overloaded=scheduler.overloaded)",
+      "id": "EV8-20"
+    },
+    {
+      "aussage": "Reihenfolge ein Dispatch-Lock (Mint+Senden Block, Projektion Wire-Reihenfolge Phase-vor-Ereignis); settings/Snapshots gleiche Grenze; Writer nach Freigabe.",
+      "beleg": "connection.py:86,514,681-712,787; server.py:10171-10179; state_version:642-672",
+      "evidenz": "hoch",
+      "gueltigkeit": "pro Verbindung",
+      "id": "EV8-21"
+    },
+    {
+      "aussage": "v2 nur /ws/v2 via Observer+Queue; nie ConnectionManager; Legacy-Payloads nie dorthin.",
+      "beleg": "server.py:5920,10121-10146; connection.py:325",
+      "evidenz": "hoch",
+      "gueltigkeit": "1 Client pro Verbindung",
+      "id": "EV8-22"
+    },
+    {
+      "aussage": "command.ack kein Event: type/version/session/commandId/accepted applied|no_change/result 15/activationId/inputPhase (idle normalisiert)/stateVersion/settingsRevision/errors[]; closing meldet Eintritts-Version.",
+      "beleg": "connection.py:452-479,620-652; schema:124-143; settings_control:224",
+      "evidenz": "hoch",
+      "gueltigkeit": "Antwort, nicht EVENT_TYPES",
+      "id": "EV8-23"
+    },
+    {
+      "aussage": "Close-Codes Terminatoren: 4400 Handshake, 4406 inkompatibel, 4408 Timeout 10.0s, 4409 rejected, 1011 intern/terminal; 1011 einziger eventloser Ende-Weg.",
+      "beleg": "schema:202-209; connection:695-702; terminal_recovery; contract:262-291",
+      "evidenz": "hoch",
+      "gueltigkeit": "Transport (kein Domaenenevent)",
+      "id": "EV8-24"
+    },
+    {
+      "aussage": "SOLL S1 18 v2-Events (Tupel-Reihenfolge).",
+      "beleg": "schema.py:148-187",
+      "evidenz": "A (Liste)",
+      "gueltigkeit": "Wire",
+      "id": "S1"
+    },
+    {
+      "aussage": "SOLL S2 13 BUILDERS + S3 5 ausserhalb (3 Terminals + settings + suppressed) = 18 geschlossen.",
+      "beleg": "events.py:478-508,453-475; connection.py:544-582,663-677",
+      "evidenz": "A",
+      "gueltigkeit": "Erzeuger geschlossen",
+      "id": "S2"
+    },
+    {
+      "aussage": "SOLL S4 NON_STATE 3 (watchdog, suppressed, interim).",
+      "beleg": "schema.py:191-197",
+      "evidenz": "A",
+      "gueltigkeit": "kein stateVersion",
+      "id": "S3"
+    },
+    {
+      "aussage": "SOLL S5 Legacy 15->13 (2:1 discarded, drained None) + Terminals completed/cancelled/failed.",
+      "beleg": "events.py:54-80",
+      "evidenz": "A",
+      "gueltigkeit": "Mapping",
+      "id": "S4"
+    },
+    {
+      "aussage": "SOLL S6 publiziert 20 (15 gemappt + 5 verworfen: followup_started/timeout, timeout, wait_started/ended) + 2 Marker.",
+      "beleg": "server.py Publish-Aufrufe; marker 5957,5963",
+      "evidenz": "A",
+      "gueltigkeit": "Timeline vs v2",
+      "id": "S5"
+    },
+    {
+      "aussage": "SOLL S7 intern: audit 16 Katalog/13 emittiert (3 WS nie), performance 12/12, system 6, transcription 20 (14 Tabelle + 6 direkt).",
+      "beleg": "operations.py:18-50; server emit-Aufrufe",
+      "evidenz": "A",
+      "gueltigkeit": "Hub-Kanaele",
+      "id": "S6"
+    },
+    {
+      "aussage": "SOLL S8 /ws/logs 8 Typen (hello/subscribed/gap/replay_completed/event/pong/keepalive/error).",
+      "beleg": "server.py:9560-9830",
+      "evidenz": "A",
+      "gueltigkeit": "Logstream",
+      "id": "S7"
+    },
+    {
+      "aussage": "SOLL S9 Abgrenzung: 6 Nicht-Events + 5 Command-Typen.",
+      "beleg": "schema.py:37-57",
+      "evidenz": "A",
+      "gueltigkeit": "keine Events",
+      "id": "S8"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "NI-1",
+      "thema": "Kein v2-Event fuer audio_availability.set (nur advance_state)."
+    },
+    {
+      "id": "NI-2",
+      "thema": "Kein v2-Event fuer trigger_suppression.set applied (nur advance_state)."
+    },
+    {
+      "id": "NI-3",
+      "thema": "Kein v2-Event fuer closing_input-Eintritt (nur advance_state)."
+    },
+    {
+      "id": "NI-4",
+      "thema": "Kein v2 fuer 5 Wait/Followup/Timeout-Namen."
+    },
+    {
+      "id": "NI-5",
+      "thema": "3 audit-Namen nie emittiert (websocket.connected/disconnected/session_config_rejected)."
+    },
+    {
+      "id": "NI-6",
+      "thema": "Kein v2-Namen transcription.cancelled (discarded+reason)."
+    }
+  ],
+  "researcher_session": "ses_e36d6e92effe8N3ujGcX7xcjqu",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-1",
+      "thema": "wakeword.score je null (Builder validiert nicht)."
+    },
+    {
+      "id": "U-2",
+      "thema": "phase deadline/remaining je null (Code erlaubt, Vektor nicht)."
+    },
+    {
+      "id": "U-3",
+      "thema": "Interne Drops durch Queue-Verdraengung (Zaehler, Schwellen config)."
+    },
+    {
+      "id": "U-4",
+      "thema": "Kein v2-Heartbeat (nur /ws/logs keepalive); keinen Timeout raten."
+    }
+  ],
+  "writer_notes": "Katalog-Vollstaendigkeit: S1 18 + S2/S3 geschlossen + S4-9 Abgrenzung. (Kanal,Name) Schluessel intern; v2 nicht ueber Hub. Terminologie-Trennung intern vs v2. NOT_REQUESTED."
+}

@@ -1,0 +1,271 @@
+{
+  "branch_note": "Der Branch feat/v2-release-cleanup ist in diesem Klon NICHT verifizierbar: kein Ref unter .git/refs/heads, kein packed-refs, HEAD detached auf dem Commit. Commit-Bindung ist belegt, Branch-Name nicht (U-04).",
+  "chapter": "03.05",
+  "commit_verification": "Checkout C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src. .git/HEAD Zeile 1 enthaelt direkt den SHA a8993c5c68042d996eab680d84a5b138a214bb5d (Detached HEAD). .git/refs/heads ist leer, .git/packed-refs existiert nicht. Nur zulaessige Quellen benutzt: server.py, settings_control.py, activation.py, protocol_v2/*, security/*, operations.py, config.yaml, Dockerfile, docker-compose.yml, tests/unit/*.",
+  "correction_round": 0,
+  "diagram_edges": [
+    "P1-06: [Env VOICESTT_* punktuell] --> add_argument(default=...)",
+    "P1-05: [YAML --config/VOICESTT_CONFIG] --> load_yaml_config_defaults --> parser.set_defaults (nach allen add_argument)",
+    "P1-03: [CLI] --gewinnt--> [YAML] --gewinnt--> [Env-Default] --gewinnt--> [Arg-Default]",
+    "P1-03: [arg == None] --> _tuning_defaults(BASE_TUNING_DEFAULTS + Profil custom leer) --> [ServerSettings]",
+    "P1-07: [runtime.json .settings] --setattr (Ausnahmen: admin_api_key, data_root_path, openai_api_key, abgeleitete Pfade)--> [ServerSettings]",
+    "P1-07: [ServerSettings nach Datei] --> __post_init__ --> enforce_cpu_model_policy",
+    "P1-02: [ServerSettings] -.keine Kante.-> [SettingsRegistry.defaults]",
+    "P1-09: [SettingsRegistry.defaults] --> [SessionSettingsState]",
+    "P1-08: [runtime.json settingsControlOverlay] --> load_control --> [ServerSettingsState.overlay] --> server_effective()",
+    "P1-10: server_effective() --> [SessionSettingsState] <-- wakeWord.selection-Override <-- [hello.wakeWordIds]",
+    "P1-11: [PATCH /api/v2/settings/server] --> patch_server --> [settingsControlOverlay + settingsRevision] (Vollkopie)",
+    "P1-16: [hello.requestedSession.wakeWordIds] --> Katalog-Resolve --> Session-Request",
+    "P1-17: [hello.runtimeSuppression] --> controller.set_runtime_suppression --> live ueber effectiveSettings (schlaegt writable=false-Defaults)",
+    "P1-14: [v2: activation_admission_settings] --> ActivationTimingPolicy --> activate()",
+    "P1-14: [v1: Query-Timings] --> activation_config --> Controller-Konstruktor --> _timing_locked (policy None)",
+    "P1-13: [Domaene wakeWord.*] --> WakeAttemptPolicy; [ServerSettings.wake_words_sensitivity] -.nur Fallback.-> WakeAttemptPolicy",
+    "P1-18: [PATCH /api/config] --> RAM (appliesTo active_sessions|new_sessions) --> persist_settings --> [runtime.json .settings]",
+    "P1-19: [NEW_SESSION-Wert] --> nur Sessions mit replace(settings) nach dem Patch",
+    "P1-22: [erster /api/config-Patch] --> Datei pinnt ACTIVE|NEW_SESSION|STARTUP_ONLY --> naechster Start ignoriert spaetere CLI/YAML/Env-Aenderungen",
+    "NICHT ZEICHNEN: [ServerSettings] --> [SessionSettingsState]; [YAML] --> [SettingsDomain]; [Client] --> [runtime.json]; [SessionSettingsState] --> [runtime.json]"
+  ],
+  "facts": [
+    {
+      "aussage": "Prioritaetsmatrix Prozesskonfiguration (ServerSettings): (1) CLI-Argument schlaegt YAML, Env-Default, Arg-Default, Tuning-Defaults, Dataclass-Default; (2) YAML via set_defaults schlaegt Env-Default, Arg-Default, Tuning-Default; (3) punktueller Env-Default schlaegt Arg-Default, Tuning-Default, Dataclass-Default; (4) Arg-Default schlaegt Dataclass-Default; (5) BASE_TUNING_DEFAULTS/Profil (nur 8 Keys, nur wenn arg None) schlaegt Dataclass-Default; (B) persistierte Legacy-Sektion schlaegt beim Start alle obigen ausser admin_api_key, data_root_path, openai_api_key und abgeleiteten Pfaden; (C) Overlay schlaegt Registry-Defaults (andere Ebene).",
+      "beleg": "server.py parse_args Z. 10394-10656 (set_defaults Z. 10655), settings_from_args Z. 10684-10810, main Z. 10813-10835, ServerSettings Z. 403-514, BASE_TUNING_DEFAULTS Z. 151-160, TUNING_PROFILES Z. 162-167, load_yaml_config_defaults Z. 10333-10391, create_app Z. 8816-8843; operations.py Z. 401-556.",
+      "evidenz": "A",
+      "gueltigkeit": "Startkonfiguration und Bootzeit",
+      "id": "P1-00a"
+    },
+    {
+      "aussage": "Prioritaetsmatrix Settings-Domaene (je Session): (1) Registry default_value; (2) server_effective() (Overlay-Datei vor Default, Vollkopie); (3) Session-Request (wakeWord.selection); (4) Session-Patch (nur requested, effective je applyPolicy); (5) Live-Suppression aus dem Controller. Keine Kante zwischen Prozesskette und Domaenenkette.",
+      "beleg": "settings_control.py Z. 875-913, Z. 278-609, Z. 1171-1258; server.py Z. 3173-3196, Z. 2376, Z. 3302-3348, Z. 3350-3407; connection.py Z. 307-328.",
+      "evidenz": "A",
+      "gueltigkeit": "Settings-Domaene je Session und Overlay",
+      "id": "P1-00b"
+    },
+    {
+      "aussage": "Metafakt Quellenbindung: geprueft ist genau Commit a8993c5c68042d996eab680d84a5b138a214bb5d; kein Branch-Ref im Klon.",
+      "beleg": ".git/HEAD Z. 1; .git/refs/heads leer; kein packed-refs.",
+      "evidenz": "A",
+      "gueltigkeit": "gesamtes Kapitel 03.05",
+      "id": "P1-01"
+    },
+    {
+      "aussage": "Zwei disjunkte Autoritaetsraeume ohne Kreuzkante: Prozesskonfiguration (ServerSettings) und Settings-Domaene (Registry/ServerSettingsState/SessionSettingsState). Die Domaene enthaelt nur Registry-Keys; Prozessfelder haben dort keine Definition. Server-Patch schreibt nur settings_control.",
+      "beleg": "settings_control.py Z. 278-609, Z. 613-673; server.py Z. 9244-9292, Z. 8907-8916.",
+      "evidenz": "A",
+      "gueltigkeit": "gesamte Matrix; Grenze zu 03.01 K1-23",
+      "id": "P1-02"
+    },
+    {
+      "aussage": "Startkette: CLI > YAML > Env-Default > Arg-Default, Tuning-Defaults ganz unten. Vorab-Parser nur --config (Default VOICESTT_CONFIG), YAML via set_defaults nach allen add_argument, dann parse_args. Acht Tuning-Keys mit Arg-Default None → _tuning_defaults greift; YAML-Werte sind nicht None und schlagen Tuning.",
+      "beleg": "server.py Z. 10394-10401, 10655-10656, 10659-10668, 10712-10731; BASE_TUNING_DEFAULTS Z. 151-160; TUNING_PROFILES Z. 162-167; Tests test_fastapi_server_protocol.py Z. 126-165, 196-227, 182-194.",
+      "evidenz": "A",
+      "gueltigkeit": "Startkonfiguration (YAML>Env nur Code-Reihenfolge, B/C)",
+      "id": "P1-03"
+    },
+    {
+      "aussage": "Code-Defaults doppelt: add_argument-Default und ServerSettings-Feld-Default (z. B. port 8010 beidseitig). Ueber main() gewinnen Arg-Defaults (settings_from_args setzt jedes Feld); bei direktem create_app(ServerSettings()) gelten Dataclass-Defaults.",
+      "beleg": "server.py Z. 403-514, Z. 10409-10654, Z. 10687-10810, Z. 10813-10835.",
+      "evidenz": "A",
+      "gueltigkeit": "Default-Ebene (C-01 Doppelpflege)",
+      "id": "P1-04"
+    },
+    {
+      "aussage": "YAML ist optional (nur --config/VOICESTT_CONFIG, keine Auto-Suche); nur fields(ServerSettings); version muss 1 sein; settings-Objekt oder flach. Abgelehnt (SystemExit): Secrets, abgeleitete Pfade, unbekannte Namen, device != cpu. Invertierungs-/JSON-Tabelle (model_warmup→no_model_warmup, vad_filter→no_vad_filter, openai_api_enabled→disable_openai_api, Dicts→JSON). Keine YAML-Wege fuer Domaenen-Keys und Secrets.",
+      "beleg": "server.py Z. 10333-10391, Z. 10301-10330, Z. 10341-10346; Tests Z. 167-180, Z. 229-242.",
+      "evidenz": "A",
+      "gueltigkeit": "Startkonfiguration",
+      "id": "P1-05"
+    },
+    {
+      "aussage": "Env-Defaults punktuell und unter YAML: genau 23 verdrahtete VOICESTT_-Variablen als Arg-Defaults (VOICESTT_CONFIG, MODEL_IDLE_*, MODEL_MEMORY_POLICY, ALLOW_TWO_MEDIUM, ADMIN_API_KEY, REQUEST_*/TRANSCRIPT_*/PERFORMANCE_*/SYSTEM_EVENT_*/LOG_CALENDAR_TIMEZONE/REALTIME_LOG_DETAIL/EVENT_STORE/LOG_LIVE/SAVE_AUDIO_FILES). Bool 1/true/yes/on. Kein generisches Mapping, kein dotenv-Loader.",
+      "beleg": "server.py Z. 10294-10298, Z. 10398-10653. Negativ-Grep load_dotenv (nur examples/).",
+      "evidenz": "A",
+      "gueltigkeit": "Startkonfiguration",
+      "id": "P1-06"
+    },
+    {
+      "aussage": "Persistierte Legacy-Sektion schlaegt beim Start alle CLI/Env/YAML-Werte: create_app laedt load() und setattr jedes hasattr-Feldes ausser DERIVED_DATA_PATH_SETTINGS, admin_api_key, data_root_path, openai_api_key; danach __post_init__ + enforce_cpu_model_policy. Unbekannte Namen still ignoriert (anders als Overlay). coerce_setting_value-Fehler → ValueError/Startabbruch.",
+      "beleg": "server.py Z. 8816-8843, Z. 8764-8801, Z. 1219-1273; Tests Z. 244-252, multi_user Z. 419-438.",
+      "evidenz": "B",
+      "gueltigkeit": "Startzeit (host/port/device/log_level nicht ausgenommen → U-01)",
+      "id": "P1-07"
+    },
+    {
+      "aussage": "Overlay eigener Raum, fail-fast: settingsControlOverlay + settingsRevision in VoiceSTTService geladen (nicht create_app). Strikt: Objekt, has_server_default, kein Secret, Typ/Constraints, Cross-Field, Revision ≠ bool und ≥ 0; sonst ValueError/Startabbruch; nur fehlende Sektionen → ({}, 0). Kein CLI/YAML-Eingang; Prioritaet nur Datei vor Registry-Default.",
+      "beleg": "server.py Z. 6282-6293; settings_control.py Z. 1174-1240; operations.py Z. 471-516; Tests test_settings_control_plane.py Z. 787-847, test_settings_runtime_persistence.py Z. 229-270.",
+      "evidenz": "A",
+      "gueltigkeit": "Server-Defaults fuer neue Sessions",
+      "id": "P1-08"
+    },
+    {
+      "aussage": "Registry-Defaults unterste Domaenen-Ebene, nicht aus ServerSettings gespeist: SessionSettingsState = registry.defaults() < server_defaults (nur bekannte Keys) < requested. server_defaults nur aus server_effective(), requested nur aus Wake-Auswahl. Keine Stelle uebertraegt ServerSettings-Werte in Defaults/Seed. --wake-words-sensitivity 0.3 aendert wakeWord.sensitivity 0.5 nicht.",
+      "beleg": "settings_control.py Z. 885-913; server.py Z. 3173-3196.",
+      "evidenz": "A",
+      "gueltigkeit": "Domaenen-Ebene",
+      "id": "P1-09"
+    },
+    {
+      "aussage": "Session-Merge einmalig im Konstruktor: Registry-Default < server_effective() < Session-Request. Spaeterer Server-Patch schreibt bestehende Sessions nicht um; neue sehen ihn.",
+      "beleg": "settings_control.py Z. 899-913; server.py Z. 2376, Z. 3173-3196, Z. 3261-3263, Z. 3302-3348; Test Z. 347-361.",
+      "evidenz": "A",
+      "gueltigkeit": "pro Session",
+      "id": "P1-10"
+    },
+    {
+      "aussage": "Overlay ist Vollkopie (alle server_default_keys), kein Delta; patch_server persistiert next_overlay ganz. Ab erstem Server-Patch pinnt die Datei alle damaligen Registry-Defaults; spaeterer Code-Default-Wechsel wird beim Start ueberschrieben.",
+      "beleg": "settings_control.py Z. 1222-1240, Z. 1359-1369; operations.py Z. 451-469.",
+      "evidenz": "B",
+      "gueltigkeit": "persistente Server-Defaults (U-02)",
+      "id": "P1-11"
+    },
+    {
+      "aussage": "Legacy-Sektion und Overlay teilen eine Datei als verschiedene Ebenen: Read-Modify-Write unter Lock, atomar via Temp+os.replace; unbekannte Top-Level-Felder bleiben. load() akzeptiert {settings:{...}} und flache Payload; Legacy schreibt verschachtelt mit version/updatedAt. Keine Ueberlappung (Feldnamen vs. Domaenen-Keys).",
+      "beleg": "operations.py Z. 401-449, Z. 451-516, Z. 518-545; Tests Z. 39-109, 157-227; multi_user Z. 426-432.",
+      "evidenz": "A",
+      "gueltigkeit": "Dateiform/Persistenz (Detail 03.10)",
+      "id": "P1-12"
+    },
+    {
+      "aussage": "Wake-Policy: Domaene schlaegt Prozesswert; wake_words_sensitivity nur Fallback. _wake_attempt_policy aus effective_settings (sensitivity, minPredictionFrames, detectorGain, cooldownMs, preRollMs) + Revision; ServerSettings-Wert nur bei Bundle-Fehlschlag/fehlendem/nicht-numerischem Key. Registry-Default 0.5 immer vorhanden → Prozesswert erreicht v2-Erkennung nicht.",
+      "beleg": "server.py Z. 2520-2566, Z. 2467; settings_control.py Z. 367-381.",
+      "evidenz": "B",
+      "gueltigkeit": "Wake-Erkennung je Session",
+      "id": "P1-13"
+    },
+    {
+      "aussage": "Activation-Timings: v2 aus der Domaene (atomares Bundle, Sekunden = ms/1000 → activate); v1 mit timing_policy=None → _timing_locked aus Konstruktorwerten (activation_config aus Query/DEFAULT_*). Nicht aus ServerSettings geerbt; laufende Activation behaelt Latch.",
+      "beleg": "server.py Z. 3350-3407, Z. 2421-2441, Z. 2615-2628; activation.py Z. 464-509, Z. 272-288; Query-Pfad Z. 1048-1079, 1110-1150, 1153-1208.",
+      "evidenz": "A",
+      "gueltigkeit": "Activation-Timing je Session/Activation",
+      "id": "P1-14"
+    },
+    {
+      "aussage": "v1-Session-Request ueber Serverkonfiguration mit Fallback: replace(self.settings) kopiert, dann feldspezifische Request-Overrides (wakeWord*, Trigger-/Timing-Query). wakeWordEnabled=inherit/null erbt; ungueltiger Wert → Serverwert restauriert + fallbacks/warnings session_config_value_fallback; fehlendes Feld → Serverwert (source server).",
+      "beleg": "server.py Z. 655-753, Z. 764-976, Z. 7335-7341, Z. 9912-9945; Tests Z. 354-381, Z. 462-486.",
+      "evidenz": "A",
+      "gueltigkeit": "v1-Session-Aufbau (nicht Domaene)",
+      "id": "P1-15"
+    },
+    {
+      "aussage": "v2-Handshake nur drei Konfigurationseingaben: trigger.manual/wakeWord, wakeWordIds, runtimeSuppression.manual/wakeWord (+Identitaet/Versionen). Keine Timings/Sensitivitaeten/Domaenen-Keys. wakeWordIds atomar gegen Katalog (eine schlechte ID lehnt ganze Auswahl ab) → wakeWord.selection-Override.",
+      "beleg": "handshake.py Z. 83-178, Z. 201-247; connection.py Z. 257-282; server.py Z. 3186-3190; Test e2e Z. 67-81.",
+      "evidenz": "A",
+      "gueltigkeit": "v2-Admission",
+      "id": "P1-16"
+    },
+    {
+      "aussage": "Handshake-runtimeSuppression ist Live-Override ueber Domaenen-Defaults: controller.set_runtime_suppression nach Admission; Definitionen writable=False (Default false); Wire-Projektionen immer live aus Controller (_suppression_live), auch im Admission-Bundle; gespeicherter/gepatchter Domaenenwert kann nicht ueberschreiben.",
+      "beleg": "connection.py Z. 307-328; server.py Z. 3282-3300, Z. 3319-3322, Z. 3364-3378; settings_control.py Z. 396-423.",
+      "evidenz": "A",
+      "gueltigkeit": "pro Connection/Session",
+      "id": "P1-17"
+    },
+    {
+      "aussage": "PATCH /api/config: RAM sofort, appliesTo entscheidet Reichweite, Datei folgt. update_settings: startup_only/unknown/INVALID abgewiesen, setattr unter Lock, appliesTo active_sessions/new_sessions/model_refresh; Logging sofort rekonfiguriert, dann persist_settings. Laufzeit: RAM > Datei (Datei nur beim Start gelesen); naechster Start: persistierter Wert schlaegt CLI/Env/YAML.",
+      "beleg": "server.py Z. 7826-7957, Z. 7959-7969, Z. 8907-8937.",
+      "evidenz": "B",
+      "gueltigkeit": "Prozesskonfiguration zur Laufzeit",
+      "id": "P1-18"
+    },
+    {
+      "aussage": "new_sessions via Settings-Kopie bei Admission: bestehende Sessions halten eigene Kopie; admit_session erzeugt replace(self.settings) unter Lock. NEW_SESSION nur fuer spaetere Sessions; ACTIVE-Werte wirken sofort an live lesenden Stellen (z. B. SessionStore.reserve liest max_sessions je Reservation).",
+      "beleg": "server.py Z. 7335-7341, Z. 6133-6169, Z. 6253, Z. 178-254.",
+      "evidenz": "B",
+      "gueltigkeit": "Prozesskonfiguration zur Laufzeit",
+      "id": "P1-19"
+    },
+    {
+      "aussage": "Secrets nur CLI/Env mit Env-Fallback zur Request-Zeit: admin_api_key/openai_api_key aus YAML (P1-05) und Legacy-Sektion (P1-07) ausgeschlossen. Gates lesen settings.* oder VOICESTT_*_ENV; Prozesswert (Start) gewinnt, sonst aktuelle Env (wirkt ohne Neustart); YAML/Datei nie.",
+      "beleg": "security/admin.py Z. 15-16; security/openai.py Z. 14-15; server.py Z. 10520-10521, Z. 8832-8837, Z. 7964-7968.",
+      "evidenz": "A",
+      "gueltigkeit": "Admin-/OpenAI-Auth",
+      "id": "P1-20"
+    },
+    {
+      "aussage": "Ohne data_root_path keine Dateiebene: runtime_config_path None; beide Store-Familien No-Ops (load {}, load_control ({},0), save* None). Kette endet bei CLI/Env/YAML; /api/config-Patches nicht persistent.",
+      "beleg": "server.py Z. 519-532; operations.py Z. 419-430, 432-434, 457-458, 478-479, 520-521.",
+      "evidenz": "A",
+      "gueltigkeit": "Deployment ohne Datenwurzel",
+      "id": "P1-21"
+    },
+    {
+      "aussage": "Pinning der Legacy-Sektion nach erstem Patch: persist_settings schreibt ACTIVE|NEW_SESSION|STARTUP_ONLY minus Secrets/Pfade/device/host/port. Ein Patch legt auch startup-only Werte (model, language, batch_size, tuning_profile) in die Datei; naechster Start schlaegt CLI/Env/YAML fuer diese Felder.",
+      "beleg": "server.py Z. 7959-7969, Z. 8827-8839, Z. 7947; Test test_stt_model_management.py Z. 916-922.",
+      "evidenz": "B",
+      "gueltigkeit": "wiederholte Starts nach Laufzeit-Patch (C-02/U-02)",
+      "id": "P1-22"
+    },
+    {
+      "aussage": "Nur-Projektionen keine Quellen: GET /api/config, GET /api/v2/settings/schema|server, session.snapshot lesen nur. /api/config zeigt mutierte Prozesskonfiguration; Domaene separat; snapshot mischt live-Werte (Latch+Suppression).",
+      "beleg": "server.py Z. 8907-8916, Z. 9223-9242; snapshot.py Z. 56-76; settings_projection_for_wire Z. 3302-3327.",
+      "evidenz": "A",
+      "gueltigkeit": "Lese-Oberflaechen",
+      "id": "P1-23"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-01",
+      "thema": "Kein generisches Env-Mapping; nur 23 verdrahtete Variablen (P1-06)."
+    },
+    {
+      "id": "N-02",
+      "thema": "Kein YAML→Domaene-Pfad; Domaenen-Keys in YAML unbekannt/abgewiesen (P1-05, P1-09)."
+    },
+    {
+      "id": "N-03",
+      "thema": "Kein REST-Patch fuer Session-Settings; nur Wire bzw. Server-Defaults per REST (P1-02)."
+    },
+    {
+      "id": "N-04",
+      "thema": "Kein Reset/Unset von Server-Defaults; nur patch_server (P1-11)."
+    },
+    {
+      "id": "N-05",
+      "thema": "Keine Session-Persistenz; kein Persist-Callback (P1-10)."
+    },
+    {
+      "id": "N-06",
+      "thema": "Kein Loeschen/Pruning persistierter Felder beim Quellenwegfall (P1-22)."
+    }
+  ],
+  "researcher_session": "ses_e45ff0018ffeBLamRosMA5cPou",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-01",
+      "thema": "host/port/log_level/device aus runtime.json im Produktivstart: nur aus main()-Reihenfolge abgeleitet, kein Test (P1-07)."
+    },
+    {
+      "id": "U-02",
+      "thema": "Vollkopie-Semantik (Pinning) beabsichtigt? Nicht dokumentiert, kein Migrations-Pfad (P1-11, P1-22)."
+    },
+    {
+      "id": "U-03",
+      "thema": "YAML > Env-Default nur Code-Reihenfolge + argparse-Semantik, kein Test (P1-03)."
+    },
+    {
+      "id": "U-04",
+      "thema": "Branch feat/v2-release-cleanup nicht verifizierbar; nur Commit gebunden (P1-01)."
+    }
+  ],
+  "writer_notes": "Zwei Spalten mit Ranglisten (oben = hoechste Prioritaet). Spalte A Prozess: CLI > YAML > Env-Default > Arg-Default > Tuning; Boot-Ueberschreibung Legacy-Sektion (3 Ausnahmen); Laufzeit PATCH /api/config + Persistenz. Spalte B Domaene: Registry-Default < server_effective < Session-Request < Session-Patch < Live-Suppression. Fehlende Verbindung als bewusste Luecke (keine Kante, P1-02). Herausstellen: (a) YAML kann keine Secrets/Pfade/Domaenen-Keys; (b) Legacy-Datei schlaegt sogar CLI; (c) Prozesswerte erreichen v2-Policy/Timings nicht. Praxis: compose-CLI/Env unterhalb Datei; Operator aendert CLI nach Patch ohne Wirkung (P1-22). Konsistenz zu 03.01/03.03/03.04 wie in Akte. Diagramm: zwei Spalten, keine erfundenen Phasen/Zahlen.",
+  "conflicts": [
+    {
+      "id": "C-01",
+      "thema": "Doppelautoritaet Defaults: Dataclass- vs. argparse-Defaults, heute wertgleich bei 8 Tuning-Keys; Drift-Risiko (P1-03, P1-04)."
+    },
+    {
+      "id": "C-02",
+      "thema": "Namensgleichheit ohne Verbindung: wake_words_sensitivity vs. wakeWord.sensitivity; Prozesswert nur Fallback; analog v1-Query vs. v2-Keys (P1-13, P1-14)."
+    },
+    {
+      "id": "C-03",
+      "thema": "settingsRevision zweimal: zwei Schreibstroeme ohne gemeinsame Kante (P1-08, P1-10; K1-19)."
+    },
+    {
+      "id": "C-04",
+      "thema": "Sticky-Persistenz: nach erstem /api/config-Patch ueberschreibt Datei spaetere CLI/Env/YAML (P1-22, U-02)."
+    }
+  ]
+}

@@ -1,0 +1,873 @@
+{
+  "chapter": "02.03",
+  "correction_round": 2,
+  "diagram_edges": [
+    {
+      "fact_ids": [
+        "A-11",
+        "A-12",
+        "A-27",
+        "A-32",
+        "A-34",
+        "A-39"
+      ],
+      "from": "idle",
+      "to": "waiting_first_speech",
+      "trigger": "activate(manual|wake_word) akzeptiert: Controller vorhanden, streaming, audio verfügbar, Quelle effective; Deadline initial_speech armiert, Gate öffnet (replace=True)"
+    },
+    {
+      "fact_ids": [
+        "A-17",
+        "A-40",
+        "A-41",
+        "A-42"
+      ],
+      "from": "waiting_first_speech",
+      "to": "segment_active",
+      "trigger": "recording_started (Gate offen + VAD-Sprache + Recording-Token passt); Watchdog initial + Warnfenster armiert"
+    },
+    {
+      "fact_ids": [
+        "A-17"
+      ],
+      "from": "segment_active",
+      "to": "segment_active",
+      "trigger": "recording_started erneut ⇒ accepted 'already_recording', changed=False, Watchdog unverändert (VAD resettet nicht)"
+    },
+    {
+      "fact_ids": [
+        "A-24"
+      ],
+      "from": "segment_active",
+      "to": "segment_active",
+      "trigger": "watchdog_warning (einmalig, warningDeadline erreicht, vor Deadline); version+1, timerRevision unverändert"
+    },
+    {
+      "fact_ids": [
+        "A-16"
+      ],
+      "from": "segment_active",
+      "to": "segment_active",
+      "trigger": "refresh: Deadline = max(aktuell, now + segment_watchdog_refresh); no-op wenn Ziel <= aktuell (changed=False)"
+    },
+    {
+      "fact_ids": [
+        "A-18",
+        "A-43"
+      ],
+      "from": "segment_active",
+      "to": "followup_wait",
+      "trigger": "recording_ended: Deadline followup = now + followup_timeout"
+    },
+    {
+      "fact_ids": [
+        "A-17"
+      ],
+      "from": "followup_wait",
+      "to": "segment_active",
+      "trigger": "recording_started im Follow-up-Fenster (neues Segment, segment_token+1, Watchdog neu)"
+    },
+    {
+      "fact_ids": [
+        "A-16"
+      ],
+      "from": "followup_wait",
+      "to": "followup_wait",
+      "trigger": "refresh: Deadline = now + followup_timeout (nicht kumulativ, timerRevision+1)"
+    },
+    {
+      "fact_ids": [
+        "A-19",
+        "A-20"
+      ],
+      "from": "waiting_first_speech",
+      "to": "closing_input",
+      "trigger": "finish oder cancel akzeptiert (reason finished|cancelled, CloseContext, closing_recovery armiert)"
+    },
+    {
+      "fact_ids": [
+        "A-19",
+        "A-20",
+        "A-22"
+      ],
+      "from": "segment_active",
+      "to": "closing_input",
+      "trigger": "finish | cancel | audio_unavailable akzeptiert"
+    },
+    {
+      "fact_ids": [
+        "A-19",
+        "A-20",
+        "A-22"
+      ],
+      "from": "followup_wait",
+      "to": "closing_input",
+      "trigger": "finish | cancel | audio_unavailable akzeptiert"
+    },
+    {
+      "fact_ids": [
+        "A-24",
+        "A-38"
+      ],
+      "from": "waiting_first_speech",
+      "to": "closing_input",
+      "trigger": "initial_speech-Timeout: reason 'timed_out', cause 'initial_speech_timeout'"
+    },
+    {
+      "fact_ids": [
+        "A-24",
+        "A-38"
+      ],
+      "from": "followup_wait",
+      "to": "closing_input",
+      "trigger": "followup-Timeout: reason 'timed_out', cause 'followup_timeout'"
+    },
+    {
+      "fact_ids": [
+        "A-24"
+      ],
+      "from": "segment_active",
+      "to": "closing_input",
+      "trigger": "segment_watchdog-Ablauf: reason/cause 'segment_watchdog_timeout', KEIN Follow-up-Fenster"
+    },
+    {
+      "fact_ids": [
+        "A-25",
+        "A-37"
+      ],
+      "from": "closing_input",
+      "to": "closing_input",
+      "trigger": "closing_recovery-Frist abgelaufen ⇒ acceptance 'closing_recovery_due', recoveryRequested=True, Phase bleibt (Recovery-Close startet)"
+    },
+    {
+      "fact_ids": [
+        "A-19",
+        "A-22"
+      ],
+      "from": "closing_input",
+      "to": "closing_input",
+      "trigger": "erneutes finish/cancel/audio_unavailable ⇒ accepted 'no_change', changed=False (idempotent, kein zweiter Close)"
+    },
+    {
+      "fact_ids": [
+        "A-23",
+        "A-36"
+      ],
+      "from": "closing_input",
+      "to": "idle",
+      "trigger": "input_closed(activationId, activationSequence) mit passender Identität nach Gate-Close/Flush/Ledger-Close/Event-Reservierung"
+    },
+    {
+      "fact_ids": [
+        "A-37"
+      ],
+      "from": "closing_input",
+      "to": "session_terminal",
+      "trigger": "Recovery kann den Eingabepfad nicht sicher schließen (Gate weiter aktiv) ⇒ fail_closed_for_recovery, v2 close 1011"
+    },
+    {
+      "fact_ids": [
+        "A-26"
+      ],
+      "from": "waiting_first_speech|segment_active|followup_wait|closing_input",
+      "to": "idle",
+      "trigger": "reset() durch stop_streaming ('stream_stopped'), close ('session_closed'), clear ('client_clear'); Gate abort, activation_closed publiziert"
+    },
+    {
+      "fact_ids": [
+        "A-34",
+        "A-39",
+        "A-40"
+      ],
+      "from": "Gate geschlossen",
+      "to": "Gate offen (activationId, generation)",
+      "trigger": "activate akzeptiert ⇒ open_controlled_activation(replace=True, generation=activationSequence)"
+    },
+    {
+      "fact_ids": [
+        "A-36",
+        "A-39",
+        "A-65"
+      ],
+      "from": "Gate offen",
+      "to": "Gate geschlossen",
+      "trigger": "Phase B: close_controlled_activation(activationId, generation) vor Flush; stale close(A) schließt B nicht"
+    },
+    {
+      "fact_ids": [
+        "A-44",
+        "A-45",
+        "A-46"
+      ],
+      "from": "Wake-Detection",
+      "to": "waiting_first_speech",
+      "trigger": "admit: detector_generation passt, kein Latch, streaming, epoch passt, audio verfügbar, Controller idle ⇒ activate('wake_word'); sonst Refusal ohne Event/Latch"
+    },
+    {
+      "fact_ids": [
+        "A-11",
+        "A-03",
+        "A-63"
+      ],
+      "from": "beliebige Nicht-idle-Phase",
+      "to": "unverändert",
+      "trigger": "activate ⇒ 'activation_locked' (kein Quellenwechsel, keine Quellen-Zusammenführung)"
+    }
+  ],
+  "facts": [
+    {
+      "evidence": "code",
+      "id": "A-01",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "Der Foreground kennt genau fünf Phasen: 'idle', 'waiting_first_speech', 'segment_active', 'followup_wait', 'closing_input'. 'INACTIVE' ist nur ein Alias auf 'idle' und keine sechste Phase; 'finalizing' existiert nicht als Phase.",
+      "symbol": "IDLE/WAITING_FIRST_SPEECH/SEGMENT_ACTIVE/FOLLOWUP_WAIT/CLOSING_INPUT, INACTIVE (L65-73)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-02",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "Das Recorder-Gate muss nur in den Phasen waiting_first_speech, segment_active und followup_wait offen sein (OPEN_WINDOW_PHASES). Der Snapshot leitet daraus 'windowOpen' ab und setzt 'active' = phase != idle; closing_input ist damit aktiv, aber kein offenes Fenster.",
+      "symbol": "OPEN_WINDOW_PHASES (L75-78), _snapshot_locked (L403-439)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-03",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "Es gibt genau zwei Triggerquellen: 'manual' und 'wake_word' (ACTIVATION_SOURCES). Eine laufende Activation trägt genau eine primarySource; 'sources' wird im Snapshot als ein-elementige Liste [primarySource] erzeugt — es gibt keine Quellen-Zusammenführung.",
+      "symbol": "MANUAL_SOURCE/WAKE_WORD_SOURCE/ACTIVATION_SOURCES (L80-82), _snapshot_locked 'sources' (L404-415)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-04",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "Der Konstruktor des Controllers verlangt mindestens eine konfigurierte Quelle: Werden manual_trigger_enabled und wake_word_trigger_enabled beide als None übergeben, gilt manual=True und wake_word=False; sind beide False, wird ValueError('at least one activation trigger must be enabled') geworfen. Alle Zeitwerte werden über _positive() als float > 0 validiert (sonst ValueError).",
+      "symbol": "ActivationController.__init__ (L194-243), _positive (L265-270)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-05",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "Controller-Defaults in Sekunden: initial_speech_timeout=15.0, followup_timeout=3.0, segment_watchdog_initial=600.0, segment_watchdog_refresh=180.0, segment_watchdog_warning=30.0, closing_recovery_timeout=5.0. Dieselben Zahlen sind als Millisekunden-Defaults im Settings-Registry hinterlegt (15000/3000/600000/180000/30000/5000).",
+      "symbol": "DEFAULT_* (L93-98); Gegenstück api_fastapi_server/settings_control.py default_value (L285-366)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-06",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Nur eine Session im Modus 'controlled' besitzt einen ActivationController. Legacy-Sessions haben keinen: activation_controller()/activation_snapshot() liefern None, und ein v1-'trigger'-Befehl wird mit reason 'controlled_activation_disabled' abgelehnt.",
+      "symbol": "RecorderBackedRealtimeSession.__init__ L2421-2441; activation_controller L3451-3453; _run_activation_command_locked L3667-3670",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-07",
+      "path": "api_fastapi_server/server.py",
+      "statement": "v1-Session-Admission liest die Triggerflags aus Query-Parametern: 'true','1','yes','on' bzw. 'false','0','no','off' (case-insensitiv, getrimmt). Fehlend oder leer bedeutet None. Ein nicht parsebarer Wert wird nicht als False interpretiert, sondern als SessionConfigurationError 'invalid_activation_flag' mit field=Parametername abgelehnt.",
+      "symbol": "_ACTIVATION_TRUE_VALUES/_ACTIVATION_FALSE_VALUES (L1081-1082), _parse_activation_flag (L1085-1107)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-08",
+      "path": "api_fastapi_server/server.py",
+      "statement": "v1-Timing-Queryfelder sind initialSpeechTimeout, followupTimeout, segmentWatchdogInitialSeconds, segmentWatchdogRefreshSeconds, segmentWatchdogWarningSeconds, closingRecoveryTimeoutSeconds. Fehlend/leer ⇒ Default; nicht-numerisch, nicht-finit oder außerhalb 0.01–3600 ⇒ SessionConfigurationError 'invalid_activation_timing' (field=Queryname).",
+      "symbol": "SESSION_ACTIVATION_TIMING_FIELDS (L1048-1079), parse_session_activation_query (L1110-1150)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-09",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Modusauflösung: ohne beide Flags ⇒ mode='legacy' (manual_enabled=False, wake_word_enabled=effektive Server-Wake-Konfiguration). Mit mindestens einem Flag ⇒ mode='controlled'; das fehlende Flag zählt als false. Beide false ⇒ 'activation_trigger_required'. Nur wake_word=true ohne aktives Wake-Word-Profil ⇒ 'activation_wake_word_unavailable'.",
+      "symbol": "resolve_session_activation_config (L1153-1208)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-10",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Die Wire-Projektion der Session-Activation-Config (v1 'activationConfig') enthält: version=2, mode, manualTriggerEnabled, wakeWordTriggerEnabled, wakeWordProfileEnabled sowie die sechs Zeitwerte (initialSpeechTimeout, followupTimeout, segmentWatchdog*Seconds, closingRecoveryTimeoutSeconds).",
+      "symbol": "ResolvedSessionActivationConfig.public_dict (L1025-1041)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-11",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "activate()-Entscheidungsreihenfolge: (1) unbekannte Quelle ⇒ abgelehnt 'trigger_disabled'; (2) phase != idle ⇒ 'activation_locked'; (3) Quelle nicht configured oder runtime-suppressed ⇒ 'trigger_disabled'; (4) mitgegebene activation_id ⇒ 'invalid_payload' (activate adressiert nie eine bestehende Activation). Ein abgelehnter activate mutiert nichts.",
+      "symbol": "ActivationController.activate (L464-509)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-12",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "Erfolgreiche Admission latchet: neue activationId (id_factory), activationSequence += 1, primary_source, eingefrorene effectiveSettings (deep copy), Timing-Policy (auch None), phase=waiting_first_speech, segment_count=0, close_context=None, recovery_requested=False und armiert die Deadline 'initial_speech' auf now + initial_speech_timeout; version += 1. Rückgabe: accepted=True, reason 'activated', changed=True.",
+      "symbol": "activate L492-509; _set_timer_locked L366-384",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-13",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "Identitäts-/Revisionssemantik im Snapshot: activationSequence steigt nur bei Admission, 'generation' ist ein Kompatibilitätsalias derselben Sequenz, 'version' steigt bei jeder Zustandsänderung, 'timerRevision' nur bei effektiver Timer-Änderung; zusätzlich werden segmentToken, deadline, deadlineKind, warningDeadline, warningFired, segments, windowOpen, active, timerRevision und ggf. closeReason/closeCause/closeRequestedByCommandId/closeRequestedByAction/recoveryRequested publiziert.",
+      "symbol": "_snapshot_locked (L403-439)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-14",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "Ein geplanter Timer-Callback muss einen vollständigen TimerToken präsentieren: (activation_id, activation_sequence, timer_revision, phase, kind, segment_token). Nur exakte Gleichheit mit dem aktuellen Token gilt; sonst antwortet tick() mit accepted=False, reason 'stale_timer' und ändert nichts. tick(None) oder ein Nicht-Token ist ebenfalls 'stale_timer'.",
+      "symbol": "TimerToken (L127-144), _timer_token_locked/_token_is_current_locked (L386-399), tick (L746-757)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-15",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "Alle Deadlines sind monoton (Default clock time.monotonic); Wall-Clock-Sprünge können eine Phase weder verlängern noch ablaufen lassen. Wall-Clock wird nur für Logs/Timestamps und die Wire-Projektion (deadlineAtUnixMs/remainingMs) verwendet.",
+      "symbol": "Modul-Docstring L21-22, __init__ self._clock (L241); api_fastapi_server/protocol_v2/snapshot.py project_deadline (L126-139)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-16",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "refresh-Phasenmatrix (quellenneutral): fehlende/leere activation_id ⇒ 'invalid_payload'; idle ⇒ 'not_active'; falsche id ⇒ 'stale_activation'; waiting_first_speech ⇒ 'invalid_phase' (Initialfenster ist nicht refreshbar); closing_input ⇒ 'closing_input' (kein Effekt, unchanged); segment_active ⇒ Deadline = max(aktuelle Deadline, now + watchdog_refresh) mit Warnfenster, und wenn das Ziel <= aktuell ist, accepted=True 'refreshed' aber changed=False; followup_wait ⇒ Deadline = now + followup_timeout (nie kumulativ). Jede effektive Änderung erhöht version und timerRevision.",
+      "symbol": "refresh (L511-570)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-17",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "recording_started() ist nur in den offenen Fensterphasen möglich (sonst 'not_active'). Ist die Phase bereits segment_active, antwortet der Controller accepted=True, reason 'already_recording', changed=False und lässt die Watchdog-Deadline unverändert (VAD setzt den Watchdog nicht zurück). Sonst: phase=segment_active, segment_count += 1, segment_token += 1, Watchdog-Deadline = now + segment_watchdog_initial, Warnzeitpunkt = deadline - segment_watchdog_warning; version += 1.",
+      "symbol": "recording_started (L572-596); _set_timer_locked warning_after (L376-383)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-18",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "recording_ended() in closing_input ist ein idempotenter Zustandsbescheid (accepted=True, reason 'input_closing', changed=False). In jeder Phase außer segment_active ⇒ 'not_active'. Aus segment_active heraus: phase=followup_wait, Deadline 'followup' = now + followup_timeout, version += 1, reason 'followup_started', changed=True.",
+      "symbol": "recording_ended (L598-616)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-19",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "finish und cancel laufen beide über _begin_input_close: fehlende/leere activation_id ⇒ 'invalid_payload'; idle ⇒ 'not_active'; fremde/veraltete id ⇒ 'stale_activation'; bereits closing_input ⇒ accepted=True 'no_change', changed=False (kein zweiter Übergang, kein zweites Event, kein zweiter Ledger-Schritt). finish setzt reason='finished', cause='finish', requested_by_action='finish'; cancel setzt reason='cancelled', cause default 'cancel' (überschreibbar), requested_by_action='cancel'.",
+      "symbol": "finish (L618-626), cancel (L628-636), _begin_input_close (L638-673)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-20",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "Der Eintritt in closing_input erzeugt genau einen unveränderlichen CloseContext (reason, cause, requested_by_command_id, requested_by_action), setzt recovery_requested=False, armiert die Deadline 'closing_recovery' auf now + closing_recovery_timeout und erhöht version. Timer-, Watchdog-, Device- und Recovery-Closes tragen keine Command-Korrelation (Felder bleiben None).",
+      "symbol": "CloseContext (L154-168), _enter_close_barrier_locked (L678-700)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-21",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "refresh/finish/cancel sind quellenunabhängig: weder eine deaktivierte noch eine suppressed Triggerquelle verhindert sie, und sie ändern primarySource nicht; nur activate ist an eine Quelle gebunden.",
+      "symbol": "Kontrollmethoden ohne source-Parameter (L511-700); Docstring L53-54",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-22",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "audio_unavailable() (generischer Geräteverlust): idle ⇒ 'not_active'; closing_input ⇒ accepted=True 'no_change'; sonst Eintritt in die Close-Barriere mit reason='cancelled', cause='audio_unavailable', ohne Command-Korrelation. Session und Background-Ledger bleiben bestehen.",
+      "symbol": "audio_unavailable (L702-720)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-23",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "input_closed(activation_id, activation_sequence) ist identitätsgebunden: außerhalb closing_input ⇒ 'not_closing_input'; abweichende id ODER abweichende Sequenz ⇒ 'stale_activation' ohne Zustandsänderung; bei Match wird auf idle geräumt (activation_id/primary_source/effectiveSettings/timing_policy/segment_count/close_context/recovery_requested zurückgesetzt, Timer gelöscht, version += 1) und der Snapshot zusätzlich mit closedActivationId, closedActivationSequence, closedPrimarySource, closedSources, closedEffectiveSettings, closedSegments sowie ggf. closeReason/closeCause/closeRequestedBy* angereichert.",
+      "symbol": "input_closed (L722-742), _clear_locked (L829-866)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-24",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "tick()-Ablauf: (1) Token-Prüfung; (2) keine Deadline ⇒ 'not_expirable'; (3) liegt now im Warnfenster (warning_deadline <= now < deadline, Warnung noch nicht gefeuert), wird genau einmal 'watchdog_warning' geliefert (warningFired=True, version += 1, timerRevision UNVERÄNDERT, dasselbe Token bleibt gültig); (4) now < deadline ⇒ 'not_due'; (5) bei Ablauf: kind 'closing_recovery' ⇒ Recovery-Pfad; kind 'segment_watchdog' ⇒ Close-Barriere mit reason/cause 'segment_watchdog_timeout' (ohne Follow-up); kind 'initial_speech'/'followup' ⇒ Close-Barriere mit reason 'timed_out' und cause 'initial_speech_timeout' bzw. 'followup_timeout'.",
+      "symbol": "tick (L746-798)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-25",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "Die Recovery-Frist in closing_input wird konsumiert, ohne die Phase zu verlassen: _recover_closing_locked löscht die Deadline, setzt recoveryRequested=True, behält CloseContext und Phase closing_input und liefert accepted=True 'closing_recovery_due', changed=True. Nur input_closed() darf daraus idle machen.",
+      "symbol": "_recover_closing_locked (L800-817)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-26",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "reset() räumt jede Nicht-idle-Phase sofort auf idle (reason 'reset', changed=True); in idle ist es accepted=True 'already_idle', changed=False. Die sessionweite activationSequence bleibt erhalten (nur die laufende Activation endet). Genutzt von stop_streaming ('stream_stopped'), close ('session_closed') und clear ('client_clear'), jeweils mit abort_controlled_activation() am Recorder.",
+      "symbol": "reset (L819-827); Aufrufer api_fastapi_server/server.py _reset_activation_locked (L4481-4505) und stop_streaming/close/clear (L2865-3009)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-27",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "Runtime-Suppression ist ein Live-Maske auf die Admission: set_runtime_suppression(manual=…, wake_word=…) setzt nur die Unterdrückungsflags, meldet changed, beendet oder verändert aber nie eine laufende Activation. trigger_state() liefert {configured, suppressed, effective} je Quelle; effective = configured AND NOT suppressed.",
+      "symbol": "set_runtime_suppression (L316-335), trigger_state (L337-352), _source_enabled (L310-314)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-28",
+      "path": "api_fastapi_server/activation_commands.py",
+      "statement": "prepare_activation_command() wirft nie und hat zwei Stufen: Zuerst entsteht die Replay-Identität (commandId muss ein String sein, wird getrimmt; Nicht-String ⇒ 'invalid_command_id'; leer/fehlend ⇒ 'missing_command_id'), dann die Semantik: action wird strip/lower normalisiert, muss in {activate,refresh,finish,cancel} liegen (sonst 'invalid_action'). activate: source muss String in {manual,wake_word} sein (sonst 'invalid_source'), und darf KEINE activationId tragen (sonst 'invalid_payload'). Controls: activationId muss ein nicht-leerer String sein (sonst 'invalid_payload'); 'source' ist bedeutungslos und wird ignoriert.",
+      "symbol": "prepare_activation_command (L175-269), _normalized_action (L168-172)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-29",
+      "path": "api_fastapi_server/activation_commands.py",
+      "statement": "Der semantische Replay-Key ist für activate ('semantic','activate',source) und für Controls ('semantic','control',action,activationId) — ohne source. Für fachlich abgelehnte Payloads mit brauchbarer commandId wird ein typstabiler Roh-Freeze des Payloads ohne commandId (und bei Controls ohne source) als Key verwendet; ohne brauchbare commandId bleibt der Key leer und es gibt keine Replay-Identität.",
+      "symbol": "ActivationCommand.payload_key (L67-79), _raw_payload_key (L151-165), freeze_payload_value (L116-148)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-30",
+      "path": "api_fastapi_server/activation_commands.py",
+      "statement": "Der CommandReplayCache ist sessionweit und wird nicht getrimmt: lookup liefert MISS, REPLAY (identischer Key, gespeicherte Antwort) oder CONFLICT (gleiche commandId, anderer Key); store nutzt setdefault und überschreibt eine bestehende Identität nie; clear() läuft beim Session-Teardown (close()).",
+      "symbol": "CommandReplayCache (L295-329); Aufruf api_fastapi_server/server.py close L2935-2937, _command_replay L2409",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-31",
+      "path": "api_fastapi_server/server.py",
+      "statement": "handle_trigger_command-Reihenfolge: (1) Envelope vorbereiten, keylose Ablehnung sofort beantworten (ohne Cache-Eintrag); (2) CANCEL mit gültigem Command geht über den gesonderten Cancel-Pfad; (3) sonst unter self.lock: Replay-Lookup (REPLAY ⇒ gespeicherte Antwort, CONFLICT ⇒ 'command_id_conflict' ohne Store), dann fachliche Ablehnung mit commandId ⇒ Antwort wird gespeichert und zurückgegeben; (4) Ausführung, Antwort speichern, Lock freigeben; (5) gesammelte Events außerhalb des Locks publizieren.",
+      "symbol": "handle_trigger_command (L3500-3572)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-32",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Sessionweite Vorprüfungen vor jeder Command-Semantik: kein Controller ⇒ 'controlled_activation_disabled'; status == 'closed' ⇒ 'session_closed'; nicht streaming ⇒ 'stream_not_started'; activate bei _audio_available == False ⇒ 'audio_unavailable'. Jede Ablehnung bleibt mit commandId und aktueller activationId korreliert.",
+      "symbol": "_run_activation_command_locked (L3665-3728), _trigger_ack (L3414-3425)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-33",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Admission-Inputs: v2-Sessions (canonical_ids=True) lesen EINEN atomaren Settings-Bundle (settingsRevision + effectiveSettings + timing_seconds aus derselben Sperrsektion) und bauen daraus die ActivationTimingPolicy; Runtime-Suppression wird live überlagert. v1-Sessions liefern die verschachtelte Legacy-Sicht und timing_policy=None, sodass die Konstruktor-/Query-Zeitwerte gelten.",
+      "symbol": "_new_activation_inputs (L3350-3407); api_fastapi_server/settings_control.py activation_admission_settings (L1121-1143)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-34",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Entscheidungsanwendung: abgelehnte Entscheidung ⇒ nur Rückgabe der activationId, keine Nebenwirkung; accepted aber changed=False ⇒ weder Gate, Ledger noch Timer werden berührt; 'watchdog_warning' ⇒ nur watchdog_event; phase == closing_input ⇒ es wird nur der immutable InputClosePlan gebaut, der Recovery-Timer erneut armiert und ('__input_close__', plan) zur Ausführung AUSSERHALB des Session-Locks eingereiht; 'activated' ⇒ Ledger-Activation wird eröffnet; bei windowOpen wird recorder.open_controlled_activation(open_id, replace=True, generation) aufgerufen (Fehler nur geloggt); danach Timer armiert und Lifecycle-Event gesammelt.",
+      "symbol": "_apply_activation_decision_locked (L3873-3954), _publish_collected_events (L4569-4575)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-35",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Legacy-Event-Mapping der Foreground-Entscheidungen: reason 'activated' ⇒ activation_started; 'refreshed' ⇒ activation_refreshed; 'finished','cancelled','timed_out','segment_watchdog_timeout' ⇒ activation_closed; 'recording_started' und 'followup_started' ⇒ kein Event. Event-Felder: activationId, generation, activationSequence, primarySource, sources, phase, timerRevision und bei Close zusätzlich reason/cause; der Close-Plan enthält cancel_pending nur für 'cancelled','client_cancel','session_closed','stream_stopped'.",
+      "symbol": "_activation_event_name (L4346-4363), _activation_event_fields (L4365-4391), _cancel_close_reason (L3956-3969)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-36",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Normaler Input-Close (Phase B, außerhalb von Session- und Dispatch-Lock) in fester Reihenfolge: interner Marker '__input_closing__' an den Protokoll-Observer; generationgebundenes recorder.close_controlled_activation(activation_id, generation=gate_generation); nur bei Erfolg und is_recording ein flush_buffered_audio(); bei Fehler bleibt die Session in closing_input (Recovery übernimmt, kein idle); dann accepted_segment_count erfassen, Ledger-Activation schließen (ggf. requested_terminal='cancelled'), genau-ein Close-Event reservieren, identitätsgebundenes input_closed() unter Lock, bei Ablehnung Event verwerfen, sonst publizieren.",
+      "symbol": "_run_input_close (L4053-4139), _build_close_plan_locked (L3835-3871), _reserve_input_close_event (L3971-4018)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-37",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Recovery-Close: abort_controlled_activation(), ggf. flush bzw. harter recorder.abort(); danach wird geprüft, ob das Gate noch aktiv ist. Ist der Eingabepfad weiterhin unsicher, wird die Session terminal beendet (fail_closed_for_recovery: _audio_available=False, Warning mit recovery='session_terminated', close(), interner '__session_terminal__'-Marker; v2 schließt mit CLOSE_INTERNAL_ERROR). Ist er sicher, wird ein orphaned Recording-Context als 'failed' mit cause 'closing_recovery_timeout' aufgelöst, das Ledger geschlossen, das Close-Event mit cause 'closing_recovery_timeout', recovered=True und causedByCommandId=None reserviert, input_closed() ausgeführt und publiziert.",
+      "symbol": "_run_recovery_close (L4141-4244), fail_closed_for_recovery (L4246-4324), _reserve_input_close_event recovery (L4004-4015)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-38",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Timer-Ausführung: pro armiertem Deadline existiert genau ein Daemon-Thread, gebunden an den TimerToken (ein unverändertes Token startet keinen zweiten Worker). Der Worker wartet auf min(warningDeadline, deadline) über service.stop_event.wait; ein frühes Aufwachen (Windows-Granularität) führt bei tick()=='not_due' zur erneuten Warteschleife statt zum Deadline-Verlust; ein abweichendes _armed_timer_token beendet den Worker; nach Ablauf wird die Entscheidung angewendet, Events publiziert, der Status neu gesetzt und der Worker beendet. Ohne Deadline/Token wird der Token gelöscht und die Generation erhöht.",
+      "symbol": "_arm_activation_timer_locked (L4393-4420), _next_timer_due_locked (L4422-4438), _activation_timer_worker (L4440-4479)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-39",
+      "path": "VoiceSTT/core/activation_control.py",
+      "statement": "Das Recorder-Gate hat die Policies 'legacy' und 'controlled' (alles andere ⇒ ValueError). Jede Gate-Operation ist an (activationId, generation) gebunden: open verweigert bei Shutdown, bei generation < aktuelle Generation und bei fremdem Besitzer ohne replace (sonst setzt es id/generation und das Event); close verweigert bei abweichender id oder generation < aktuelle und ist sonst idempotent (Rückgabe True nur, wenn vorher offen); abort schließt unbedingt; shutdown schließt dauerhaft und verweigert spätere opens; Snapshot liefert policy/active/activationId/generation/shutdown.",
+      "symbol": "configure_activation_policy (L52-67), open_controlled_activation_gate (L70-109), close_controlled_activation_gate (L112-141), abort (L144-155), shutdown (L158-166), controlled_activation_snapshot (L169-178)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-40",
+      "path": "VoiceSTT/core/activation_control.py",
+      "statement": "Die einzige Autorität für den Segmentstart ist in der controlled-Policy das Gate: recording_activation_gate_is_open liefert False bei geschlossenem Event und konsultiert recorder.wakeword_detected bewusst NICHT; bei offenem Gate werden activationId und generation als Recording-Token gelatcht (controlled_recording_activation_snapshot) und True geliefert. In der Legacy-Policy bleibt das alte Verhalten (wakeword_detected ODER (!use_wake_words || wake_word_activation_delay_passed) && start_recording_on_voice_activity).",
+      "symbol": "recording_activation_gate_is_open (L191-226), controlled_recording_activation_snapshot (L181-189)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-41",
+      "path": "VoiceSTT/core/recording.py",
+      "statement": "Die VAD-Schleife des Recorders fragt das Gate vor jeder Sprachaktivitätsprüfung ab; nur bei offenem Gate darf is_voice_active() zum self.start() führen. Ein erkanntes Wake Word allein kann das Gate in der controlled-Policy nicht umgehen, weil der Recorder die Quelle nicht kennt und nur 'offen/geschlossen' sieht.",
+      "symbol": "Wake/VAD-Schleife L349-390 (Aufruf recording_activation_gate_is_open L351)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-42",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Beim Recorder-Start prüft die Session zusätzlich: Lifecycle (streaming und nicht closed), Sprecher-Slot (try_activate_speaker), dann den vom Recorder gelatchten Recording-Token gegen den Controller-Snapshot — abweichende activationId ODER generation ⇒ Admission abgelehnt, Aufnahme verworfen/geflusht und Sprecher deaktiviert, kein Segment im Ledger. Bei Zulassung: recording_started(), Ledger accept_segment(activation_id, segment_id), recording_started-Timeline-Event mit activationId/activationSequence/segmentSequence/requestId.",
+      "symbol": "_on_recording_start (L5294-5439)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-43",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Beim Recorder-Stop wird das Segment beendet, die Speaker-Freigabe aufgehoben und recording_ended() aufgerufen; bei changed wird der Follow-up-Timer armiert. In der controlled-Policy ist der Controller die einzige Follow-up-Autorität: der Legacy-Wakeword-Followup (zweiter Timer, direktes Schreiben von recorder.wakeword_detected/wake_word_timeout) wird nur ausgeführt, wenn kein Controller existiert.",
+      "symbol": "_on_recording_stop (L5441-5532, Guard L5526-5531)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-43b",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "Idle ist unabhängig von laufender Transkription: Nach dem sicheren Input-Close steht der Foreground auf idle und darf die nächste Activation aufnehmen, während ältere Arbeit im Background-Ledger weiterläuft (pendingActivations im Snapshot, Terminal-Events activation.completed/cancelled/failed).",
+      "symbol": "Modul-Docstring L3-8; api_fastapi_server/protocol_v2/snapshot.py build_pending_activations (L142-165); api_fastapi_server/protocol_v2/events.py ACTIVATION_TERMINAL_TYPES (L75-80)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-44",
+      "path": "api_fastapi_server/wake_admission.py",
+      "statement": "Wake-Word-Pfad (v2): Ein finalisierter Hit wird nur admitted, wenn detector_generation übereinstimmt und der Evaluator nicht gelatcht ist. Die Session prüft vor dem Commit: streaming und nicht closed, detection epoch == lifecycle epoch, Controller vorhanden, audio verfügbar, Settings auflösbar. Der Commit-Punkt ist controller.activate('wake_word', settings, timing_policy). Fehler NACH dem Commit machen die Activation nicht rückgängig (post-commit error), Fehler davor bedeuten Refusal ohne Latch, ohne Activation und ohne logisches Event; nach akzeptierter Activation wird genau ein logisches Event gemintet und dann (fehlertolerant, wiederholbar via redeliver) zugestellt.",
+      "symbol": "WakeAdmissionCoordinator.admit (L248-312), _attempt_delivery/redeliver (L314-345); api_fastapi_server/server.py _activate_from_wake_candidate (L2588-2660)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-45",
+      "path": "api_fastapi_server/wake_admission.py",
+      "statement": "Ein Wake Word während einer bereits offenen Activation wird als 'activation_locked' abgewiesen und hat keinerlei Trigger-/Finish-/Cancel-/Refresh-Wirkung; es entstehen kein Event, kein Latch und keine zweite Activation. Ebenso wenig öffnet das Wake Word selbst eine Aufnahme — es öffnet nur über den Controller das Gate.",
+      "symbol": "admit Refusal-Pfad L285-288; api_fastapi_server/server.py _activate_from_wake_candidate Decision-Check L2629-2630",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-46",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Der Wake-Latch wird genau am sicheren Input-Close der zugehörigen Activation gelöst: _publish_timeline_event('activation_closed', …) ruft _release_wake_latch(activationId); der Evaluator gibt den Latch nur frei, wenn die Activation-ID passt, setzt dabei Engine/Tracker zurück und liest die Policy neu; ein explizit konfigurierter cooldownMs bleibt bestehen.",
+      "symbol": "_publish_timeline_event L5891-5898, _release_wake_latch L2699-2713; VoiceSTT/core/wake_detection.py release_latch (L746-762)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "schema",
+      "id": "A-47",
+      "path": "api_fastapi_server/protocol_v2/commands.py",
+      "statement": "v2-Befehl 'activation.command' ist strenger als v1: action muss kanonisch sein ('extend' existiert nicht), activate darf keine activationId tragen und source muss 'manual' sein (CLIENT_SOURCES = {'manual'} — 'wake_word' ist serverintern und auf der Leitung verboten), Controls dürfen kein source-Feld tragen und benötigen eine kanonische UUID als activationId. Verstöße ⇒ result 'invalid_payload'. Ein fehlender/unbrauchbarer commandId führt zu gar keiner Antwort.",
+      "symbol": "_validate_activation_command (L143-167), parse_command (L90-138); api_fastapi_server/protocol_v2/schema.py CLIENT_SOURCES (L72-80)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "schema",
+      "id": "A-48",
+      "path": "api_fastapi_server/protocol_v2/commands.py",
+      "statement": "v2 projiziert Domain-Reasons auf einen geschlossenen Satz von 15 result-Codes; accepted=true ist nur für 'applied' und 'no_change' erlaubt. Explizit gemappt sind u.a. activation_locked⇒activation_locked, not_active⇒not_active, invalid_phase⇒invalid_phase, closing_input⇒closing_input, stale_activation⇒stale_activation, trigger_disabled/trigger_suppressed⇒trigger_suppressed, audio_unavailable⇒audio_unavailable, command_id_conflict⇒command_id_conflict; Recorder-/Timer-Reasons (watchdog_warning, followup_started, recording_started, stale_timer, …) sind als NON_COMMAND_REASONS deklariert; ein unbekannter Reason wirft UnmappedDomainReason (im Connection-Layer zu internal_error geloggt).",
+      "symbol": "DOMAIN_REASON_RESULTS (L211-247), NON_COMMAND_REASONS (L252-263), map_domain_reason (L266-276)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "schema",
+      "id": "A-49",
+      "path": "api_fastapi_server/protocol_v2/connection.py",
+      "statement": "Wird ein Trigger mit result 'trigger_suppressed' abgelehnt, emittiert der v2-Layer zusätzlich das diagnostische Event 'activation.trigger_suppressed' (source aus dem Payload, sonst 'manual', reason='trigger_suppressed'); es ist in NON_STATE_EVENTS und erhöht stateVersion nicht.",
+      "symbol": "_answer_domain L448-449, _emit_trigger_suppressed (L663-677); api_fastapi_server/protocol_v2/schema.py NON_STATE_EVENTS (L191-197)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-50",
+      "path": "api_fastapi_server/protocol_v2/connection.py",
+      "statement": "Beim v2-Handshake werden runtimeSuppression.manual/wakeWord validiert (beide bool) und nach Session-Admission über controller.set_runtime_suppression gesetzt; danach wird die Audio-Pipeline atomar mit session.start_streaming() geöffnet — v2 kennt keinen 'start'-Befehl. Trigger-/Wake-Flags des hello bilden die SessionActivationRequest (nur manual/wakeWord; v2 setzt keine Timing-Querywerte).",
+      "symbol": "_admit (L257-282), _activate_session (L307-328); api_fastapi_server/protocol_v2/handshake.py suppression (L144-177)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-51",
+      "path": "api_fastapi_server/protocol_v2/connection.py",
+      "statement": "Der Eintritt in closing_input hat kein öffentliches v2-Event; der interne Marker '__input_closing__' versioniert die sichtbare Zustandsänderung genau einmal pro (activationId, activationSequence), und der v2-Ack meldet inputPhase='closing_input' mit dieser Closing-Version statt der Version des späteren Close.",
+      "symbol": "_on_domain_event L706-708, _observe_input_closing (L718-740), _closing_version (L742-750), _state_version_for (L452-479)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "schema",
+      "id": "A-52",
+      "path": "api_fastapi_server/protocol_v2/events.py",
+      "statement": "v2-Events werden aus den Legacy-Lifecycle-Events abgeleitet: activation_started⇒activation.started, activation_refreshed⇒activation.phase_changed, activation_closed⇒activation.input_closed, watchdog_warning⇒watchdog.warning, recording_*/transcription_* entsprechend; activation.started und activation.input_closed kündigen ihre Phase selbst an, bei allen anderen Events wird bei geänderter Phase zuerst ein activation.phase_changed (previousPhase, inputPhase, deadlineAtUnixMs, remainingMs) emittiert. Ledger-Terminals werden zu activation.completed/cancelled/failed.",
+      "symbol": "LEGACY_EVENT_TYPES (L54-73), _phase_change_event (L170-192), _observe_phase (L194-207), ACTIVATION_TERMINAL_TYPES (L75-80)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "schema",
+      "id": "A-53",
+      "path": "api_fastapi_server/protocol_v2/snapshot.py",
+      "statement": "Der v2-Snapshot publiziert input{phase, activationId, primarySource, deadlineAtUnixMs, remainingMs, closeRequested}; in idle sind activationId/primarySource/Deadline null und closeRequested=False, in closing_input ist closeRequested=True. Zusätzlich: trigger{configured,suppressed,effective}, audioAvailable, requested/effectiveSettings, pendingActivations (nur input-closed, nach activationSequence sortiert) sowie lastEventSeq/stateVersion.",
+      "symbol": "build_snapshot (L36-79), build_input (L92-123), project_deadline (L126-139), build_pending_activations (L142-165), build_trigger (L168-184)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "config",
+      "id": "A-54",
+      "path": "api_fastapi_server/settings_control.py",
+      "statement": "Die sechs Timing-Settings sind Session-Scope, int, applyPolicy 'next_activation' und besitzen Server-Defaults: activation.initialSpeechTimeoutMs 100–3600000 (Default 15000), activation.followupTimeoutMs 100–60000 (3000), activation.segmentWatchdogInitialMs 60000–3600000 (600000), activation.segmentWatchdogRefreshMs 30000–600000 (180000), activation.segmentWatchdogWarningMs min 5000 mit lessThanKeys [watchdogInitial, watchdogRefresh] (30000), activation.closingRecoveryTimeoutMs 1000–30000 (5000) — alle in ms, vom Controller in Sekunden (/1000) genutzt.",
+      "symbol": "builtin_definitions (L285-366), TIMING_KEYS/WATCHDOG_WARNING_LESS_THAN_KEYS (L127-149), activation_admission_settings (L1121-1143)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-55",
+      "path": "api_fastapi_server/activation.py",
+      "statement": "Eine Timing-Patch während einer laufenden Activation kann deren armierte Timer nicht mehr verschieben: der Controller liest alle Fristen über _timing_locked() aus der beim Admission gelatchten ActivationTimingPolicy; neue Werte greifen erst bei der nächsten Admission. Ein Patch während einer Activation liefert also einen anderen Freeze für die nächste Activation.",
+      "symbol": "_timing_locked (L272-288), activate timing_policy (L464-505), _clear_locked setzt _timing_policy=None (L840)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-56",
+      "path": "api_fastapi_server/settings_control.py",
+      "statement": "Die Runtime-Suppression ist im Settings-Registry als nicht schreibbarer Session-Key (writable=False, applyPolicy 'live') modelliert; einzige Schreibautorität ist der Befehl 'trigger_suppression.set' (bzw. hello). Der v2-layer setzt beide Flags gemeinsam, liefert 'applied' bei Änderung (mit stateVersion-Advance) und 'no_change' ohne Version-Advance, wenn nichts moved.",
+      "symbol": "RUNTIME_SUPPRESSION_MANUAL/WAKE_WORD Definitionen (L396-423); api_fastapi_server/protocol_v2/connection.py _apply_trigger_suppression (L483-503)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-57",
+      "path": "api_fastapi_server/segment_ledger.py",
+      "statement": "Die Ledger-Activation wird bei 'activated' eröffnet (open_activation mit activationId, activationId und effectiveSettings, nur bei steigender Sequenz) und bei jeder Close-Phase geschlossen. accept_segment verweigert unbekannte Activation (KeyError), bereits geschlossenen Input und eine gesetzte Cancel-Barriere (RuntimeError); eine Cancel-Annahme setzt die Barriere, neutralisiert vorbereiteten Text und terminalisiert betroffene Segmente als 'cancelled'.",
+      "symbol": "open_activation (L150-169), accept_segment (L232-259), mark_cancel_requested (L171-230)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-58",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Cancel wird unter der totalen Ordnung _ledger_dispatch_lock → self.lock angenommen: Controller entscheidet, Ledger-Barriere wird gesetzt, Ack gespeichert/geschrieben, Lock freigegeben, LedgerUpdate unter Dispatch sichtbar angewendet, erst danach läuft der physische Close. Damit kann keine Publikation nach der Cancel-Annahme mehr entweichen; ein bereits laufender Final-Thread publiziert vorher.",
+      "symbol": "_handle_cancel_accept (L3574-3663), _ledger_dispatch_lock Docstring (L4536-4551)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-59",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Audio-Verlust im v2-Pfad nutzt dieselbe Cancel-Barriere (mark_cancel_requested mit 'cancelled'), aber die audio_availability-commandId wird ausdrücklich NICHT zu causedByCommandId des Close-Events; das v2-Close-Event trägt causedByCommandId=None. Die Availability-commandId bleibt reine Replay-/Ack-Identität.",
+      "symbol": "handle_audio_availability_command (L3730-3821); api_fastapi_server/protocol_v2/connection.py _apply_audio_availability (L392-406)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-60",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Der Reason eines Close-Events ist 'finished' (finish), 'cancelled' (cancel/audio_unavailable/stream_stop/clear), 'timed_out' (initial/followup timeout), 'segment_watchdog_timeout'; cause spezifiziert 'finish'/'cancel'/'audio_unavailable'/'initial_speech_timeout'/'followup_timeout'/'segment_watchdog_timeout'. causedByCommandId wird nur gesetzt, wenn requested_by_action 'finish' oder 'cancel' ist UND eine commandId existiert.",
+      "symbol": "_reserve_input_close_event (L3994-4015), _build_close_plan_locked (L3854-3869)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "code",
+      "id": "A-61",
+      "path": "api_fastapi_server/server.py",
+      "statement": "v1-Route /ws/transcribe verarbeitet 'trigger' und 'audio_availability' (neben start/stop/clear/ping/metrics); v2 ist eine eigene Route /ws/v2, die erst nach validiertem Client-hello eine Session admitted. v1-hello kündigt sessionCapabilities.activationTriggers mit supported=True, version=2, sources, actions, commandType='trigger', ackType='trigger_ack', commandIdRequired/Idempotent=True, commandHistory='session', activationEvents [activation.started, activation.refreshed, activation.closed, watchdog.warning] an.",
+      "symbol": "Routen L9912/L10121-10128, Dispatch L10074-10098, Capabilities L7743-7769",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "test",
+      "id": "A-62",
+      "path": "tests/unit/test_server_trigger_contract.py",
+      "statement": "v1 akzeptiert 'activate' mit source='wake_word' als Client-Befehl, sofern die Wake-Quelle konfiguriert ist (Test bestätigt accepted/reason 'activated'); v2 verbietet genau das auf der Leitung. Beide Protokolle teilen sich denselben Controller — die Einschränkung ist reine v2-Envelope-Policy.",
+      "symbol": "test_wake_word_source_is_accepted_as_a_command_when_enabled (L288-300); Gegenstück api_fastapi_server/protocol_v2/schema.py CLIENT_SOURCES (L77)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "test",
+      "id": "A-63",
+      "path": "tests/unit/test_server_command_timer_e2e.py",
+      "statement": "Die v1-Phasenmatrix ist durch Tests fixiert: idle → activate accepted 'activated', refresh/finish/cancel 'not_active'; waiting_first_speech → activate 'activation_locked', refresh 'invalid_phase', finish 'finished', cancel 'cancelled'; segment_active/followup_wait → activate 'activation_locked', refresh 'refreshed', finish 'finished', cancel 'cancelled'. Abgelehnte Befehle lassen Phase, Deadline, timerRevision und version unverändert und das Gate offen.",
+      "symbol": "CommandPhaseMatrixTests.MATRIX (L141-166), test_a_rejected_command_leaves_the_gate_and_timers_untouched (L209-233)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "test",
+      "id": "A-64",
+      "path": "tests/unit/test_server_controlled_e2e.py / tests/unit/test_server_command_timer_e2e.py",
+      "statement": "Getestete Zeitverkettung: initialSpeechTimeout=0.3 schließt das Gate ohne Fremdeinwirkung (activation_closed reason 'timed_out'), Sprachpakete starten danach keine Aufnahme mehr; followupTimeout=0.6 mit laufenden Refreshes hält die Activation offen und endet nach dem letzten Refresh mit reason 'timed_out', cause 'followup_timeout'; segmentWatchdogInitialSeconds=0.8 / Warning 0.4 liefert erst watchdog_warning (phase segment_active, segmentSequence 1), dann activation_closed mit reason/cause 'segment_watchdog_timeout', phase idle, ohne Follow-up-Fenster — das aufgenommene Audio wird als final geliefert.",
+      "symbol": "ActivationTimeoutEndToEndTests (L1303-1404); SegmentWatchdogEndToEndTests (L651-705)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "test",
+      "id": "A-65",
+      "path": "tests/unit/test_recorder_activation_control.py / tests/unit/test_server_command_timer_e2e.py",
+      "statement": "Getestete Gate-/Race-Eigenschaften: geschlossenes controlled-Gate blockiert Sprache vollständig (recording_starts=0, kein recording_started-Event); ein offenes Gate liefert Gate-Snapshot mit activationId=ack.activationId; ein spätes close(A) schließt nicht B, ein stale open ersetzt kein neueres Aktivierungs-Generation, mehrfaches close ist idempotent, shutdown schließt dauerhaft; während eines blockierten normalen Input-Close und während laufender Recovery-Cleanup bleibt activate 'activation_locked'.",
+      "symbol": "test_04/05/06/07/07b/10/11/15 (L122-244); CloseAdmissionRaceEndToEndTests (L1393-1479)",
+      "uncertainty": "none"
+    },
+    {
+      "evidence": "server.py:1048-1079 (SESSION_ACTIVATION_TIMING_FIELDS mit 0.01/3600.0-Grenzen), 1110-1150 (parse_session_activation_query), 1153-1208 (resolve_session_activation_config: mode legacy vs. controlled), 2421-2441 (ActivationController nur bei mode=='controlled'), 9913-9945 (websocket_transcribe parst die Query), 3407 (_new_activation_inputs gibt fuer nicht-kanonische Sitzungen (wire_settings, None) zurueck), 1025-1041 (public_dict, im hello.activationConfig exponiert); activation.py:93-98 (Contract-Defaults in Sekunden), 272-288 (_timing_locked nutzt _timing_policy oder Konstruktorwerte); tests/unit/test_server_controlled_e2e.py:1316,1358; tests/unit/test_server_command_timer_e2e.py:40-42,656-660,733-740",
+      "id": "R-01",
+      "path": "api_fastapi_server/server.py",
+      "statement": "V1-Controlled-Sitzungen (mindestens ein Trigger-Flag in der Query) uebernehmen die sechs Query-Timingwerte in Sekunden (initialSpeechTimeout, followupTimeout, segmentWatchdogInitialSeconds, segmentWatchdogRefreshSeconds, segmentWatchdogWarningSeconds, closingRecoveryTimeoutSeconds; je 0.01-3600, Defaults 15/3/600/180/30/5 s) als ActivationController-Konstruktorwerte; sie gelten unveraendert fuer die gesamte Sitzungsdauer, weil _new_activation_inputs fuer nicht-kanonische (v1) Sitzungen keine Timing-Policy liefert (None) und ActivationController._timing_locked dann auf die Konstruktorwerte zurueckfaellt. V1-Legacy-Sitzungen ohne Trigger-Flags behalten die Werte zwar im hello.activationConfig, haben aber keinen Controller, der sie verwendet - Praesenz ist keine Wirksamkeit.",
+      "symbol": "SESSION_ACTIVATION_TIMING_FIELDS, parse_session_activation_query, resolve_session_activation_config, RecorderBackedRealtimeSession.__init__, _new_activation_inputs; api_fastapi_server/activation.py: _timing_locked",
+      "uncertainty": "Der Legacy-Fall ist nur indirekt belegt: Die sechs Werte werden geparst und in hello.activationConfig publiziert, ein Controller existiert dort aber nicht. Ein Test, der die Wirkungslosigkeit der Querywerte im Legacy-Modus explizit prueft, wurde nicht gefunden."
+    },
+    {
+      "evidence": "server.py:10121-10146 (websocket_protocol_v2 liest ausschliesslich clientId; keine parse_session_activation_query), 3350-3406 (_new_activation_inputs: canonical_ids == True -> bundle.activation_admission_settings(), timing_seconds -> ActivationTimingPolicy), 3700-3705 und 5797-5801 (Policy wird bei jeder activate-Admission uebergeben), 2615-2627 (Wake-Pfad ebenso); protocol_v2/connection.py:257-282 (SessionActivationRequest nur mit manual_enabled/wake_word_enabled, keine Timings); activation.py:464-509 (timing_policy wird im activate gelatcht), 272-288 (_timing_locked liest die gelatchte Policy); settings_control.py:1111 (activation_timings_seconds)",
+      "id": "R-02",
+      "path": "api_fastapi_server/server.py",
+      "statement": "V2-Sitzungen lesen keine Timing-Queryparameter: /ws/v2 wertet nur clientId aus und baut die Sitzung aus dem validierten hello (manual_trigger/wake_word_trigger). Die sechs Zeitwerte stammen ausschliesslich aus der Settings-Registry und werden bei jeder Activation neu als immutables ActivationTimingPolicy-Objekt gelatcht (SessionSettingsState.activation_admission_settings()); ein Settings-Patch wirkt damit erst ab der naechsten Activation, nie auf eine laufende.",
+      "symbol": "websocket_protocol_v2, ProtocolV2Connection._admit, RecorderBackedRealtimeSession._new_activation_inputs, SessionSettingsState.activation_admission_settings; api_fastapi_server/settings_control.py: activation_timings_seconds",
+      "uncertainty": "Die Bereiche/Defaults der Registry-Werte stammen aus der Settings-Control-Plane (A-54/A-55); R-02 belegt nur Herkunft und Latch-Zeitpunkt, nicht die einzelnen Wertebereiche."
+    },
+    {
+      "evidence": "server.py:2406-2409 (Kommentar: 'Session-scoped command idempotency ... cleared when the session is torn down, not trimmed while it runs'; CommandReplayCache()), 2935-2937 (einziger clear()-Aufruf in close()), 3532-3569 (Lookup vor Semantik, REPLAY/CONFLICT, Speichern auch fachlicher Ablehnungen), 3617-3628 (Cancel-Pfad mit identischer Reihenfolge), 7754-7758 ('commandIdRequired': True, 'commandIdIdempotent': True, 'commandHistory': 'session'); activation_commands.py:284-329 (CommandReplayCache: lookup/store/clear, setdefault verhindert Ueberschreiben)",
+      "id": "R-03",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Die commandId-Idempotenz ist sitzungsgebunden, nicht verbindungsgebunden: Der CommandReplayCache wird pro Sitzung im RecorderBackedRealtimeSession.__init__ erzeugt, die Faehigkeitsanzeige nennt commandHistory='session', und geleert wird er ausschliesslich in close() - nicht bei stop() und nicht bei anderen Zustaandswechseln. Innerhalb derselben Sitzung liefert dieselbe commandId mit demselben Payload die gespeicherte Antwort ohne Zustandsaenderung, dieselbe commandId mit anderem Payload command_id_conflict; auch fachlich abgelehnte Befehle mit brauchbarer commandId belegen ihre Identitaet. Stop/Start/Clear heben die Identitaet daher nicht auf.",
+      "symbol": "RecorderBackedRealtimeSession.__init__ (_command_replay), RecorderBackedRealtimeSession.close, handle_trigger_command, _handle_cancel_accept; api_fastapi_server/activation_commands.py: CommandReplayCache, prepare_activation_command",
+      "uncertainty": "Kein Unsicherheitsrest: clear() hat genau einen Aufrufpfad (close). Die Aussage 'stop hebt die Identitaet nicht auf' folgt aus dem Fehlen weiterer clear()-Aufrufe."
+    },
+    {
+      "evidence": "protocol_v2/connection.py:200-214 (close_session entfernt die Domain-Sitzung), 257-282 (_admit: schema.new_canonical_id() als session_id, SessionActivationRequest ohne Timings), 236-245 (neue Verbindung -> neues _handle_handshake -> _admit); server.py:10111-10113 (finally: remove_session + manager.disconnect), 2891-2937 (close leert den Replay-Cache); protocol_v2/handshake.py:111-116 (clientRunId muss kanonische UUID sein, sonst invalid_client_run_id)",
+      "id": "R-03b",
+      "path": "api_fastapi_server/protocol_v2/connection.py",
+      "statement": "Nach einem echten Verbindungsabbruch entsteht eine neue Sitzung mit leerem Replay-Cache: v1 entfernt die Sitzung im finally von websocket_transcribe (service.remove_session), v2 ruft beim Verbindungsende ProtocolV2Connection.close_session() (remove_session) und eroeffnet bei einer neuen Verbindung eine Sitzung mit schema.new_canonical_id() - also eine frische UUID. Dieselbe commandId ist dort ein neuer Befehl und kann eine neue Activation eroeffnen; Replay-Kontinuitaet ueber einen Disconnect hinweg ist nicht garantiert. Die Wiederaufnahme erfolgt per Snapshot-Resync mit neuen commandIds. clientRunId ist eine Pflicht-UUID des Handshakes zur Identifikation des Client-Laufs und stellt keine Sitzung wieder her.",
+      "symbol": "ProtocolV2Connection.close_session, ProtocolV2Connection._admit; api_fastapi_server/server.py: websocket_transcribe (finally), close; api_fastapi_server/protocol_v2/handshake.py: parse_hello (clientRunId)",
+      "uncertainty": "Fuer den Client-seitigen Resync-Ablauf (Snapshot-Anforderung nach Reconnect) verweist dieses Kapitel auf 04.09; R-03b belegt nur, dass keine Sitzungs-/Replay-Kontinuitaet besteht und clientRunId keine Wiederaufnahme ist."
+    },
+    {
+      "evidence": "protocol_v2/commands.py:143-167 (activate: has_activation_id -> invalid_payload; source muss str und in schema.CLIENT_SOURCES sein, sonst invalid_payload; fuer refresh/finish/cancel: has_source -> invalid_payload und activationId muss kanonische UUID sein); protocol_v2/schema.py:62-80 (ACTIVATE/REFRESH/FINISH/CANCEL, CLIENT_SOURCES = frozenset({MANUAL_SOURCE}), PRIMARY_SOURCES enthaelt wake_word)",
+      "id": "R-04",
+      "path": "api_fastapi_server/protocol_v2/commands.py",
+      "statement": "V2-activate verlangt source als Pflichtfeld, und der einzige zulaessige Client-Wert ist 'manual' (schema.CLIENT_SOURCES = frozenset({'manual'})). Fehlt source oder ist es kein String aus CLIENT_SOURCES - insbesondere 'wake_word' -, wird der Befehl mit invalid_payload abgelehnt, ohne den Controller zu betreten. Zusaetzlich ist activationId bei activate verboten (invalid_payload).",
+      "symbol": "_validate_activation_command; api_fastapi_server/protocol_v2/schema.py: CLIENT_SOURCES, MANUAL_SOURCE, WAKE_WORD_SOURCE",
+      "uncertainty": "Fuer 'activate ohne source' existiert kein dedizierter Test; der Codepfad ist derselbe wie beim belegten wake_word-Fall (Zeile 157-160), ein eigener Test wurde nicht gefunden."
+    },
+    {
+      "evidence": "protocol_v2/commands.py:163-167 (if has_source: return RESULT_INVALID_PAYLOAD; danach is_canonical_uuid(activationId)); activation_commands.py:26-29 (Docstring: source bei Steuerbefehlen nicht semantisch, wird toleriert und ignoriert), 67-79 (payload_key fuer Controls = (action, activationId) ohne source), 245-269 (Control-Pfad: activationId Pflicht, source wird nicht gelesen), 151-165 (_raw_payload_key ignoriert source bei control=True)",
+      "id": "R-04b",
+      "path": "api_fastapi_server/protocol_v2/commands.py",
+      "statement": "V2-Steuerbefehle (refresh, finish, cancel) verbieten das Feld source vollstaendig: Jedes vorhandene source - auch 'manual' - fuehrt zu invalid_payload, und stattdessen ist eine kanonische activationId Pflicht. Damit ist die Migrationsregel eindeutig: source bei activate auf 'manual' setzen, bei Steuerbefehlen entfernen. Auf v1 ist source bei Steuerbefehlen dagegen toleriert und wird ignoriert; es ist weder Teil des semantischen Befehls noch des Replay-Schluessels.",
+      "symbol": "_validate_activation_command (has_source-Zweig); api_fastapi_server/activation_commands.py: prepare_activation_command, ActivationCommand.payload_key, _raw_payload_key",
+      "uncertainty": "Keine: Das Verbot ist eine explizite Pruefung vor jeder weiteren Auswertung."
+    },
+    {
+      "evidence": "activation_commands.py:212-226 (activate: source muss in ACTIVATION_SOURCES = (manual, wake_word) liegen, sonst invalid_source), 48-50; protocol_v2/schema.py:72-80 (CLIENT_SOURCES = {manual}, PRIMARY_SOURCES = {manual, wake_word}); server.py:2624 (activate('wake_word', ...) im Wake-Pfad), 5798 (activate-Aufruf im Command-Pfad mit command.source); activation.py:474-485 (unbekannte Quelle -> trigger_disabled, nicht freigeschaltete Quelle -> trigger_disabled)",
+      "id": "R-04c",
+      "path": "api_fastapi_server/activation_commands.py",
+      "statement": "'wake_word' als Primaerquelle entsteht ausschliesslich serverseitig: Der Wake-Admission-Koordinator ruft ActivationController.activate('wake_word', ...) im Server auf; auf dem v2-Draht ist der Wert nicht zulaessig (invalid_payload), auf v1 ist er syntaktisch zulaessig, wirkt aber nur, wenn die Wake-Quelle in der Sitzung freigeschaltet ist (sonst trigger_disabled). Auf v1 ist source bei activate ebenfalls Pflicht; fehlt es, antwortet der Parser mit invalid_source.",
+      "symbol": "prepare_activation_command (invalid_source), ActivationCommand; api_fastapi_server/protocol_v2/schema.py: CLIENT_SOURCES, PRIMARY_SOURCES; api_fastapi_server/activation.py: activate (_source_enabled)",
+      "uncertainty": "Der v1-Fall 'wake_word bei nicht freigeschalteter Quelle' ist ueber _source_enabled/trigger_disabled belegt; ein eigener Test dafuer wurde in dieser Runde nicht geprueft."
+    },
+    {
+      "evidence": "server.py:2390 (_activation = None), 2421-2441 (nur bei mode=='controlled': set_activation_policy('controlled') und ActivationController(...)), 1153-1208 (Legacy bei fehlenden Flags; controlled ab einem Flag; activation_trigger_required bei false/false), 3451-3453 (activation_controller(): 'or None in legacy mode'); protocol_v2/connection.py:272-275 (v2 setzt manual_enabled/wake_word_enabled aus dem hello); activation_control.py:29-37 (Default-Policy 'legacy'), 52-67 (configure_activation_policy)",
+      "id": "R-05",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Ein ActivationController existiert nur im kontrollierten Modus: __init__ setzt _activation = None und instanziiert den Controller ausschliesslich bei activation_config.mode == 'controlled'; zugleich wird dann die Recorder-Policy auf 'controlled' gesetzt. resolve_session_activation_config waehlt 'legacy', wenn weder manualTriggerEnabled noch wakeWordTriggerEnabled in der Query stehen, und 'controlled', sobald mindestens ein Flag vorhanden ist (das fehlende Flag zaehlt dann als false; false/false wird mit activation_trigger_required abgelehnt). V2-Sitzungen sind immer kontrolliert, weil die Admission beide Flags aus dem hello setzt.",
+      "symbol": "RecorderBackedRealtimeSession.__init__, resolve_session_activation_config, activation_controller(); VoiceSTT/core/activation_control.py: initialize_activation_control, configure_activation_policy",
+      "uncertainty": "Keine: Der Konstruktionszweig ist ein explizites if auf mode == 'controlled'."
+    },
+    {
+      "evidence": "server.py:5526-5531 (Follow-up-Fenster nur wenn self._activation is None; Kommentar: im kontrollierten Modus abgeschaltet), 5600-5659 (Fenster aus wake_word_followup_window, <=0 -> kein Fenster), 446 und 575 (Default 0.0, Bereich 0.0-3600.0), 3665-3670 und 3596-3601 (kein Controller -> controlled_activation_disabled), 4748-4752 und 5369-5376 (synthetische IDs legacy-<sessionId>-<n>), 2384 (_legacy_activation_sequence); activation_control.py:191-226 (Gate-Pruefung: Policy 'legacy' nutzt wakeword_detected/start_recording_on_voice_activity), 29-37 (Default-Policy legacy); recording.py:230-384 (Recorder-Policy-Zweige)",
+      "id": "R-06",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Der V1-Legacy-Modus hat eigene Aufnahme- und Follow-up-Pfade: Die Aufnahme entsteht direkt aus VAD/Wake Word (recording_activation_gate_is_open prueft bei Policy 'legacy' recorder.wakeword_detected bzw. start_recording_on_voice_activity statt des Gates), ein trigger-Befehl wird mit controlled_activation_disabled abgelehnt, der Anschluss nach einem Segment laeuft ueber _start_wakeword_followup_window mit dem Recorder-Fenster wake_word_followup_window (Default 0.0 = aus, Maximalwert 3600), und Ledger-Identitaeten sind synthetisch als legacy-<sessionId>-<n>. Die sechs Zeitwerte haben dort keine Wirkung. Im kontrollierten Modus ist dieser Legacy-Follow-up abgeschaltet, weil der Controller die einzige Follow-up-Autoritaet ist.",
+      "symbol": "_start_wakeword_followup_window, _finish_wakeword_followup, _on_recording_stop, _compat_final_context, _run_activation_command_locked; VoiceSTT/core/activation_control.py: recording_activation_gate_is_open; VoiceSTT/core/recording.py",
+      "uncertainty": "recording.py:230-384 wurde als Policy-Zweig gelesen, aber nicht Zeile fuer Zeile gegen alle Legacy-Callbacks geprueft; die Kernaussagen (kein Controller, Legacy-Aufnahme, Legacy-Follow-up, synthetische IDs, wirkungslose Timings) sind ueber server.py und activation_control.py belegt."
+    },
+    {
+      "evidence": "server.py:3596-3615 (Cancel-Pfad: controlled_activation_disabled, session_closed, stream_not_started), 3665-3688 (identische Reihenfolge im allgemeinen Pfad), 3690-3699 (audio_unavailable nur im ACTIVATE-Zweig), 3706-3714 (refresh/finish ohne Audio-Pruefung), 3782-3812 (audioAvailable=false -> _activation.audio_unavailable(), Ledger mark_cancel_requested, command_id=None), 3730-3743 (Docstring: Verlust bricht die offene Activation ab, Sitzung bleibt); activation.py:702-720 (audio_unavailable -> _enter_close_barrier_locked('cancelled','audio_unavailable'); in idle not_active, in closing_input no_change); protocol_v2/commands.py:211-247 (audio_unavailable -> RESULT_AUDIO_UNAVAILABLE; controlled_activation_disabled/session_closed/stream_not_started -> RESULT_INTERNAL_ERROR)",
+      "id": "R-07",
+      "path": "api_fastapi_server/server.py",
+      "statement": "Die Sitzungs-Ablehnungsgruende sind keine Unterarten von audio_unavailable: _run_activation_command_locked prueft vor jedem Befehl der Reihe nach _activation is None (controlled_activation_disabled), status == 'closed' (session_closed) und not streaming (stream_not_started); audio_unavailable wird ausschliesslich im activate-Zweig bei fehlender Geraeteverfuegbarkeit erzeugt. refresh/finish/cancel werden nicht gegen die Geraeteverfuegbarkeit geprueft - ein Geraeteverlust wirkt dort ueber den separaten audio_availability-Pfad, der die offene Activation mit reason 'cancelled' und cause 'audio_unavailable' schliesst. Auf v2 projiziert die Reason-Map controlled_activation_disabled, session_closed und stream_not_started auf internal_error, audio_unavailable auf audio_unavailable.",
+      "symbol": "_run_activation_command_locked, _handle_cancel_accept, handle_audio_availability_command; api_fastapi_server/activation.py: audio_unavailable; api_fastapi_server/protocol_v2/commands.py: DOMAIN_REASON_RESULTS",
+      "uncertainty": "Keine inhaltliche: Alle vier Gruende und die v2-Projektion sind explizite Codezweige. Ungeprueft bleibt, ob die v2-Schicht zusaetzlich vor der Projektion eigene Lifecycle-Guards besitzt."
+    }
+  ],
+  "not_implemented_unknown_conflicts": [
+    "KEIN 'extend'/additives Verlängern: prepare_activation_command akzeptiert nur activate|refresh|finish|cancel; 'extend' ist 'invalid_action'. Die Docstring in ActivationCommand.payload_key ('``extend`` is normalised to ``refresh`` before the key is built', activation_commands.py L74-76) ist veraltet und widerspricht dem Code — Code ist Autorität (bestätigt durch test_the_deprecated_extend_alias_is_gone).",
+    "KEIN 'abort'-Command im Protokoll: abort existiert nur als interner Recorder-/Reset-Pfad (abort_controlled_activation), nicht als wire action; cancel ist der einzige Client-Abbruch.",
+    "KEINE Priorität zwischen Triggerquellen: es gibt keine Rangfolge und keine Quellen-Zusammenführung; die erste Admission gewinnt, die zweite Quelle erhält 'activation_locked' (sources enthält immer genau einen Eintrag).",
+    "KEINE globale Maximaldauer einer Activation und kein Cap über Phasen hinweg: die einzigen Obergrenzen sind initial_speech, followup und der Segment-Watchdog (nur in segment_active, nur durch refresh verlängerbar). Ein 'activation.maxDuration' o. Ä. ist NICHT_IMPLEMENTIERT.",
+    "KEINE Supervision des Timer-Workers: pro Deadline genau ein Daemon-Thread ohne Watchdog/Retry; stirbt der Thread, wird die Deadline nicht neu armiert (kein Code dafür vorhanden) — Verhalten UNKNOWN/nicht abgesichert.",
+    "input_closed() prüft activation_sequence nicht typdefensiv: int(activation_sequence) kann bei None mit TypeError abbrechen; es gibt keine Reason-Antwort für diesen Fall (UNKNOWN/ungeprüft, Aufrufer übergibt immer int).",
+    "Eintritt in closing_input hat kein öffentliches v2-Event: nur der interne Marker '__input_closing__' versioniert ihn; 'activation.phase_changed' wird für diesen Übergang NICHT emittiert (bewusste Design-Entscheidung, im Code dokumentiert).",
+    "Spannungsfeld Doku/Code: settings_control.freeze_activation() dokumentiert 'only next_activation values are latched', während die v2-Admission tatsächlich activation_admission_settings().effective_settings (alle Session-Scope-Keys) in die Activation latcht (nur Runtime-Suppression wird live überlagert). Funktional konsistent (Projektion überlagert Live-Werte), aber die Aussage 'nur next_activation' ist für diesen Pfad zu eng.",
+    "v1 und v2 unterscheiden sich bewusst bei der Quelle: v1-Client darf 'source=wake_word' senden (akzeptiert, wenn konfiguriert), v2 verbietet es ('wake_word' ist serverintern). Kein Widerspruch, aber ein dokumentationspflichtiger Protokollunterschied.",
+    "v2 kennt keine Timing-Queryparameter: die sechs Fristen kommen ausschließlich aus dem Settings-Registry (Server-Defaults bzw. session_settings.patch). v1-Timing-Querywerte (initialSpeechTimeout etc.) existieren nur auf /ws/transcribe.",
+    "Der Controller-Snapshot enthält 'timerToken' als TimerToken-Dataclass-Objekt und ist damit nicht JSON-serialisierbar; die v2-Wire-Sicht baut deshalb einen eigenen Snapshot (snapshot.build_snapshot) und verwendet timerToken nicht.",
+    "Der Test-Hook _test_cancel_after_barrier existiert im Produktivcode (server.py L3646-3648); er ist nur ein optionales Attribut und wird im Normalbetrieb nicht gesetzt.",
+    "Nicht Teil dieses Kapitels/UNKNOWN: exakte Ledger-Drain- und Publikationsregeln (Reihenfolge, Sequenzlücken, terminale Zählungen) sowie die vollständige Transkriptions-Zuordnung nach Cancel sind in segment_ledger.py/AP-SRV-040 implementiert und müssen in den Ledger-/Transkriptions-Kapiteln belegt werden — hier nur die Aktivations-Konsequenzen (Barriere, Terminal-Events, pendingActivations).",
+    "Als Konfigurationsbeleg wurde config.yaml geprüft: sie enthält nur wake_word_activation_delay (0.0), keine Activation-Timing-Werte; die Defaults stammen ausschließlich aus Code/Settings-Registry."
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "sources": [
+    "api_fastapi_server/activation.py (L1-866: Modul-Docstring/Timer-Contract, Phasen-Konstanten L65-98, TimerToken L127-144, ActivationDecision L146-151, CloseContext L154-168, ActivationTimingPolicy L171-188, ActivationController L191-866)",
+    "api_fastapi_server/activation_commands.py (L1-329: Envelope/Replay-Key, prepare_activation_command L175-269, parse_activation_command L272-281, CommandReplayCache L295-329)",
+    "VoiceSTT/core/activation_control.py (L1-226: Policy-Konstanten, Gate-Operationen L70-166, Snapshots L169-189, recording_activation_gate_is_open L191-226)",
+    "VoiceSTT/core/recording.py (L320-390: VAD-Schleife konsultiert Gate vor is_voice_active/self.start())",
+    "VoiceSTT/audio_recorder.py (L712-811: set_activation_policy/open_controlled_activation/close_controlled_activation/abort_controlled_activation/controlled_activation_state/abort/shutdown)",
+    "api_fastapi_server/server.py (L36-68 Imports; L985-1208 SessionActivationRequest/Query/Resolve; L2308-2448 Session-Konstruktion inkl. Controller; L2450-2713 Wake-Runtime; L2850-3009 start/stop/close/clear; L3265-3407 Settings-Latch; L3409-3735 trigger/audio-Befehle; L3835-4139 InputClosePlan/Close-Phasen; L4141-4344 Recovery/Watchdog; L4346-4520 Event-Mapping/Timer/Reset; L5294-5532 Recorder-Callbacks; L5589-5640 Status/legacy Followup; L5880-5963 Publish-Funnel; L7738-7769 Capabilities; L9912-10128 Routen /ws/transcribe und /ws/v2)",
+    "api_fastapi_server/wake_admission.py (L80-107 Outcom, L140-204 LogicalWakeEventLedger, L207-372 WakeAdmissionCoordinator)",
+    "VoiceSTT/core/wake_detection.py (L516-790 WakeDetectionEvaluator: observe_scores L~680-702, accept L704-727, refuse L734-744, release_latch L746-762)",
+    "api_fastapi_server/protocol_v2/schema.py (L44-102 Befehlstypen/Actions/Sources/Phasen, L105-143 Result-Codes, L146-197 Event-Namen/NON_STATE_EVENTS)",
+    "api_fastapi_server/protocol_v2/commands.py (L42-138 parse_command, L143-167 _validate_activation_command, L206-263 DOMAIN_REASON_RESULTS/NON_COMMAND_REASONS/map_domain_reason)",
+    "api_fastapi_server/protocol_v2/connection.py (L257-343 Session-Admission + Suppression + start_streaming, L347-450 Command-Dispatch/Ack, L452-479 stateVersion, L483-503 trigger_suppression, L609-677 Ack/trigger_suppressed, L688-750 Domain-Event/Closing-Version)",
+    "api_fastapi_server/protocol_v2/events.py (L51-92 Legacy→v2-Event-Map, L114-208 Phasenableitung, L451-470 Terminal-Events)",
+    "api_fastapi_server/protocol_v2/snapshot.py (L36-139 build_snapshot/build_input/project_deadline, L142-184 pendingActivations/trigger)",
+    "api_fastapi_server/settings_control.py (L52 APPLY_NEXT_ACTIVATION, L71-76/l27-134 Timing-Keys, L278-366 Registry-Definitionen, L844-1143 ActivationAdmissionSettings/activation_admission_settings/freeze_activation, L1150-1166 settings_projection)",
+    "api_fastapi_server/segment_ledger.py (L150-260 open_activation/accept_segment/mark_cancel_requested, L95-111 ActivationTerminal/LedgerUpdate)",
+    "tests/unit/test_server_activation_controller.py (56 Tests, u.a. Phasenmatrix, Watchdog L583-686, Closing-Recovery L690-751, Stale-Token L394-439, Audio-Verlust L896-936, Reset L1031-1082, Race L1106-1250)",
+    "tests/unit/test_server_activation_commands.py (22 Tests: Actions, Semantik-Keys, Replay/Conflict, Keyless-Rejections)",
+    "tests/unit/test_recorder_activation_control.py (23 Tests: Gate-Blockade, Generation-Bindung, Idempotenz, Shutdown, Parallelität)",
+    "tests/unit/test_server_command_timer_e2e.py (Phasenmatrix L141-207, Refresh-nicht-kumulativ L235-268, Close-Admission-Races L1401-1600, Watchdog-E2E L651-709)",
+    "tests/unit/test_server_controlled_e2e.py (Query-/Modus-Admission L420-471, Gate gated Sprache L475-523, Wake-Word-Pfad L525-560, Timeouts L1303-1404)",
+    "tests/unit/test_server_trigger_contract.py (Ack-Korrelation, Idempotenz, deaktivierte Quelle L196-204, stream_not_started L206-234, wake_word als v1-Befehl L288-323)",
+    "tests/unit/test_protocol_v2_e2e.py (v2-Acks, activation_locked L667, invalid_phase L677, doorway, audioAvailable-cancel L1160-1179, kein Legacy-Event L1181-1201, idle+pendings L1340-1371)",
+    "tests/unit/test_wake_admission.py (L150: activation_locked publiziert nichts und latcht nicht; L283 waiting_first_speech)",
+    "tests/contracts/protocol-v2-vectors.json (L103-108: inputPhase waiting_first_speech als Vertragsvektor)",
+    ".git/HEAD (Inhalt: a8993c5c68042d996eab680d84a5b138a214bb5d — Checkout-Stand bestätigt)"
+  ],
+  "states_events_defaults": "PHASEN (genau fünf): idle | waiting_first_speech | segment_active | followup_wait | closing_input. Offenes Recorder-Fenster nur in waiting_first_speech/segment_active/followup_wait; closing_input ist active=true, windowOpen=false. STEUERMETHODEN: activate(source in {manual,wake_word}), refresh(activationId), finish(activationId), cancel(activationId,cause='cancel'), recording_started/recording_ended (Recorder-Callbacks), input_closed(activationId,activationSequence), audio_unavailable, tick(TimerToken), reset. DEADLINE-KINDS: initial_speech (now+initial_speech_timeout beim Admission, nicht refreshbar), followup (now+followup_timeout nach Segmentende und bei jedem refresh, nie kumulativ), segment_watchdog (now+segment_watchdog_initial beim Segmentstart; refresh = max(current, now+segment_watchdog_refresh); Warnung segment_watchdog_warning vor Ablauf; VAD resettet nicht), closing_recovery (now+closing_recovery_timeout beim Eintritt in closing_input). DEFAULTS (Sekunden Controller / ms Settings): initial 15.0/15000, followup 3.0/3000, watchdog initial 600.0/600000, refresh 180.0/180000, warning 30.0/30000, closing recovery 5.0/5000; v1-Query-Bereich 0.01–3600 s, Settings-Bereiche 100–3600000 / 100–60000 / 60000–3600000 / 30000–600000 / min 5000 (< watchdog) / 1000–30000 ms. REASONS (Controller): activated, activation_locked, trigger_disabled, invalid_payload, not_active, stale_activation, invalid_phase, closing_input, refreshed, already_recording, recording_started, followup_started, input_closing, finished, cancelled, timed_out, segment_watchdog_timeout, watchdog_warning, closing_recovery_due, not_closing_input, input_closed, stale_timer, not_due, not_expirable, reset, already_idle. SESSION-REASONS: controlled_activation_disabled, session_closed, stream_not_started, audio_unavailable, command_id_conflict, invalid_action, invalid_source, invalid_command_id, missing_command_id, no_change, applied. v2-RESULTS (15): applied, no_change, activation_locked, not_active, invalid_phase, closing_input, stale_session, stale_activation, command_id_conflict, invalid_payload, trigger_suppressed, audio_unavailable, settings_revision_conflict, settings_rejected, internal_error; accepted nur applied/no_change. EVENTS (legacy): activation_started, activation_refreshed, activation_closed, watchdog_warning, activation_drained, recording_started/ended, wakeword_detected; EVENTS (v2 kanonisch): activation.started, activation.phase_changed, activation.input_closed, activation.completed, activation.cancelled, activation.failed, activation.trigger_suppressed, watchdog.warning, segment.recording_started/ended, wakeword.detected, wakeword.availability_changed, settings.changed; NON_STATE: watchdog.warning, activation.trigger_suppressed, transcription.interim. SNAPSHOT-SCHLÜSSEL: phase, state, activationId, activationSequence, generation, version, timerRevision, segmentToken, primarySource, sources, effectiveSettings, deadline, deadlineKind, warningDeadline, warningFired, segments, windowOpen, active, timerRevision, recoveryRequested, closeReason/closeCause/closeRequestedByCommandId/closeRequestedByAction, closed* (nach Close). GATE: policy legacy|controlled, active, activationId, generation, shutdown; Recording-Token (activationId, generation).",
+  "title": "Activation"
+}

@@ -1,0 +1,218 @@
+{
+  "branch_note": "feat/v2-release-cleanup nicht verifizierbar (detached HEAD); nur Commit bindend.",
+  "chapter": "08.10",
+  "commit_verification": ".git/HEAD exakt 40-Zeichen-Hash (detached, kein ref).",
+  "conflicts": [
+    {
+      "id": "C-1",
+      "thema": "Testvektor settings={} statt baseRevision/changes; nur fremde Nachricht, kein Widerspruch."
+    },
+    {
+      "id": "C-2",
+      "thema": "Vektor idle_snapshot ohne requestedSettings; Code sendet es (Autoritaet)."
+    },
+    {
+      "id": "C-3",
+      "thema": "hello.accepted-Test nur Teilmenge; kein Widerspruch."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "Route @app.websocket(/ws/v2); accept ohne Subprotokoll; nicht im ConnectionManager.",
+      "beleg": "server.py:10121-10152",
+      "evidenz": "A",
+      "gueltigkeit": "gesamte Akte",
+      "id": "WS8-01"
+    },
+    {
+      "aussage": "Bootstrap clientId Query/Header; Version/Commit aus app_identity; Timeout Default.",
+      "beleg": "server.py:10137-10152",
+      "evidenz": "A",
+      "gueltigkeit": "jede Verbindung",
+      "id": "WS8-02"
+    },
+    {
+      "aussage": "Writer nur Text json.dumps separators ohne sort_keys (Einfuegereihenfolge); None=Close; Fehler->1011.",
+      "beleg": "server.py:10154-10190",
+      "evidenz": "A",
+      "gueltigkeit": "alle S->C",
+      "id": "WS8-03"
+    },
+    {
+      "aussage": "hello 8 Pflichtfelder in Reihenfolge type/Versions/Identitaet/RunId/Session/Trigger/Ids/Suppression.",
+      "beleg": "handshake.py:83-178",
+      "evidenz": "A/B",
+      "gueltigkeit": "erste Nachricht",
+      "id": "WS8-04"
+    },
+    {
+      "aussage": "3 Stufen Envelope->4400 ohne Nachricht; keine Version->incompatible+4406; inadmissibel->rejected+4409; Exception->1011.",
+      "beleg": "handshake.py:8-21,83-165; connection.py:218-305",
+      "evidenz": "A/B",
+      "gueltigkeit": "Handshake",
+      "id": "WS8-05"
+    },
+    {
+      "aussage": "incompatible 5 Felder + supported; rejected 5+errors[] (field/code/message + Wake reason/id).",
+      "beleg": "handshake.py:62-80; ports.py:130-138",
+      "evidenz": "A/B",
+      "gueltigkeit": "Ablehnung",
+      "id": "WS8-06"
+    },
+    {
+      "aussage": "accepted 7 Felder + snapshot ohne type + logAccess; kein start; start_streaming.",
+      "beleg": "connection.py:307-343; snapshot.py:82-89",
+      "evidenz": "A/B",
+      "gueltigkeit": "einmal/Verbindung",
+      "id": "WS8-07"
+    },
+    {
+      "aussage": "Envelope type/commandId/version/sessionId; unbekannt ignoriert; ohne ID kein Ack; falsch invalid, fremd stale.",
+      "beleg": "commands.py:90-138",
+      "evidenz": "A/B",
+      "gueltigkeit": "alle Commands",
+      "id": "WS8-08"
+    },
+    {
+      "aussage": "5 Typen: activation (activate source manual/ohne ID; Control ohne source/mit ID), suppression, audio, patch, snapshot.request.",
+      "beleg": "commands.py:143-203",
+      "evidenz": "A/B",
+      "gueltigkeit": "Envelope",
+      "id": "WS8-09"
+    },
+    {
+      "aussage": "ack 10+errors; accepted nur applied/no_change; idle normalisiert; stateVersion 3 Faelle; Replay verbatim; ack vor snapshot.",
+      "beleg": "connection.py:620-661",
+      "evidenz": "A/B",
+      "gueltigkeit": "jedes Kommando",
+      "id": "WS8-10"
+    },
+    {
+      "aussage": "15 Results geschlossen; 12 via 26 Reasons, stale nur Envelope, settings nur Settings, internal Fallback.",
+      "beleg": "schema.py:124-140; commands.py:211-276",
+      "evidenz": "A/B",
+      "gueltigkeit": "Ack-Projektion",
+      "id": "WS8-11"
+    },
+    {
+      "aussage": "Event-Envelope 7+Typfelder; eventId UUID, eventSeq ab 1 lueckenlos, stateVersion nur sichtbar (3 NON_STATE).",
+      "beleg": "session.py:105-144",
+      "evidenz": "A/B",
+      "gueltigkeit": "alle Events",
+      "id": "WS8-12"
+    },
+    {
+      "aussage": "18 = 13 Builder + 3 Terminals + suppressed + settings; 15 Legacy->13 distinkt, Unbekannt verworfen.",
+      "beleg": "events.py:54-80,453-508; connection.py:544-677",
+      "evidenz": "A/B",
+      "gueltigkeit": "Projektion",
+      "id": "WS8-13"
+    },
+    {
+      "aussage": "Ordnung phase_changed vor Event (ausser announcing/katalog); settings-Gruppen POLICY_ORDER live/next_activation/next_session/restart, keys sortiert.",
+      "beleg": "events.py:114-192; connection.py:544-582",
+      "evidenz": "A/B",
+      "gueltigkeit": "Ordnung",
+      "id": "WS8-14"
+    },
+    {
+      "aussage": "snapshot 15 Keys; input 6 (idle null/false); pending nur inputClosed sortiert; trigger 3x2; wake {revision,ids}.",
+      "beleg": "snapshot.py:36-184; ports.py:103-107",
+      "evidenz": "A/B",
+      "gueltigkeit": "Snapshot+-type",
+      "id": "WS8-15"
+    },
+    {
+      "aussage": "Binaer uint32 LE + JSON max 65536 + Audio; rate Pflicht, channels 1 max 8, nur pcm_s16le, frames konsistent; Limit 524288.",
+      "beleg": "protocol.py:7-82; server.py:449,7653-7683",
+      "evidenz": "A/B",
+      "gueltigkeit": "jeder Frame",
+      "id": "WS8-16"
+    },
+    {
+      "aussage": "Binaer vor hello 4400; nachher Fehler still verworfen (kein Close/Nachricht).",
+      "beleg": "connection.py:181-198",
+      "evidenz": "A/B",
+      "gueltigkeit": "Audio-Pfad",
+      "id": "WS8-17"
+    },
+    {
+      "aussage": "Close 4400/4406/4408/4409/1011 + 1000; erster gewinnt.",
+      "beleg": "schema.py:202-206; connection.py:140-152; server.py:10259-10281",
+      "evidenz": "A/B",
+      "gueltigkeit": "/ws/v2",
+      "id": "WS8-18"
+    },
+    {
+      "aussage": "Timeout 10.0s nur vor Annahme, ueberschreibbar, danach receive/close.",
+      "beleg": "schema.py:209; connection.py:72-78; server.py:10193-10247",
+      "evidenz": "A/B",
+      "gueltigkeit": "jede Verbindung",
+      "id": "WS8-19"
+    },
+    {
+      "aussage": "Version 2, SUPPORTED (2,), max gemeinsam; jedes Kommando version 2 (bool ab); jede Server-Nachricht 2.",
+      "beleg": "schema.py:29-32; handshake.py:181-187; commands.py:116-118",
+      "evidenz": "A/B",
+      "gueltigkeit": "29 Texte",
+      "id": "WS8-20"
+    },
+    {
+      "aussage": "Version/Commit in accepted/snapshot/incompatible/rejected (Env/unknown, kein Git); nicht Ack/Events.",
+      "beleg": "identity.py:1-29; handshake.py:62-67; snapshot.py:63-64",
+      "evidenz": "A/B",
+      "gueltigkeit": "4 Typen",
+      "id": "WS8-21"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Kein WS-Subprotokoll (accept ohne Argument)."
+    },
+    {
+      "id": "N2",
+      "thema": "Kein Ping/Pong/App-Heartbeat auf /ws/v2."
+    },
+    {
+      "id": "N3",
+      "thema": "Kein Idle/Session-Timeout nach accepted."
+    },
+    {
+      "id": "N4",
+      "thema": "Keine Rate/Text-Limit im v2-Pfad."
+    },
+    {
+      "id": "N5",
+      "thema": "Keine normative Schluesselreihenfolge (nur Dict-Reihenfolge)."
+    }
+  ],
+  "researcher_session": "ses_e3482e4c0ffeFSxNLgJRebWp2W",
+  "solver_notes": [
+    "29 Texte = 6 C->S (hello+5 Commands) + 23 S->C (accepted/incompatible/rejected/ack/snapshot+18 Events)",
+    "18 = 13 Builder + 3 Terminals + suppressed + settings; 15 Legacy->13 distinkt",
+    "15 Results (accepted applied/no_change), 4 Actions, 3 Control, 5 Phasen, 1 Client-Source, 2 Primary, 3 NON_STATE, 26/10 Reasons",
+    "Close 5+1000; Timeout 10.0s; Meta 65536; Audio 524288; 1 Binaer; Version 2",
+    "Reihenfolge Code-Reihenfolge nicht normativ",
+    "Abgrenzung 08.01/08.02/04.x"
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Text-Frame-Limit (nur Audio verifiziert)."
+    },
+    {
+      "id": "U2",
+      "thema": "Wake-code vollstaendig AP-SRV-060."
+    },
+    {
+      "id": "U3",
+      "thema": "Versionsherkunft resolve_version nicht hier."
+    }
+  ],
+  "writer_notes": "Zahlen 29/18/5/15/4/5/3/15/26/10/5+1/10s/65536/524288/1/Version 2. ack vor snapshot; settings vor Domain (Lock)."
+}

@@ -1,0 +1,3659 @@
+[@0001] activation.py:
+  IDLE = "..."
+  WAITING_FIRST_SPEECH = "..."
+  SEGMENT_ACTIVE = "..."
+  FOLLOWUP_WAIT = "..."
+  CLOSING_INPUT = "..."
+  INACTIVE = I
+  OPEN_WINDOW_PHASES = f
+  MANUAL_SOURCE = "..."
+  WAKE_WORD_SOURCE = "..."
+  ACTIVATION_SOURCES = f
+  INITIAL_SPEECH_DEADLINE = "..."
+  FOLLOWUP_DEADLINE = "..."
+  SEGMENT_WATCHDOG_DEADLINE = "..."
+  CLOSING_RECOVERY_DEADLINE = "..."
+  DEFAULT_INITIAL_SPEECH_TIMEOUT = 1
+  DEFAULT_FOLLOWUP_TIMEOUT = 3
+  DEFAULT_SEGMENT_WATCHDOG_INITIAL = 6
+  DEFAULT_SEGMENT_WATCHDOG_REFRESH = 1
+  DEFAULT_SEGMENT_WATCHDOG_WARNING = 3
+  DEFAULT_CLOSING_RECOVERY_TIMEOUT = 5
+  def _freeze(value):
+  def _thaw(value):
+
+  class TimerToken:
+
+  class ActivationDecision:
+
+  class CloseContext:
+
+  class ActivationTimingPolicy:
+
+  class ActivationController:
+    def __init__(
+    def _positive(name, value):
+    def _timing_locked(self):
+    def manual_enabled(self):
+    def wake_word_enabled(self):
+    def window_open(self):
+    def _configured(self, source):
+    def _source_enabled(self, source):
+    def set_runtime_suppression(self, *, manual=None, wake_word=None):
+    def trigger_state(self):
+    def _clear_timer_locked(self):
+    def _set_timer_locked(self, kind, deadline, *, warning_after=None):
+    def _timer_token_locked(self):
+    def _token_is_current_locked(self, token):
+    def _snapshot_locked(self):
+    def snapshot(self):
+    def timer_token(self):
+    def _activation_mismatch_locked(self, activation_id):
+    def activate(self, source, effective_settings=None, *, activation_id=None,
+    def refresh(self, *, activation_id, command_id=None):
+    def recording_started(self):
+    def recording_ended(self):
+    def finish(self, *, activation_id, command_id=None):
+    def cancel(self, *, activation_id, command_id=None, cause="cancel"):
+    def _begin_input_close(
+    def _closing_snapshot_locked(self):
+    def _enter_close_barrier_locked(
+    def audio_unavailable(self):
+    def input_closed(self, *, activation_id, activation_sequence):
+    def tick(self, token):
+    def _recover_closing_locked(self):
+    def reset(self):
+    def _clear_locked(self, close_context=None):
+
+[@0002] activation_commands.py:
+  ACTIVATE = "..."
+  REFRESH = "..."
+  FINISH = "..."
+  CANCEL = "..."
+  ACTIVATION_ACTIONS = (...)
+  CONTROL_ACTIONS = f
+  MANUAL_SOURCE = "..."
+  WAKE_WORD_SOURCE = "..."
+  ACTIVATION_SOURCES = (...)
+
+  class ActivationCommand:
+    def payload_key(self):
+
+  class CommandRejected(Exception):
+    def __init__(self, reason, command_id=""):
+
+  class PreparedActivationCommand:
+  def _freeze_value(value):
+  def _raw_payload_key(data, *, control):
+  def _normalized_action(data):
+  def prepare_activation_command(data):
+  def parse_activation_command(data):
+  MISS = "..."
+  REPLAY = "..."
+  CONFLICT = "..."
+
+  class ReplayLookup:
+
+  class CommandReplayCache:
+    def __init__(self):
+    def __len__(self):
+    def lookup(self, command_id, payload_key):
+    def store(self, command_id, payload_key, result):
+    def clear(self):
+
+[@0003] kroko_runtime.py:
+  KROKO_ENGINE = "..."
+  def kroko_model_key(model: Any, manifest: Any = None) -> str:
+  def kroko_lane_models(settings: Any, manifest: Any = None) -> List[Tuple[str, str, str]]:
+  def enforce_kroko_single_identity(settings: Any, manifest: Any = None) -> None:
+
+[@0004] openai_routes.py:
+  def create_openai_router(
+      def emit_http_transcription(event, severity="info", **fields):
+          def record_http_first_text(text):
+          def stream_callback(text, _detail):
+          def emit_http_realtime_summary():
+            def selected_percentile(fraction):
+
+[@0005] protocol.py:
+  MAX_METADATA_BYTES = 6
+
+  class AudioPacketError(ValueError):
+
+  class AudioPacket:
+  def normalize_engine_name(name):
+  def parse_json_object(value, name):
+  def encode_audio_packet(metadata, audio):
+  def decode_audio_packet(message):
+  def require_positive_int(metadata, key):
+
+[@0006] commands.py:
+
+  class UnmappedDomainReason(LookupError):
+
+  class ParsedCommand:
+    def rejected(self):
+  def freeze_payload(payload):
+  def _reject(payload, command_id, result):
+  def parse_command(payload, *, session_id):
+  def _validate_activation_command(payload):
+  def _validate_trigger_suppression(payload):
+  def _validate_audio_availability(payload):
+  def _validate_session_settings_patch(payload):
+  def _validate_snapshot_request(payload):
+  _VALIDATORS = {...}
+  DOMAIN_REASON_RESULTS = {...}
+  NON_COMMAND_REASONS = f
+  def map_domain_reason(reason):
+  def is_accepted(result):
+
+[@0007] connection.py:
+  LOGGER = l
+
+  class ProtocolV2Connection:
+    def __init__(
+    def accepted(self):
+    def closed(self):
+    def close_code(self):
+    def set_sink(self, sink):
+    def send(self, payload):
+    def request_close(self, code):
+    def drain(self):
+    def handle_text(self, raw):
+    def handle_binary(self, data):
+    def close_session(self):
+    def _handle_handshake(self, raw):
+    def _admit(self, hello, selection=None):
+    def _admission_failure(self, exc):
+    def _reject_session(self, reason, errors):
+    def _activate_session(self, session, result):
+    def _handle_command(self, payload):
+    def _apply_activation_command(self, parsed):
+    def _apply_audio_availability(self, parsed):
+    def _answer_domain(
+    def _state_version_for(
+    def _apply_trigger_suppression(self, parsed):
+      def apply():
+    def _apply_settings_patch(self, parsed):
+      def apply():
+    def _bind_settings_patch(self, patch):
+    def _emit_settings_changed(self, patch):
+      def produce():
+    def _apply_snapshot_request(self, parsed):
+    def _answer_cached(self, parsed, apply):
+    def _emit_ack(
+    def _memoise(self, command_id, ack):
+    def _memoised(self, command_id):
+    def _emit_trigger_suppressed(self, parsed):
+      def mint():
+    def _dispatch_events(self, produce):
+    def _on_domain_event(self, legacy_event, payload):
+    def _observe_input_closing(self, payload):
+    def _closing_version(self, activation_id, *, newer_than):
+    def _projection_context(self):
+    def _active_segment(self):
+    def _snapshot_payload(self):
+    def _controller_snapshot(self):
+    def _session_id(self):
+
+[@0008] events.py:
+
+  class ProjectionContext:
+  LEGACY_EVENT_TYPES = {...}
+  ACTIVATION_TERMINAL_TYPES = {...}
+  _PHASE_ANNOUNCING = f
+  _CATALOG_LEVEL = f
+
+  class EventProjector:
+    def __init__(self, state):
+    def project(self, legacy_event, payload, context):
+    def observed_phase(self):
+    def _phase_change_event(self, event_type, payload, context):
+    def _observe_phase(self, event_type, context):
+    def _remember_segment(self, payload, context):
+    def segment_mismatches(self):
+    def _segment_fields(self, payload, context):
+    def _logical_key(legacy_event, payload, context):
+    def _build_activation_started(self, payload, context):
+    def _build_phase_changed(self, payload, context):
+    def _build_input_closed(self, payload, context):
+    def _build_segment_recording_started(self, payload, context):
+    def _build_segment_recording_ended(self, payload, context):
+    def _build_transcription_accepted(self, payload, context):
+    def _build_transcription_interim(self, payload, context):
+    def _build_transcription_completed(self, payload, context):
+    def _build_transcription_discarded(self, payload, context):
+    def _build_transcription_failed(self, payload, context):
+    def _build_watchdog_warning(self, payload, context):
+    def _build_wakeword_detected(self, payload, context):
+    def _build_wakeword_availability_changed(self, payload, context):
+    def _project_drained(self, payload):
+  _BUILDERS = {...}
+  def _timestamp_ms(payload):
+  def _int_or_none(value, fallback=None):
+
+[@0009] handshake.py:
+
+  class ParsedHello:
+
+  class HandshakeRefusal:
+
+  class HandshakeResult:
+    def accepted(self):
+  def _server_identity(server_version, server_commit):
+  def protocol_incompatible(reason, *, server_version, server_commit):
+  def session_rejected(reason, errors, *, server_version, server_commit):
+  def parse_hello(payload, *, server_version, server_commit):
+  def negotiate(client_versions):
+  def validate_requested_session(hello, wake_word_port):
+  def admit_requested_session(hello, wake_word_port):
+  def _non_empty_string(value):
+
+[@0010] identity.py:
+  UNKNOWN_COMMIT = "..."
+  def runtime_variant(distribution_name=None, package_version=None, product_version=None):
+
+  class RuntimeIdentity:
+    def public_info(self, instance_id):
+  def resolve_runtime_identity():
+  def server_version():
+  def server_commit():
+
+[@0011] ports.py:
+  REQUIRES_AP_SRV_050_BINDING = "..."
+  AP_SRV_060_BINDING = "..."
+  REQUIRES_AP_SRV_060_BINDING = A
+
+  class SettingsPort:
+    def __init__(self, session):
+    def revision(self):
+    def effective_settings(self):
+    def requested_settings(self):
+    def settings_projection(self):
+    def patch(self, base_revision, changes):
+
+  class WakeWordPort:
+    def __init__(self, service):
+    def catalog(self):
+    def capabilities(self):
+    def catalog_revision(self):
+    def available_ids(self):
+    def resolve_selection(self, wake_word_ids, *, requested_backend=None,
+    def requested_backend(self):
+    def validate_selection(self, wake_word_ids):
+
+[@0012] schema.py:
+  PROTOCOL_VERSION = 2
+  SUPPORTED_PROTOCOL_VERSIONS = (...)
+  HELLO = "..."
+  HELLO_ACCEPTED = "..."
+  PROTOCOL_INCOMPATIBLE = "..."
+  SESSION_REJECTED = "..."
+  COMMAND_ACK = "..."
+  SESSION_SNAPSHOT = "..."
+  ACTIVATION_COMMAND = "..."
+  TRIGGER_SUPPRESSION_SET = "..."
+  AUDIO_AVAILABILITY_SET = "..."
+  SESSION_SETTINGS_PATCH = "..."
+  SESSION_SNAPSHOT_REQUEST = "..."
+  COMMAND_TYPES = f
+  ACTIVATE = "..."
+  REFRESH = "..."
+  FINISH = "..."
+  CANCEL = "..."
+  ACTIVATION_ACTIONS = (...)
+  CONTROL_ACTIONS = f
+  MANUAL_SOURCE = "..."
+  WAKE_WORD_SOURCE = "..."
+  CLIENT_SOURCES = f
+  PRIMARY_SOURCES = f
+  IDLE = "..."
+  WAITING_FIRST_SPEECH = "..."
+  SEGMENT_ACTIVE = "..."
+  FOLLOWUP_WAIT = "..."
+  CLOSING_INPUT = "..."
+  INPUT_PHASES = (...)
+  OPEN_INPUT_PHASES = f
+  RESULT_APPLIED = "..."
+  RESULT_NO_CHANGE = "..."
+  RESULT_ACTIVATION_LOCKED = "..."
+  RESULT_NOT_ACTIVE = "..."
+  RESULT_INVALID_PHASE = "..."
+  RESULT_CLOSING_INPUT = "..."
+  RESULT_STALE_SESSION = "..."
+  RESULT_STALE_ACTIVATION = "..."
+  RESULT_COMMAND_ID_CONFLICT = "..."
+  RESULT_INVALID_PAYLOAD = "..."
+  RESULT_TRIGGER_SUPPRESSED = "..."
+  RESULT_AUDIO_UNAVAILABLE = "..."
+  RESULT_SETTINGS_REVISION_CONFLICT = "..."
+  RESULT_SETTINGS_REJECTED = "..."
+  RESULT_INTERNAL_ERROR = "..."
+  RESULT_CODES = (...)
+  ACCEPTED_RESULTS = f
+  EVENT_ACTIVATION_STARTED = "..."
+  EVENT_ACTIVATION_PHASE_CHANGED = "..."
+  EVENT_ACTIVATION_INPUT_CLOSED = "..."
+  EVENT_ACTIVATION_COMPLETED = "..."
+  EVENT_ACTIVATION_CANCELLED = "..."
+  EVENT_ACTIVATION_FAILED = "..."
+  EVENT_ACTIVATION_TRIGGER_SUPPRESSED = "..."
+  EVENT_SEGMENT_RECORDING_STARTED = "..."
+  EVENT_SEGMENT_RECORDING_ENDED = "..."
+  EVENT_TRANSCRIPTION_ACCEPTED = "..."
+  EVENT_TRANSCRIPTION_INTERIM = "..."
+  EVENT_TRANSCRIPTION_COMPLETED = "..."
+  EVENT_TRANSCRIPTION_DISCARDED = "..."
+  EVENT_TRANSCRIPTION_FAILED = "..."
+  EVENT_WATCHDOG_WARNING = "..."
+  EVENT_WAKEWORD_DETECTED = "..."
+  EVENT_WAKEWORD_AVAILABILITY_CHANGED = "..."
+  EVENT_SETTINGS_CHANGED = "..."
+  EVENT_TYPES = (...)
+  NON_STATE_EVENTS = f
+  CLOSE_INVALID_HANDSHAKE = 4
+  CLOSE_PROTOCOL_INCOMPATIBLE = 4
+  CLOSE_HANDSHAKE_TIMEOUT = 4
+  CLOSE_SESSION_REJECTED = 4
+  CLOSE_INTERNAL_ERROR = 1
+  DEFAULT_HANDSHAKE_TIMEOUT_SECONDS = 1
+  def new_canonical_id():
+  def is_canonical_uuid(value):
+  def normalize_command_id(value):
+
+[@0013] session.py:
+
+  class ProtocolSessionState:
+    def __init__(
+    def state_version(self):
+    def last_event_seq(self):
+    def settings_revision(self):
+    def set_settings_revision(self, revision):
+    def versions(self):
+    def advance_state(self):
+    def mint_event(self, event_type, *, logical_key=None, state_change=None,
+    def minted_event(self, logical_key):
+    def forget_event(self, logical_key):
+
+[@0014] snapshot.py:
+  def build_snapshot(
+  def embedded_snapshot(payload):
+  def build_input(controller_snapshot, *, monotonic=None, wall_clock=None):
+  def project_deadline(deadline, *, monotonic=None, wall_clock=None):
+  def build_pending_activations(ledger):
+  def build_trigger(controller):
+
+[@0015] admin.py:
+  LOCAL_ADMIN_HOSTS = f
+
+  class AdminGate:
+    def __init__(self, settings):
+    def configured_key(self):
+    def key_matches(self, supplied):
+    def http_error(self, request):
+
+[@0016] kroko.py:
+  DEFAULT_CHECK_TIMEOUT = 5
+
+  class KrokoLicenseGate:
+    def __init__(self):
+    def check_model(self, model_uuid, *, options=None, force_community=False,
+    def _execute(self, token, model_uuid, key, connect, timeout):
+    def current_decision(self, model_uuid):
+    def decide(self, model_uuid, *, options=None, force_community=False):
+    def bind_intent(self, *, options=None, force_community=False):
+    def prepare(self, model_uuid, *, options=None, force_community=False):
+    def run(self, decision, plan, *, connect=None, timeout=DEFAULT_CHECK_TIMEOUT,
+    def refresh(self, model_uuid, *, options=None, force_community=False,
+    def _background_check(self, token, model_uuid, key, connect, timeout,
+
+[@0017] logs.py:
+  TOKEN_LIFETIME_SECONDS = 2
+  TOKEN_SWEEP_THRESHOLD = 1
+
+  class LogTokenAuthority:
+    def __init__(self, *, clock=None):
+    def issue(self, session_id):
+    def validate(self, token, session_id=None):
+
+  class LogGate:
+    def __init__(self, admin, tokens):
+    def http_scope(self, request, requested_session_id=None):
+    def websocket_scope(self, token, requested_session_id=None):
+
+[@0018] openai.py:
+
+  class OpenAIGate:
+    def __init__(self, settings):
+    def configured_key(self):
+    def http_error(self, request, *, audit, normalize_client_id):
+
+[@0019] service.py:
+
+  class SecurityService:
+    def __init__(self, settings):
+    def admin_http_error(self, request):
+    def admin_key_matches(self, supplied):
+    def openai_http_error(self, request, *, audit, normalize_client_id):
+    def log_http_scope(self, request, requested_session_id=None):
+    def log_websocket_scope(self, token, requested_session_id=None):
+
+[@0020] segment_ledger.py:
+  SEGMENT_TERMINALS = f
+  ACTIVATION_TERMINALS = f
+  def freeze_value(value):
+  def thaw_value(value):
+  def normalize_segment_id(value):
+
+  class SegmentContext:
+
+  class SegmentPublication:
+
+  class SegmentResolution:
+
+  class ActivationTerminal:
+
+  class LedgerUpdate:
+
+  class _SegmentRecord:
+
+  class _ActivationRecord:
+
+  class SegmentLedger:
+    def __init__(self, session_id, clock=None, request_id_factory=None):
+    def open_activation(
+    def mark_cancel_requested(self, activation_id, reason):
+    def accept_segment(self, activation_id, segment_id):
+    def close_activation(
+    def resolve_completed(self, context, text):
+    def resolve_terminal(self, context, state, reason):
+    def cancel_all(self, reason):
+    def context_for_request(self, request_id):
+    def snapshot(self):
+    def accepted_segment_count(self, activation_id):
+    def _matching_pending_locked(self, context):
+    def _drain_locked(self):
+    def _terminalize_activations_locked(self):
+
+[@0021] server.py:
+  LOGGER = l
+  STATIC_DIR = P
+  INDEX_PATH = S
+  WARMUP_AUDIO_PATH = (...)
+  SERVER_SAMPLE_RATE = 1
+  INT16_MAX_ABS_VALUE = 3
+  LOG_STREAM_KEEPALIVE_SECONDS = 3
+  BASE_TUNING_DEFAULTS = {...}
+  TUNING_PROFILES = {...}
+  ACTIVE_RUNTIME_SETTINGS = {...}
+  NEW_SESSION_RUNTIME_SETTINGS = {...}
+  STARTUP_ONLY_SETTINGS = {...}
+  MODEL_MANAGEMENT_SETTINGS = {...}
+  DERIVED_DATA_PATH_SETTINGS = {...}
+  INT_SETTINGS = {...}
+  FLOAT_SETTINGS = {...}
+  BOOL_SETTINGS = {...}
+  OPTIONAL_STRING_SETTINGS = {...}
+  DICT_SETTINGS = {...}
+  TUPLE_FLOAT_SETTINGS = {...}
+
+  class ServerSettings:
+    def __post_init__(self):
+    def public_dict(self):
+    def wake_word_enabled(self):
+  SESSION_WAKE_WORD_QUERY_FIELDS = (...)
+  SESSION_WAKE_WORD_TUNING_FIELDS = {...}
+  OPENWAKEWORD_SESSION_BACKENDS = {...}
+
+  class SessionConfigurationError(ValueError):
+    def __init__(self, code, message, **details):
+    def payload(self):
+
+  class SessionWakeWordRequest:
+    def get(self, name, default=None):
+    def provided_fields(self):
+
+  class ResolvedSessionWakeWordConfig:
+    def public_dict(self):
+  def parse_session_wake_word_query(query_params):
+  def _split_wake_word_ids(value):
+  def resolve_session_wake_word_config(base_settings, request, registry):
+  def public_session_settings(settings):
+  SESSION_ACTIVATION_QUERY_FIELDS = (...)
+  ACTIVATION_SOURCES_PUBLIC = (...)
+  ACTIVATION_ACTIONS_PUBLIC = t
+
+  class SessionActivationRequest:
+
+  class ResolvedSessionActivationConfig:
+    def public_dict(self):
+  SESSION_ACTIVATION_TIMING_FIELDS = {...}
+  _ACTIVATION_TRUE_VALUES = {...}
+  _ACTIVATION_FALSE_VALUES = {...}
+  def _parse_activation_flag(query_params, name):
+  def parse_session_activation_query(query_params):
+  def resolve_session_activation_config(request, effective_wake_word_enabled):
+  def runtime_settings_contract():
+  def coerce_setting_value(name, value):
+  def resolved_engine_options(settings, resolved_engine, lane):
+
+  class SegmentState:
+    def __init__(self, id_factory=None):
+    def _advance_locked(self):
+    def realtime(self):
+    def final(self):
+    def current(self):
+    def reset(self):
+  def timestamp_iso(timestamp):
+  def normalized_client_id(value=None):
+  def segment_text_fields(segment):
+
+  class SegmentTimelineTracker:
+    def __init__(self, settings: ServerSettings):
+    def reset(self):
+    def mark_wakeword_wait_started(self, timestamp=None):
+    def mark_wakeword_wait_ended(self, timestamp=None):
+    def mark_wakeword_detected(self, timestamp=None):
+    def mark_wakeword_timeout(self, timestamp=None):
+    def mark_recording_started(self, segment_id, actual_preroll_seconds=None, timestamp=None):
+    def mark_recording_ended(
+    def snapshot(self, segment_id=None):
+    def _segment_locked(self, segment_id):
+    def _copy_segment_locked(self, segment_id):
+    def _wakeword_payload(
+
+  class RunningStats:
+    def __init__(self):
+    def record(self, value):
+    def snapshot_ms(self):
+      def percentile(fraction):
+
+  class InferenceJob:
+
+  class InferenceResult:
+
+  class QueueSubmitResult:
+
+  class InputClosePlan:
+
+  class ConnectionManager:
+    def __init__(self):
+    def bind_loop(self, loop):
+    def publish_session(self, session_id, message):
+    def publish_all(self, message):
+
+  class FairInferenceQueue:
+    def __init__(self, name, settings: ServerSettings, drop_callback=None):
+    def submit(self, job: InferenceJob):
+    def get(self):
+    def cancel_session(self, session_id):
+    def close(self):
+    def snapshot(self):
+    def _ensure_session_locked(self, session_id):
+    def _session_has_work_locked(self, session_id):
+    def _cleanup_session_locked(self, session_id):
+    def _notify_drops(self, dropped_jobs):
+
+  class SharedEngineWorker:
+    def __init__(
+    def start(self):
+    def stop(self):
+    def snapshot(self):
+    def _worker(self):
+    def _warmup(self):
+
+  class InferenceScheduler:
+    def __init__(
+    def start(self):
+    def stop(self):
+    def wait_ready(self, timeout=None):
+    def healthy(self):
+    def submit(self, job: InferenceJob):
+    def cancel_session(self, session_id):
+    def snapshot(self):
+    def _create_main_engine(self):
+    def _create_realtime_engine(self):
+
+  class SchedulerTranscriptionExecutor:
+    def __init__(self, service, session_id, kind):
+    def transcribe(self, audio, language=None, use_prompt=True):
+    def transcribe_with_context(
+
+  class RecorderBackedRealtimeSession:
+    def __init__(
+    def _install_wake_word_runtime(self):
+    def _wake_effective_settings(self):
+    def _wake_engine_options(self):
+    def _wake_attempt_policy(self):
+      def number(key, fallback, cast):
+    def _open_wake_activation_id(self):
+    def _activate_from_wake_candidate(self, candidate, boundary):
+    def _deliver_wake_detected_event(self, logical_event, detection):
+    def _publish_accepted_wake_detection(self, detection):
+    def _release_wake_latch(self, activation_id=None):
+    def _reset_wake_detector(self):
+    def publish_wake_word_availability(self, catalog_revision, available_ids):
+    def wake_detection_diagnostics(self):
+    def _create_recorder(self):
+    def start_streaming(self):
+    def stop_streaming(self):
+    def close(self):
+    def clear(self):
+    def ingest_audio_packet(self, packet):
+    def handle_inference_result(self, result: InferenceResult):
+    def on_job_dropped(self, job: InferenceJob, reason: str):
+    def on_submit_result(self, job: InferenceJob, result: QueueSubmitResult):
+    def record_executor_result(self, result: InferenceResult):
+    def publish_status(self, state=None):
+    def session_config_dict(self):
+    def activation_config_dict(self):
+    def _effective_activation_settings(self):
+    def _build_settings_state(self):
+    def _validate_wake_selection_key(self, key, value):
+    def apply_settings_patch(self, base_revision, changes):
+    def _latched_wire_effective(self):
+    def _suppression_live(self):
+    def settings_projection_for_wire(self):
+    def settings_effective_for_wire(self):
+    def settings_requested_for_wire(self):
+    def _new_activation_inputs(self):
+    TRIGGER_ACTIONS = A
+    TRIGGER_SOURCES = A
+    def _trigger_ack(
+    def _current_phase(self):
+    def _current_activation_id(self):
+    def activation_snapshot(self):
+    def activation_controller(self):
+    def audio_available(self):
+    def active_segment_identity(self):
+    def set_protocol_observer(self, observer):
+    def protocol_replay_lookup(self, command_id, payload_key):
+    def protocol_replay_store(self, command_id, payload_key, result):
+    def _activation_correlation(self):
+    def handle_trigger_command(self, data):
+    def _handle_cancel_accept(self, prepared):
+    def _run_activation_command_locked(self, command, published):
+    def handle_audio_availability_command(self, data):
+      def store_and_return(ack):
+    def _audio_availability_ack(self, command_id, accepted, reason):
+    def _build_close_plan_locked(self, snapshot, *, requested_by_command_id=None,
+    def _apply_activation_decision_locked(
+    def _cancel_close_reason(close_reason):
+    def _reserve_input_close_event(self, plan, *, recovery=False):
+    def _discard_registered_input_close_event(self, key):
+    def _publish_registered_input_close_event(self, key):
+    def _run_input_close(self, plan):
+    def _run_recovery_close(self, plan):
+    def fail_closed_for_recovery(self, activation_id):
+    def _watchdog_warning_fields(self, snapshot):
+    def _activation_event_name(action, reason):
+    def _activation_event_fields(snapshot):
+    def _arm_activation_timer_locked(self, snapshot):
+    def _next_timer_due_locked(self, token):
+    def _activation_timer_worker(self, token):
+    def _reset_activation_locked(self, reason):
+    def _open_ledger_activation(self, snapshot):
+    def _close_ledger_activation(
+    def _dispatch_ledger_operation(self, operation, *args, **kwargs):
+    def _apply_ledger_update(self, update: LedgerUpdate):
+    def _publish_collected_events(self, published):
+    def _publish_noncompleted_segment_terminal(self, resolution):
+    def current_transcription_context(self):
+    def public_settings(self):
+    def snapshot(self):
+    def _text_worker(self):
+    def _compat_final_context(self, text_generation, expected_segment_id=None):
+    def _publish_discarded_empty_final(
+    def _publish_final_text(
+    def _publish_ordered_final(self, context, text):
+    def _on_realtime_text(self, text):
+    def _on_realtime_stabilization_event(self, event):
+    def _record_first_text_performance(self, segment_id, timestamp, segment, text):
+    def _record_realtime_performance(
+    def _emit_realtime_summary(self, segment_id, timestamp, segment):
+      def percentile(values, fraction):
+    def _on_recording_start(self):
+    def _on_recording_stop(self):
+    def _on_transcription_start(self, *_):
+    def _waiting_state_locked(self, streaming=None):
+    def _start_wakeword_followup_window(self):
+    def _wakeword_followup_timeout_worker(self, generation, window):
+    def _finish_wakeword_followup(self, generation=None):
+    def _clear_recorder_followup_gate_locked(self):
+    def _on_vad_start(self):
+    def _on_vad_stop(self):
+    def _on_vad_detect_start(self):
+    def _on_vad_detect_stop(self):
+    def _voice_or_waiting_state(self):
+    def _silence_or_waiting_state(self):
+    def _on_wakeword_detection_start(self):
+    def _on_wakeword_detection_end(self):
+    def _on_wakeword_detected(self, candidate=None, boundary=None):
+    def _on_wakeword_timeout(self):
+    def _transcription_id(self, segment_id):
+    def _emit_cancelled_transcription(
+    def _emit_structured_event(
+    def _publish_timeline_event(
+    INPUT_CLOSING_NOTIFICATION = "..."
+    SESSION_TERMINAL_NOTIFICATION = "..."
+    def _notify_input_closing(self, plan):
+    def _notify_protocol_observer(self, event, payload):
+    def _timeline_snapshot(self, segment_id=None):
+    def _recorder_queue_depth(self):
+    def _enforce_recording_duration(self, samples):
+    def _on_recorded_chunk(self, data):
+    def _force_finalize_after_limit(self):
+    def _trim_recorded_audio_queue(self):
+
+  class SessionStore:
+    def __init__(self, settings: ServerSettings):
+    def reserve(self, session_id):
+    def add(self, session):
+    def can_accept(self):
+    def release_reservation(self, session_id):
+    def remove(self, session_id):
+    def remove_all(self):
+    def get(self, session_id):
+    def all(self):
+    def try_activate_speaker(self, session_id):
+    def deactivate_speaker(self, session_id):
+    def count(self):
+    def active_speaker_count(self):
+    def snapshots(self):
+    def _session_slots_used_locked(self):
+
+  class VoiceSTTService:
+    def __init__(
+    def _probe_stt_model(self, candidate):
+    def _apply_stt_model_snapshot(self, snapshot):
+    KROKO_LICENSE_CHECK_TIMEOUT = 5
+    def kroko_native_guard(self):
+    def _kroko_force_community(self):
+    def _kroko_manifest(self):
+    def _kroko_lane_options(self, settings):
+    def _kroko_license_target(self, settings, intent, options, force):
+    def _kroko_path_tier(self, path):
+    def _kroko_active_pro_roles(self):
+    def _kroko_pro_revocation(self):
+    def _kroko_license_entitlement(self, product, candidate_path=None):
+    def refresh_kroko_license_policy(self, *, settings=None, background=False,
+      def settled(_current):
+    def apply_kroko_force_change(self):
+    def _kroko_involved(self):
+    def _spawn_kroko_reconcile(self, trigger):
+    def reconcile_kroko_models(self, trigger):
+    def kroko_runtime_status(self):
+    def _kroko_scheduler_preflight(self):
+    def _kroko_probe_reuses_live_instance(self, candidate):
+    def _kroko_probe_preflight(self, candidate):
+    def _kroko_quiesced_manager_refresh(self):
+    def _kroko_assert_switch_possible(self, candidate):
+    def _kroko_rebind_current(self):
+    def stt_model_management_status(self):
+    def stt_model_readiness_summary(self):
+    def _stt_secret_values(self, settings=None):
+    def _safe_stt_error(self, error, *settings_objects):
+    def refresh_stt_models(self, timeout=180.0, license_check=True):
+    def _refresh_stt_models_locked(self, timeout, license_check=True):
+    def _configured_global_disabled_wake_words(self):
+    def wake_word_inference_backend(self):
+    def _on_wake_word_catalog_changed(
+    def refresh_wake_word_catalog(self):
+    def apply_wake_word_global_disable(self):
+    def _new_scheduler(self):
+    def start(self, loop):
+    def stop(self):
+    def admit_session(
+    def remove_session(self, session_id):
+    def submit_inference_job(self, job: InferenceJob):
+    def cancel_scheduler_session(self, session_id):
+    def touch_model_activity(self, reason=None):
+    def ensure_models_loaded(self, timeout=180.0):
+    def _submit_scheduler_job(self, job, activity):
+    def load_models(self, timeout=180.0):
+    def _models_busy(self):
+    def unload_models(self, reason="manual"):
+    def _log_model_performance(self, event, started_at, memory_before, **fields):
+    def model_lifecycle_status(self):
+    def _model_idle_worker(self):
+    def try_activate_speaker(self, session_id):
+    def deactivate_speaker(self, session_id):
+    def session_count(self):
+    def active_speaker_count(self):
+    def packet_to_server_samples(self, packet):
+    def metrics(self):
+    def limits_dict(self):
+    def runtime_settings_contract(self):
+    def session_capabilities(self):
+    def create_log_access(self, session_id):
+    def validate_log_access(self, token, session_id=None):
+    def ready_payload(self, session):
+    def update_settings(self, updates):
+    def persist_settings(self):
+    def _persist_settings_control(self, overlay, revision):
+    def model_catalog(self):
+    def active_models(self):
+    def switch_models(self, updates, timeout=180.0):
+    def _switch_models_locked(self, updates, timeout):
+    def transcribe_for_recorder(
+    def complete_pending_recorder_transcription(self, result: InferenceResult):
+    def transcribe_openai(
+    def complete_pending_api_transcription(self, result):
+    def resolve_openai_model(self, model, override=None, override_source=None):
+    def resolve_openai_lane(self, model):
+    def fail_pending_recorder_transcription(self, request_id, error):
+    def cancel_pending_recorder_transcriptions(self, session_id):
+    def _pop_pending_recorder_result(self, request_id):
+    def _ready_worker(self, scheduler, load_started=None, memory_before=None):
+    def _on_inference_result(self, result: InferenceResult):
+    def _on_scheduler_drop(self, job: InferenceJob, reason: str, lane: str):
+    def _on_scheduler_error(self, lane, exc):
+
+  class AudioData:
+  def read_wav_float32(path: Path):
+  def decode_audio_float32(data):
+  def resample_int16(samples, source_rate, target_rate):
+  def effective_device(device):
+  def model_size_rank(engine, model):
+  def enforce_cpu_model_policy(settings):
+  def load_fastapi():
+  def create_app(settings: Optional[ServerSettings] = None, scheduler_factory=None, recorder_factory=None):
+    def admin_auth_error(request):
+    def _settings_server_identity():
+    def _split_filter(value):
+    def _log_access_scope(request, requested_session_id=None):
+    def _log_events_response(
+      def sink(payload):
+        def _deliver():
+  def _env_bool(name, default=False):
+  YAML_CONFIG_SECRET_KEYS = {...}
+  YAML_CONFIG_DERIVED_KEYS = {...}
+  YAML_CONFIG_TO_ARG_DEST = {...}
+  def load_yaml_config_defaults(path):
+  def parse_args(argv=None):
+  def _tuning_defaults(profile):
+  def _value_or_default(args, defaults, name):
+  def parse_float_tuple(value, flag_name):
+  def settings_from_args(args):
+  def main(argv=None):
+
+[@0022] settings_control.py:
+  SCOPE_SESSION = "..."
+  SCOPE_SERVER = "..."
+  SCOPE_CLIENT_LOCAL = "..."
+  AUTH_SESSION = "..."
+  AUTH_ADMIN = "..."
+  TYPE_INT = "..."
+  TYPE_FLOAT = "..."
+  TYPE_BOOL = "..."
+  TYPE_STRING = "..."
+  TYPE_STRING_LIST = "..."
+  APPLY_LIVE = "..."
+  APPLY_NEXT_ACTIVATION = "..."
+  APPLY_NEXT_SESSION = "..."
+  APPLY_SERVER_RESTART = "..."
+  APPLY_POLICIES = (...)
+  POLICY_EVENT_ORDER = (...)
+  RESULT_APPLIED = "..."
+  RESULT_NO_CHANGE = "..."
+  RESULT_REVISION_CONFLICT = "..."
+  RESULT_REJECTED = "..."
+  RESULT_INTERNAL_ERROR = "..."
+  ACTIVATION_INITIAL_SPEECH = "..."
+  ACTIVATION_FOLLOWUP = "..."
+  ACTIVATION_WATCHDOG_INITIAL = "..."
+  ACTIVATION_WATCHDOG_REFRESH = "..."
+  ACTIVATION_WATCHDOG_WARNING = "..."
+  ACTIVATION_CLOSING_RECOVERY = "..."
+  WAKE_WORD_SENSITIVITY = "..."
+  WAKE_WORD_MIN_PREDICTION_FRAMES = "..."
+  WAKE_WORD_SELECTION = "..."
+  WAKE_WORD_GLOBAL_DISABLED = "..."
+  WAKE_WORD_COOLDOWN_MS = "..."
+  WAKE_WORD_PRE_ROLL_MS = "..."
+  WAKE_WORD_DETECTOR_GAIN = "..."
+  WAKE_WORD_NOISE_SUPPRESSION = "..."
+  WAKE_WORD_VAD_THRESHOLD = "..."
+  WAKE_WORD_INFERENCE_BACKEND = "..."
+  KROKO_FORCE_COMMUNITY = "..."
+  WAKE_WORD_BACKEND_VALUES = [...]
+  WAKE_WORD_MIN_RECEPTIVE_FIELD_MS = 1
+  WAKE_WORD_MAX_RECEPTIVE_FIELD_MS = 3
+  CALIBRATION_PENDING = "..."
+  RUNTIME_SUPPRESSION_MANUAL = "..."
+  RUNTIME_SUPPRESSION_WAKE_WORD = "..."
+  TIMING_KEYS = f
+  WATCHDOG_WARNING_LESS_THAN_KEYS = (...)
+  WATCHDOG_CROSS_FIELD_KEYS = f
+  CODE_UNKNOWN_KEY = "..."
+  CODE_INVALID_TYPE = "..."
+  CODE_OUT_OF_RANGE = "..."
+  CODE_TOO_FEW_ITEMS = "..."
+  CODE_CROSS_FIELD_CONFLICT = "..."
+  CODE_WRONG_SCOPE = "..."
+  CODE_STALE_REVISION = "..."
+  CODE_READ_ONLY_AUTHORITY = "..."
+  CODE_INVALID_PAYLOAD = "..."
+  CODE_WAKE_SELECTION_REQUIRED = "..."
+  CODE_WAKE_WORD_UNAVAILABLE = "..."
+  CODE_PERSISTENCE_FAILED = "..."
+  CODE_VALUE_NOT_ALLOWED = "..."
+
+  class SettingDefinition:
+    def to_schema_dict(self) -> Dict[str, Any]:
+
+  class FieldError:
+    def to_dict(self) -> Dict[str, str]:
+
+  class PatchResult:
+    def error_dicts(self) -> List[Dict[str, str]]:
+    def to_dict(self) -> Dict[str, Any]:
+  def _coerce_copy(value: Any) -> Any:
+  def builtin_definitions() -> List[SettingDefinition]:
+
+  class SettingsRegistry:
+    def __init__(self, definitions: Optional[Iterable[SettingDefinition]] = None):
+    def get(self, key: str) -> Optional[SettingDefinition]:
+    def __contains__(self, key: str) -> bool:
+    def keys(self) -> FrozenSet[str]:
+    def session_keys(self) -> FrozenSet[str]:
+    def server_default_keys(self) -> FrozenSet[str]:
+    def is_secret(self, key: str) -> bool:
+    def defaults(self) -> Dict[str, Any]:
+    def defaults_for_server_defaults(self) -> Dict[str, Any]:
+    def schema_payload(self) -> List[Dict[str, Any]]:
+  def build_default_registry() -> SettingsRegistry:
+  def _finite(value: Any) -> bool:
+  def _error(defn: SettingDefinition, code: str, message: str) -> FieldError:
+  def coerce_definition_value(
+  def _validate_constraints(defn: SettingDefinition, value: Any) -> Optional[FieldError]:
+  def validate_patch_envelope(
+  def validate_timing_bundle(
+  def _freeze(value: Any) -> Any:
+  def _thaw(value: Any) -> Any:
+
+  class ActivationAdmissionSettings:
+
+  class SessionSettingsProjection:
+
+  class SessionSettingsState:
+    def __init__(
+    def settings_revision(self) -> int:
+    def registry(self) -> SettingsRegistry:
+    def requested_values(self) -> Dict[str, Any]:
+    def effective_values(self) -> Dict[str, Any]:
+    def apply_patch(
+    def freeze_activation(self) -> Mapping[str, Any]:
+    def activation_timings_seconds(self) -> Dict[str, float]:
+    def activation_admission_settings(self) -> ActivationAdmissionSettings:
+    def settings_projection(self) -> SessionSettingsProjection:
+
+  class ServerSettingsState:
+    def __init__(
+    def settings_revision(self) -> int:
+    def registry(self) -> SettingsRegistry:
+    def overlay(self) -> Dict[str, Any]:
+    def server_effective(self) -> Dict[str, Any]:
+    def patch_server(
+    def server_public(self, *, server_version="", server_commit="unknown") -> Dict[str, Any]:
+
+[@0023] wake_admission.py:
+  LOGGER = l
+
+  class WakeActivationOutcome:
+    def refused(cls) -> "WakeActivationOutcome":
+  def _as_outcome(value: Any) -> WakeActivationOutcome:
+
+  class LogicalWakeEvent:
+    def to_dict(self) -> Dict[str, Any]:
+
+  class LogicalWakeEventLedger:
+    def __init__(self):
+    def events(self) -> Tuple[LogicalWakeEvent, ...]:
+    def count(self, activation_id: Optional[str] = None) -> int:
+    def get(self, activation_id: str) -> Optional[LogicalWakeEvent]:
+    def mint(self, detection) -> LogicalWakeEvent:
+    def mark_delivered(self, event: LogicalWakeEvent) -> None:
+    def mark_delivery_attempt(self, event: LogicalWakeEvent) -> None:
+    def undelivered(self) -> Tuple[LogicalWakeEvent, ...]:
+    def diagnostics(self) -> Dict[str, Any]:
+
+  class WakeAdmissionCoordinator:
+    def __init__(self, *, evaluator, activate, deliver=None, publish=None,
+    def evaluator(self):
+    def ledger(self) -> LogicalWakeEventLedger:
+    def accepted_detection(self):
+    def logical_event_count(self, activation_id: Optional[str] = None) -> int:
+    def admit(self, hit, boundary=None):
+    def _attempt_delivery(self, event: LogicalWakeEvent, detection) -> bool:
+    def redeliver(self) -> bool:
+    def _probe_committed(self) -> Optional[str]:
+    def release(self, activation_id: Optional[str] = None) -> bool:
+    def suspend_admission(self):
+    def reset(self) -> int:
+    def diagnostics(self) -> dict:
+
+[@0024] build_identity_support.py:
+  def capture_identity(root: Path, product_version: str, distribution_name: str,
+      def git(*args):
+  def write_identity(directory: Path, identity: BuildIdentity) -> None:
+  def match_identity(actual: BuildIdentity, expected: BuildIdentity) -> None:
+  def wheel_identity(path: Path, *, required: Literal[True] = True) -> BuildIdentity: ...
+  def wheel_identity(path: Path, *, required: Literal[False]) -> BuildIdentity | None: ...
+  def wheel_identity(path: Path, *, required: bool = True) -> BuildIdentity | None:
+
+[@0025] 2026-10-19_ONNX_REPLAY.py:
+  def main():
+
+[@0026] 2026-10-22_extra_probe.py:
+  def hashes(root):
+  def wheel(out, root, name, package, tag, extra=False):
+  def main():
+    def run(*cmd):
+
+[@0027] 2026-10-22_native_probe.py:
+  KEYS = (...)
+  PREFIXES = (...)
+  def digest(data):
+  def payload_name(name):
+  def audit(rc, out):
+  def child(args):
+  def probes(args):
+  def main():
+
+[@0028] release.py:
+  REPO_ROOT = P
+
+[@0029] adapters.py:
+  VARIANTS = r
+  def default_runner(cmd: Sequence[str], *, cwd: Optional[Path] = None) -> CommandResult:
+
+  class PublicationAdapter(Protocol):
+    def verify(self, manifest: Dict[str, Any], state: ReleaseState) -> str: ...
+    def publish(self, manifest: Dict[str, Any], state: ReleaseState) -> None: ...
+
+  class TwineUploader:
+    def __init__(self, *, dist_dir: Path, runner=default_runner):
+    def upload(self, distribution: str, filenames: Sequence[str]) -> None:
+
+  class ExternalUploader:
+    def __init__(self, executor: str = "pypa/gh-action-pypi-publish"):
+    def upload(self, distribution: str, filenames: Sequence[str]) -> None:
+
+  class PyPIAdapter:
+    def __init__(self, *, uploader, fetch=default_pypi_fetcher):
+    def _variant_status(self, manifest: Dict[str, Any], variant: str) -> str:
+    def verify(self, manifest: Dict[str, Any], state: ReleaseState) -> str:
+    def publish(self, manifest: Dict[str, Any], state: ReleaseState) -> None:
+
+  class _RegistryPromotionAdapter:
+    def __init__(
+    def _remote_ref(self, manifest: Dict[str, Any], variant: str) -> str:
+    def _variant_status(self, manifest: Dict[str, Any], variant: str) -> str:
+    def verify(self, manifest: Dict[str, Any], state: ReleaseState) -> str:
+    def publish(self, manifest: Dict[str, Any], state: ReleaseState) -> None:
+  def _staging_source_ref(manifest: Dict[str, Any], variant: str) -> str:
+
+  class DockerHubAdapter(_RegistryPromotionAdapter):
+    def __init__(self, *, repo_root: Optional[str] = None, runner=default_runner):
+
+  class GHCRAdapter(_RegistryPromotionAdapter):
+    def __init__(
+    def _dockerhub_source_ref(self, manifest: Dict[str, Any], variant: str) -> str:
+
+  class AliasAdapter:
+    def __init__(self, *, registry_roots: Optional[Dict[str, str]] = None, runner=default_runner):
+    def _targets(self, manifest: Dict[str, Any]) -> List[Tuple[str, str, str]]:
+    def verify(self, manifest: Dict[str, Any], state: ReleaseState) -> str:
+    def publish(self, manifest: Dict[str, Any], state: ReleaseState) -> None:
+
+  class GitTagAdapter:
+    def __init__(self, *, repo_root: Path, remote: str = config.GIT_REMOTE_NAME, runner=None):
+    def tag_name(manifest: Dict[str, Any]) -> str:
+    def _tag_commits(self, manifest: Dict[str, Any]) -> Tuple[str, str, Optional[str], Optional[str]]:
+    def verify(self, manifest: Dict[str, Any], state: ReleaseState) -> str:
+    def publish(self, manifest: Dict[str, Any], state: ReleaseState) -> None:
+
+  class GitHubReleaseAdapter:
+    def __init__(
+    def tag_name(manifest: Dict[str, Any]) -> str:
+    def verify(self, manifest: Dict[str, Any], state: ReleaseState) -> str:
+    def publish(self, manifest: Dict[str, Any], state: ReleaseState) -> None:
+
+  class AggregateVerificationAdapter:
+    def __init__(self, *, name: str, sub_adapters: Sequence[PublicationAdapter]):
+    def verify(self, manifest: Dict[str, Any], state: ReleaseState) -> str:
+    def publish(self, manifest: Dict[str, Any], state: ReleaseState) -> None:
+  def build_default_adapters(
+
+[@0030] aliases.py:
+  _SEMVER_RE = r
+  LATEST_ALIAS = "..."
+  def parse_version(version: str) -> Dict[str, str]:
+  def is_prerelease(version: str) -> bool:
+  def alias_tags_for(version: str) -> List[str]:
+  def exact_tag_for(version: str) -> str:
+  def git_tag_for(version: str) -> str:
+
+[@0031] candidate.py:
+  BUILD_MANIFEST_TEMPLATE = "..."
+  DISTRIBUTION_MANIFEST_TEMPLATE = "..."
+  STAGING_MANIFEST_TEMPLATE = "..."
+  def _read_json(path: Path, what: str) -> Dict[str, Any]:
+  def _require(value: Any, what: str) -> Any:
+  def kroko_artifact_sha256(build_manifest: Dict[str, Any], variant: str) -> str:
+  def _wheel_record_from_dict(d: Dict[str, Any], variant: str) -> Dict[str, Any]:
+  def distribution_block(
+  def image_block(
+  def assemble_rc_manifest(
+
+[@0032] cli.py:
+  EXIT_OK = 0
+  EXIT_FAILED = 1
+  EXIT_USAGE = 2
+  EXIT_NOT_IMPLEMENTED = 3
+  def _print_json(payload: dict) -> None:
+  def _cmd_preflight(args: argparse.Namespace) -> int:
+  def _placeholder_manifest(*, version: str, commit: Optional[str], tree: Optional[str]) -> Dict[str, Any]:
+    def _distribution(variant: str, name: str) -> Dict[str, Any]:
+    def _image(variant: str, digest_seed: str) -> Dict[str, Any]:
+  def _load_or_placeholder_manifest(args: argparse.Namespace, *, version: str) -> Dict[str, Any]:
+  def _cmd_dry_run(args: argparse.Namespace) -> int:
+  def _cmd_status(args: argparse.Namespace) -> int:
+  def _cmd_manifest_validate(args: argparse.Namespace) -> int:
+  def _cmd_manifest_build(args: argparse.Namespace) -> int:
+  def _cmd_manifest_qualify(args: argparse.Namespace) -> int:
+  def _cmd_prepare_next_version(args: argparse.Namespace) -> int:
+  def _cmd_publish(args: argparse.Namespace) -> int:
+    def persist(updated_state):
+  def _cmd_precheck_pypi(args: argparse.Namespace) -> int:
+  def build_parser() -> argparse.ArgumentParser:
+  def main(argv: Optional[Sequence[str]] = None) -> int:
+
+[@0033] config.py:
+  REPO_ROOT = P
+  _TOOLS_DIR = R
+  LEGACY_DISTRIBUTION_NAME = D
+  GHCR_REPO_ENV = "..."
+  DOCKERHUB_REPO_ENV = "..."
+  DOCKERHUB_NAMESPACE_ENV = "..."
+  GITHUB_OWNER_ENV = "..."
+  GHCR_REGISTRY = "..."
+  DOCKERHUB_REGISTRY = "..."
+  STAGING_SUFFIX = "..."
+  DOCKERHUB_TOKEN_ENV = "..."
+  GITHUB_TOKEN_ENV = "..."
+  GITHUB_REPO_SLUG = "..."
+  GIT_REMOTE_NAME = "..."
+  RELEASE_STATE_DIRNAME = "..."
+  def release_state_dir(repo_root: Path = REPO_ROOT) -> Path:
+  def github_owner() -> str:
+  def ghcr_repo_root() -> str:
+  def dockerhub_namespace() -> str:
+  def dockerhub_repo_root() -> str:
+  def staging_repo_root() -> str:
+  def staging_image_name_for(variant: str) -> str:
+  def credential_presence() -> Dict[str, bool]:
+  def redistribution_approval() -> dict:
+  def redistribution_verified(approval: dict) -> bool:
+
+[@0034] engine.py:
+
+  class ExecutionMode(str, Enum):
+    REAL = "..."
+    DRY_RUN = "..."
+
+  class StepKind(str, Enum):
+    PUBLISH = "..."
+    VERIFY_ONLY = "..."
+    LOCAL = "..."
+
+  class StepDefinition:
+  STEP_DEFINITIONS = (...)
+  def plan_from(current_state: str, stop_after: Optional[str] = None) -> List[StepDefinition]:
+
+  class StepOutcome:
+    def to_json_dict(self) -> Dict[str, Any]:
+
+  class EngineRunResult:
+    def to_json_dict(self) -> Dict[str, Any]:
+  def run_engine(
+
+[@0035] errors.py:
+
+  class ReleaseError(RuntimeError):
+
+  class ManifestError(ReleaseError):
+
+  class StateError(ReleaseError):
+
+  class OrderError(StateError):
+
+  class ConflictError(ReleaseError):
+
+  class SecretDetectedError(ReleaseError):
+
+  class VerificationUnavailableError(ReleaseError):
+
+[@0036] gitinfo.py:
+
+  class GitError(RuntimeError):
+  def _run(cmd: Sequence[str], cwd: Path) -> subprocess.CompletedProcess:
+
+  class GitIdentity:
+  def resolve_identity(repo_root: Path) -> GitIdentity:
+  def local_tag_commit(repo_root: Path, tag: str) -> Optional[str]:
+  def remote_tag_commit(repo_root: Path, remote: str, tag: str) -> Optional[str]:
+  def create_tag(repo_root: Path, tag: str, commit: str) -> None:
+  def push_tag(repo_root: Path, remote: str, tag: str) -> None:
+
+[@0037] pipeline.py:
+  PIPELINE_STEPS = t
+  def dry_run(
+
+[@0038] preflight.py:
+  PASS = "..."
+  FAIL = "..."
+  WARN = "..."
+  _WINDOWS_ABSOLUTE_PATH_RE = r
+
+  class CheckResult:
+
+  class PreflightReport:
+    def passed(self) -> bool:
+    def to_json_dict(self) -> dict:
+  def _check_version(expected_version: str) -> CheckResult:
+  def _check_release_notes(repo_root: Path, version: str) -> CheckResult:
+  def _check_git(repo_root: Path, expected_commit: Optional[str], expected_tree: Optional[str]) -> List[CheckResult]:
+  def _check_tag_absence(repo_root: Path, version: str, expected_commit: Optional[str]) -> CheckResult:
+  def _check_manifest(manifest_path: Optional[Path]) -> CheckResult:
+  def _check_manifest_version(
+  def _check_tool_availability() -> List[CheckResult]:
+  def _check_registry_identifiers() -> List[CheckResult]:
+  def _check_credentials() -> List[CheckResult]:
+  def _check_no_local_path_dependency(rc_manifest_path: Optional[Path]) -> CheckResult:
+  def _check_no_state_conflict(repo_root: Path, version: str) -> CheckResult:
+  def _check_qualification(
+  def _check_redistribution(manifest_path, require_qualified=False):
+  def run_preflight(
+
+[@0039] rc_manifest.py:
+  SCHEMA_VERSION = 3
+  READINESS_NOT_QUALIFIED = "..."
+  READINESS_QUALIFIED = "..."
+  READINESS_REJECTED = "..."
+  READINESS_STATES = (...)
+  VARIANTS = (...)
+  REQUIRED_PLATFORMS = (...)
+  _SHA256_RE = r
+  _COMMIT_RE = r
+  _DIGEST_RE = r
+  _CANDIDATE_ID_RE = r
+  def _require(condition: bool, message: str, problems: List[str]) -> None:
+  def _require_wheel_block(block: Any, name: str, problems: List[str]) -> None:
+  def _require_distribution_block(block: Any, name: str, variant: str, problems: List[str]) -> None:
+  def _require_image_block(block: Any, name: str, problems: List[str]) -> None:
+  def validate_rc_manifest(data: Dict[str, Any]) -> None:
+  def build_rc_manifest(
+  def load_rc_manifest(path: Path) -> Dict[str, Any]:
+  def write_rc_manifest(path: Path, manifest: Dict[str, Any]) -> None:
+  def manifest_sha256(manifest: Dict[str, Any]) -> str:
+  def distribution_names(manifest: Dict[str, Any]) -> Dict[str, str]:
+  def state_identity(manifest: Dict[str, Any]) -> Dict[str, Dict[str, Dict[str, str]]]:
+  def candidate_identity(manifest: Dict[str, Any]) -> Dict[str, str]:
+  def expected_pypi_files(manifest: Dict[str, Any], variant: str) -> Dict[str, str]:
+  def expected_image_digest(manifest: Dict[str, Any], variant: str) -> Optional[str]:
+  def staging_reference(manifest: Dict[str, Any], variant: str) -> Optional[str]:
+  def qualify_manifest(
+
+[@0040] redaction.py:
+  _SECRET_KEY_MARKERS = (...)
+  _ALLOWED_SECRET_SHAPED_KEYS = {...}
+  _SECRET_VALUE_PATTERNS = (...)
+  def looks_like_secret_key_name(field_name: str) -> bool:
+  def looks_like_secret_value(value: Any) -> bool:
+  def assert_no_secrets(data: Any, *, _path: str = "$") -> None:
+  def redact_text(text: str) -> str:
+
+[@0041] remote_checks.py:
+  ABSENT = "..."
+  MATCH = "..."
+  def default_pypi_fetcher(url: str) -> Optional[dict]:
+  def inspect_pypi_release(
+  def check_pypi_release(
+  def precheck_pypi(
+
+  class CommandResult:
+  _ABSENT_MARKERS = (...)
+  _DIGEST_RE = r
+  def remote_manifest_digest(
+  def check_registry_image(
+  def check_registry_alias(
+
+[@0042] state.py:
+  STATE_ORDER = [...]
+  FIRST_PUBLIC_ARTIFACT_STATE = "..."
+  STATE_INDEX = {...}
+  def _utcnow_iso() -> str:
+
+  class ReleaseState:
+    def __post_init__(self) -> None:
+    def to_json_dict(self) -> Dict[str, Any]:
+    def clone(self) -> "ReleaseState":
+    def from_json_dict(cls, data: Dict[str, Any]) -> "ReleaseState":
+  def new_state(
+  def default_state_path(repo_root: Path, version: str) -> Path:
+  def load_state(path: Path) -> Optional[ReleaseState]:
+  def save_state(path: Path, state: ReleaseState) -> None:
+  def ensure_same_version(state: ReleaseState, requested_version: str) -> None:
+  def ensure_same_identity(state: ReleaseState, *, source_commit: str, source_tree: str, distributions: Dict[str, Dict[str, str]], images: Dict[str, Dict[str, str]], candidate: Optional[Dict[str, str]] = None) -> None:
+  def advance(state: ReleaseState, target: str) -> ReleaseState:
+  def assert_tag_allowed(state: ReleaseState) -> None:
+  def assert_public_publication_allowed(state: ReleaseState, surface: str) -> None:
+  def assert_aliases_allowed(state: ReleaseState) -> None:
+  def assert_github_release_allowed(state: ReleaseState) -> None:
+
+[@0043] setup.py:
+  REPO_ROOT = o
+  DISTRIBUTION_VARIANT_ENV = "..."
+  LEGACY_DISTRIBUTION_NAME = "..."
+  PUBLIC_DISTRIBUTION_NAMES = {...}
+  PUBLIC_PYTHON_REQUIRES = "..."
+  LEGACY_PYTHON_REQUIRES = "..."
+  def resolve_distribution_variant():
+  _WAKEWORD_ASSET_DIR = o
+  INSTALL_GUIDE = "..."
+
+[@0044] advanced_talk.py:
+
+[@0045] feed_audio.py:
+    CHUNK = 1
+    FORMAT = p
+    CHANNELS = 1
+    RATE = 1
+    def feed_audio_thread():
+    def recorder_transcription_thread():
+      def process_text(full_sentence):
+
+[@0046] final_transcription_gap_regression.py:
+  ROOT_DIR = P
+  AUDIO_DIR = R
+  DEFAULT_AUDIO_FILE = A
+  DEFAULT_EXPECTED_JSON = A
+  INT16_MAX_ABS_VALUE = 3
+
+  class AudioData:
+  def parse_args():
+  def read_wav_samples(path: Path) -> AudioData:
+  def normalize_text(text: str) -> str:
+  def edit_distance(left: List[str], right: List[str]) -> int:
+  def word_error_rate(expected: str, actual: str) -> float:
+  def diff_windows(expected: str, actual: str, context: int = 8, limit: int = 8) -> List[Dict[str, str]]:
+  def feed_samples(recorder, samples, sample_rate, chunk_size, speed):
+  def feed_silence(recorder, seconds, sample_rate, chunk_size, speed):
+  def safe_label(value: str) -> str:
+  def default_snippet_dir(args) -> Path:
+  def write_wav_snippet(path: Path, audio: np.ndarray, sample_rate: int):
+  def save_transcription_snippet(args, label: str, index: int, recorder, audio: AudioData):
+  def snippet_pass_dir(args, label: str) -> Path:
+  def prepare_snippet_pass_dir(args, label: str):
+  def write_run_manifest(args, result: Dict, audio: AudioData):
+  def make_recorder_config(args, device: str, compute_type: str):
+  def run_streaming_text_pass(label: str, args, audio: AudioData, device: str, compute_type: str):
+    def recorder_idle():
+    def feeder():
+    def text_loop():
+  def write_expected_json(path: Path, args, audio: AudioData, result: Dict):
+  def load_expected_json(path: Path):
+  def compare_against_expected(expected, actual, args) -> bool:
+  def main():
+
+[@0047] install_extras_matrix.py:
+  ROOT = P
+  DEFAULT_VENV_ROOT = R
+
+  class MatrixCase:
+    def install_target(self) -> str:
+  BASE_CHECKS = (...)
+  MATRIX = (...)
+  def run(cmd: list[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+  def python_executable(venv: Path) -> Path:
+  def check_script(checks: tuple[str, ...]) -> str:
+
+[@0048] install_packages.py:
+  def check_and_install_packages(packages):
+
+[@0049] minimalistic_talkbot.py:
+    def generate(messages):
+
+[@0050] openai_voice_interface.py:
+  START_IN_VOICE_ACTIVITY_MODE = F
+    def generate_response(messages):
+
+[@0051] openwakeword_test.py:
+    def on_wakeword_detected():
+    def on_recording_stop():
+    def on_wakeword_timeout():
+    def on_wakeword_detection_start():
+    def on_recording_start():
+    def on_vad_detect_start():
+    def text_detected(text):
+
+[@0052] realtime_boundary_detector_live_test.py:
+
+[@0053] realtime_boundary_detector_microphone.py:
+  ROOT_DIR = o
+  ANSI_RESET = "..."
+  ANSI_CLEAR_LINE = "..."
+  ANSI_GREEN = "..."
+  ANSI_RED = "..."
+  ANSI_YELLOW = "..."
+  ANSI_DIM = "..."
+  def list_input_devices(audio):
+  def colorize(text, color, enabled):
+  def db_to_fraction(energy_db):
+  def render_bar(value, width):
+  def render_status_line(result, event_count, flash_until, use_color):
+  def parse_args():
+  def open_stream(audio, args):
+  def main():
+
+[@0054] realtime_loop_test.py:
+
+    class SimpleApp(QWidget):
+      def __init__(self):
+      def speak_stt(self):
+      def speak_input(self):
+      def text_detected(self, text):
+      def audio_stream_stop(self):
+      def speak(self, text):
+      def actual_update_stt_text(self, text):
+      def actual_update_tts_text(self, text):
+      def closeEvent(self, event):
+
+[@0055] realtime_transcription_count_comparison.py:
+  ROOT_DIR = o
+  DEFAULT_AUDIO_FILE = o
+  DEFAULT_EXPECTED_TEXT = (...)
+
+  class AudioData:
+  def parse_delays(value):
+  def parse_args():
+  def read_wav_samples(path: str) -> AudioData:
+  def normalize_transcript(text: str) -> str:
+  def edit_distance(left: List[str], right: List[str]) -> int:
+  def transcription_metrics(expected: str, actual: str) -> Dict[str, object]:
+  def reset_realtime_counters(recorder):
+  def snapshot_realtime_counters(recorder, update_callback_count: int, elapsed: float):
+  def make_recorder_config(args, use_syllable_boundaries: bool):
+  def feed_samples(
+  def feed_silence(
+  def run_mode(label: str, args, audio: AudioData, use_syllable_boundaries: bool):
+    def on_realtime_update(text):
+  def print_mode_result(result):
+  def print_comparison(results):
+  def main():
+
+[@0056] Legacy-STT_chinese.py:
+    def clear_console():
+    def text_detected(text):
+    def process_text(text):
+
+[@0057] Legacy-STT_kroko_test.py:
+  EXTENDED_LOGGING = F
+  WRITE_TO_KEYBOARD_INTERVAL = 0
+  DEFAULT_KROKO_FINAL_MODEL = "..."
+  DEFAULT_KROKO_REALTIME_MODEL = "..."
+  KROKO_KEY_ENV_NAMES = (...)
+  KROKO_REFERRAL_ENV_NAMES = (...)
+  def first_env_value(names):
+  def default_model_path(filename):
+  def install_repo_on_path():
+  def check_and_install_packages(packages):
+  def check_kroko_runtime():
+  def check_recorder_vad_runtime():
+    def live_panel(renderable, title, border_style):
+    def update_live(renderable, title, border_style):
+    def configure_voicestt_live_logging(level):
+    def preprocess_text(text):
+    def text_detected(text):
+    def process_text(text):
+
+[@0058] Legacy-STT_omnilingual_test.py:
+  DEFAULT_MODEL = "..."
+  DEFAULT_AUDIO_FILE = "..."
+  DEFAULT_AUDIO_URL = (...)
+  DEFAULT_EXPECTED_TEXT = "..."
+  def install_repo_on_path():
+  def normalize_text(text):
+  def check_supported_runtime(allow_unsupported=False):
+  def check_runtime_imports():
+  def apply_cache_home(cache_home):
+  def resolve_compute_type(device, compute_type):
+  def build_engine_options(args):
+  def create_engine(args):
+  def ensure_audio_file(args):
+  def run_init_only(args):
+  def run_file_smoke(args):
+  def run_microphone(args):
+    def on_realtime(text):
+    def on_final(text):
+  def parse_args(argv=None):
+  def main(argv=None):
+
+[@0059] Legacy-STT_speechendpoint.py:
+  IS_DEBUG = F
+  EXTENDED_LOGGING = F
+    def clear_console():
+    def is_speech_finished(text):
+    def preprocess_text(text):
+    def text_detected(text):
+    def process_queue():
+    def process_text(text):
+
+[@0060] Legacy-STT_speechendpoint_binary_classified.py:
+  IS_DEBUG = F
+  USE_STEREO_MIX = T
+  LOOPBACK_DEVICE_NAME = "..."
+  LOOPBACK_DEVICE_HOST_API = 0
+  EXTENDED_LOGGING = F
+    def get_completion_probability(sentence, model, tokenizer, device, max_length):
+    def interpolate_detection(prob):
+    def is_speech_finished(text):
+    def preprocess_text(text):
+    def text_detected(text):
+    def ends_with_string(text: str, s: str):
+    def sentence_end(text: str):
+    def additional_pause_based_on_words(text):
+    def strip_ending_punctuation(text):
+    def get_suggested_whisper_pause(text):
+    def find_stereo_mix_index():
+    def find_matching_texts(texts_without_punctuation):
+    def process_queue():
+    def process_text(text):
+
+[@0061] Legacy-STT_test.py:
+  EXTENDED_LOGGING = F
+  WRITE_TO_KEYBOARD_INTERVAL = 0
+    def clear_console():
+    def preprocess_text(text):
+    def text_detected(text):
+    def process_text(text):
+
+[@0062] recorder_client.py:
+  CLEAR_LINE = "..."
+  RESET_CURSOR = "..."
+  GREEN_TEXT = "..."
+  RESET_COLOR = "..."
+  def print_realtime_text(text):
+
+[@0063] simple_test.py:
+
+[@0064] translator.py:
+    def generate_response(messages):
+    def clear_console():
+    def select_language():
+    def main():
+
+[@0065] type_into_textbox.py:
+  def process_text(text):
+
+[@0066] conftest.py:
+  def _isolated_kroko_native_guard():
+  def pro_capable_test_runtime(monkeypatch):
+
+[@0067] kroko_native_child.py:
+  REPO = o
+  COMMUNITY_FILE = "..."
+  PRO_FILE = "..."
+  COMMUNITY_ID = "..."
+  PRO_ID = "..."
+  KEY_NAMES = (...)
+  MODEL_DIR = o
+  AUDIO = o
+  EXPECT = [...]
+  def load_key():
+  def audio():
+  def hits(text):
+  def emit(**fields):
+  def guard_status():
+  def engine_options(key=None, **extra):
+  def scenario_community_no_key():
+  def scenario_pro_with_key():
+  def _server_settings(key, model_id, resolved_file):
+  def scenario_pro_shared_final_realtime():
+    def on_result(result):
+  def _runtime(service):
+  def scenario_service_community_pro_switch():
+    def transcribe(lane):
+    def record(name, **fields):
+    def wait_reconcile(previous):
+  SCENARIOS = {...}
+
+[@0068] release_support.py:
+  REPO_ROOT = P
+  VERSION = "..."
+  COMMIT = "..."
+  TREE = "..."
+  PRO_DIGEST = "..."
+  PRO_WHEEL_SHA = "..."
+  PRO_WHEEL_WIN_SHA = "..."
+  KROKO_PRO_SHA = "..."
+  PRO_WHEEL = "..."
+  PRO_WHEEL_WIN = "..."
+  STAGING_ROOT = "..."
+  DOCKERHUB_ROOT = "..."
+  GHCR_ROOT = "..."
+  def make_manifest(**overrides: Any) -> Dict[str, Any]:
+  def make_state(state_name: str = "PREPARED", manifest: Optional[Dict[str, Any]] = None) -> ReleaseState:
+
+  class RecordingRunner:
+    ABSENT_STDERR = "..."
+    def __init__(
+    def __call__(self, cmd: Sequence[str], **kwargs: Any) -> CommandResult:
+    def commands(self) -> List[str]:
+    def assert_no_writes(self, testcase) -> None:
+  def ok(stdout: str = "") -> CommandResult:
+  def absent() -> CommandResult:
+  def failed(stderr: str, returncode: int = 1) -> CommandResult:
+  def digest_response(digest: str) -> CommandResult:
+  def pypi_fetcher(published: Optional[Dict[str, Dict[str, str]]] = None):
+    def fetch(url: str) -> Optional[dict]:
+
+[@0069] wake_catalog_support.py:
+  BACKEND_SUFFIX = {...}
+  PIPELINE_STEMS = (...)
+  PIPELINE_FILES = t
+  def backend_file_name(file_name: str, backend: str) -> str:
+  def write_artifact(root: Path, name: str, payload: bytes = b"onnx-test-artifact") -> Path:
+  def artifact_spec(root: Path, name: str) -> dict:
+  def build_bundle(
+  DEFAULT_ENTRIES = (...)
+  def build_authority(root, entries=DEFAULT_ENTRIES, **kwargs):
+
+  class FakeCatalogService:
+    def __init__(self, catalog):
+
+[@0070] vad_test.py:
+  def on_vad_detect_start():
+  def on_vad_detect_stop():
+  def on_transcription_finished(text):
+
+[@0071] build_distribution.py:
+  REPO_ROOT = P
+  DISTRIBUTION_VARIANT_ENV = "..."
+  DISTRIBUTION_NAMES = {...}
+  EMBEDDED_PACKAGE = "..."
+  EMBEDDED_MANIFEST_NAME = "..."
+  EMBEDDED_MANIFEST_SCHEMA = 1
+  KROKO_LICENSE_DIRNAME = "..."
+  _WHEEL_NAME_RE = r
+
+  class DistributionBuildError(RuntimeError):
+  def normalize_variant(variant: str) -> str:
+  def distribution_name_for(variant: str) -> str:
+  def escaped_name(distribution: str) -> str:
+  def parse_wheel_filename(filename: str) -> Dict[str, str]:
+  def sha256_of(path: Path) -> str:
+  def _record_hash(data: bytes) -> str:
+  def build_base_wheel(
+  def _dist_info_dir(names: Sequence[str], *, what: str) -> str:
+  def kroko_payload_names(kroko_names: Sequence[str], kroko_dist_info: str) -> List[str]:
+  def build_embedded_manifest(
+  def verify_bundled_notices(archive: zipfile.ZipFile) -> dict:
+  def merge_kroko_runtime(
+  def _rewrite_wheel_metadata(text: str, *, tag: str) -> str:
+  def build_distribution(
+  def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+  def main(argv: Optional[Sequence[str]] = None) -> int:
+
+[@0072] build_production.py:
+  REPO_ROOT = P
+  PRODUCTION_DOCKERFILE = R
+  KROKO_BUILDER_DOCKERFILE = R
+  KROKO_BUILDER_IMAGE = "..."
+  PRODUCTION_BASE_IMAGE = "..."
+  PRODUCTION_BASE_IMAGE_DIGEST = (...)
+  def production_base_image_ref() -> str:
+  VARIANT_FREE = "..."
+  VARIANT_PRO = "..."
+  SUPPORTED_VARIANTS = (...)
+  ALL_VARIANTS_TARGET = "..."
+  IMAGE_NAMES = {...}
+
+  class BuildError(RuntimeError):
+
+  class CommandResult:
+  def default_runner(
+  def normalize_variant(variant: str) -> str:
+  def image_name_for(variant: str) -> str:
+  def variants_for_target(target: str) -> List[str]:
+  def preflight(runner: CommandRunner = default_runner) -> Dict[str, str]:
+  def resolve_git_commit(runner: CommandRunner = default_runner, cwd: Path = REPO_ROOT) -> str:
+  def resolve_dirty(runner: CommandRunner = default_runner, cwd: Path = REPO_ROOT) -> bool:
+  def resolve_voicestt_version() -> str:
+  def resolve_source_build_date(
+  def build_voicestt_wheel(
+  def build_kroko_builder_image(
+  def _run_kroko_builder(
+  def describe_kroko_artifact(
+  def build_kroko_artifact(
+  def _host_wheel_path(artifact_store_host: Path, container_wheel_path: str) -> Path:
+  def resolve_kroko_wheel(
+  def copy_kroko_wheel_to_context(
+  DIST_DIR_IN_CONTEXT = "..."
+  def default_dist_dir(repo_root: Path = REPO_ROOT) -> Path:
+  def require_dist_dir_inside_build_context(
+  def require_image_version(version: str) -> None:
+  def build_production_image(
+  def inspect_image(image_ref: str, runner: CommandRunner = default_runner) -> Dict[str, Any]:
+  def validate_image_identity(image_ref: str, details: Dict[str, Any], *,
+  def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+  def run(target: str, *, dist_dir: Path, kroko_artifact_store: Optional[Path] = None,
+  def main(argv: Optional[Sequence[str]] = None) -> int:
+
+[@0073] compose.py:
+  PROJECT_ROOT = P
+  DEFAULT_CONFIG = P
+  COMPOSE_FILE = P
+  MODEL_ENV_NAMES = {...}
+  def load_deployment_config(path: Path = DEFAULT_CONFIG) -> Dict[str, Any]:
+  def _resolve_path(value: str, project_root: Path) -> Path:
+  def discover_model_path(
+  def discover_data_path(
+  def build_compose_environment(
+  def parse_args(argv=None):
+  def main(argv=None) -> int:
+
+[@0074] evaluate_realtime_text_stabilizer.py:
+  ROOT = P
+  DEFAULT_OUTPUT = R
+  SAMPLE_RATE = 1
+  TOKEN_RE = r
+
+  class ReplayInput:
+
+  class ReplayScenario:
+  def normalize_word(value: str) -> str:
+  def normalized_words(text: str) -> List[str]:
+  def edit_distance(left: Sequence[str], right: Sequence[str]) -> int:
+  def word_error_rate(expected_text: str, actual_text: str) -> float:
+  def word_error_rate_words(expected: Sequence[str], actual: Sequence[str]) -> float:
+  def common_prefix_length(left: Sequence[str], right: Sequence[str]) -> int:
+  def percentile(values: Sequence[float], q: float) -> Optional[float]:
+  def summary_stats(values: Sequence[float]) -> Dict[str, Optional[float]]:
+  def timed_reference(
+  def obs(
+  def scenario(
+  def build_scenarios() -> Tuple[ReplayScenario, ...]:
+  def make_observation(
+  def false_commit_summary(
+  def prefix_partial_wer(reference_words: Sequence[str], display_words: Sequence[str]) -> float:
+  def evaluate_scenario(
+  def aggregate_results(results: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+  def _revision_spans_from_events(events: Sequence[Dict[str, Any]]) -> List[int]:
+  def build_scenario_by_name(name: str) -> ReplayScenario:
+  def compact_result(result: Dict[str, Any]) -> Dict[str, Any]:
+  def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+  def main(argv: Optional[Sequence[str]] = None) -> int:
+
+[@0075] kroko_catalog_cli.py:
+  def main(argv: list[str] | None = None) -> int:
+
+[@0076] qualify_build_identity.py:
+  REPO_ROOT = P
+  def sha256(path: Path) -> str:
+  def validate_distribution(path: Path, source: BuildIdentity, variant: str,
+  INSTALLED_CHECK = r
+  def running_app(app, *, lifespan="on"):
+  def qualify_candidate(directory: Path, *, platform: str | None = None,
+  def main(argv=None):
+
+[@0077] release_candidate.py:
+  REPO_ROOT = P
+  _TOOLS_DIR = R
+  VARIANTS = r
+  def candidate_source(source_tree, runner):
+
+  class CandidateError(RuntimeError):
+  def _write_json(path: Path, payload: Dict[str, Any]) -> None:
+  def sha256_of(path: Path) -> str:
+  def default_candidate_id(env: Optional[Dict[str, str]] = None) -> str:
+  def candidate_run_info(env: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+  def staging_reference_for(variant: str, candidate_id: str, staging_root: str) -> str:
+  def push_staging_image(
+  def unpushed_staging_record(variant: str, reason: str) -> Dict[str, Any]:
+  def build_candidate(
+  def windows_kroko_fingerprint(variant: str) -> Dict[str, Any]:
+  def resolve_windows_kroko(
+  def build_windows_candidate(
+  def build_inventory(out_dir: Path) -> Dict[str, Any]:
+  def print_fingerprints(
+  def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
+  def resolve_source_tree(runner=build_production.default_runner) -> str:
+  def main(argv: Optional[Sequence[str]] = None) -> int:
+
+[@0078] sync_wakeword_assets.py:
+  REPO_ROOT = p
+  TARGET = R
+  BUNDLED_FRAMEWORKS = (...)
+  CATALOG_REVISION = 2
+  AUXILIARY_ASSETS = {...}
+  ALIASES = {...}
+  DISPLAY_NAMES = {...}
+  def canonical_id(raw_id: str) -> str:
+  def display_name(identifier: str) -> str:
+  def sha256_of(path: pathlib.Path) -> str:
+  def render_manifest(value, _indent: int = 0) -> str:
+  def _index_by_canonical_id(mapping):
+  def build_manifest(source: pathlib.Path):
+  def main(argv=None) -> int:
+
+[@0079] validate_openai_endpoint.py:
+  def post_request(base_url, audio_path, model, language="de", response_format="json", stream=False):
+  def main(argv=None):
+
+[@0080] validate_parallel_realtime.py:
+  ROOT_DIR = P
+  SAMPLE_RATE = 1
+  def http_transcription(base_url, audio_path, language="de", api_key=None):
+  def set_wake_word_for_test(base_url, admin_api_key, enabled, snapshot=None):
+  def main(argv=None):
+
+[@0081] wakeword_calibration.py:
+  REPO_ROOT = P
+  SAMPLE_RATE = 1
+  CHUNK_SAMPLES = 5
+  def environment():
+  def rss_bytes():
+  def load_backend(selection, **engine_options):
+  def read_wav(path):
+  def command_artifacts(authority, _args):
+  def command_resources(authority, args):
+  def _pcm(data):
+  def command_scores(authority, args):
+  COMMANDS = {...}
+  def main(argv=None):
+
+[@0082] _embedded.py:
+  EMBEDDED_MANIFEST_NAME = "..."
+  EMBEDDED_MANIFEST_SCHEMA = 1
+  def embedded_manifest_path() -> Path:
+  def embedded_kroko() -> Optional[Dict[str, Any]]:
+  def embedded_kroko_variant() -> Optional[str]:
+
+[@0083] _build_identity.py:
+  RESOURCE_NAME = "..."
+  PRODUCT_DISTRIBUTIONS = (...)
+  PRODUCT_VARIANTS = {...}
+
+  class IdentityError(ValueError):
+  def package_version_for(product_version: str) -> str:
+  def validate_commit(value: str | None) -> str:
+  def package_root() -> Path:
+  def is_source_checkout(root: Path | None = None) -> bool:
+  def installed_distribution() -> tuple[str | None, str | None]:
+
+  class BuildIdentity:
+    def from_dict(cls, payload) -> BuildIdentity:
+    def complete(self) -> bool:
+    def require_complete(self) -> None:
+    def to_json(self) -> str:
+  def _unique_object(pairs):
+  def parse_identity(text: str) -> BuildIdentity:
+  def load_build_identity(path: Path | None = None) -> BuildIdentity | None:
+  def validated_build_identity() -> BuildIdentity | None:
+
+[@0084] _version.py:
+  DISTRIBUTION_NAME = "..."
+  BUILD_VERSION_ENV = "..."
+  _SEMVER_RE = r
+  BUMP_PATCH = "..."
+  BUMP_MINOR = "..."
+  BUMP_MAJOR = "..."
+  BUMP_KINDS = (...)
+
+  class SemVerError(ValueError):
+
+  class SemVer(NamedTuple):
+    def release_str(self) -> str:
+  def parse_semver(value: str) -> SemVer:
+  def is_valid_semver(value: str) -> bool:
+  def validate_semver(value: str) -> str:
+  def bump(version: str, kind: str) -> str:
+  def resolve_bump_kind(*, minor: bool = False, major: bool = False) -> str:
+  def _version_file_path() -> pathlib.Path:
+  def read_version_file() -> str:
+  def _build_override() -> str:
+  def resolve_version() -> str:
+
+[@0085] audio_input.py:
+  DESIRED_RATE = 1
+  CHUNK_SIZE = 1
+  AUDIO_FORMAT = p
+  CHANNELS = 1
+
+  class AudioInput:
+    def __init__(
+    def get_supported_sample_rates(self, device_index):
+    def _get_best_sample_rate(self, actual_device_index, desired_rate):
+    def list_devices(self):
+    def setup(self):
+    def lowpass_filter(self, signal, cutoff_freq, sample_rate):
+    def resample_audio(self, pcm_data, target_sample_rate, original_sample_rate):
+    def read_chunk(self):
+    def cleanup(self):
+
+[@0086] audio_recorder.py:
+  INIT_MODEL_TRANSCRIPTION = "..."
+  INIT_MODEL_TRANSCRIPTION_REALTIME = "..."
+  INIT_REALTIME_PROCESSING_PAUSE = 0
+  INIT_REALTIME_INITIAL_PAUSE = 0
+  INIT_SILERO_SENSITIVITY = 0
+  INIT_WEBRTC_SENSITIVITY = 3
+  INIT_POST_SPEECH_SILENCE_DURATION = 0
+  INIT_MIN_LENGTH_OF_RECORDING = 0
+  INIT_MIN_GAP_BETWEEN_RECORDINGS = 0
+  INIT_WAKE_WORDS_SENSITIVITY = 0
+  INIT_PRE_RECORDING_BUFFER_DURATION = 1
+  INIT_WAKE_WORD_ACTIVATION_DELAY = 0
+  INIT_WAKE_WORD_TIMEOUT = 5
+  INIT_WAKE_WORD_BUFFER_DURATION = 0
+  ALLOWED_LATENCY_LIMIT = 1
+  SAMPLE_RATE = 1
+  BUFFER_SIZE = 5
+  DEACTIVITY_SILENCE_CONFIRMATION_DURATION = 0
+  INIT_HANDLE_BUFFER_OVERFLOW = F
+    INIT_HANDLE_BUFFER_OVERFLOW = T
+  TIME_SLEEP = 0
+  INT16_MAX_ABS_VALUE = 3
+
+  class AudioToTextRecorder:
+    def __init__(self,
+    def start(self, frames = None):
+    def stop(self,
+    def listen(self):
+    def wait_audio(self):
+    def text(self,
+    def transcribe(self):
+    def perform_final_transcription(self, audio_bytes=None, use_prompt=True):
+    def feed_audio(self, chunk, original_sample_rate=16000):
+    def set_activation_policy(self, policy):
+    def open_controlled_activation(
+    def close_controlled_activation(self, activation_id=None, generation=None):
+    def abort_controlled_activation(self):
+    def controlled_activation_state(self):
+    def controlled_recording_activation_state(self):
+    def wakeup(self):
+    def abort(self):
+    def set_microphone(self, microphone_on=True):
+    def clear_audio_queue(self):
+    def has_pending_recordings(self):
+    def flush_buffered_audio(self, min_abs_level=50):
+    def shutdown(self):
+    def format_number(self, num):
+    def __enter__(self):
+    def __exit__(self, exc_type, exc_value, traceback):
+
+[@0087] audio_recorder_client.py:
+  DEFAULT_CONTROL_URL = "..."
+  DEFAULT_DATA_URL = "..."
+  INIT_MODEL_TRANSCRIPTION = "..."
+  INIT_MODEL_TRANSCRIPTION_REALTIME = "..."
+  INIT_REALTIME_PROCESSING_PAUSE = 0
+  INIT_REALTIME_INITIAL_PAUSE = 0
+  INIT_SILERO_SENSITIVITY = 0
+  INIT_WEBRTC_SENSITIVITY = 3
+  INIT_POST_SPEECH_SILENCE_DURATION = 0
+  DEACTIVITY_SILENCE_CONFIRMATION_DURATION = 0
+  INIT_MIN_LENGTH_OF_RECORDING = 0
+  INIT_MIN_GAP_BETWEEN_RECORDINGS = 0
+  INIT_WAKE_WORDS_SENSITIVITY = 0
+  INIT_PRE_RECORDING_BUFFER_DURATION = 1
+  INIT_WAKE_WORD_ACTIVATION_DELAY = 0
+  INIT_WAKE_WORD_TIMEOUT = 5
+  INIT_WAKE_WORD_BUFFER_DURATION = 0
+  ALLOWED_LATENCY_LIMIT = 1
+  BUFFER_SIZE = 5
+  SAMPLE_RATE = 1
+  INIT_HANDLE_BUFFER_OVERFLOW = F
+    INIT_HANDLE_BUFFER_OVERFLOW = T
+
+  class bcolors:
+    HEADER = '...'
+    OKBLUE = '...'
+    OKCYAN = '...'
+    OKGREEN = '...'
+    WARNING = '...'
+    FAIL = '...'
+    ENDC = '...'
+    BOLD = '...'
+    UNDERLINE = '...'
+  def format_timestamp_ns(timestamp_ns: int) -> str:
+
+  class AudioToTextRecorderClient:
+    def __init__(self,
+    def text(self, on_transcription_finished=None):
+    def feed_audio(self, chunk, audio_meta_data, original_sample_rate=16000):
+    def set_microphone(self, microphone_on=True):
+    def abort(self):
+    def wakeup(self):
+    def clear_audio_queue(self):
+    def perform_final_transcription(self):
+    def stop(self):
+    def connect(self):
+    def start_server(self):
+    def is_server_running(self):
+    def ensure_server_running(self):
+    def list_devices(self):
+    def start_recording(self):
+    def setup_audio(self):
+    def record_and_send_audio(self):
+    def cleanup_audio(self):
+    def on_control_message(self, ws, message):
+    def on_data_message(self, ws, message):
+          INT16_MAX_ABS_VALUE = 3
+    def on_error(self, ws, error):
+    def on_close(self, ws, close_status_code, close_msg):
+    def on_control_open(self, ws):
+    def on_data_open(self, ws):
+    def set_parameter(self, parameter, value):
+    def get_parameter(self, parameter):
+    def call_method(self, method, args=None, kwargs=None):
+    def shutdown(self):
+    def __enter__(self):
+    def __exit__(self, exc_type, exc_value, traceback):
+
+[@0088] activation_control.py:
+  LEGACY_ACTIVATION_POLICY = "..."
+  CONTROLLED_ACTIVATION_POLICY = "..."
+  ACTIVATION_POLICIES = {...}
+  def initialize_activation_control(recorder):
+  def _ensure_initialized(recorder):
+  def configure_activation_policy(recorder, policy):
+  def open_controlled_activation_gate(
+  def close_controlled_activation_gate(
+  def abort_controlled_activation_gate(recorder):
+  def shutdown_controlled_activation_gate(recorder):
+  def controlled_activation_snapshot(recorder):
+  def controlled_recording_activation_snapshot(recorder):
+  def recording_activation_gate_is_open(
+
+[@0089] audio_input_worker.py:
+  def run_audio_data_worker(
+    def get_highest_sample_rate(audio_interface, device_index):
+    def initialize_audio_stream(audio_interface, sample_rate, chunk_size):
+      def validate_device(device_index):
+    def preprocess_audio(chunk, original_sample_rate, target_sample_rate):
+    def setup_audio():
+
+[@0090] initialization.py:
+  def initialize_recorder(
+  def _assign_initial_attributes(recorder, init_args, normalize_wakeword_backend):
+  def _configure_logger(recorder, no_log_file, init_args=None):
+  def _initialize_shutdown_state(recorder):
+  def _configure_multiprocessing_start_method():
+  def _log_extended_initialization(use_extended_logging, init_args):
+  def _initialize_transcription_runtime(recorder, recorder_cls):
+  def _start_audio_reader(recorder, recorder_cls):
+  def _initialize_realtime_transcription_model(recorder):
+  def _initialize_wakeword_detection(
+  def _initialize_voice_activity_detection(
+  def _initialize_recording_buffers(recorder):
+  def _start_worker_threads(recorder):
+  def _finish_initialization(recorder):
+
+[@0091] lifecycle.py:
+  def start_recording(recorder, frames=None):
+  def stop_recording(
+  def listen_for_voice_activity(recorder):
+  def wait_for_recorded_audio(recorder):
+  def wakeup_recorder(recorder):
+  def abort_recording(recorder):
+
+[@0092] manual_audio_input.py:
+  def feed_audio(recorder, chunk, original_sample_rate=16000):
+
+[@0093] openwakeword_engine.py:
+  PREDICTION_FRAME_SAMPLES = 1
+  DEFAULT_SAMPLE_RATE = 1
+  INT16_MIN = -
+  INT16_MAX = 3
+
+  class PredictionFrame:
+    def diagnostics(self) -> Dict[str, Any]:
+  def apply_detector_gain(pcm: np.ndarray, gain: Any) -> np.ndarray:
+  def _default_model_factory(**kwargs):
+
+  class OpenWakeWordEngine:
+    def __init__(
+    def model(self):
+    def backend(self) -> str:
+    def selection(self):
+    def frame_index(self) -> int:
+    def sample_position(self) -> int:
+    def input_frames(self) -> Dict[str, Any]:
+    def process(self, data, *, gain: Optional[float] = None,
+    def _tail_scores(self, new_frames: int) -> Dict[str, Tuple[float, ...]]:
+    def reset(self) -> None:
+    def close(self) -> None:
+    def diagnostics(self) -> Dict[str, Any]:
+
+[@0094] preroll.py:
+  REASON_BELOW_MINIMUM = "..."
+  REASON_EMPTY_BUFFER = "..."
+  REASON_FALLBACK_FULL_PREROLL = "..."
+  REASON_STABLE_SILENCE_FOUND = "..."
+  REASON_UNCERTAIN = "..."
+  DEFAULT_PREROLL_MIN_SILENCE_MS = 2
+  DEFAULT_PREROLL_GUARD_MS = 1
+  DEFAULT_PREROLL_MIN_INCLUDED_MS = 6
+  DEFAULT_PREROLL_MAX_GAP_MS = 8
+  DEFAULT_PREROLL_NOISE_FLOOR_MULTIPLIER = 2
+  DEFAULT_PREROLL_ENERGY_MARGIN_RMS = 2
+
+  class PrerollFrameMetadata:
+
+  class PrerollSelection:
+  def select_preroll_frames(
+  def _empty_selection(sample_rate):
+  def _full_selection(frames, sample_rate, reason, diagnostics):
+  def _find_merged_speech_onset_index(frames, max_gap_samples):
+  def _stable_silence_before_onset(frames, onset_index, energy_threshold_rms):
+  def _is_stable_silence_frame(frame, energy_threshold_rms):
+  def _is_speech_frame(frame):
+  def _optional_bool(value):
+  def _energy_threshold_rms(
+  def _sample_offset_for_index(frames, index):
+  def _index_for_sample_offset(frames, sample_offset):
+  def _sum_samples(frames):
+  def _speech_sample_count(frames, attr_name):
+  def _frame_sample_count(frame):
+  def _milliseconds_to_samples(milliseconds, sample_rate):
+
+[@0095] realtime.py:
+  TIME_SLEEP = 0
+  INT16_MAX_ABS_VALUE = 3
+  def run_realtime_worker(recorder):
+    def _sleep_briefly():
+    def _safe_get_realtime_pause():
+    def _safe_get_realtime_fallback_pause():
+    def _safe_get_sample_rate():
+    def _snapshot_frames():
+    def _frames_to_audio_array(frames_snapshot, enforce_min_samples=True):
+    def _count_frame_samples(frames_snapshot):
+    def _extract_text_and_language(transcription_result):
+    def _transcribe_with_main_model(audio_array):
+    def _transcribe_with_realtime_model(audio_array):
+    def _streaming_realtime_target():
+    def _close_streaming_session():
+    def _create_streaming_session(target):
+    def _ensure_streaming_session(recording_id):
+    def _finish_streaming_session(frames_snapshot=None):
+    def _transcribe_with_realtime_streaming_model(
+    def _safe_realtime_callback(callback, *args):
+    def _publish_realtime_text(
+    def _run_realtime_transcription(trigger_reason):
+    def _get_boundary_followup_offsets():
+    def _reset_boundary_scheduler():
+    def _process_new_boundary_frames(frames_snapshot):
+    def _run_syllable_boundary_scheduler():
+
+[@0096] realtime_boundary_detector.py:
+  INT16_MAX_ABS_VALUE = 3
+
+  class SpeechBoundaryEvent:
+    def __init__(
+    def as_dict(self) -> Dict[str, float]:
+    def __repr__(self) -> str:
+
+  class SpeechBoundaryResult:
+    def __init__(
+    def boundary_detected(self) -> bool:
+    def latest_event(self) -> Optional[SpeechBoundaryEvent]:
+
+  class RealtimeSpeechBoundaryDetector:
+    def __init__(
+    def reset(self) -> None:
+    def process_bytes(self, pcm_chunk: bytes) -> SpeechBoundaryResult:
+    def process_samples(self, samples) -> SpeechBoundaryResult:
+    def _empty_result(self) -> SpeechBoundaryResult:
+    def _samples_to_float32(self, samples) -> np.ndarray:
+    def _analyze_frame(self, frame: np.ndarray) -> Dict[str, float]:
+    def _zero_crossing_rate(self, frame: np.ndarray) -> float:
+    def _voicing_score(self, frame: np.ndarray, rms: float) -> float:
+    def _update_noise_floor(self, energy_db: float) -> None:
+    def _maybe_detect_boundary(self) -> Optional[SpeechBoundaryEvent]:
+    def _trim_history(self) -> None:
+    def _score_component(self, value: float, threshold: float) -> float:
+    def _clamp(self, value: float, low: float, high: float) -> float:
+
+[@0097] realtime_callbacks.py:
+  def publish_realtime_transcription_stabilized(recorder, text):
+  def publish_realtime_transcription_update(recorder, text):
+
+[@0098] realtime_text_stabilizer.py:
+
+  class RealtimeTextStabilizationConfig:
+
+  class RealtimeTextObservation:
+
+  class RealtimeTextFinalObservation:
+
+  class RealtimeTextEvidenceDiagnostics:
+
+  class RealtimeTextObservationTiming:
+
+  class RealtimeTextStabilizationEvent:
+
+  class RealtimeTextFinalizationEvent:
+
+  class RealtimeTextStabilizationSnapshot:
+
+  class _Projection:
+
+  class _EvidencePoint:
+
+  class _ObservationRecord:
+
+  class RealtimeTextStabilizer:
+    def __init__(
+    def reset(
+    def observe(
+    def finalize(
+    def snapshot(self) -> RealtimeTextStabilizationSnapshot:
+    def _accepted_event(
+    def _ignored_event(
+    def _confirmed_frontier(
+    def _char_is_stable(
+    def _space_is_stable(
+    def _evidence_for_offset(
+    def _add_evidence(self, record: _ObservationRecord) -> None:
+    def _build_delta(
+    def _raw_suffix_after_stable(self, projection: _Projection) -> str:
+    def _public_unstable_preview(self, projection: _Projection) -> str:
+    def _raw_suffix_after_shared_word_prefix(self, projection: _Projection) -> str:
+    def _raw_suffix_after_comparison(
+    def _stable_raw_end_offset(
+    def _outlier_decision(self, record: _ObservationRecord) -> str:
+    def _has_stable_prefix_conflict(self, projection: _Projection) -> bool:
+    def _remember_accepted(self, record: _ObservationRecord) -> None:
+    def _remember_ignored(self, record: _ObservationRecord) -> None:
+    def _clear_unstable_branch(self) -> None:
+    def _public_consensus_aligned(self) -> bool:
+  def _project_text(text: str) -> _Projection:
+  def _is_punctuation(char: str) -> bool:
+  def _similarity(left: str, right: str) -> float:
+  def _shared_word_prefix_length(left: str, right: str) -> int:
+  def _evidence_passes(
+  def _timing_from_observation(
+
+[@0099] recorder_config.py:
+  def build_recorder_init_args(
+
+[@0100] recording.py:
+  INT16_MAX_ABS_VALUE = 3
+  BYTES_PER_SAMPLE = 2
+  def _wake_history_start_sample(recorder, stream_sample_position):
+  def _wake_detection_step(recorder, data, frame_index, stream_sample_position):
+  def run_recording_worker(recorder):
+
+[@0101] recording_buffers.py:
+  INT16_MAX_ABS_VALUE = 3
+  def set_audio_from_frames(
+      FRAME_SIZE = 2
+  def queue_recorded_audio(
+  def get_next_recorded_audio(recorder):
+  def has_pending_recordings(recorder):
+  def flush_buffered_audio(recorder, min_abs_level=50):
+  def clear_audio_queue(recorder):
+
+[@0102] runtime.py:
+  def start_recorder_worker(target=None, args=()):
+  def read_stdout_pipe(recorder):
+
+[@0103] safepipe.py:
+
+  class ParentPipe:
+    def __init__(self, parent_synthesize_pipe):
+    def _pipe_worker(self):
+    def send(self, data):
+    def recv(self):
+    def poll(self, timeout=0.0):
+    def close(self):
+  def SafePipe(debug=False):
+  def child_process_code(child_end):
+    def sender_thread(n):
+
+[@0104] shutdown.py:
+  def shutdown_recorder(recorder):
+
+[@0105] silero_vad.py:
+  SILERO_BACKEND_AUTO = "..."
+  SILERO_BACKEND_LEGACY = "..."
+  SILERO_BACKEND_PYTORCH_CPU = "..."
+  SILERO_BACKEND_PYTORCH_CUDA = "..."
+  SILERO_BACKEND_OFFICIAL_ONNX = "..."
+  SILERO_BACKEND_RAW_ONNX = "..."
+  SILERO_BACKEND_RAW_ONNX_IFLESS = "..."
+  SILERO_OP18_IFLESS_MODEL = "..."
+  SILERO_ONNX_MODEL = "..."
+  _BACKEND_ALIASES = {...}
+
+  class SileroVadError(RuntimeError):
+  def normalize_silero_backend(backend):
+  def resolve_silero_backend(backend="auto", silero_use_onnx=None):
+  def create_silero_vad_model(
+  def _create_auto_vad(
+  def _create_raw_onnx_vad(
+  def _create_official_onnx_vad(onnx_model_path=None):
+  def _create_legacy_vad(onnx=False):
+  def _create_pytorch_vad(device):
+  def _load_silero_package_model(onnx=False):
+  def _load_torch_hub_model(onnx=False):
+  def _first_model(loaded):
+  def find_silero_model_file(filename):
+  def _silero_package_roots():
+  def _find_file_under(root, filename):
+
+  class SileroCallableVad:
+    def __init__(self, model, backend, device=None):
+    def reset_states(self):
+    def __call__(self, audio, sample_rate):
+
+  class RawSileroOnnxVad:
+    def __init__(self, model_path, backend, intra_op_num_threads=2):
+    def reset_states(self):
+    def __call__(self, audio, sample_rate):
+  def _select_audio_input_name(inputs):
+  def _select_sample_rate_input_name(inputs):
+  def _state_shape(input_info):
+  def _as_float32_audio(audio):
+  def _result_to_float(result):
+
+[@0106] state.py:
+  def run_callback(recorder, cb, *args, **kwargs):
+  def set_recorder_state(recorder, new_state):
+  def set_spinner(recorder, text):
+
+[@0107] text_formatting.py:
+  def format_number(num):
+  def preprocess_output(
+  def find_tail_match_in_text(text1, text2, length_of_match=10):
+
+[@0108] transcription.py:
+  TIME_SLEEP = 0
+
+  class TranscriptionWorker:
+    def __init__(self, conn, stdout_pipe, transcription_engine, transcription_engine_options, model_path, download_root, compute_type, gpu_device_index, device,
+    def custom_print(self, *args, **kwargs):
+    def poll_connection(self):
+    def run(self):
+  def run_transcription_worker(*args, **kwargs):
+  def call_transcription_executor(
+  def submit_transcription_request(recorder, audio, language, use_prompt):
+      def _run_external_transcription():
+  def receive_transcription_result(recorder, timeout=0.1):
+
+[@0109] transcription_api.py:
+  def text(recorder, on_transcription_finished=None):
+  def transcribe(recorder):
+  def _set_state_after_transcription(recorder):
+  def perform_final_transcription(recorder, audio_bytes=None, use_prompt=True):
+
+[@0110] voice_activity.py:
+  SAMPLE_RATE = 1
+  BUFFER_SIZE = 5
+  INT16_MAX_ABS_VALUE = 3
+
+  class _BColors:
+    OKGREEN = '...'
+    WARNING = '...'
+    ENDC = '...'
+  def silero_vad_probability(recorder, audio_chunk):
+  def reset_silero_vad_state(recorder):
+  def warmup_voice_activity_detectors(recorder):
+  def is_silero_speech(recorder, chunk, generation=None):
+  def is_webrtc_speech(recorder, chunk, all_frames_must_be_true=False):
+  def check_voice_activity(recorder, data, thread_factory=None):
+  def pre_recording_buffer_trim_enabled(recorder):
+  def append_to_pre_recording_buffer(recorder, data):
+  def clear_pre_recording_buffer(recorder):
+  def selected_pre_recording_buffer_frames(recorder):
+  def preroll_frame_metadata(recorder, data):
+  def metadata_for_frame_without_vad(recorder, frame):
+  def frame_rms(data):
+  def webrtc_replay_preroll_diagnostics(recorder, frames):
+  def is_voice_active(recorder):
+
+[@0111] wake_audio_boundary.py:
+  DEFAULT_SAMPLE_RATE = 1
+  BYTES_PER_SAMPLE = 2
+  BASIS_OPERATIONAL_ZERO_POINT = "..."
+  def ms_to_samples(milliseconds: Any, sample_rate: int) -> int:
+
+  class WakeAudioBoundary:
+    def boundary_defined(self) -> bool:
+    def pre_roll_ms(self) -> float:
+    def released_pre_roll_samples(self) -> int:
+    def pre_roll_clamped(self) -> bool:
+    def to_dict(self) -> Dict[str, Any]:
+  def resolve_wake_audio_boundary(
+  def trim_frames_to_boundary(
+
+[@0112] wake_backend.py:
+  BACKEND_AUTO = "..."
+  BACKEND_ONNX = "..."
+  BACKEND_TFLITE = "..."
+  INFERENCE_BACKENDS = (...)
+  BACKEND_SETTING_VALUES = (...)
+  PLATFORM_WINDOWS = "..."
+  PLATFORM_LINUX = "..."
+  REASON_BACKEND_UNAVAILABLE = "..."
+  REASON_NO_COMMON_BACKEND = "..."
+  def current_platform() -> str:
+  def normalize_backend(value: Any) -> str:
+  def backend_preference(
+
+  class BackendSelection:
+    def admitted(self) -> bool:
+    def to_dict(self) -> dict:
+  def select_common_backend(
+
+[@0113] wake_detection.py:
+  EMBEDDING_FRAME_STEP_MS = 8
+  EMBEDDING_WINDOW_MS = 7
+  DEFAULT_SAMPLE_RATE = 1
+  def receptive_field_ms(input_frames: Any) -> float:
+  def selection_receptive_field_ms(input_frames_by_model: Mapping[str, Any]) -> float:
+
+  class WakeAttemptPolicy:
+    def min_frames(self) -> int:
+    def to_dict(self) -> Dict[str, Any]:
+  def _coerce_policy(value: Any) -> WakeAttemptPolicy:
+
+  class RawWakeCandidate:
+    def diagnostics(self) -> Dict[str, Any]:
+
+  class WakeHit:
+    def score(self) -> float:
+    def diagnostics(self) -> Dict[str, Any]:
+
+  class AcceptedWakeDetection:
+    def event_fields(self) -> Dict[str, Any]:
+  def arbitration_key(hit: WakeHit) -> Tuple[int, int, str]:
+  def arbitrate_finalized(hits: Iterable[WakeHit]) -> Optional[WakeHit]:
+
+  class _HitRegion:
+    def __init__(self, wake_word_id: str, frame_index: int, end_sample: int,
+    def extend(self, frame_index: int, end_sample: int, score: float) -> None:
+    def qualify(self, frame_index: int, end_sample: int) -> None:
+    def qualified(self) -> bool:
+
+  class WakeHitTracker:
+    def __init__(self, *, policy_supplier=None, generation: int = 0):
+    def active(self) -> bool:
+    def attempt_policy(self) -> Optional[WakeAttemptPolicy]:
+    def frame_index(self) -> int:
+    def generation(self) -> int:
+    def current_policy(self) -> WakeAttemptPolicy:
+    def reset(self, *, generation: Optional[int] = None) -> int:
+    def observe(
+    def _build_hit(
+    def _read_policy_locked(self) -> WakeAttemptPolicy:
+    def diagnostics(self) -> Dict[str, Any]:
+
+  class WakeDetectionEvaluator:
+    def __init__(
+    def _read_policy(self) -> WakeAttemptPolicy:
+    def active_policy(self) -> WakeAttemptPolicy:
+    def engine(self):
+    def tracker(self) -> WakeHitTracker:
+    def threshold(self) -> float:
+    def cooldown_ms(self) -> int:
+    def pre_roll_ms(self) -> int:
+    def min_consecutive_prediction_frames(self) -> int:
+    def generation(self) -> int:
+    def latched(self) -> bool:
+    def latched_activation_id(self) -> Optional[str]:
+    def new_generation(self) -> int:
+    def _reset_engine_locked(self) -> bool:
+    def process(self, data, *, now: Optional[float] = None,
+    def observe_scores(
+    def accept(
+    def _arm_cooldown_locked(self, hit: Optional[WakeHit], timestamp: float) -> None:
+    def refuse(self, hit: Optional[WakeHit] = None, *, now: Optional[float] = None) -> None:
+    def release_latch(self, *, activation_id: Optional[str] = None) -> bool:
+    def diagnostics(self) -> Dict[str, Any]:
+
+[@0114] wakeword.py:
+  PORCUPINE_WAKEWORD_BACKENDS = {...}
+  OPENWAKEWORD_BACKENDS = {...}
+  def _resolve_openwakeword_paths(
+  def _normalize_wakeword_backend(wakeword_backend, wake_words):
+  def _load_porcupine_module(importer=None):
+  def _load_openwakeword_modules(importer=None):
+  def setup_wakeword_detection(
+  def bind_wake_word_selection(recorder, selection):
+  def _canonical_wake_word_id(recorder, model_key):
+  def collect_wake_candidates(recorder, data, *, sample_position=0, frame_index=0,
+  def process_wakeword(recorder, data):
+
+[@0115] wakeword_catalog.py:
+  WAKEWORD_ASSET_ROOT_ENV = "..."
+  MANIFEST_NAME = "..."
+  BUNDLED_FRAMEWORK = B
+  BACKEND_SUFFIX = {...}
+  REASON_GLOBALLY_DISABLED = "..."
+  REASON_ARTIFACT_MISSING = "..."
+  REASON_PIPELINE_UNAVAILABLE = "..."
+  REASON_ARTIFACT_UNLOADABLE = "..."
+  REASON_ARTIFACT_INTEGRITY = "..."
+  REASON_RUNTIME_UNAVAILABLE = "..."
+  REASON_NOT_CANONICAL = "..."
+  CODE_UNAVAILABLE = "..."
+  REASON_UNKNOWN = "..."
+  _REASON_BACKEND_ORDER = I
+  _SEPARATORS = r
+  _UNSET = o
+
+  class WakeWordArtifactError(RuntimeError):
+
+  class WakeWordManifestError(ValueError):
+  def normalize_wake_word_token(value: Any) -> str:
+  def _sha256_of(path: Path) -> Optional[str]:
+
+  class WakeWordArtifact:
+    def framework(self) -> str:
+    def model_key(self) -> str:
+
+  class WakeWordPipeline:
+    def backends(self) -> Tuple[str, ...]:
+    def framework(self) -> str:
+    def artifacts(self, backend: str) -> Tuple[Optional[Path], Optional[Path]]:
+    def files_present(self, backend: str) -> bool:
+    def available_for(self, backend: str) -> bool:
+    def available(self) -> bool:
+    def loader_kwargs(self, backend: str) -> Dict[str, str]:
+
+  class BackendHealth:
+    def public_dict(self) -> Dict[str, Any]:
+
+  class WakeWordEntry:
+    def declared_backends(self) -> Tuple[str, ...]:
+    def healthy_backends(self) -> Tuple[str, ...]:
+    def artifact(self) -> Optional[WakeWordArtifact]:
+    def artifact_for(self, backend: str) -> Optional[WakeWordArtifact]:
+    def public_dict(self) -> Dict[str, Any]:
+
+  class WakeWordSelection:
+    def wake_word_ids(self) -> Tuple[str, ...]:
+    def model_paths(self) -> Tuple[str, ...]:
+    def model_key_to_id(self) -> Dict[str, str]:
+    def loader_kwargs(self) -> Dict[str, Any]:
+    def to_dict(self) -> Dict[str, Any]:
+
+  class SelectionError:
+    def to_dict(self) -> Dict[str, str]:
+
+  class RefreshResult:
+    def to_dict(self) -> Dict[str, Any]:
+    def public_payload(self, *, protocol_version: int = 2) -> Dict[str, Any]:
+
+  class WakeWordCatalogSnapshot:
+    def __init__(
+    def catalog_revision(self) -> int:
+    def entries(self) -> Tuple[WakeWordEntry, ...]:
+    def pipeline(self) -> WakeWordPipeline:
+    def manifest_path(self) -> Optional[Path]:
+    def diagnostics(self) -> Dict[str, Any]:
+    def public_catalog(self) -> List[Dict[str, Any]]:
+    def available_ids(self) -> Tuple[str, ...]:
+    def capabilities(self) -> Dict[str, Any]:
+    def visible_projection(self) -> Any:
+    def get(self, wake_word_id: str) -> Optional[WakeWordEntry]:
+    def resolve(self, value: Any) -> Optional[str]:
+    def admit_selection(
+    def common_backends(self, entries: Sequence[WakeWordEntry]) -> Tuple[str, ...]:
+    def _backend_error(self, entries, backend_selection) -> SelectionError:
+    def resolve_human_selection(self, values: Sequence[Any], **kwargs):
+    def _derive(self, entries, *, revision=None, diagnostics=None):
+    def with_catalog_revision(self, revision: int) -> "WakeWordCatalogSnapshot":
+    def with_backend_health(self, probers: Mapping[str, Any]) -> "WakeWordCatalogSnapshot":
+    def with_global_disabled(
+  def _replace_entry(entry: WakeWordEntry, **changes) -> WakeWordEntry:
+  def _entry_reason(entry: WakeWordEntry) -> Optional[str]:
+  def probe_backend_health(
+  def _entry_with_backend_health(
+  def default_asset_root() -> Path:
+  def load_snapshot(asset_root: Optional[Path] = None) -> WakeWordCatalogSnapshot:
+  def _parse_pipeline(payload: Mapping[str, Any], root: Path) -> WakeWordPipeline:
+  def _parse_entries(
+    def claim(token: str, kind: str, owner: str) -> None:
+  def default_artifact_probers() -> Dict[str, Any]:
+  def _default_onnx_prober():
+    def probe(path: str) -> None:
+  def _default_tflite_prober():
+    def probe(path: str) -> None:
+  def default_artifact_prober():
+
+  class WakeWordCatalogAuthority:
+    def __init__(
+    def load_error(self) -> Optional[str]:
+    def catalog_revision(self) -> int:
+    def snapshot(self) -> Optional[WakeWordCatalogSnapshot]:
+    def available_ids(self) -> Tuple[str, ...]:
+    def capabilities(self) -> Dict[str, Any]:
+    def public_payload(self, *, protocol_version: int = 2) -> Dict[str, Any]:
+    def resolve(self, value: Any) -> Optional[str]:
+    def _unavailable_catalog_error(self):
+    def admit_selection(
+    def resolve_human_selection(
+    def set_artifact_prober(self, prober) -> None:
+    def set_artifact_probers(self, probers) -> None:
+    def set_loader_for_tests(self, loader) -> None:
+    def backend_health(self) -> Dict[str, Dict[str, Any]]:
+    def refresh(self, *, global_disabled_ids: Any = _UNSET) -> RefreshResult:
+    def set_global_disabled(self, disabled_ids: Sequence[Any]) -> RefreshResult:
+    def _reload_locked(self, *, initial: bool) -> RefreshResult:
+    def _commit_locked(
+  def _resolve_probers(artifact_prober, artifact_probers) -> Dict[str, Any]:
+
+[@0116] install_kroko.py:
+  DEFAULT_REPO = b
+  DEFAULT_BRANCH = b
+  DEFAULT_REVISION = b
+  SUPPORTED_VARIANTS = b
+  KROKO_LICENSE_QUIET_ENV = "..."
+  KROKO_LICENSE_KEY_ENV_NAMES = (...)
+  LINUX_BUILD_ENV_STRIP_NAMES = (...)
+  def sanitize_build_subprocess_env(base_env):
+
+  class KrokoInstallError(RuntimeError):
+  def parse_retention_days(value):
+  def parse_args(argv=None):
+  def quote_cmd(cmd):
+  def run(cmd, cwd=None, env=None):
+  def ensure_program(name, message):
+  def default_work_dir():
+  def resolve_work_dir(args):
+  def ensure_work_dir_writable(work_dir):
+  def preflight_build(args):
+  def remove_tree_inside(path, root):
+    def clear_readonly(func, failed_path, _exc_info):
+  def checkout_origin_url(repo_dir):
+  def normalize_repo_authority(repo):
+  def checkout_matches_repo_authority(repo_dir, repo):
+  def prepare_checkout(args, work_dir=None):
+  def materialize_pristine_checkout(repo_dir, revision, *, work_dir):
+  def current_revision(repo_dir):
+  def ensure_pinned_revision(repo_dir, revision):
+  def read_text(path):
+  def write_text(path, text):
+  def normalize_lf(path):
+  def sanitize_batch_ascii(path):
+  def patch_windows_bat(repo_dir):
+  def _packaging_tool_assertion():
+  def _pinned_windows_dockerfile_edits(newline):
+    def block(*lines):
+  def _pinned_windows_openssl_block(newline):
+  def patch_windows_dockerfile(repo_dir):
+  def patch_windows_container_script(repo_dir):
+  def _insert_after_line(text, line_text, insertion):
+  def _wrap_license_output_line(text, marker):
+  def patch_license_quiet_env(repo_dir):
+  def stage_windows_channel_manifest(repo_dir):
+  def prepare_windows_checkout(repo_dir):
+  def ensure_windows_host():
+  def find_windows_wheel(repo_dir, variant):
+  def install_windows(args, repo_dir):
+  def effective_linux_openssl_root(args=None):
+  def linux_build_env(variant, openssl_root=None):
+  def windows_build_env():
+  def find_linux_wheel(wheel_dir):
+  def _declared_variant(value):
+  def _record_digest(data):
+  def retag_linux_wheel(wheel_path, variant):
+  def build_linux_wheel(args, repo_dir):
+  def build_windows_wheel(args, repo_dir):
+  def build_wheel(args, repo_dir):
+  def install_linux(args, repo_dir):
+  def _first_nonblank_line(text):
+  def _probe_version(executable):
+  def _probe_command(command):
+  def _sha256_identity(path):
+  def _first_existing(candidates):
+  def _openssl_version_from_headers(headers):
+  def detect_linux_openssl_identity(openssl_root=None, *, required=False):
+  def detect_linux_toolchain_identity(openssl_root=None, *, require_openssl=False):
+  def fingerprint_for(args):
+  def artifact_store_for(args):
+  def cleanup_artifact_store(store, args, fingerprint):
+  def describe_artifact(args):
+  def install_wheel(wheel_path):
+  def main(argv=None):
+  def _report_installed_runtime(variant):
+
+[@0117] artifacts.py:
+    def _acquire_os_lock(handle) -> bool:
+    def _release_os_lock(handle) -> None:
+    def _acquire_os_lock(handle) -> bool:
+    def _release_os_lock(handle) -> None:
+  ARTIFACT_SCHEMA_VERSION = 1
+  ARTIFACT_METADATA_NAME = "..."
+  ARTIFACT_STORE_ENV = "..."
+  ARTIFACT_RETENTION_ENV = "..."
+  DEFAULT_ARTIFACT_RETENTION_DAYS = 3
+  STAGING_DIR_NAME = "..."
+  LOCK_DIR_NAME = "..."
+  REPLACED_SUFFIX = "..."
+  DEFAULT_LOCK_TIMEOUT_SECONDS = 1
+  DEFAULT_LOCK_POLL_SECONDS = 0
+  _WHEEL_NAME_RE = r
+
+  class KrokoArtifactError(RuntimeError):
+  def default_store_root() -> Path:
+  def resolve_store_root(explicit: Optional[Any] = None) -> Path:
+  def sha256_of(path: Path) -> str:
+  def parse_wheel_filename(filename: str) -> Dict[str, str]:
+  def read_wheel_metadata(wheel_path: Path) -> Dict[str, Any]:
+  def variant_of_wheel(wheel_path: Path) -> Optional[str]:
+  _PLATFORM_ARCH_TOKENS = {...}
+  _PLATFORM_FAMILY_PREFIXES = {...}
+  def wheel_platform_tag_matches_target(
+  def _wheel_tag_platform_component(tag: str) -> str:
+
+  class ArtifactRecord:
+    def fingerprint(self) -> str:
+    def variant(self) -> str:
+    def wheel_sha256(self) -> str:
+    def public_dict(self) -> Dict[str, Any]:
+  def build_metadata(
+  def verify_artifact(
+
+  class KrokoArtifactStore:
+    def __init__(self, root: Optional[Any] = None):
+    def variant_dir(self, variant: str) -> Path:
+    def slot_dir(self, variant: str, fingerprint: str) -> Path:
+    def wheel_path_in(self, slot_dir: Path, metadata: Mapping[str, Any]) -> Path:
+    def _slot_lock_path(self, variant: str, fingerprint: str) -> Path:
+    def _slot_lock(
+    def read_metadata_in(self, slot_dir: Path) -> Optional[Dict[str, Any]]:
+    def read_metadata(self, variant: str, fingerprint: str) -> Optional[Dict[str, Any]]:
+    def _verify_slot_dir(
+    def replaced_backups(self, variant: str, fingerprint: str) -> List[Path]:
+    def _recover_slot_locked(
+    def recover_slot(
+    def lookup(
+    def cleanup_obsolete(
+      def slot_time(path: Path, metadata: Optional[Mapping[str, Any]]) -> datetime:
+    def store(
+  def installed_variant_from_embedded_manifest() -> Optional[str]:
+  def verify_installed_runtime(expected_variant: str) -> Dict[str, Any]:
+
+[@0118] buildinputs.py:
+  KROKO_UPSTREAM_REPO = "..."
+  KROKO_UPSTREAM_REVISION = "..."
+  KROKO_UPSTREAM_BRANCH_HINT = "..."
+  PATCHED_UPSTREAM_SOURCES = (...)
+  PATCH_SET_REVISION = 5
+  WINDOWS_BUILDER_REVISION = 5
+  LINUX_BUILDER_REVISION = 2
+  BUILDER_REVISION = W
+  LINUX_CMAKE_FLAGS = (...)
+  LINUX_MAKE_ARGS = "..."
+  LINUX_BUILDER_BASE_IMAGE = "..."
+  LINUX_BUILDER_BASE_IMAGE_DIGEST = (...)
+  LINUX_BUILDER_APT_PACKAGES = (...)
+  LINUX_BUILDER_PACKAGING_TOOLS = (...)
+  def linux_builder_base_image_ref() -> str:
+  def linux_builder_declaration():
+  PRO_BUILD_ENV_NAME = "..."
+  PRO_BUILD_ENV_VALUE = "..."
+  PRO_BUILD_ENV_OFF_VALUE = "..."
+  KROKO_CAPABILITY_SWITCH_ENV_NAMES = (...)
+  WINDOWS_BASE_IMAGE = "..."
+  WINDOWS_BASE_IMAGE_DIGEST = (...)
+  WINDOWS_APT_SNAPSHOT_URI = "..."
+  WINDOWS_APT_SUITES = (...)
+  WINDOWS_APT_COMPONENTS = (...)
+  WINDOWS_CLANG_VERSION = "..."
+  WINDOWS_NSIS_VERSION = "..."
+  WINDOWS_CMAKE_VERSION = "..."
+  WINDOWS_CMAKE_SHA256 = (...)
+  WINDOWS_XWIN_VERSION = "..."
+  WINDOWS_XWIN_SHA256 = (...)
+  WINDOWS_XWIN_MANIFEST_BUNDLED_PATH = "..."
+  WINDOWS_XWIN_MANIFEST_CACHE_NAME = "..."
+  WINDOWS_XWIN_MANIFEST_BYTES = 9
+  WINDOWS_XWIN_MANIFEST_SHA256 = (...)
+  WINDOWS_XWIN_PACKAGE_MANIFEST_URL = (...)
+  WINDOWS_XWIN_PACKAGE_MANIFEST_CACHE_KEY = (...)
+  WINDOWS_XWIN_PACKAGE_MANIFEST_CACHE_NAME = (...)
+  WINDOWS_XWIN_PACKAGE_MANIFEST_BYTES = 1
+  WINDOWS_XWIN_PACKAGE_MANIFEST_SHA256 = (...)
+  WINDOWS_XWIN_SDK_VERSION = "..."
+  WINDOWS_XWIN_CRT_VERSION = "..."
+  WINDOWS_PYTHON_TARGET_VERSION = "..."
+  WINDOWS_PYTHON_TAG = "..."
+  WINDOWS_PYTHON_NUPKG_SHA256 = (...)
+  WINDOWS_VC_REDIST_URL = (...)
+  WINDOWS_VC_REDIST_SHA256 = (...)
+  WINDOWS_OPENSSL_VERSION = "..."
+  WINDOWS_OPENSSL_CONDA_BUILD = "..."
+  WINDOWS_OPENSSL_SHA256 = (...)
+  WINDOWS_OPENFST_TAG = "..."
+  WINDOWS_OPENFST_SHA256 = (...)
+  WINDOWS_PACKAGING_TOOLS = (...)
+  def windows_cmake_url():
+  def windows_xwin_url():
+  def windows_python_nupkg_url():
+  def windows_openssl_filename():
+  def windows_openssl_url():
+  def windows_openfst_url():
+  def windows_toolchain_declaration():
+  VARIANT_FREE = "..."
+  VARIANT_PRO = "..."
+  SUPPORTED_VARIANTS = (...)
+  def cmake_flags_for(target_platform: str) -> str:
+  def builder_revision_for(target_platform: str) -> int:
+  def normalize_variant(variant: str) -> str:
+
+[@0119] catalog.py:
+  SCHEMA = "..."
+  NOTE = "..."
+  MAX_CATALOG_BYTES = 4
+  _NAME = r
+  _REQUIRED = f
+  _OPTIONAL = f
+
+  class CatalogDiagnostic:
+
+  class CatalogValidationError(ValueError):
+    def __init__(self, diagnostics: tuple[CatalogDiagnostic, ...]):
+  def _fail(code: str, message: str) -> None:
+  def validate_download_url(url: object, filename: str) -> str | None:
+
+  class CatalogEntry:
+    def streaming(self) -> bool:
+    def public_dict(self) -> dict[str, object]:
+  def parse_entry(raw: object) -> CatalogEntry:
+  def sort_entries(entries: tuple[CatalogEntry, ...]) -> tuple[CatalogEntry, ...]:
+
+  class KrokoCatalog:
+    def from_payload(cls, payload: object) -> KrokoCatalog:
+    def languages(self) -> tuple[str, ...]:
+    def get(self, model_id: str) -> CatalogEntry | None:
+    def filter(
+    def summary(self) -> dict[str, object]:
+
+  class CatalogSource(Protocol):
+    def load(self) -> KrokoCatalog: ...
+  def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+
+  class OfflineCatalogSource:
+    def load(self) -> KrokoCatalog:
+  def load_catalog(path: str | Path) -> KrokoCatalog:
+
+  class DownloadPlan:
+    def public_dict(self) -> dict[str, object]:
+  def create_download_plan(
+
+[@0120] credentials.py:
+  KROKO_KEY_ENV_NAMES = (...)
+  def effective_recognizer_key(
+
+[@0121] fingerprint.py:
+  FINGERPRINT_SCHEMA_VERSION = 1
+  FINGERPRINT_ID_LENGTH = 1
+  def canonical_json(document: Mapping[str, Any]) -> str:
+  def detect_target_platform() -> str:
+  def detect_architecture() -> str:
+  def detect_python_tag() -> str:
+  def windows_toolchain_authority(
+  def toolchain_identity(target_platform: str) -> Dict[str, Any]:
+  def build_fingerprint_document(
+  def fingerprint_id(document: Mapping[str, Any]) -> str:
+  def compute_fingerprint(**kwargs: Any) -> Dict[str, Any]:
+
+[@0122] license_api.py:
+
+  class LicenseCheckResult:
+    def allowed(self) -> bool:
+  def check_onprem_license(
+
+[@0123] license_state.py:
+  _REVISION_SECRET = s
+  def _key_revision(key: str) -> str:
+
+  class KrokoLicenseState:
+    def __init__(self, *, clock: Callable[[], float] = time.monotonic):
+    def bind(self, *, key: str = "", force_community: bool = False) -> bool:
+    def begin(self, model_uuid: str) -> int | None:
+    def apply(self, token: int, result: LicenseCheckResult) -> bool:
+    def _expire_locked(self) -> None:
+    def pro_enabled_for(self, model_uuid: str) -> bool:
+    def public_snapshot(self) -> dict[str, Any]:
+
+[@0124] models.py:
+  KROKO_MODEL_ROOT_ENV = "..."
+  ALLOW_MODEL_DOWNLOAD_ENV = "..."
+  VERIFY_MODEL_HASH_ENV = "..."
+  MANIFEST_NAME = "..."
+  TRUE_VALUES = {...}
+  REDISTRIBUTION_ALLOWED = "..."
+  REDISTRIBUTION_POLICY_REQUIRED = "..."
+  REDISTRIBUTION_PROHIBITED = "..."
+
+  class KrokoModelError(RuntimeError):
+  def _bool_env(name: str, default: bool = False) -> bool:
+  def model_download_allowed(options: Optional[Mapping[str, Any]] = None) -> bool:
+  def hash_verification_enabled(options: Optional[Mapping[str, Any]] = None) -> bool:
+  def sha256_of(path: Path) -> str:
+
+  class KrokoModelEntry:
+    def redistributable(self) -> bool:
+    def public_dict(self) -> Dict[str, Any]:
+
+  class KrokoModelManifest:
+    def __init__(self, payload: Mapping[str, Any], *, path: Optional[Path] = None):
+    def path(self) -> Optional[Path]:
+    def schema_version(self) -> int:
+    def manifest_revision(self) -> int:
+    def entries(self) -> Tuple[KrokoModelEntry, ...]:
+    def license_policy(self) -> Dict[str, Any]:
+    def upstream(self) -> Dict[str, Any]:
+    def get(self, value: Any) -> Optional[KrokoModelEntry]:
+    def redistributable_entries(self) -> Tuple[KrokoModelEntry, ...]:
+  def _parse_entry(raw: Mapping[str, Any]) -> KrokoModelEntry:
+  def default_manifest_path() -> Path:
+  def load_manifest(path: Optional[Any] = None) -> KrokoModelManifest:
+  def candidate_roots(
+  def verify_model_file(
+  def check_variant_compatibility(
+  def locate_model(
+  def describe_local_availability(
+  def provisioning_error(entry: Optional[KrokoModelEntry], requested: str) -> KrokoModelError:
+  MODEL_UUID_SCAN_BYTES = 6
+  _MODEL_UUID_PATTERN = r
+  def read_model_uuid(path: Any) -> Optional[str]:
+  _MODEL_FREE_PATTERN = r
+  def read_model_tier(path: Any) -> Optional[str]:
+  def license_uuid_for(
+  def community_fallback_model(
+
+[@0125] native_guard.py:
+  CONCURRENT_IDENTITY = "..."
+  PRO_IDENTITY_CHANGE = "..."
+  KEY_CONTEXT_CHANGE = "..."
+  PRO_KEY_REQUIRED = "..."
+  RESTART_CODES = f
+  _MESSAGES = {...}
+
+  class KrokoNativeConflict(RuntimeError):
+    def __init__(self, code: str, detail: str = ""):
+
+  class NativeIdentity:
+    def is_pro(self) -> bool:
+  def identity_for_path(path: Any) -> NativeIdentity:
+  _KEY_SECRET = s
+  def _key_revision(key: Any) -> str:
+
+  class KrokoNativeGuard:
+    def __init__(self) -> None:
+    def evaluate(
+    def restart_conflict(
+    def key_context_conflict(self, key: Any) -> Optional[KrokoNativeConflict]:
+    def acquire(self, identity: NativeIdentity, key: Any = "") -> int:
+    def confirm_loaded(self, lease: Optional[int]) -> None:
+    def native_license_confirmed(self, model_ident: str, key: Any) -> bool:
+    def release(self, lease: Optional[int]) -> None:
+    def live_identities(self) -> tuple:
+    def status(self) -> Dict[str, Any]:
+    def reset_for_tests(self) -> None:
+  _PROCESS_GUARD = K
+  def process_guard() -> KrokoNativeGuard:
+
+[@0126] _model_utils.py:
+  def attr_or_key(value, name, default=None):
+  def first_item(value):
+  def text_from_output(output):
+  def language_from_output(output, fallback=None):
+  def move_to_device(value, device=None, dtype=None):
+  def model_kwargs_from_inputs(inputs):
+  def decode_to_text(decoded):
+  def torch_dtype_from_compute_type(torch_module, compute_type, default=None):
+
+[@0127] base.py:
+
+  class TranscriptionInfo:
+
+  class TranscriptionResult:
+
+  class TranscriptionEngineConfig:
+
+  class TranscriptionEngineError(RuntimeError):
+
+  class UnsupportedTranscriptionEngineError(TranscriptionEngineError):
+
+  class StreamingTranscriptionSession(ABC):
+    def reset(self):
+    def accept_audio(self, audio, sample_rate=None):
+    def decode(self):
+    def get_result(self) -> TranscriptionResult:
+    def finish(self) -> TranscriptionResult:
+    def close(self):
+
+  class BaseTranscriptionEngine(ABC):
+    def __init__(self, config: TranscriptionEngineConfig):
+    def warmup(self, audio):
+    def transcribe(self, audio, language=None, use_prompt=True) -> TranscriptionResult:
+    def create_streaming_session(self, language=None, use_prompt=True) -> StreamingTranscriptionSession:
+    def _normalize_audio(self, audio):
+    def _get_prompt(self, use_prompt):
+
+[@0128] cohere_transcribe_engine.py:
+
+  class CohereTranscribeBackend(_hf.CohereTranscribeBackend):
+
+  class CohereTranscribeEngine(_hf.CohereTranscribeEngine):
+    def __init__(self, config, backend=None, backend_cls=None):
+
+[@0129] factory.py:
+  ENGINE_CLASS_PATHS = {...}
+  def _load_engine_class(name):
+  def create_transcription_engine(name, config: TranscriptionEngineConfig):
+  def get_supported_transcription_engines():
+
+[@0130] faster_whisper_engine.py:
+  def _load_faster_whisper():
+
+  class FasterWhisperEngine(BaseTranscriptionEngine):
+    def __init__(self, config):
+    def transcribe(self, audio, language=None, use_prompt=True):
+    def transcribe_with_options(self, audio, language=None, use_prompt=True, options=None):
+    def _transcribe(self, audio, kwargs, stream_callback=None):
+
+[@0131] funasr_engine.py:
+  def _load_FunASR_():
+
+  class FunASREngine(BaseTranscriptionEngine):
+    def __init__(self, config):
+    def transcribe(self, audio, language=None, use_prompt=False, **kwargs):
+
+[@0132] granite_speech_engine.py:
+
+  class GraniteSpeechBackend(_hf.GraniteSpeechBackend):
+
+  class GraniteSpeechEngine(_hf.GraniteSpeechEngine):
+    def __init__(self, config, backend=None, backend_cls=None):
+
+[@0133] hf_transformers_engines.py:
+  DEFAULT_COHERE_MODEL = "..."
+  DEFAULT_GRANITE_MODEL = "..."
+  DEFAULT_MOONSHINE_MODEL = "..."
+  def _load_transformers_classes(engine_name, class_names):
+  def _load_torch(engine_name):
+  def _with_cache_dir(options, download_root):
+
+  class CohereTranscribeBackend:
+    def __init__(self, config, processor_cls=None, model_cls=None, torch_module=None):
+    def transcribe(self, audio, language, **params):
+
+  class CohereTranscribeEngine(BaseTranscriptionEngine):
+    def __init__(self, config, backend=None, backend_cls=None):
+    def transcribe(self, audio, language=None, use_prompt=True):
+
+  class GraniteSpeechBackend:
+    def __init__(self, config, processor_cls=None, model_cls=None, torch_module=None):
+    def _audio_tensor(self, audio):
+    def transcribe(self, audio, prompt, **params):
+
+  class GraniteSpeechEngine(BaseTranscriptionEngine):
+    DEFAULT_PROMPT = "..."
+    def __init__(self, config, backend=None, backend_cls=None):
+    def _prompt(self, language, use_prompt):
+    def transcribe(self, audio, language=None, use_prompt=True):
+
+  class MoonshineBackend:
+    def __init__(self, config, processor_cls=None, model_cls=None, torch_module=None):
+    def _default_max_length(self, inputs):
+    def transcribe(self, audio, **params):
+
+  class MoonshineEngine(BaseTranscriptionEngine):
+    def __init__(self, config, backend=None, backend_cls=None):
+    def transcribe(self, audio, language=None, use_prompt=True):
+
+[@0134] kroko_onnx_engine.py:
+  DEFAULT_KROKO_ONNX_MODEL = "..."
+  KROKO_ONNX_PUBLIC_MODELS = {...}
+  KROKO_ONNX_LICENSE_QUIET_ENV = "..."
+  KROKO_ONNX_FALLBACK_TAIL_PADDING_SECONDS = 0
+  KROKO_ONNX_TAIL_PADDING_MARGIN_SECONDS = 0
+  _KROKO_OUTPUT_SUPPRESSION_LOCK = t
+
+  class KrokoOnnxDecodedOutput:
+  def _load_numpy():
+  def _load_online_recognizer_class():
+  def _bool_option(options, name, default=False):
+  def _output_suppression_enabled(options):
+  def _enable_kroko_license_quiet(enabled):
+  def _suppress_native_output(enabled):
+  def _int_option(options, name, default):
+  def _float_option(options, name, default):
+  def _provider_from_config(config, options):
+  def _maybe_under_download_root(download_root, value):
+  def _looks_like_kroko_data_file(filename):
+  def _first_existing_data_file(model_dir):
+  def _language_from_model_path(path):
+  def _chunk_seconds_from_model_path(path):
+  def _default_tail_padding_seconds(path):
+  def _tail_padding_option(options, path):
+
+  class KrokoOnnxBackend:
+    def __init__(self, config, recognizer_cls=None, numpy_module=None):
+    def _admit_native_instance(self):
+    def _release_native_instance(self):
+    def close(self):
+    def _resolve_model_path(self):
+    def _recognizer_kwargs(self):
+    def _create_recognizer(self, recognizer_cls):
+    def _as_float32_audio(self, audio):
+    def _accept_waveform(self, stream, sample_rate, audio):
+    def _decode_ready_stream(self, stream):
+    def _result_text(self, stream):
+    def transcribe(self, audio, **params):
+
+  class KrokoOnnxEngine(BaseTranscriptionEngine):
+    def __init__(self, config, backend=None, backend_cls=None):
+    def create_streaming_session(self, language=None, use_prompt=True):
+    def close(self):
+    def transcribe(self, audio, language=None, use_prompt=True):
+
+  class KrokoOnnxStreamingSession(StreamingTranscriptionSession):
+    def __init__(self, engine, language=None, use_prompt=True):
+    def reset(self):
+    def accept_audio(self, audio, sample_rate=None):
+    def decode(self):
+    def get_result(self):
+    def finish(self):
+    def close(self):
+
+[@0135] model_resolver.py:
+  TRUE_VALUES = {...}
+  FASTER_WHISPER_ROOT_ENV = "..."
+  KROKO_ROOT_ENV = "..."
+  OFFLINE_MODELS_ENV = "..."
+  def _bool(value, default=False):
+  def offline_models_enabled(options=None):
+  def _is_ctranslate2_model(path):
+  def _snapshot_model(path):
+  def _model_aliases(model):
+  def resolve_faster_whisper_model(model, download_root=None, options=None):
+  def resolve_kroko_model(model, download_root=None, options=None):
+
+[@0136] moonshine_engine.py:
+
+  class MoonshineBackend(_hf.MoonshineBackend):
+
+  class MoonshineEngine(_hf.MoonshineEngine):
+    def __init__(self, config, backend=None, backend_cls=None):
+
+[@0137] omnilingual_asr_engine.py:
+  DEFAULT_OMNILINGUAL_ASR_MODEL = "..."
+  KNOWN_OMNILINGUAL_ASR_MODELS = (...)
+  OPTIONAL_OMNILINGUAL_ASR_V2_MODEL_NAMES = (...)
+  _WHISPER_DEFAULT_MODEL_NAMES = {...}
+  _LANGUAGE_ALIASES = {...}
+  def _dependency_error_message():
+  def _model_card_from_config(config, engine_options):
+  def _is_ctc_model(model_card):
+  def _is_llm_model(model_card):
+  def _boolish_false(value):
+  def _int_option(options, name, default):
+  def _float_option(options, name, default):
+  def _dtype_from_option(torch_module, value):
+  def _normalize_language_code(language, aliases):
+  def _is_model_not_known_error(exc):
+  def _model_not_known_error_message(model_card):
+
+  class OmnilingualASRBackend:
+    def __init__(
+    def _load_pipeline_cls():
+    def _load_torch():
+    def _load_numpy():
+    def _resolve_device(self):
+    def _resolve_dtype(self, torch_module):
+    def _ensure_pipeline(self):
+    def _numpy(self):
+    def _check_duration(self, waveform, sample_rate):
+    def _audio_input(self, audio):
+    def language_code(self, language=None):
+    def transcribe(self, audio, language=None, **params):
+
+  class OmnilingualASREngine(BaseTranscriptionEngine):
+    def __init__(self, config, backend=None, backend_cls=None):
+    def transcribe(self, audio, language=None, use_prompt=True):
+
+[@0138] openai_api_engine.py:
+
+  class OpenAIAPIEngine(BaseTranscriptionEngine):
+    def __init__(self, config):
+    def transcribe(self, audio, language=None, use_prompt=True):
+
+[@0139] openai_whisper_engine.py:
+
+  class OpenAIWhisperBackend:
+    def __init__(self, config, whisper_module=None):
+    def _load_whisper_module():
+    def transcribe(self, audio, **params):
+
+  class OpenAIWhisperEngine(BaseTranscriptionEngine):
+    def __init__(self, config, backend=None, backend_cls=None):
+    def transcribe(self, audio, language=None, use_prompt=True):
+
+[@0140] parakeet_engine.py:
+  DEFAULT_PARAKEET_MODEL = "..."
+
+  class ParakeetNeMoBackend:
+    def __init__(self, config, asr_model_cls=None, soundfile_module=None):
+    def _load_asr_model_class():
+    def _load_soundfile(self):
+    def _audio_paths(self, audio):
+    def transcribe(self, audio, **params):
+
+  class ParakeetEngine(BaseTranscriptionEngine):
+    def __init__(self, config, backend=None, backend_cls=None):
+    def transcribe(self, audio, language=None, use_prompt=True):
+
+[@0141] qwen3_asr_engine.py:
+  DEFAULT_QWEN3_ASR_MODEL = "..."
+  QWEN_LANGUAGE_NAMES = {...}
+
+  class Qwen3ASRBackend:
+    def __init__(self, config, model_factory=None, torch_module=None):
+    def _load_model_factory():
+    def _load_torch():
+    def transcribe(self, audio, language=None, **params):
+
+  class Qwen3ASREngine(BaseTranscriptionEngine):
+    def __init__(self, config, backend=None, backend_cls=None):
+    def _language_name(self, language):
+    def transcribe(self, audio, language=None, use_prompt=True):
+
+[@0142] sherpa_onnx_engine.py:
+  DEFAULT_SHERPA_ONNX_PARAKEET_MODEL = "..."
+  DEFAULT_SHERPA_ONNX_MOONSHINE_MODEL = "..."
+  PARAKEET_DOWNLOAD_URL = (...)
+  MOONSHINE_DOWNLOAD_URL = (...)
+  KNOWN_MODEL_DIRS = {...}
+
+  class SherpaOnnxDecodedOutput:
+  def _load_offline_recognizer_class():
+  def _bool_option(options, name, default=False):
+  def _int_option(options, name, default):
+  def _float_option(options, name, default):
+  def _maybe_join(base_dir, value):
+
+  class SherpaOnnxOfflineBackend:
+    def __init__(self, config, recognizer_cls=None):
+    def _resolve_model_dir(self):
+    def _file(self, option_name, default_name):
+    def _common_recognizer_kwargs(self):
+    def _create_recognizer(self, recognizer_cls):
+    def transcribe(self, audio, **params):
+
+  class SherpaOnnxParakeetBackend(SherpaOnnxOfflineBackend):
+    def _create_recognizer(self, recognizer_cls):
+
+  class SherpaOnnxMoonshineBackend(SherpaOnnxOfflineBackend):
+    def _create_recognizer(self, recognizer_cls):
+
+  class SherpaOnnxParakeetEngine(BaseTranscriptionEngine):
+    def __init__(self, config, backend=None, backend_cls=None):
+    def transcribe(self, audio, language=None, use_prompt=True):
+
+  class SherpaOnnxMoonshineEngine(BaseTranscriptionEngine):
+    def __init__(self, config, backend=None, backend_cls=None):
+    def transcribe(self, audio, language=None, use_prompt=True):
+
+[@0143] whisper_cpp_engine.py:
+
+  class PyWhisperCppBackend:
+    def __init__(self, config, model_cls=None):
+    def _load_model_class():
+    def transcribe(self, audio, **params):
+
+  class WhisperCppEngine(BaseTranscriptionEngine):
+    def __init__(self, config, backend=None, backend_cls=None):
+    def transcribe(self, audio, language=None, use_prompt=True):
+
+[@0144] credential_redaction.py:
+  KROKO_CREDENTIAL_ENV_NAMES = (...)
+  _CREDENTIAL_KEYS = {...}
+  _OPTION_CONTEXT_KEYS = {...}
+  _LABELLED_SECRET = r
+  def _normalized(value: Any) -> str:
+  def _child_context(current: bool, key: Any) -> bool:
+  def _secret_key(key: Any, context: bool) -> bool:
+  def redact_kroko_credentials(
+  def kroko_credential_values(value: Any, *, _context: bool = False) -> Tuple[str, ...]:
+  def redact_secret_text(value: Any, extra_values: Iterable[Any] = ()) -> str:
+
+[@0145] event_logging.py:
+  CONTEXT_FIELDS = {...}
+  _DROP_FIELD = o
+  _SECRET_KEYS = {...}
+  _AUDIO_KEYS = {...}
+  _TRANSCRIPT_KEYS = {...}
+  _QUERY_KEYS = {...}
+  _SECRET_TEXT_PATTERN = r
+  _BEARER_PATTERN = r
+  def _normalized_key(value: Any) -> str:
+  def _sanitize_string(value: str, key: str) -> str:
+  def sanitize_event_value(
+
+  class BoundedPriorityEventQueue:
+    def __init__(self, maxsize: int):
+    def put_nowait(self, item, priority: int):
+    def get(self):
+    def task_done(self):
+    def join(self):
+    def close(self):
+  def utc_timestamp() -> str:
+  def resolve_calendar_timezone(name: str):
+  def resolve_log_level(value: Any) -> int:
+  def apply_process_log_level(value: Any) -> str:
+  def _calendar_root(configured: Optional[str], fallback: str) -> Optional[Path]:
+
+  class CalendarJsonlSink:
+    def __init__(
+    def _day_for(self, timestamp: str):
+    def _base_path(self, day) -> Path:
+    def _segment_path(self, base_path: Path) -> Path:
+    def _ensure_stream(self, timestamp: str, line_bytes: int):
+    def _cleanup(self, current_day):
+    def write(self, event: Dict[str, Any]):
+    def current_path(self) -> Optional[Path]:
+    def close(self):
+
+  class SQLiteEventStore:
+    def __init__(self, path: Path):
+    def set_retention(self, retention_days: Dict[str, int]):
+    def _prune_if_due(self, now=None):
+    def append(self, event: Dict[str, Any]) -> int:
+    def _cursor_high_watermark_locked(self) -> int:
+    def latest_cursor(self) -> int:
+    def oldest_cursor(self) -> int:
+    def retention_cursor(
+    def query(
+    def close(self):
+
+  class StructuredEventHub:
+    def __init__(self, settings):
+    def configure(self, settings):
+    def _next_cursor(self) -> int:
+    def _priority(channel: str, event: str, severity: str) -> int:
+    def emit(
+    def _enqueue(self, target, payload, priority):
+    def _run_worker(self, target, callback):
+    def _run_file(self):
+    def _run_stdout(self):
+    def _run_control(self):
+    def _write_file(self, payload):
+    def _write_stdout(payload):
+    def _record_sink_drop(self, sink, payload, failed=False):
+    def _enqueue_control(self, payload, *, critical=False):
+    def _derived_store_state(self):
+    def _set_store_state(self, state, *, capability, error=None):
+    def _publish_control(self, payload):
+    def subscribe(
+    def subscribe_async(
+      def deliver(payload):
+        def put():
+    def unsubscribe(self, subscription_id: str):
+    def query(self, **filters):
+    def latest_cursor(self) -> int:
+    def oldest_cursor(self) -> int:
+    def retention_cursor(self, **filters) -> int:
+    def store_status(self):
+    def store_available(self) -> bool:
+    def drop_counts(self):
+    def flush(self):
+    def close(self):
+
+  class ChannelLogManager:
+    def __init__(
+    def configure(self, settings):
+    def event(self, event, **fields):
+    def flush(self):
+    def close(self):
+
+[@0146] install_packages.py:
+  def check_and_install_packages(packages):
+
+[@0147] openai_compat.py:
+  SUPPORTED_AUDIO_EXTENSIONS = {...}
+  SUPPORTED_RESPONSE_FORMATS = {...}
+  SUPPORTED_TIMESTAMP_GRANULARITIES = {...}
+
+  class OpenAIRequestError(ValueError):
+    def __init__(self, message, param=None, code=None, status_code=400):
+
+  class OpenAITranscriptionRequest:
+  def _as_bool(value, name):
+  def _as_float(value, name, default, minimum=0.0, maximum=1.0):
+  def _form_list(form, name, split_commas=True):
+  def parse_transcription_form(form):
+  def validate_audio_filename(filename):
+  def openai_error(message, param=None, code=None, error_type="invalid_request_error"):
+  def _fallback_segments(text, duration):
+  def _segments(result, duration):
+  def _words(result):
+  def _usage(duration):
+  def _logprobs(result):
+  def format_json_response(request, result, duration):
+  def _timestamp(seconds, separator=","):
+  def format_caption_response(request, result, duration):
+  def sse_data(payload):
+
+[@0148] operations.py:
+  FASTER_MODEL_ROOT_ENV = "..."
+  KROKO_MODEL_ROOT_ENV = "..."
+  AUDIT_EVENT_MESSAGES_DE = {...}
+  PERFORMANCE_EVENT_MESSAGES_DE = {...}
+  _RUNTIME_CONFIG_WRITE_LOCK = t
+
+    class _ProcessMemoryCountersEx(ctypes.Structure):
+  def _utc_now():
+  def process_memory_snapshot():
+  def _ctranslate_model_path(path):
+
+  class LocalModelRegistry:
+    def __init__(self, faster_root=None, kroko_root=None):
+    def _configured_aliases(self):
+    def list_models(self):
+    def aliases_for(self, engine, configured_model):
+    def resolve(self, requested, preferred_engine=None):
+
+  class WakeWordRegistry:
+    def __init__(self, catalog_authority=None):
+    def _snapshot(self):
+    def openwakeword_models(self, framework="onnx"):
+    def resolve_openwakeword(self, model_ids, framework="onnx"):
+    def catalog(self, framework="onnx"):
+    def _entry_dict(entry, artifact, preferred):
+
+  class AuditLogManager:
+    def __init__(self, settings, event_hub=None):
+    def hub(self):
+    def configure(self, settings, configure_hub=True):
+    def event(self, event, **fields):
+    def archive_audio(self, data, original_filename, request_id):
+    def close(self):
+
+  class PerformanceLogManager:
+    def __init__(self, settings, event_hub=None):
+    def hub(self):
+    def configure(self, settings, configure_hub=True):
+    def event(self, event, **fields):
+    def close(self):
+
+  class RuntimeConfigStore:
+    OVERLAY_FIELD = "..."
+    REVISION_FIELD = "..."
+    def __init__(self, path=None):
+    def load(self):
+    def save(self, settings, allowed_names):
+    def save_settings_control(self, overlay, revision):
+    def load_control(self):
+    def _write_merged(self, new_fields):
+    def _read_payload(self):
+
+[@0149] server.py:
+
+[@0150] stt_cli_client.py:
+  DEFAULT_CONTROL_URL = "..."
+  DEFAULT_DATA_URL = "..."
+  def main():
+    def clear_line():
+    def write(text):
+    def on_realtime_transcription_update(text):
+      def set_post_speech_silence_duration(duration: float):
+      def preprocess_text(text):
+      def ends_with_ellipsis(text: str):
+      def sentence_end(text: str):
+
+[@0151] stt_model_management.py:
+  DISCOVERED = "..."
+  VALIDATED = "..."
+  LOAD_VERIFIED = "..."
+  MINIMUM_READY = "..."
+  NOT_READY = "..."
+  ROLE_FINAL = "..."
+  ROLE_REALTIME = "..."
+  REQUIRED_ROLES = f
+  _COMMUNITY_LICENSE_CLASSES = f
+  _TARGET_LOCKS_GUARD = t
+  def installed_kroko_variant() -> str:
+  def normalize_engine(value: Any) -> str:
+  def _as_bool(value: Any) -> bool:
+  def _stage_name(name: str) -> bool:
+  def _safe_error(error: Any, secrets: Iterable[Any] = ()) -> str:
+
+  class ProductModel:
+    def __post_init__(self) -> None:
+    def public_dict(self) -> Dict[str, Any]:
+
+  class OperatorIntent:
+    def from_settings(cls, settings: Any) -> "OperatorIntent":
+      def add_legacy_paths(engine: str, options: Any) -> None:
+    def engine_config(self, engine: str) -> Mapping[str, Any]:
+    def model_config(self, model: ProductModel) -> Mapping[str, Any]:
+    def engine_enabled(self, engine: str) -> bool:
+    def model_enabled(self, model: ProductModel) -> bool:
+    def effective_auto_download(self, model: ProductModel) -> bool:
+    def auto_download_scope(self, model: ProductModel) -> Tuple[str, ...]:
+    def priority(self, model: ProductModel) -> Optional[int]:
+
+  class ModelCandidate:
+    def public_dict(self) -> Dict[str, Any]:
+
+  class ModelSnapshot:
+    def minimum_ready(self) -> bool:
+    def public_dict(self) -> Dict[str, Any]:
+  def default_product_authority() -> Tuple[ProductModel, ...]:
+
+  class FasterWhisperAdapter:
+    def _model_path(path: Path) -> Optional[Path]:
+    def discover(
+    def _friendly_id(name: str) -> str:
+    def _matches(product: ProductModel, value: str) -> bool:
+    def validate(candidate: ModelCandidate, product: Optional[ProductModel]) -> ModelCandidate:
+
+  class KrokoAdapter:
+    def discover(
+    def validate(candidate: ModelCandidate, product: Optional[ProductModel]) -> ModelCandidate:
+
+  class AtomicModelProvisioner:
+    def __init__(
+    def _download(source: str, destination: Path) -> Optional[str]:
+    def _is_writable(root: Path) -> bool:
+    def choose_target(self, product: ProductModel, roots: Sequence[Path]) -> Path:
+    def provision(self, product: ProductModel, roots: Sequence[Path]) -> Path:
+    def _verified(product: ProductModel, path: Path) -> bool:
+
+  class STTModelManager:
+    def __init__(
+    def default_root(self, engine: str) -> Path:
+    def discovery_roots(
+    def provisioning_roots(self, engine: str) -> Tuple[Path, ...]:
+    def find_product(self, engine: str, requested: str) -> Optional[ProductModel]:
+    def locate_local_path(
+    def resolve_license_uuid(
+    def local_license_candidates(
+    def status(self) -> Dict[str, Any]:
+    def readiness_summary(self) -> Dict[str, Any]:
+    def snapshot(self) -> ModelSnapshot:
+    def _filter_snapshot_by_license(
+    def restore_last_known_good(
+    def refresh(self) -> ModelSnapshot:
+    def _build_snapshot(self) -> ModelSnapshot:
+      def probe(item: ModelCandidate) -> Optional[ModelCandidate]:
+    def _find_product(self, engine: str, requested: str) -> Optional[ProductModel]:
+    def _find_candidate(
+    def _kroko_license_allows(
+    def _eligible(
+    def candidate_eligible(
+    def _provision(
+
+  class ManagedModelRegistryView:
+    def __init__(self, manager: STTModelManager) -> None:
+    def list_models(self) -> list:
+    def _tokens(value: Any) -> set:
+    def aliases_for(self, engine: str, configured_model: Any) -> set:
+    def resolve(self, requested: Any, preferred_engine: Optional[str] = None):
+
+[@0152] stt_server.py:
+  FORMAT = p
+  CHANNELS = 1
+
+  class bcolors:
+    HEADER = '...'
+    OKBLUE = '...'
+    OKCYAN = '...'
+    OKGREEN = '...'
+    WARNING = '...'
+    FAIL = '...'
+    ENDC = '...'
+    BOLD = '...'
+    UNDERLINE = '...'
+  def preprocess_text(text):
+  def debug_print(message):
+  def format_timestamp_ns(timestamp_ns: int) -> str:
+  def text_detected(text, loop):
+      def ends_with_ellipsis(text: str):
+      def sentence_end(text: str):
+  def on_recording_start(loop):
+  def on_recording_stop(loop):
+  def on_vad_detect_start(loop):
+  def on_vad_detect_stop(loop):
+  def on_wakeword_detected(loop):
+  def on_wakeword_detection_start(loop):
+  def on_wakeword_detection_end(loop):
+  def on_transcription_start(_audio_bytes, loop):
+  def on_turn_detection_start(loop):
+  def on_turn_detection_stop(loop):
+  def parse_arguments():
+  def _recorder_thread(loop):
+    def process_text(full_sentence):
+  def decode_and_resample(
+  def make_callback(loop, callback):
+    def inner_callback(*args, **kwargs):
+  def main():
+
+[@0153] wakeword_package_resources.py:
+  MANIFEST_NAME = "..."
+  AUXILIARY_ASSET_FILENAMES = (...)
+  def manifested_filenames(models_json_path: pathlib.Path) -> List[str]:
+  def bundled_package_data_files(asset_dir: pathlib.Path) -> List[str]:

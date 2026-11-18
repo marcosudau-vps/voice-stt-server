@@ -1,0 +1,265 @@
+{
+  "branch_note": "Checkout detached, keine Branch-Ref; Commit-Bindung verifiziert, Branch-Bindung nicht (U-01).",
+  "chapter": "03.11",
+  "commit_verification": "Checkout C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src. .git/HEAD enthält exakt a8993c5c68042d996eab680d84a5b138a214bb5d (kein ref:). .git/logs/HEAD: checkout moving from main to FETCH_HEAD. .git/FETCH_HEAD: derselbe Hash von https://github.com/marcosudau-vps/voice-stt-server.",
+  "correction_round": 1,
+  "diagram_edges": [
+    "CLI --admin-api-key --> ServerSettings.admin_api_key",
+    "Env VOICESTT_ADMIN_API_KEY --> AdminGate.configured_key",
+    "ServerSettings.admin_api_key --> AdminGate.configured_key",
+    "AdminGate.configured_key --> key_matches (compare_digest)",
+    "CLI --openai-api-key --> ServerSettings.openai_api_key",
+    "Env VOICESTT_API_KEY --> OpenAIGate.configured_key",
+    "ServerSettings.openai_api_key --> OpenAIGate.configured_key",
+    "Env KROKO_API_KEY|KROKO_ONNX_KEY|VOICESTT_KROKO_ONNX_KEY|KROKO_KEY --> effective_recognizer_key",
+    "EngineOptions(transcription/realtime/stt_engine_settings.engine_options) --> effective_recognizer_key",
+    "effective_recognizer_key --> KrokoOnnxBackend._recognizer_kwargs.key",
+    "ServerSettings --> public_dict --> /api/config und SessionSettings",
+    "ServerSettings --> RuntimeConfigStore.save --> redact_kroko_credentials(drop=True) --> runtime.json",
+    "update_settings.applied --> redact_kroko_credentials --> audit config.updated",
+    "switch_models.changed --> redact_kroko_credentials --> audit models.switched",
+    "EngineOptions/stt_engine_settings --> kroko_credential_values --> redact_secret_text --> Diagnostics/Exceptions",
+    "SettingsRegistry.secret --> patch_server/overlay load (reject)",
+    "KrokoKey --> KrokoLicenseState.bind --> HMAC revision",
+    "KrokoLicenseState.public_snapshot --> keyPresent bool (kein Key)",
+    "KROKO_*/KROKO_LICENSE -/-> Build-Env (entfernt)",
+    "runtime.json --> create_app.load --> ServerSettings.engine_options (Loader-Lücke S1-08)",
+    "Env --> os.getenv zur Request-Zeit (kein app .env loader)"
+  ],
+  "facts": [
+    {
+      "aussage": "ServerSettings enthält genau openai_api_key und admin_api_key als optionale Strings (beide STARTUP_ONLY, OPTIONAL_STRING_SETTINGS). Kein eigener Secret-Typ/Store, kein top-level Kroko-Key-Feld; Trennung via Feldklassifikation + Projektionen.",
+      "beleg": "server.py:403-513, Felder 507-508; STARTUP_ONLY 256-285 (257, 280); OPTIONAL_STRING_SETTINGS 381-390 (382, 389); settings_from_args 10684-10768, Z. 10767-10768.",
+      "evidenz": "A",
+      "gueltigkeit": "Prozesskonfiguration/Start",
+      "id": "S1-01"
+    },
+    {
+      "aussage": "AdminGate.configured_key(): settings.admin_api_key oder (falls leer) os.getenv VOICESTT_ADMIN_API_KEY. Vergleich compare_digest. Ohne Key nur lokaler Pfad; 401-Body ohne Key.",
+      "beleg": "security/admin.py:15-16, 18-22, 24-45; Test test_server_security_modularization.py:34-63.",
+      "evidenz": "A",
+      "gueltigkeit": "Admin-HTTP-Gate, pro Request",
+      "id": "S1-02"
+    },
+    {
+      "aussage": "OpenAIGate.configured_key(): settings.openai_api_key oder os.getenv VOICESTT_API_KEY. Ohne Key offen. Bei Key: exakter Bearer-Match, sonst 401 invalid_api_key + Audit authentication.failed; Body ohne Key.",
+      "beleg": "security/openai.py:14-15, 17-35; Test test_server_security_modularization.py:66-94; test_openai_compatible_endpoint.py:181.",
+      "evidenz": "A",
+      "gueltigkeit": "OpenAI-Gate, pro Request",
+      "id": "S1-03"
+    },
+    {
+      "aussage": "Asymmetrie: --admin-api-key Default=os.getenv (Env wird Prozesswert beim Start); --openai-api-key Default None (Env erst im Gate pro Request). Env-Rotation wirkt bei OpenAI immer, bei Admin nur wenn Settings-Wert leer. Nur leerer Fall getestet.",
+      "beleg": "server.py parse_args 10520-10521; settings_from_args 10767-10768; admin.py:15-16; openai.py:14-15; Test 57-63.",
+      "evidenz": "A",
+      "gueltigkeit": "Start plus Runtime-Rotation (C-01)",
+      "id": "S1-04"
+    },
+    {
+      "aussage": "YAML verbietet genau admin_api_key und openai_api_key (YAML_CONFIG_SECRET_KEYS). Vorkommen in YAML-Settings → SystemExit mit Verweis auf Env-Datei. Test prüft admin_api_key: geheim.",
+      "beleg": "server.py:10301, 10333-10390 (Prüfung 10366-10370); Test test_fastapi_server_protocol.py:167-180.",
+      "evidenz": "A",
+      "gueltigkeit": "YAML-Startkonfiguration (Namensliste; keine verschachtelten Kroko-Keys, C-02)",
+      "id": "S1-05"
+    },
+    {
+      "aussage": "public_dict() ruft redact_kroko_credentials(asdict, drop=True) und entfernt *_engine_options, openai_api_key, admin_api_key. /api/config + Session-Settings nutzen Projektion. runtimeSettings.startupOnly nennt Feldnamen, keine Werte; adminAuthRequired nur Bool.",
+      "beleg": "server.py:545-553, 8907-8916, 979-982, 1211-1216; Tests protocol_v2_settings:759-766,816-825; stt_model_management:905-915.",
+      "evidenz": "A",
+      "gueltigkeit": "öffentliche REST-/Session-Projektionen (C-06 Namen vs Werte)",
+      "id": "S1-06"
+    },
+    {
+      "aussage": "persist_settings erlaubt ACTIVE|NEW_SESSION|STARTUP_ONLY minus admin_api_key/data_root_path/openai_api_key/runtime_config_path/device/host/port. save() redigiert mit drop=True, schreibt nur Allowlist. Tests: admin_api_key fehlt; Kroko-Secrets aus Engine-Options fehlen, Nicht-Secrets bleiben.",
+      "beleg": "server.py:7959-7969; operations.py save 432-449; Tests openai_compatible:371-379, server_operations:980-987, stt_model_management:916-922.",
+      "evidenz": "A",
+      "gueltigkeit": "Legacy-runtime.json-Schreibpfad (Format 03.10)",
+      "id": "S1-07"
+    },
+    {
+      "aussage": "Startup-Load schließt Admin/OpenAI aus, aber nicht Engine-Options: nur hasattr + nicht DERIVED/3 Secrets. transcription_engine_options/realtime/stt_engine_settings ohne Re-Redaction übernommen. Manipuliertes runtime.json kann Kroko-Key injizieren; normale Pfade verhindern das, Loader nicht. Kein Test dafür.",
+      "beleg": "server.py create_app 8827-8839; persist_settings 7964-7968; operations.py load 423-430, save 432-449.",
+      "evidenz": "A (Liste) + C (Lücke)",
+      "gueltigkeit": "Start aus runtime.json (C-04)",
+      "id": "S1-08"
+    },
+    {
+      "aussage": "Kroko-Key-Präzedenz effective_recognizer_key(): zuerst recognizer.key (auch leer → unterdrückt Env); sonst nichtleeres top-level key; sonst erste nichtleere Env aus KROKO_API_KEY, KROKO_ONNX_KEY, VOICESTT_KROKO_ONNX_KEY, KROKO_KEY; sonst ''. Env pro Aufruf aus os.environ.",
+      "beleg": "kroko/credentials.py:13-18, 21-47; Tests selective_improvements:23-47, artifact_store:868-895.",
+      "evidenz": "A",
+      "gueltigkeit": "native Kroko + Lizenz-/Guard-Pfade",
+      "id": "S1-09"
+    },
+    {
+      "aussage": "Kroko-Key in transcription_engine_options/realtime/stt_engine_settings.<engine>.engine_options|options. resolved_engine_options lane-spezifisch; _kroko_lane_options final; Backend key=effective_recognizer_key(options). Kein dediziertes ServerSettings-Feld. referralcode mitgegeben, aber nicht als Secret klassifiziert.",
+      "beleg": "server.py:1276-1305, 6408-6413; kroko_onnx_engine.py:348-356, 430-438; Tests multi_user_asr:30-51, pr15_b1b2:243-245.",
+      "evidenz": "A",
+      "gueltigkeit": "Engine-Konstruktion/Start",
+      "id": "S1-10"
+    },
+    {
+      "aussage": "Kroko-Options via CLI-JSON (--engine-options, --realtime-engine-options, --stt-engine-settings), YAML (transcription_engine_options, realtime_transcription_engine_options, stt_engine_settings), PATCH stt_engine_settings (ACTIVE). transcription/realtime_engine_options STARTUP_ONLY. Key direkt unter stt_engine_settings.kroko_onnx wird redigiert, aber von resolved_engine_options nicht zurückgegeben; wirksam nur engine_options/options-Unterbaum.",
+      "beleg": "server.py:10432-10433,10443-10451,10697-10708,10317-10324,218-220,7826-7892,1299-1304; Test stt_model_management:877-922.",
+      "evidenz": "A (Wirksamkeitsfalle C)",
+      "gueltigkeit": "Konfigurationspfade Start/Patch (C-05)",
+      "id": "S1-11"
+    },
+    {
+      "aussage": "YAML-Sperre greift nicht für verschachtelte Kroko-Keys: stt_engine_settings/Engine-Options sind generische DICT_SETTINGS (beliebige dicts ok); Secret-Prüfung nur zwei Top-Level-Namen. Kroko-Key in YAML unter stt_engine_settings...engine_options.key oder transcription_engine_options.key möglich, obwohl Meldung generelle Sperre suggeriert. Kein Test.",
+      "beleg": "server.py coerce 1263-1266, load_yaml 10360-10390, YAML_CONFIG_SECRET_KEYS 10301.",
+      "evidenz": "A + C",
+      "gueltigkeit": "YAML-Start (C-02)",
+      "id": "S1-12"
+    },
+    {
+      "aussage": "Redaction rekursiv+kontextsensitiv: _CREDENTIAL_KEYS (apikey, krokoapikey, krokokey, krokoonnxkey, voicestt...), _OPTION_CONTEXT_KEYS (...engineoptions, sttenginesettings, kroko, ...). Blankes key nur im Kontext Secret; außerhalb Business-Key. drop=True entfernt, sonst [REDACTED]; Mapping/list/tuple rekursiv.",
+      "beleg": "credential_redaction.py:10-100 (17-23, 24-33, 53-55, 58-100); Test stt_model_management:634-658.",
+      "evidenz": "A",
+      "gueltigkeit": "alle Projektionen/Diagnosen (N-06: namensbasiert)",
+      "id": "S1-13"
+    },
+    {
+      "aussage": "Text-Redaction für Kroko/Engine-Kontext: kroko_credential_values() sammelt Options-/STT-Secrets; redact_secret_text ersetzt diese plus aktuelle Env-Werte (längste zuerst) und redigiert Label-Muster key:/api_key:/kroko*key= per Regex. Via _safe_stt_error/redact_secret_text verschwinden Options-/Env-Secrets aus Meldungen. Nur aktuelle Env-Werte (ohne extra_values kein alter). password:/Bearer-Maskierung gehört NICHT hierher, sondern in event_logging (S1-16).",
+      "beleg": "credential_redaction.py:103-121,124-138; server.py:7049-7063; stt_model_management.py:75-77,898,949,1283; Tests:654-658,665-690.",
+      "evidenz": "A",
+      "gueltigkeit": "Fehler-/Diagnosetexte (rotierter alter Env ohne extra_values nicht abgedeckt)",
+      "id": "S1-14",
+      "review_fix": "2026-11-08 R1-F1: password/Bearer-Anteil nach S1-16 verlagert (credential_redaction deckt nur Key-Varianten ab)."
+    },
+    {
+      "aussage": "Model-Management: Redaction als Projektion, nicht Löschung im Intent. OperatorIntent kopiert stt_engine_settings in engines, sammelt redaction_values (repr=False). status() ohne Intent-Engines, Diagnostics redigiert. Intent kann Rohwerte im Speicher halten.",
+      "beleg": "stt_model_management.py:158-236 (167-171,174-236), 780-813; Tests:665-690,575-603.",
+      "evidenz": "A/B",
+      "gueltigkeit": "Diagnostics (U-05: kein repr-Logging-Beleg, engines unredigiert)",
+      "id": "S1-15"
+    },
+    {
+      "aussage": "Logs/Audit nur redigiert: event_logging entfernt Secret-Felder via normalisierte _SECRET_KEYS + Suffixe, redigiert Bearer/Label-Secrets. update_settings audit config.updated redigiert; switch_models models.switched + Performance via public_changed.",
+      "beleg": "event_logging.py:31-53,79-83,116-186; server.py:7945-7946,8139-8149,8235-8243.",
+      "evidenz": "A",
+      "gueltigkeit": "Audit-/Event-/Performance-Logs (Mechanik 03.10/05.x, hier nur Redaction)",
+      "id": "S1-16"
+    },
+    {
+      "aussage": "Registry secret nur Sperr-Markierung, kein Store: patch_server weist secret mit read_only_runtime_authority ab; Overlay mit secret → ValueError; server_public nur Metadaten + redacted:true. Produktive builtins ohne secret=true; kroko.forceCommunity Policy-Key, kein Secret. schema_payload/to_schema_dict filtern secret NICHT (künftige Definition erschiene mit Key/Typ/defaultValue).",
+      "beleg": "settings_control.py:170-212 (198), 646-648, 663-669, 1212-1215, 1309-1317, 1407-1437; Tests:402-420,817-833,106-115 (synthetisch).",
+      "evidenz": "A/B",
+      "gueltigkeit": "Control-Plane (C-03: Werte geschützt, Metadaten nicht)",
+      "id": "S1-17"
+    },
+    {
+      "aussage": "GET /api/v2/settings/schema setzt secretsExposed:false als Literal (nicht berechnet); Server-Route liefert server_public(). Tests: kein Secret-Wert/\"field\"-Name in Schema/Server-Read/Patch/Wake-Antwort.",
+      "beleg": "server.py:9223-9242; Tests protocol_v2_settings:740-775,816-825,845-857.",
+      "evidenz": "A",
+      "gueltigkeit": "v2-Settings-API (C-03: Deklaration, kein Beweis gegen künftige secret-Definition)",
+      "id": "S1-18"
+    },
+    {
+      "aussage": "KrokoLicenseState speichert Key nicht: _key_revision HMAC-SHA256 mit prozesszufälligem Secret; public_snapshot nur status/generation/scope/proEnabled/modelUuid/keyPresent(Bool)/forceCommunity/reasonCode – kein Key/Fingerprint. Gates nutzen Projektion.",
+      "beleg": "kroko/license_state.py:20-26,109-128; security/kroko.py:73-120.",
+      "evidenz": "A",
+      "gueltigkeit": "Lizenzstatus/Snapshot (Mechanik 05.06, hier nur Projektion)",
+      "id": "S1-19"
+    },
+    {
+      "aussage": "Native Builds/Artefakte ohne Kroko-Keys: sanitize_build_subprocess_env entfernt vier Key-Namen + KROKO_LICENSE-Switch (Linux+Windows); linux_build_env nutzt Bereinigung. Tests: Keys fehlen in Build-Env, Secret fehlt in Metadaten/Wheel/public_dict, Docker-Args ohne KROKO_API_KEY.",
+      "beleg": "install_kroko.py:47-52,90-115,1495-1543; Tests artifact_store:788-847, build_production:185-188,259-260.",
+      "evidenz": "A",
+      "gueltigkeit": "Native Builds/Release (KROKO_LICENSE kein Secret, aber isoliert)",
+      "id": "S1-20"
+    },
+    {
+      "aussage": "Kein .env-Loader im Python-Server: kein load_dotenv-Aufruf; Admin/OpenAI/Kroko lesen os.environ direkt. YAML-Fehlermeldung beschreibt Deployment-Vertrag, keinen Loader. Env-Eintrag außerhalb Python-Scope.",
+      "beleg": "os.getenv/environ in admin.py:16, openai.py:15, credentials.py:42-46; load_dotenv nur examples/; keine Anwendungstreffer.",
+      "evidenz": "B",
+      "gueltigkeit": "Deployment/Start (U-02 Mechanismus)",
+      "id": "S1-21"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-01",
+      "thema": "Kein eigener Secret-Typ/Store; Secrets = ServerSettings-Felder bzw. Engine-Options-Einträge (S1-01)."
+    },
+    {
+      "id": "N-02",
+      "thema": "Kein .env-Loader im Server; Env vom Deployment/Prozessmanager (S1-21/U-02)."
+    },
+    {
+      "id": "N-03",
+      "thema": "Keine YAML-Sperre für verschachtelte Kroko-Keys; nur zwei Top-Level-Namen (S1-12/C-02)."
+    },
+    {
+      "id": "N-04",
+      "thema": "Keine Schema-Filterung für secret=True (S1-17/C-03)."
+    },
+    {
+      "id": "N-05",
+      "thema": "Keine Load-Time-Redaction/Filter für Engine-Options (S1-08/C-04)."
+    },
+    {
+      "id": "N-06",
+      "thema": "Keine Redaction unbekannt benannter Felder; namensbasiert (S1-13)."
+    },
+    {
+      "id": "N-07",
+      "thema": "Keine produktiven secret=True-Definitionen; Admin/OpenAI-Keys keine Registry-Keys (S1-17)."
+    }
+  ],
+  "researcher_session": "ses_e43b08dbdffeIM6NqZddj3JGO",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-01",
+      "thema": "Branch im detached Checkout nicht verifizierbar; nur Commit (S1-01)."
+    },
+    {
+      "id": "U-02",
+      "thema": "Wie Env-Datei in Prozess gelangt (Compose/Shell/systemd/env_file): außerhalb Python-Scope (S1-21)."
+    },
+    {
+      "id": "U-03",
+      "thema": "Admin-Key-Rotation zur Laufzeit: Code snapshottet Admin-Env im Standardstart (S1-04/C-01)."
+    },
+    {
+      "id": "U-04",
+      "thema": "Ob Key direkt unter stt_engine_settings.kroko_onnx außerhalb engine_options/options an Engine gelangt: kein Pfad gefunden (S1-11/C-05)."
+    },
+    {
+      "id": "U-05",
+      "thema": "Ob Drittcode/Logging repr(Settings/Intent) ausgibt: kein Settings-repr-Logging gefunden, kein __repr__-Schutz (S1-15)."
+    },
+    {
+      "id": "U-06",
+      "thema": "Externe Kroko-Lizenz-API-Details: 05.06, nicht diese Akte (S1-19)."
+    }
+  ],
+  "writer_notes": "Drei Familien trennen (Admin, OpenAI, Kroko; nur erste zwei ServerSettings-Felder). Secret-Name vs. Wert unterscheiden. Projektionsmatrix: public_dict//api/config/Session, save, Audit/Event, Schema, Lizenz-Snapshot, Build. Drei Warnkästen: C-01 Admin-Env-Snapshot, C-02 YAML-Verbot nicht für verschachtelte Kroko-Keys, C-04 manipuliertes runtime.json injiziert Engine-Options.",
+  "conflicts": [
+    {
+      "id": "C-01",
+      "thema": "Admin/OpenAI-Env-Timing asymmetrisch: Admin-Env wird Prozesswert beim Start, OpenAI-Env bleibt Request-Fallback (S1-04)."
+    },
+    {
+      "id": "C-02",
+      "thema": "YAML-Verbot vs. verschachtelte Kroko-Keys: Meldung suggeriert Generalsperre, Loader prüft nur zwei Namen (S1-05/S1-12)."
+    },
+    {
+      "id": "C-03",
+      "thema": "secretsExposed:false vs. ungefiltertes Schema: aktuell sauber (keine secret-Definitionen), aber keine Garantie (S1-17/S1-18)."
+    },
+    {
+      "id": "C-04",
+      "thema": "Persistenz-Redaction vs. Startup-Load: normale Pfade entfernen Keys, manipuliertes runtime.json injiziert sie (S1-08)."
+    },
+    {
+      "id": "C-05",
+      "thema": "stt_engine_settings-Key: redigiert, aber nicht via resolved_engine_options wirksam (S1-11)."
+    },
+    {
+      "id": "C-06",
+      "thema": "Secret-Namen vs. Werte: Namen (startupOnly-Liste) sichtbar, Werte nie (S1-06)."
+    }
+  ]
+}

@@ -1,0 +1,238 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD). Nur Commit bindend.",
+  "chapter": "07.10",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached). VERSION 2.0.0.",
+  "conflicts": [
+    {
+      "id": "C-01",
+      "thema": "candidateRun: build_candidate befuellt, Workflow manifest build nicht ({})."
+    },
+    {
+      "id": "C-02",
+      "thema": "Assembly-Timestamp wird durch qualify ohne --timestamp ersetzt (Qualifikationszeitpunkt)."
+    },
+    {
+      "id": "C-03",
+      "thema": "Wheel-Smoke einziger Gate-Block ohne Test (Inventar real ausgefuehrt)."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [
+    "E1 dispatch->candidate-linux",
+    "E2 dispatch->build-windows",
+    "E3 build-windows->candidate-windows",
+    "E4 candidate-linux->candidate",
+    "E5 candidate-windows->candidate",
+    "E6 source-identity->Build",
+    "E7 fingerprints->Cache-Key/Store",
+    "E8 Cache/Store->Build",
+    "E9 Build->Staging-Push+Digest-Ruecklesung",
+    "E10 Build->CANDIDATE_DIR (build/dist/staging JSON+whl)",
+    "E11 linux Build->--install-Quali->identity-qualification-linux.json",
+    "E12 build-windows->Identitaet (ohne Install)->Upload build",
+    "E13 win Download->native --install->identity-qualification-windows.json",
+    "E14 Downloads->manifest build NOT_QUALIFIED",
+    "E15 build->validate",
+    "E16 validate->Nicht-Public-Nachweis",
+    "E17 Nachweis->Wheel-Smoke",
+    "E18 Smoke->--check-reports",
+    "E19 --check-reports->manifest qualify QUALIFIED",
+    "E20 qualify->validate",
+    "E21 validate->SHA-Inventar",
+    "E22 Inventar->Verifikation",
+    "E23 Verifikation->Upload release-candidate-<commit> 90d"
+  ],
+  "facts": [
+    {
+      "aussage": "Nur workflow_dispatch (+optional context); Concurrency sha kein Abbruch; contents read; PY3.12.",
+      "beleg": "RC:28-47; test_release_workflows:142-159",
+      "evidenz": "A",
+      "gueltigkeit": "gesamter RC",
+      "id": "RC7-01"
+    },
+    {
+      "aussage": "4 Jobs: linux + build-win parallel; win braucht build-win; candidate braucht beide.",
+      "beleg": "RC:53,167,246-249,301-303; test_release_workflows:398-407",
+      "evidenz": "A",
+      "gueltigkeit": "Graph",
+      "id": "RC7-02"
+    },
+    {
+      "aussage": "Runner ubuntu/ubuntu/windows/ubuntu; nur linux packages write (Staging); sonst read; kein environment.",
+      "beleg": "RC:55,169,249,304,56-59,170-171,250-251,305-306; test_release_workflows:176-254,389-396",
+      "evidenz": "A",
+      "gueltigkeit": "Rechte/Runner",
+      "id": "RC7-03"
+    },
+    {
+      "aussage": "Dreifach-Bindung commit+tree+VERSION; clean doppelt (Workflow + require_complete); --source-tree Abgleich.",
+      "beleg": "RC:96-103,201-207,341-348; build_identity:19-68; _build_identity:163-173; release_candidate:61-68",
+      "evidenz": "A",
+      "gueltigkeit": "alle Jobs",
+      "id": "RC7-04"
+    },
+    {
+      "aussage": "Fingerprint-Cache pro Variante kroko-pro-<fp> Pfad .../pro; Linux im Builder-Container, Windows store-unabhaengig; target verhindert Kollision.",
+      "beleg": "RC:108-122,209-221; release_candidate:296-370,442-474; fingerprint:179-211",
+      "evidenz": "A",
+      "gueltigkeit": "linux/build-win",
+      "id": "RC7-05"
+    },
+    {
+      "aussage": "Privater GHCR-Push staging:<id> + Digest-Ruecklesung imagetools (sha256: sonst Error); Record digest-gepinnt private true; Login GITHUB_TOKEN.",
+      "beleg": "release_candidate:131-173; config:97-136; RC:124-142",
+      "evidenz": "A",
+      "gueltigkeit": "nur linux (--push-staging)",
+      "id": "RC7-06"
+    },
+    {
+      "aussage": "Ohne --push-staging kein digest => Assembly fail-closed (sonst nur Neubau publizierbar).",
+      "beleg": "release_candidate:176-184; candidate:47-50,149-271",
+      "evidenz": "A",
+      "gueltigkeit": "Assembly beide Wege",
+      "id": "RC7-07"
+    },
+    {
+      "aussage": "Linux erzeugt Build-/Distribution-/Staging-Manifeste + Wheel ausserhalb Checkout (--no-manifest); validate vs Identitaet/Kroko; Packaging-Test vorher am Baum.",
+      "beleg": "RC:69-94,131-142; release_candidate:192-293; qualify:35-61",
+      "evidenz": "A",
+      "gueltigkeit": "candidate-linux",
+      "id": "RC7-08"
+    },
+    {
+      "aussage": "Linux-Quali Frisch-venv ausserhalb Checkout (Env bereinigt, Offline, Constraint, install, pip/cpu check, INSTALLED_CHECK kalt/warm no-store complete Version/Commit/Dist/Runtime/Tree/Date/health/WS; genau 1 Marker; identity-qualification.json Schema1).",
+      "beleg": "RC:144-148; qualify:64-187,190-224,341-363",
+      "evidenz": "A",
+      "gueltigkeit": "candidate-linux",
+      "id": "RC7-09"
+    },
+    {
+      "aussage": "Win cross auf Linux, nur nativ qualifiziert; kein docker/buildx/release_candidate auf Win (x64); resolve verweigert Nicht-Linux/amd64/cp312.",
+      "beleg": "RC:167-296; release_candidate:303-422",
+      "evidenz": "A",
+      "gueltigkeit": "build-win/candidate-win",
+      "id": "RC7-10"
+    },
+    {
+      "aussage": "Assembly NOT_QUALIFIED (candidate-id run/attempt, tree, timestamp UTC, context, evidence run-url); liest nur Produzenten; fail-closed (Datei/Doppel/Name/Wheel/Commit/VERSION/dirty/Kroko).",
+      "beleg": "RC:329-361; cli:229-248; candidate:165-271; rc_manifest:20-286",
+      "evidenz": "A",
+      "gueltigkeit": "candidate",
+      "id": "RC7-11"
+    },
+    {
+      "aussage": "validate + Nicht-Public-Nachweis (kein Tag an HEAD, jedes staging -staging@sha256: + Digest-Bindung staging endet @digest).",
+      "beleg": "RC:363-377; cli:219-226; rc_manifest:36-161,289-299",
+      "evidenz": "A",
+      "gueltigkeit": "candidate",
+      "id": "RC7-12"
+    },
+    {
+      "aussage": "Wheel-Smoke >=2 variant Embedded (kroko+voice_stt_server, variant==), Engines exakt 2, kein engineering/; Bytes nicht Install; ungetestet.",
+      "beleg": "RC:379-404",
+      "evidenz": "B (kein Test; verwandt packaging:62-79)",
+      "gueltigkeit": "candidate alle",
+      "id": "RC7-13"
+    },
+    {
+      "aussage": "Reports-Gate erwartet {(pro,linux),(pro,win)}, liest beide Quali-JSON (Schema1 int, je 1 Wheel, nativeImport, complete, Commit/Version/Dist/Runtime/Build frisch, proven alle), rc-manifest bindet Bytes/Fingerprints.",
+      "beleg": "RC:406-409; qualify:227-338",
+      "evidenz": "A",
+      "gueltigkeit": "candidate",
+      "id": "RC7-14"
+    },
+    {
+      "aussage": "qualify Option A --evidence-ref/--context (kein --timestamp => Qualifikationszeitpunkt) + Re-Validate.",
+      "beleg": "RC:411-421; cli:251-264,494-503; rc_manifest:400-423",
+      "evidenz": "A",
+      "gueltigkeit": "candidate",
+      "id": "RC7-15"
+    },
+    {
+      "aussage": "Inventar nach Qualify rekursiv (rel posix, bytes, sha256, ohne sich), dann Verifikation (existiert/bytes/sha/rc-manifest drin/QUALIFIED); Reihenfolge erzwungen.",
+      "beleg": "RC:423-447; release_candidate:425-439",
+      "evidenz": "A",
+      "gueltigkeit": "candidate",
+      "id": "RC7-16"
+    },
+    {
+      "aussage": "Uploads Zwischen 1d error, final release-candidate-<commit> 90d (rc/sha/build/dist/staging/quali/packaging-evidence/dist).",
+      "beleg": "RC:150-162,236-244,287-296,449-463",
+      "evidenz": "A",
+      "gueltigkeit": "alle Jobs",
+      "id": "RC7-17"
+    },
+    {
+      "aussage": "Kein Tag/kein Public negativ (kein tag/gh/twine/DockerHub, nur GHCR-Staging); statisch + Laufzeit-Tag-Check.",
+      "beleg": "RC:19-23,124-129,366-377; test_release_workflows:294-305,286-292",
+      "evidenz": "A+B",
+      "gueltigkeit": "RC (Text + HEAD-Check)",
+      "id": "RC7-18"
+    },
+    {
+      "aussage": "QUALIFIED mit BLOCKED vereinbar (approval BLOCKED/VERIFIED + evidenceRef; Redistribution aus Datei, Fallback BLOCKED; RC setzt nie VERIFIED).",
+      "beleg": "rc_manifest:212-267; config:179-194; redistribution.json:1-6",
+      "evidenz": "A",
+      "gueltigkeit": "jedes RC-Manifest",
+      "id": "RC7-19"
+    },
+    {
+      "aussage": "Workflow-Pfad candidateRun {} (kein --candidate-run); Rueckverfolgung nur candidateId/evidence/Artefakt; build_candidate befuellt (Divergenz).",
+      "beleg": "RC:353-361; cli:519-522,243; rc_manifest:277,360-375; release_candidate:106-123,280-291",
+      "evidenz": "A",
+      "gueltigkeit": "GitHub-RCs",
+      "id": "RC7-20"
+    },
+    {
+      "aussage": "RC ruft Testsuite nicht (nur packaging-Identitaet); Unit/Compat = CI; Verlass auf Quali+Reports.",
+      "beleg": "RC:89-94; ci:188,191; pytest.ini:1-3",
+      "evidenz": "A",
+      "gueltigkeit": "RC",
+      "id": "RC7-21"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Keine Registry-Re-Verifikation im candidate (nur Push-Zeit)."
+    },
+    {
+      "id": "N2",
+      "thema": "Keine Signatur/SBOM/Attestation."
+    },
+    {
+      "id": "N3",
+      "thema": "Kein candidateRun im Workflow-Pfad."
+    },
+    {
+      "id": "N4",
+      "thema": "Kein BLOCKED->VERIFIED Automatismus."
+    },
+    {
+      "id": "N5",
+      "thema": "Kein Retry/Resume (nur kein Abbruch)."
+    }
+  ],
+  "researcher_session": "ses_e3728c900ffekKjFHYGL6rHAxu",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-01",
+      "thema": "GHCR staging wirklich privat (nur Feld, Registry-Einstellung)."
+    },
+    {
+      "id": "U-02",
+      "thema": "Multi-Arch Digest Index vs Plattform (nur Prefix geprüft)."
+    },
+    {
+      "id": "U-03",
+      "thema": "Cache-Miss sichtbar/gewollt (Actions-Semantik)."
+    },
+    {
+      "id": "U-04",
+      "thema": "windows-latest stellt 3.12/x64 Tools (nur setup-python x64)."
+    }
+  ],
+  "writer_notes": "Nur Ablauf/Gates (nicht Verfahren/Merge/Build). Zahlen: 4 Jobs, 1 Variante pro, 2 Plattformen, 2 Engines, >=2 Wheels, Schema3, cp312, 90/1 Tage, PY3.12. E1-E23 belegt; kein Tag/Publish/Signatur/SBOM/Release."
+}

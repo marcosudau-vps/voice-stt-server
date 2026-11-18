@@ -1,0 +1,251 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD). Nur Commit bindend.",
+  "chapter": "07.08",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached, Zeile 1 gelesen).",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "WINDOWS_XWIN_MANIFEST_URL in __all__ aber nirgends definiert (Star-Import wuerde fehlen); ersetzt durch BUNDLED_PATH/CACHE_NAME."
+    },
+    {
+      "id": "C2",
+      "thema": "PATCH_SET Kommentar-Drift (1->2,2->3, dann 5; 4 nur Builder-Block); massgeblich PATCH_SET_REVISION=5 + Guard-Digest."
+    },
+    {
+      "id": "C3",
+      "thema": "Deutsche Kommentare in artifacts.py sonst englisch (Stil, kein Verhalten)."
+    },
+    {
+      "id": "C4",
+      "thema": "Zwei Tool-Pfade: tools/build_production Shim vs engineering/tools Implementierung; zitiere engineering."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [
+    "E1 --variant/repo/revision -> fingerprint_for()",
+    "E2 buildinputs-Konstanten -> Fingerprint-Dokument",
+    "E3 Fingerprint-Dokument -> 16-Hex fingerprint",
+    "E4 fingerprint -> Store-Lookup",
+    "E5 HIT -> pip install (kein Compile)",
+    "E6 MISS -> preflight (git/cmake/OpenSSL/Docker)",
+    "E7 Preflight ok -> prepare_checkout",
+    "E8 Checkout -> ensure_pinned_revision (detached+Verify)",
+    "E9 Pin -> pristine (reset --hard + clean -fdx)",
+    "E10 Pristine -> Windows-Patchsatz + build_windows.bat --variant",
+    "E11 Pristine -> linux_build_env + pip wheel",
+    "E12 Windows -> release_artifacts/windows cp312 win_amd64",
+    "E13 Linux -> retag 1free/1pro cp312 linux_x86_64",
+    "E14 Wheel -> store.store + verify_artifact",
+    "E15 Slot -> artifact.json",
+    "E16 Slot -> pip install --force-reinstall",
+    "E17 Installation -> verify_installed_runtime",
+    "E18 _embedded_kroko.json -> verify (erste Autoritaet)",
+    "E19 Builder-Deklaration+Dockerfile -> Digest -> LINUX_BUILDER_REVISION -> Fingerprint",
+    "E20 Builder-Image -> docker run --platform linux/amd64 (Mounts)",
+    "E21 describe JSON -> resolve REUSE/build",
+    "E22 Host-Wheel -> Merge Produkt-Wheel (07.07)"
+  ],
+  "facts": [
+    {
+      "aussage": "Zwei Einstiege: stt-install-kroko CLI + python -m ENTRYPOINT Builder; ohne --build SystemExit; fingerprint/describe ohne Compile.",
+      "beleg": "setup.py:422; install_kroko.py:2153,141,2255,2172-2173,2160,2164; kroko-builder.Dockerfile:56-57",
+      "evidenz": "A",
+      "gueltigkeit": "global beide Plattformen",
+      "id": "KB7-01"
+    },
+    {
+      "aussage": "Genau free/pro case-insensitiv; Build-Tag 1free/1pro (PEP427), Fingerprint-Input + Store-Namespace.",
+      "beleg": "buildinputs.py:549-575; install_kroko.py:168-173,1607,1674; artifacts.py:219",
+      "evidenz": "A",
+      "gueltigkeit": "Linux+Windows",
+      "id": "KB7-02"
+    },
+    {
+      "aussage": "Unveraenderliche Revision (Repo/Revision/Branch-Hint getrennt); Klon Branch nur Start, dann detached checkout + Verify, sonst Error.",
+      "beleg": "buildinputs.py:26,34,40; install_kroko.py:35,187-195,590-620",
+      "evidenz": "A",
+      "gueltigkeit": "beide",
+      "id": "KB7-03"
+    },
+    {
+      "aussage": "Reuse nur bei origin==--repo (normalisiert), sonst scoped loeschen+Neuklon; vor Build reset --hard + clean -fdx.",
+      "beleg": "install_kroko.py:399-570 (prepare/checkout/normalize/origin/clone/pristine)",
+      "evidenz": "A",
+      "gueltigkeit": "nur Work-Root",
+      "id": "KB7-04"
+    },
+    {
+      "aussage": "Patchsatz 4 Dateien Revision 5 (WebSocket/OpenSSL/Buildskript/Lizenz+Shutdown); Guard-Digest gegen Drift.",
+      "beleg": "buildinputs.py:46-51,79; install_kroko.py:667,1056,1124,1236-1385; fingerprint:373,346-496",
+      "evidenz": "A",
+      "gueltigkeit": "Windows+Linux license.h",
+      "id": "KB7-05"
+    },
+    {
+      "aussage": "Builder-Revisionen getrennt Windows 5 / Linux 2; beide Fingerprint-Inputs (plattformspezifisch).",
+      "beleg": "buildinputs.py:131-136,566; fingerprint.py:206-208; fingerprint:100-116,475-492,1533-1540",
+      "evidenz": "A",
+      "gueltigkeit": "getrennt",
+      "id": "KB7-06"
+    },
+    {
+      "aussage": "Windows-Toolchain voll deklariert (Base-Digest, apt-Snapshot, Clang/NSIS, CMake+xwin-SHA, Channel+vsman+SDK/CRT/CPython/Redist/OpenSSL/openfst/Packaging); offline hashbar.",
+      "beleg": "buildinputs.py:306-481; Channel-JSON existiert; fingerprint:1054-1299",
+      "evidenz": "A",
+      "gueltigkeit": "Windows-Crossbuild Container",
+      "id": "KB7-07"
+    },
+    {
+      "aussage": "Windows hart CPython3.12 x64 amd64 + Docker version; Patches + Manifest-Stage + build_windows.bat --variant; Suche cp312 win_amd64 1free/1pro neuestes.",
+      "beleg": "install_kroko.py:1388-1478,154-161,1352-1385,1440-1464",
+      "evidenz": "A",
+      "gueltigkeit": "Windows-Host",
+      "id": "KB7-08"
+    },
+    {
+      "aussage": "Linux CPU-only exakt 8 Flags (GPU/PortAudio/TTS/Diarization/Binary OFF, WS ON, kein preinstalled ONNX) + -j2.",
+      "beleg": "buildinputs.py:138-161; install_cpu:67-86; fingerprint:911-930",
+      "evidenz": "A",
+      "gueltigkeit": "Linux nativ",
+      "id": "KB7-09"
+    },
+    {
+      "aussage": "Linux-Env ersetzt (4 Keys+KROKO_LICENSE + Ambient-Liste gestrippt), dann CMAKE/MAKE + KROKO_LICENSE ON/OFF + optional OPENSSL_ROOT.",
+      "beleg": "install_kroko.py:47-113,1495-1545; buildinputs.py:63-87,253-265",
+      "evidenz": "A",
+      "gueltigkeit": "Linux (Windows nur Strip)",
+      "id": "KB7-10"
+    },
+    {
+      "aussage": "Linux pip wheel . --no-deps nach release_artifacts/linux; Retag 1free/1pro in Name+WHEEL, RECORD neu, atomar replace, Tag-Konflikt abgelehnt.",
+      "beleg": "install_kroko.py:1566-1741; install_cpu:31-56",
+      "evidenz": "A",
+      "gueltigkeit": "Linux (Tag bleibt Build-Tag)",
+      "id": "KB7-11"
+    },
+    {
+      "aussage": "Builder-Image digest-gepinnt, apt+pip gepinnt, COPY-Whitelist, Deklaration+Dockerfile gemeinsam gehasht (Guard).",
+      "beleg": "kroko-builder.Dockerfile:27-54; buildinputs.py:202-248; fingerprint:1488-1575; production_contract:91-109",
+      "evidenz": "A",
+      "gueltigkeit": "linux/amd64 Builder",
+      "id": "KB7-12"
+    },
+    {
+      "aussage": "Builder build/run --platform linux/amd64 Mounts store/work + Env; describe read-only vs build bei Miss; Host-Pfad-Mapping; Gesamtlauf.",
+      "beleg": "build_production.py:35-36,275-433,702; tools Shim 21 Zeilen",
+      "evidenz": "A",
+      "gueltigkeit": "Produktion/Release",
+      "id": "KB7-13"
+    },
+    {
+      "aussage": "Nie Kroko-Compile im Produktionsimage (kein AS/kein --from, keine Keys); Abort statt Verschieben.",
+      "beleg": "production_contract:43-44,156-157,112-162,151-153; build_production.py:390-398",
+      "evidenz": "A",
+      "gueltigkeit": "Produktions-Image",
+      "id": "KB7-14"
+    },
+    {
+      "aussage": "Fingerprint kanonisch (sort_keys/kompakt) Schema1 16-Hex; Felder upstream/variant/target/python/build/toolchain; keine Version/Dateien.",
+      "beleg": "fingerprint.py:33-231; install_kroko.py:2058-2078",
+      "evidenz": "A",
+      "gueltigkeit": "global",
+      "id": "KB7-15"
+    },
+    {
+      "aussage": "Windows IDs gepinnt free 8b6d.. pro 54b5.. (cp312/amd64); historisch b28b../26d5..; Linux bewusst kein Pin (Host-Toolchain).",
+      "beleg": "fingerprint:61-98; fingerprint.py:104-138",
+      "evidenz": "A",
+      "gueltigkeit": "Windows Commit-gebunden",
+      "id": "KB7-16"
+    },
+    {
+      "aussage": "Toolchain Windows deklariert+Digest hostunabhaengig; Linux geprobt (CMake/C/C++/OpenSSL Header/Lib SHA), Generator nicht.",
+      "beleg": "fingerprint.py:84-138; install_kroko.py:1914-2055",
+      "evidenz": "A",
+      "gueltigkeit": "Win stabil, Linux hostabhaengig",
+      "id": "KB7-17"
+    },
+    {
+      "aussage": "Store ausserhalb Repo variant/fingerprint Slots, .staging/.locks, OS-Lock crash-recoverable 1800s/0.05s nie geloescht, atomar replace+Rollback+Backup-Purge, lookup lock-frei wenn gesund, Retention 30d/0=aus schuetzt aktuell+LKG.",
+      "beleg": "artifacts.py:47-894; Store-Tests",
+      "evidenz": "A",
+      "gueltigkeit": "beide",
+      "id": "KB7-18"
+    },
+    {
+      "aussage": "artifact.json Schema1 Fingerprint+Inputs+Repo/Revision/Variante/Ziel/Python/Flags/Toolchain/Wheel-Name/SHA/Bytes/Tags/BuildTag/builtAt (nicht Fingerprint); kein fingerprint.json.",
+      "beleg": "artifacts.py:87-383; Suche fingerprint.json 0",
+      "evidenz": "A",
+      "gueltigkeit": "einzige Provenienz ausser Wheel",
+      "id": "KB7-19"
+    },
+    {
+      "aussage": "Verify sammelt alle Fehler (Schema/Fingerprint/Variante/Bytes/SHA/Tag/Inputs/Ziel/Arch/ABI/Plattform); WHEEL-Dokument Autoritaet; installiert: Import + embedded-zuerst sonst Build-Tag, Gleichheit sonst problem.",
+      "beleg": "artifacts.py:219-489,1051-1106; install_kroko.py:2240-2252",
+      "evidenz": "A",
+      "gueltigkeit": "beide",
+      "id": "KB7-20"
+    },
+    {
+      "aussage": "Merge schreibt _embedded_kroko.json Schema1 (Variante/Distribution/Version/Kroko-Details/Tags, installed-distribution, key-nur-Credential); Notices vs sources.json byte-exakt; Redistribution BLOCKED.",
+      "beleg": "_embedded.py:14-52; build_distribution.py:201-380; sources.json; redistribution.json",
+      "evidenz": "A",
+      "gueltigkeit": "Produkt (Merge 07.07)",
+      "id": "KB7-21"
+    },
+    {
+      "aussage": "Reuse-by-default: Fingerprint+Lookup vor Preflight; HIT ohne Compile installieren; MISS Preflight/Checkout/Build/Verify/Store/install; rebuild erzwingt; describe JSON.",
+      "beleg": "install_kroko.py:2116-2237,2145-2150,378-396,314-355",
+      "evidenz": "A",
+      "gueltigkeit": "global",
+      "id": "KB7-22"
+    },
+    {
+      "aussage": "Nur Windows+Linux; sonst Error mit Upstream-Hinweis; Arch-Gate nur Windows; Container linux/amd64.",
+      "beleg": "install_kroko.py:1788-1800,1416-1421; build_production.py:312,360",
+      "evidenz": "B",
+      "gueltigkeit": "CLI (Linux arm64 UNKNOWN)",
+      "id": "KB7-23"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Kein Linux-Arch-Gate (aarch64); nur Windows + Docker --platform. Verhalten arm64 UNKNOWN."
+    },
+    {
+      "id": "N2",
+      "thema": "Kein separates Fingerprint-Artefakt/Signatur/Attestation (nur artifact.json)."
+    },
+    {
+      "id": "N3",
+      "thema": "install_windows/install_linux nie von main aufgerufen (nur Test); produktiv build_wheel."
+    },
+    {
+      "id": "N4",
+      "thema": "Kein Verify gegen externen Hash (nur selbstgeschrieben); Redistribution BLOCKED."
+    }
+  ],
+  "researcher_session": "ses_e3748fb5affecX7pfDby20M3M5",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Wheel-Version 1.12.9 nur Tests/Kommentare, nicht deklariert (neue Revision unbekannt)."
+    },
+    {
+      "id": "U2",
+      "thema": "linux_x86_64 vs manylinux nicht deklariert (Retag uebernimmt; beide akzeptiert)."
+    },
+    {
+      "id": "U3",
+      "thema": "Dauer/Quote/Speicher keine Quelle (Kommentare keine Messung)."
+    },
+    {
+      "id": "U4",
+      "thema": "Branch detached, nicht verifiziert."
+    }
+  ],
+  "writer_notes": "Belegbar: Warum Native-Build (Fingerprint-Dekopplung), Inputs als Code, Pin+Haertung, zwei Ketten, Fingerprint/Toolchain, Store/Verify/Provenienz, Grenzen (nur Win/Linux). Diagramm E1-E22 belegt; keine Zeiten/Erfolge."
+}

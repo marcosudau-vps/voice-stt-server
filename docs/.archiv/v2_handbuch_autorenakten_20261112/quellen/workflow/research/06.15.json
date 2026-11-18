@@ -1,0 +1,232 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar. Nur Commit a8993c5c68042d996eab680d84a5b138a214bb5d bindend.",
+  "chapter": "06.15",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached). Nur *.py/Docker/Compose/requirements/config/setup/ps1/workflows/tests als Quellen; docs/README/build-md/engineering-md/Legacy-STT verworfen.",
+  "conflicts": [
+    {
+      "id": "Z6-02",
+      "thema": "Root-requirements ohne Server-Stack; Server braucht [server]-Extra oder Server-Requirements (Stolperstelle, kein Widerspruch)."
+    },
+    {
+      "id": "Z6-12",
+      "thema": "YAML set_defaults zuletzt → überschreibt auch Env-/CLI-Defaults (data_root/max_sessions)."
+    },
+    {
+      "id": "Z6-21",
+      "thema": "Drei divergierende Werte: config.yaml (/data, max 8) vs Compose/Dockerfile (/var/lib/voicestt) vs Dataclass (max 4); mit VOICESTT_CONFIG verschiebt sich Stamm weg vom Volume."
+    }
+  ],
+  "correction_round": 2,
+  "diagram_edges": [
+    "Z6-01->Z6-02->Z6-03->Z6-05",
+    "Z6-03->Z6-13",
+    "Z6-03->Z6-14->Z6-15->Z6-17->Z6-19",
+    "Z6-14->Z6-19",
+    "Z6-06->Z6-20->Z6-14",
+    "Z6-07->Z6-08",
+    "Z6-07->Z6-12->Z6-18",
+    "Z6-09->Z6-11",
+    "Z6-10->Z6-11->Z6-05",
+    "Z6-12->Z6-14",
+    "Z6-13->Z6-07",
+    "Z6-13->Z6-10",
+    "Z6-16->Z6-14",
+    "Z6-19->Z6-04",
+    "Z6-19->Z6-05",
+    "Z6-21->Z6-14",
+    "Z6-21->Z6-12",
+    "Z6-21 -| Z6-22 (Abgrenzung)"
+  ],
+  "facts": [
+    {
+      "aussage": "Einzelbenutzer lokal: venv py3.12 + Extras ([faster-whisper,silero-onnx-cpu,wakewords,kroko-builder,server,example-app] oder WHEEL[recommended,server]); CI-Smoke installiert Wheel (nicht editable) + prüft 5 Scripts.",
+      "beleg": "install_windows_cpu.ps1 Z.1-11; setup.py Z.280-317/378-380/409-424; activate_venv L24-91; ci.yml Z.87-105/141-144/188.",
+      "evidenz": "E1",
+      "gueltigkeit": "lokal Win+Linux",
+      "id": "Z6-01"
+    },
+    {
+      "aussage": "Root-requirements ohne Server-Stack (kein fastapi/uvicorn/PyYAML/multipart/sse); Server braucht [server]-Extra oder Server-Requirements (Fehlermeldung verweist selbst darauf).",
+      "beleg": "requirements.txt Z.1-17; api_fastapi_server/requirements.txt Z.1-6; server.py Z.10822-10828.",
+      "evidenz": "E1",
+      "gueltigkeit": "lokaler Start (Container: Wheel hat Extras)",
+      "id": "Z6-02"
+    },
+    {
+      "aussage": "Start: voice-stt-server/stt-server (python -m identisch); ein uvicorn-Prozess ohne workers. Defaults: 0.0.0.0/8010/cpu(nur Wahl)/int8/small/Kroko-DE-Datei/de/faster_whisper/kroko_onnx.",
+      "beleg": "setup.py Z.409-424; server.py Z.1-26/10394-10431/10830-10835; ci.yml Z.141-144.",
+      "evidenz": "E1",
+      "gueltigkeit": "alle Szenarien",
+      "id": "Z6-03"
+    },
+    {
+      "aussage": "Default-Start ohne Modell = lebend-nicht-bereit (kein Auto-Download, load_error→unhealthy, ready trotzdem gesetzt, HTTP 200). Nur Mechanismus belegt, Ergebnis nicht ausgeführt (U).",
+      "beleg": "server.py Z.498/503/10436-10441/2012-2030/2173-2178/7685-7700; setup.py Z.389-395.",
+      "evidenz": "E2/U",
+      "gueltigkeit": "lokal (+Container ohne Modelle)",
+      "id": "Z6-04"
+    },
+    {
+      "aussage": "Prüfungen: /health (ok/ready/Sessions/Speaker/rejected/scheduler/models/sttReady/sttModels/startupErrors/eventStore), /api/metrics (Snapshots+limits+ok), /api/config, /api/v2/info (Version/Commit/Status/krokoVariant/instanceId); Health auch während Laden reaktionsschnell (<0,5s).",
+      "beleg": "server.py Z.7702-7711/7685-7700/8874-8941; identity.py Z.85-108; Tests Z.393-497/2547-2561.",
+      "evidenz": "E1",
+      "gueltigkeit": "alle Szenarien",
+      "id": "Z6-05"
+    },
+    {
+      "aussage": "Ohne Admin-Key nur Loopback/testclient/::1 (sonst 403); mit Key falsch/fehlend 401 (Präzedenz x-voicestt>Bearer>x-admin). /health/metrics/config/v2-info offen.",
+      "beleg": "security/admin.py Z.8-45.",
+      "evidenz": "E1",
+      "gueltigkeit": "lokal (Container: Compose setzt Key)",
+      "id": "Z6-06"
+    },
+    {
+      "aussage": "Zulassung hart: reserve/add lehnt bei sessions+reserviert ≥ max_sessions oder Duplikat (rejectedSessions++); Reservierung zählt während Aufbau.",
+      "beleg": "server.py Z.6133-6237/7325-7370; Tests Z.950-958/1307-1341.",
+      "evidenz": "E1",
+      "gueltigkeit": "alle (>1 Client)",
+      "id": "Z6-07"
+    },
+    {
+      "aussage": "Ablehnung Leitung: v1 accept+error/admission+limits+close 1013 (+Audit session_limit); v2 session_rejected reason session_limit_reached + close 4409 (Timeout 10s). Codes E2 (kein Test-Assert).",
+      "beleg": "server.py Z.9912/9970-9986; connection.py Z.236-305; schema.py Z.202-209; Test nur Payload Z.2642-2652.",
+      "evidenz": "E1/E2",
+      "gueltigkeit": "beide Protokolle",
+      "id": "Z6-08"
+    },
+    {
+      "aussage": "Sprecherlimit: über max_active_speakers → nur Aufnahme verworfen (reject+Zähler+Warnung), Verbindung bleibt, kein Close.",
+      "beleg": "server.py Z.488/5314-5327/6201-6212; Tests Z.935-948.",
+      "evidenz": "E1",
+      "gueltigkeit": "Multiuser (unabhängig max_sessions)",
+      "id": "Z6-09"
+    },
+    {
+      "aussage": "Queues: final-Ablehnung bei Session-/Global-Tiefe; realtime coalescing (alt ersetzt) sonst global-Limit; stale bei Deadline (1500ms Default); Zähler im Snapshot. config.yaml gleiche Werte; max_sessions dort 8 vs Default 4.",
+      "beleg": "server.py Z.491-493/1756-1874/1898-1915/8298-8302; config.yaml Z.71/77-79.",
+      "evidenz": "E2 (Baustein-Referenz)",
+      "gueltigkeit": "Last",
+      "id": "Z6-10"
+    },
+    {
+      "aussage": "Überlast signalisiert: Ablehnung mit reason~voll → scheduler.overloaded (warning+IDs/lane) + queue.limit_reached; Session-Snapshot Zähler/Latenzen.",
+      "beleg": "server.py Z.4624-4666/7497-7526.",
+      "evidenz": "E2 (kein Test-Assert)",
+      "gueltigkeit": "Überlast",
+      "id": "Z6-11"
+    },
+    {
+      "aussage": "Limits live änderbar (ACTIVE: max_sessions/Speaker/Tiefen/Alter/Degradation) + persistiert + Start-Reload; YAML set_defaults zuletzt (überschreibt Env/CLI). Keine Untergrenze geprüft (0 ungetestet U).",
+      "beleg": "server.py Z.178-285/10655/7879-7892/7959-7969/8827-8842/8921-9292/9849-9892; Tests Z.2428-2447.",
+      "evidenz": "E1/U",
+      "gueltigkeit": "laufend (Volume nötig)",
+      "id": "Z6-12"
+    },
+    {
+      "aussage": "Harte Grenzen: 1 Prozess (kein workers; Store/Queue prozesslokal, kein Replica-Mechanismus); Aufnahme-Deckel 30s (Finalisierung); Ready erst nach wait_ready; Last-Harness 4 Clients + Fairness max-p95-Skew.",
+      "beleg": "server.py Z.147/489/6011-6044/8521-8545/10830-10835; run_multi_user_perf.cmd; Tests L701-864.",
+      "evidenz": "E1/E2",
+      "gueltigkeit": "Multiuser",
+      "id": "Z6-13"
+    },
+    {
+      "aussage": "Compose: genau 1 Service, restart unless-stopped, init, Port 8010, Bind ./data→/var/lib/voicestt (+ro Modell-Mounts), ENV (CPU_ONLY/OFFLINE/ROOT/Keys/OMP-4/CT2/local_files_only), env_file optional, Liveness-Health (30s/10s/60s/5, nur 200).",
+      "beleg": "docker-compose.yml Z.13-90; Tests Z.170-203.",
+      "evidenz": "E1",
+      "gueltigkeit": "Container-Standard",
+      "id": "Z6-14"
+    },
+    {
+      "aussage": "Image: digest-ubuntu24.04 2 Stages, Non-Root 10001, /var/lib/voicestt Volume, EXPOSE 8010, ENTRYPOINT Servermodul + CMD-Defaults; Health liveness-only (nie ready/ok/Modell). Wheel+Extras+pip-check+CPU-Assertions; Build-Args/OCI-Labels; SERVER_COMMIT==OCI-Revision.",
+      "beleg": "Dockerfile Z.7-102; Tests Z.38-148.",
+      "evidenz": "E1",
+      "gueltigkeit": "Container",
+      "id": "Z6-15"
+    },
+    {
+      "aussage": "Build braucht fertige dist/voicestt/*.whl (Dockerfile baut kein Wheel/Kroko); Laufzeit offline (local_files_only/OFFLINE_MODELS; auto_download aus).",
+      "beleg": "Dockerfile Z.22-40; compose Z.8-19; model_resolver.py Z.10-31; server.py Z.503/10436-10441.",
+      "evidenz": "E1/E3",
+      "gueltigkeit": "Build+Start ohne Netz",
+      "id": "Z6-16"
+    },
+    {
+      "aussage": "Modelle: Managed Store data_root/models/stt/*; Discovery custom→Legacy-ENV→Store (dedup); Compose ro-Mounts /models/custom (leer→Fallback); Image-Verzeichnisse vorab.",
+      "beleg": "stt_model_management.py Z.662-699; compose Z.29-35/65-80; Dockerfile Z.76-78.",
+      "evidenz": "E1",
+      "gueltigkeit": "Container (lokal: lokaler Stamm)",
+      "id": "Z6-17"
+    },
+    {
+      "aussage": "Zustand persistiert: runtime.json im Volume (ohne admin/openai/data_root); Logs/Audio/Event; Identität gecached. Persistenz nur Codepfad belegt (U).",
+      "beleg": "server.py Z.519-532/6282-6292/7959-7969/8827-8842; Dockerfile Z.84; compose Z.60-64.",
+      "evidenz": "E1/U",
+      "gueltigkeit": "Volume (lokal: --data-root)",
+      "id": "Z6-18"
+    },
+    {
+      "aussage": "Container-Health ≠ Ready: /health 200 auch ohne Modell (sttReady false, ok true möglich); Docker-Check nur Statuscode; nicht-bereit = administrierbar, kein Neustartgrund.",
+      "beleg": "server.py Z.7685-7700/8885-8905; stt_model_management Z.815-833; Tests Z.874-903/390-451/118 + Contract Z.141-188.",
+      "evidenz": "E1",
+      "gueltigkeit": "Container + Monitoring",
+      "id": "Z6-19"
+    },
+    {
+      "aussage": "compose.py: deployment-Abschnitt→ENV (Image/Variante/Port/Threads/Pfade), Datenpfad-Anlage, fester Projektname/Datei. Werkzeug-Code E2 (kein Test); nicht portables Compose (siehe Z6-21).",
+      "beleg": "compose.py Z.13-183; test_project_config Z.23-24 (nur Keys).",
+      "evidenz": "E2",
+      "gueltigkeit": "Betreiberweg (nicht portabel)",
+      "id": "Z6-20"
+    },
+    {
+      "aussage": "Abgrenzung: öffentliches Compose vertragsfrei von Betreiber-Markern (Test); config.yaml enthält sie (URL/Pfade/free/Port/Threads). KONFLIKT: config /data+max8 vs Compose /var/lib/voicestt vs Default 4; mit --config gewinnt YAML → Stamm weg vom Volume.",
+      "beleg": "Tests Z.26-35/191-194; config.yaml Z.71/100-102/133-170; compose Z.28; Dockerfile Z.68; server.py Z.487/10655.",
+      "evidenz": "E1",
+      "gueltigkeit": "Abgrenzung (Befund, keine Empfehlung)",
+      "id": "Z6-21"
+    },
+    {
+      "aussage": "Kein VPS-Code: docker/vps/voice nur README; workflows ohne deploy/vps/ssh. VPS-Automatisierung NOT_IMPLEMENTED; Host/Proxy/TLS UNKNOWN (nicht behaupten).",
+      "beleg": "Verzeichnislisting; Grep workflows 0 Treffer; ci.yml Z.9-34.",
+      "evidenz": "E3",
+      "gueltigkeit": "VPS (Abgrenzung)",
+      "id": "Z6-22"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "Z6-22",
+      "thema": "VPS-Automatisierung: kein Compose/Dockerfile/Skript; workflows ohne deploy/vps/ssh."
+    },
+    {
+      "id": "Z6-13",
+      "thema": "Multi-Replica: kein workers, prozesslokal, keine Koordination."
+    }
+  ],
+  "researcher_session": "ses_e3d733eebffeL0RQllw1wKKnQ1",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "Z6-04",
+      "thema": "Default-Start-Ergebnis ohne Modell nicht ausgeführt (nur Mechanismus)."
+    },
+    {
+      "id": "Z6-12",
+      "thema": "Keine Untergrenze max_sessions/Speaker (0 ungetestet)."
+    },
+    {
+      "id": "Z6-16",
+      "thema": "Kein CI baut/bootet Produktions-Image."
+    },
+    {
+      "id": "Z6-18",
+      "thema": "Persistenz-Assertions nicht im Detail geprüft."
+    },
+    {
+      "id": "Z6-22",
+      "thema": "VPS-Details UNKNOWN."
+    }
+  ],
+  "writer_notes": "Mechanik nur Baustein+Verweis (Zulassung/Queue/Control/Health/Docker); Konsistenzrisiko 4-vs-8 als Präzedenzfall nennen; Einzelbenutzer = Defaults+1 Client+Loopback (kein Modus); 4 Szenarien = Kombinationen (A lokal Z6-01..06, B Multi Z6-07..13, C Container Z6-14..20, D VPS-Abgrenzung Z6-21/22); E2 als Code-Fakt kennzeichnen (Z6-08/10/11/20); E1 (Z6-19/05) trägt Health/Ready-Trennung; Brief null → NOT_REQUESTED; docs/ nie Quelle; Z6-02/Z6-21 Konfliktkästen; Z6-22 keine Anleitung; compose.py-Weg nur Tool-vorhanden oder Review-nachziehen; U offen markieren."
+}

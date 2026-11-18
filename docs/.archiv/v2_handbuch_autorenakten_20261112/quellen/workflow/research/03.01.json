@@ -1,0 +1,273 @@
+{
+  "branch_note": "Der Branch feat/v2-release-cleanup ist in diesem Klon NICHT verifizierbar: shallow clone ohne refs/heads/*, HEAD detached auf dem Commit, Reflog zeigt Checkout auf FETCH_HEAD (ausgehend von main). Commit-Bindung ist belegt, Branch-Name nicht (UNKNOWN U-01).",
+  "chapter": "03.01",
+  "commit_verification": "Verifiziert am Checkout C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src: .git/HEAD Zeile 1 enthaelt direkt a8993c5c68042d996eab680d84a5b138a214bb5d (Detached HEAD). .git/FETCH_HEAD Zeile 1 nennt denselben SHA, geholt von https://github.com/marcosudau-vps/voice-stt-server. .git/logs/HEAD Zeile 1: checkout: moving from main to FETCH_HEAD. Keine docs/README/Legacy-STT/Berichte als Quelle benutzt; nur *.py, YAML-/Compose-/Docker-Build-Dateien und Tests.",
+  "correction_round": 0,
+  "diagram_edges": [
+    "K1-10: [config.yaml] --> load_yaml_config_defaults --> parser.set_defaults",
+    "K1-11: [Env VOICESTT_* punktuell] --> add_argument(default=...)",
+    "K1-09: [CLI] --> argparse",
+    "K1-09/K1-02: argparse --> settings_from_args --> [ServerSettings]",
+    "K1-22: [BASE_TUNING_DEFAULTS] --> [ServerSettings] nur wenn arg is None",
+    "K1-08: [runtime.json .settings] --> create_app --> [ServerSettings] (Allowlist, abgeleitete Keys ausgenommen)",
+    "K1-12/K1-08: [PATCH /api/config] --> update_settings --> [ServerSettings] --> persist_settings --> [runtime.json .settings]",
+    "K1-07: RuntimeConfigStore.load_control --> [ServerSettingsState]",
+    "K1-13/K1-07/K1-06: [PATCH /api/v2/settings/server] --> ServerSettingsState.patch_server --> persist --> [runtime.json settingsControlOverlay + settingsRevision]",
+    "K1-03: [builtin_definitions] --> [SettingsRegistry] --> GET /api/v2/settings/schema",
+    "K1-04/K1-15: [SettingsRegistry.defaults()] + [server_effective()] + [session requested] --> [SessionSettingsState]",
+    "K1-17/K1-15: [handshake requestedSession] --> Session-Admission --> wakeWord.selection-Override --> [SessionSettingsState]",
+    "K1-14: [Client session_settings.patch] --> SettingsPort.patch --> SessionSettingsState.apply_patch --> PatchResult --> command.ack",
+    "K1-14: PatchResult --> settings.changed (Gruppen nach applyPolicy)",
+    "K1-21/K1-23: [SessionSettingsState] --> settings_projection/activation_admission_settings --> session.snapshot (requestedSettings/effectiveSettings/settingsRevision)",
+    "K1-18: [ServerSettings.admin_api_key] und [Env VOICESTT_ADMIN_API_KEY] --> AdminGate; [ServerSettings.openai_api_key] und [Env VOICESTT_API_KEY] --> OpenAIGate",
+    "K1-19: [Server-Patch] --> server settingsRevision und [Session-Patch] --> session settingsRevision (zwei getrennte Stroeme, keine gemeinsame Kante)",
+    "K1-16: [SessionSettingsState] -.x. [runtime.json] (keine Persistenzkante)",
+    "K1-24: [Env VOICESTT_*_MODEL_ROOT] --> discovery_roots, [explizite Wurzel] --> discovery_roots (Parameter gewinnt)",
+    "K1-25: [PATCH /api/v2/settings/server] --> Settings-Wert --> apply_wake_word_global_disable --> [Katalog]; [POST /api/v2/wake-words/refresh] --> catalogRevision (kein Pfad zu settingsRevision)",
+    "K1-27: [Dockerfile CMD] --> parse_args; [Compose Env/env_file] --> Env-Defaults; [VPS-Compose VOICESTT_CONFIG/--config] --> YAML-Ebene",
+    "NICHT ZEICHNEN: Client --> global settings file; YAML --> SessionSettingsState; Katalog-Refresh --> settingsRevision"
+  ],
+  "facts": [
+    {
+      "aussage": "Der gepruefte Stand ist genau ein Commit (a8993c5c68042d996eab680d84a5b138a214bb5d); ein Branch-Ref ist im Klon nicht vorhanden.",
+      "beleg": ".git/HEAD Z. 1 (SHA direkt); .git/FETCH_HEAD Z. 1 (gleicher SHA von origin); .git/logs/HEAD Z. 1 (checkout: moving from main to FETCH_HEAD); Verzeichnis .git ohne refs/heads-Eintraege, shallow vorhanden.",
+      "evidenz": "A",
+      "gueltigkeit": "Metafakt, gilt fuer das gesamte Kapitel 03.01",
+      "id": "K1-01"
+    },
+    {
+      "aussage": "ServerSettings ist die Prozess-/Deployment-Konfiguration (eigene Klasse, eigener Nummernraum) und nicht Teil der serververwalteten Settings-Domaene. __post_init__ leitet alle Datenpfade aus data_root_path ab und setzt runtime_config_path auf <data_root>/config/runtime.json, sonst None.",
+      "beleg": "api_fastapi_server/server.py, Symbol ServerSettings, Z. 403-556; Feld-Defaults Z. 405-514; __post_init__ Z. 519-543 (Pfadableitung Z. 520-532, Validierung realtime_log_detail/log_live_enabled Z. 533-543); public_dict Z. 545-553 (entfernt Engine-Options und beide API-Keys).",
+      "evidenz": "A",
+      "gueltigkeit": "Prozesskonfiguration (host, port, model, device, compute_type, Logging, Limits, data_root_path, Secrets), nicht Settings-Registry",
+      "id": "K1-02"
+    },
+    {
+      "aussage": "SettingsRegistry/SettingDefinition ist der zentrale, read-only Vertrag der serververwalteten Schluessel mit key, scope, auth, type, constraints, default_value, apply_policy, has_server_default, writable und secret. Die Registry bietet Defaults, Server-Default-Keys, Session-Keys und ein deterministisch sortiertes Schema-Payload.",
+      "beleg": "api_fastapi_server/settings_control.py: SettingDefinition Z. 170-212 (to_schema_dict Z. 200-212); builtin_definitions Z. 278-609; SettingsRegistry Z. 613-669 (defaults Z. 650-654, defaults_for_server_defaults Z. 656-661, server_default_keys Z. 640-644, session_keys Z. 634-638, schema_payload Z. 663-669); build_default_registry Z. 672-673.",
+      "evidenz": "A",
+      "gueltigkeit": "Code-Defaults und Schema/Contract der Settings-Domaene (activation.*, wakeWord.*, kroko.forceCommunity, runtimeSuppression.*); keine Prozessfelder",
+      "id": "K1-03"
+    },
+    {
+      "aussage": "Die Zusammenfuehrung der Session-Ebene erfolgt ausschliesslich im Konstruktor von SessionSettingsState in der Reihenfolge Registry-Defaults < Server-Default-Overlay < Session-Request; ein separater Merge-Helper existiert nicht.",
+      "beleg": "api_fastapi_server/settings_control.py, SessionSettingsState.__init__ Z. 885-913: base = registry.defaults() (Z. 899), Overlay server_defaults (Z. 900-902), requested (Z. 903-905), Vollkopie requested/effective (Z. 907-913). Kein merge_settings/deep_merge im Servercode (Grep). Test: tests/unit/test_settings_control_plane.py::test_server_default_change_never_rewrites_an_existing_session Z. 347-361.",
+      "evidenz": "B",
+      "gueltigkeit": "pro Session, einmalig beim Session-Aufbau",
+      "id": "K1-04"
+    },
+    {
+      "aussage": "ServerSettingsState ist das admin-verwaltete Server-Default-Overlay mit eigenem settingsRevision-Strom. Persistierte Daten werden beim Start strikt validiert (Revision kein bool und >= 0, Overlay Objekt, nur Keys mit has_server_default, keine Secrets, Werte gegen Constraints, Cross-Field-Regel). Das Overlay wird als vollstaendige Kopie aller server_default_keys gefuehrt, nicht als Delta.",
+      "beleg": "api_fastapi_server/settings_control.py, ServerSettingsState Z. 1171-1444; __init__ Z. 1174-1240 (Validierung Z. 1187-1231, candidate = defaults_for_server_defaults + loaded, Vollkopie Z. 1224-1240); patch_server Z. 1260-1405; server_public Z. 1407-1444. Tests: test_settings_control_plane.py TestStartupPersistenceValidation Z. 786-843; test_server_patch_success_persists_and_bumps_once Z. 365-379.",
+      "evidenz": "B",
+      "gueltigkeit": "Server-Defaults fuer neue Sessions; eigener Revisionszaehler; vollstaendiges Overlay-Snapshot statt Delta",
+      "id": "K1-05"
+    },
+    {
+      "aussage": "Persistenz nutzt genau ein JSON-Dokument mit zwei Schreibfamilien (Legacy-settings und settingsControlOverlay/settingsRevision) plus unbekannten Top-Level-Feldern; beide Wege lesen-aendern-schreiben unter einem modulweiten Lock und ersetzen atomar per Temp-Datei und os.replace. load_control ist fail-fast fuer vorhandene, aber ungueltige Sektionen; nur fehlende Sektionen defaulten auf ({}, 0). Ohne data_root_path ist die Persistenz faktisch deaktiviert.",
+      "beleg": "VoiceSTT_server/operations.py, RuntimeConfigStore Z. 401-556; OVERLAY_FIELD/REVISION_FIELD Z. 415/417; save Z. 432-449; save_settings_control Z. 451-469; load_control Z. 471-516; _write_merged Z. 518-545; No-Op bei path None Z. 419-430, 457-458, 478-479. Tests: tests/unit/test_settings_runtime_persistence.py Z. 39-109, 157-227.",
+      "evidenz": "B",
+      "gueltigkeit": "einzige Konfigurationsdatei fuer gespeicherte Settings; abhaengig von data_root_path",
+      "id": "K1-06"
+    },
+    {
+      "aussage": "Die Server-Default-Persistenz ist so verdrahtet: Service baut RuntimeConfigStore, laedt load_control() und konstruiert ServerSettingsState mit overlay, revision und persist-Callback. Im Patch gilt Prepare -> persist -> commit; ein Persist-Fehler hinterlaesst RAM und Revision unveraendert und liefert internal_error/persistence_failed.",
+      "beleg": "api_fastapi_server/server.py, VoiceSTTService.__init__ Z. 6282-6294; _persist_settings_control Z. 7971-7973. api_fastapi_server/settings_control.py, patch_server Z. 1355-1388. Tests: test_settings_control_plane.py Z. 848-890; test_settings_runtime_persistence.py Z. 80-95.",
+      "evidenz": "B",
+      "gueltigkeit": "Serverstart und Admin-Patch der Server-Defaults",
+      "id": "K1-07"
+    },
+    {
+      "aussage": "Zweite Persistenz-/Startschicht: create_app liest die Legacy-Sektion settings aus runtime.json und wendet erlaubte Werte per setattr auf ServerSettings an, ausgenommen abgeleitete Pfade, admin_api_key, data_root_path und openai_api_key; danach laufen __post_init__ und enforce_cpu_model_policy erneut. Zurueckgeschrieben wird ueber persist_settings mit Allowlist ACTIVE/NEW_SESSION/STARTUP_ONLY minus Secrets, Pfade, device, host, port.",
+      "beleg": "api_fastapi_server/server.py, create_app Z. 8816-8843 (Anwenden Z. 8826-8842); persist_settings Z. 7959-7969. Test: tests/unit/test_fastapi_server_protocol.py::test_persisted_removed_profile_is_rejected_before_server_start Z. 244-252.",
+      "evidenz": "B",
+      "gueltigkeit": "Startzeit, Prozesskonfiguration; andere Dateisektion als K1-06/K1-07",
+      "id": "K1-08"
+    },
+    {
+      "aussage": "CLI-Ebene: Ein Vorab-Parser (add_help=False, parse_known_args) liest nur --config, dessen Default VOICESTT_CONFIG ist; danach werden YAML-Defaults geladen und per parser.set_defaults nach allen add_argument-Defaults gesetzt. Effektive Reihenfolge: CLI > YAML > Env-Default > Argument-Default. settings_from_args giesst den Namespace in ServerSettings.",
+      "beleg": "api_fastapi_server/server.py, parse_args Z. 10394-10656 (Vorab-Parser Z. 10395-10401, set_defaults(**yaml_defaults) Z. 10655); settings_from_args Z. 10684-10810; main Z. 10813-10835. Test: test_fastapi_server_protocol.py::test_yaml_start_config_loads_defaults_and_cli_overrides Z. 126-165.",
+      "evidenz": "B",
+      "gueltigkeit": "Startkonfiguration",
+      "id": "K1-09"
+    },
+    {
+      "aussage": "YAML-Ebene: versionierte Startkonfiguration (version default 1, nur 1 erlaubt), settings-Objekt oder flache Payload, erlaubte Namen = Dataclass-Felder von ServerSettings. Secrets (admin_api_key, openai_api_key) und abgeleitete Pfade werden abgelehnt, unbekannte Keys abgelehnt, device nur cpu, tuning_profile validiert; Sonderfaelle invertieren Dest/Namen bzw. serialisieren Dicts als JSON. Eine automatische Suche nach config.yaml gibt es nicht.",
+      "beleg": "api_fastapi_server/server.py, load_yaml_config_defaults Z. 10333-10391; YAML_CONFIG_SECRET_KEYS/YAML_CONFIG_DERIVED_KEYS/YAML_CONFIG_TO_ARG_DEST Z. 10301-10330; lazy yaml-Import Z. 10341-10346. PyYAML-Abhaengigkeit: api_fastapi_server/requirements.txt Z. 5. Test: test_fastapi_server_protocol.py Z. 126-180.",
+      "evidenz": "B",
+      "gueltigkeit": "nur wenn --config oder VOICESTT_CONFIG gesetzt ist",
+      "id": "K1-10"
+    },
+    {
+      "aussage": "Env-Ebene ist punktuell: nur explizit verdrahtete VOICESTT_-Variablen werden als Argument-Defaults gebunden (u. a. VOICESTT_CONFIG, VOICESTT_ADMIN_API_KEY, VOICESTT_DATA_ROOT, VOICESTT_MODEL_IDLE_UNLOAD, VOICESTT_MODEL_IDLE_TIMEOUT_SECONDS, VOICESTT_MODEL_MEMORY_POLICY, VOICESTT_ALLOW_TWO_MEDIUM_MODELS, Logging-Schalter, VOICESTT_EVENT_STORE, VOICESTT_SAVE_AUDIO_FILES, VOICESTT_LOG_CALENDAR_TIMEZONE, VOICESTT_REALTIME_LOG_DETAIL). Ein generisches Env-zu-Feld-Mapping und ein dotenv-Loader im Server existieren nicht.",
+      "beleg": "api_fastapi_server/server.py, _env_bool Z. 10294-10298 (akzeptiert 1/true/yes/on); Variablen u. a. Z. 10398, 10500, 10506, 10511, 10516, 10521, 10530, 10540, 10630, 10635, 10641, 10653. Kein load_dotenv im Servercode (nur examples/app_talk_with_llm/example_app_config.py).",
+      "evidenz": "A",
+      "gueltigkeit": "Startkonfiguration, unterhalb von YAML und CLI",
+      "id": "K1-11"
+    },
+    {
+      "aussage": "Laufzeit-Ebene der Prozesskonfiguration (Legacy-REST): ACTIVE_RUNTIME_SETTINGS, NEW_SESSION_RUNTIME_SETTINGS und STARTUP_ONLY_SETTINGS definieren die Zustaendigkeit je Feld. update_settings weist startup_only und unbekannte Namen maschinenlesbar zurueck, prueft Typen, setzt setattr unter _settings_lock und liefert appliesTo aus active_sessions/new_sessions/model_refresh; danach persist_settings. Diese Achse ist nicht die apply_policy-Achse der Settings-Domaene.",
+      "beleg": "api_fastapi_server/server.py, Mengen Z. 178-301 (ACTIVE 178-221, NEW_SESSION 223-254, STARTUP_ONLY 256-285, MODEL_MANAGEMENT 287-291, DERIVED 293-301); update_settings Z. 7826-7957; runtime_settings_contract Z. 1211-1216; Routen GET/PATCH /api/config Z. 8907-8937. Test: test_fastapi_server_protocol.py::test_runtime_settings_update_distinguishes_safe_and_startup_only_fields Z. 576-591.",
+      "evidenz": "B",
+      "gueltigkeit": "Prozesskonfiguration zur Laufzeit, nicht Settings-Domaene",
+      "id": "K1-12"
+    },
+    {
+      "aussage": "v2-REST-Oberflaeche der Settings-Domaene: GET /api/v2/settings/schema liefert das sortierte Registry-Schema mit secretsExposed=false, GET /api/v2/settings/server liefert non-secret Serverwerte (secret-Eintraege redigiert), PATCH /api/v2/settings/server ist admin-gated, ruft patch_server unter _kroko_policy_lock auf und mappt das Ergebnis auf HTTP 200/409/422/500.",
+      "beleg": "api_fastapi_server/server.py, Routen Z. 9223-9292 (Schema 9223-9233, Server-Read 9235-9242, Patch 9244-9292); api_fastapi_server/settings_control.py, server_public Z. 1407-1444.",
+      "evidenz": "A",
+      "gueltigkeit": "Verwaltungs-API der Settings-Domaene; kein REST-Patch fuer Sessionwerte",
+      "id": "K1-13"
+    },
+    {
+      "aussage": "v2-Wire-Ebene: session_settings.patch laeuft ueber SettingsPort, der nichts speichert, in SessionSettingsState.apply_patch und antwortet mit PatchResult. Die Connection projiziert no_change/settings_revision_conflict/settings_rejected/applied, spiegelt die Revision genau einmal und erzeugt settings.changed-Gruppen deterministisch nach POLICY_EVENT_ORDER, wobei nur das erste Event state_change ist.",
+      "beleg": "api_fastapi_server/protocol_v2/schema.py SESSION_SETTINGS_PATCH Z. 47; api_fastapi_server/protocol_v2/ports.py SettingsPort Z. 36-81 (patch Z. 75-81); api_fastapi_server/protocol_v2/connection.py _apply_settings_patch Z. 505-521, _bind_settings_patch Z. 523-542, _emit_settings_changed Z. 544-582.",
+      "evidenz": "A",
+      "gueltigkeit": "pro Session, Wire-Schicht",
+      "id": "K1-14"
+    },
+    {
+      "aussage": "Beim Session-Aufbau werden Server-Defaults und die aufgeloeste Client-Wake-Auswahl zur Session-Autoritaet: server_defaults = server_effective(), bei aktiver Wake-Konfiguration Override von wakeWord.selection mit den effektiv aufgeloesten Wake-Words, dann SessionSettingsState mit eigener Registry-Instanz und session-bezogenem Validator. Ein spaeterer Server-Default-Patch beeinflusst bestehende Sessions nicht.",
+      "beleg": "api_fastapi_server/server.py, _build_settings_state Z. 3173-3196; settings_state-Erzeugung Z. 2376; apply_settings_patch Z. 3261-3263; Projektionen Z. 3306-3348; _new_activation_inputs Z. 3350-3407. Test: test_settings_control_plane.py Z. 347-361.",
+      "evidenz": "B",
+      "gueltigkeit": "pro Session, einmalig beim Aufbau",
+      "id": "K1-15"
+    },
+    {
+      "aussage": "Sessionwerte werden nie persistiert; nur das Server-Default-Overlay ist persistent. SessionSettingsState hat keinen Persist-Callback.",
+      "beleg": "api_fastapi_server/settings_control.py, SessionSettingsState.apply_patch Docstring Z. 938-942; Konstruktor ohne persist-Parameter Z. 885-897.",
+      "evidenz": "A",
+      "gueltigkeit": "gesamte Session-Ebene; keine Kante Session -> runtime.json",
+      "id": "K1-16"
+    },
+    {
+      "aussage": "Die Client-Anforderung im Handshake ist eine eigene, enge Eingabe-Ebene: requestedSession mit trigger.manual/trigger.wakeWord (bool) und wakeWordIds (Liste nicht-leerer Strings), dazu runtimeSuppression.manual/wakeWord (bool). Die Admission erzwingt mindestens eine Triggerquelle, verbietet Auswahl ohne Wake-Trigger, verlangt Auswahl bei Wake-Trigger und loest die IDs atomar und fail-closed gegen den Katalog auf.",
+      "beleg": "api_fastapi_server/protocol_v2/handshake.py, Hello-Parsing Z. 118-178; admit_requested_session Z. 201-247; api_fastapi_server/protocol_v2/ports.py WakeWordPort.resolve_selection Z. 119 ff.",
+      "evidenz": "A",
+      "gueltigkeit": "Session-Admission (v2-Handshake)",
+      "id": "K1-17"
+    },
+    {
+      "aussage": "Credential-Aufloesung mit Prioritaet Settings-Wert vor Env-Fallback: admin_api_key oder VOICESTT_ADMIN_API_KEY, openai_api_key oder VOICESTT_API_KEY. Secrets sind in YAML verboten und erscheinen nicht in ServerSettings.public_dict(); admin_api_key ist startup-only und von der Persistenz ausgeschlossen.",
+      "beleg": "api_fastapi_server/security/admin.py AdminGate.configured_key Z. 15-16; api_fastapi_server/security/openai.py OpenAIGate.configured_key Z. 14-15; api_fastapi_server/server.py YAML-Secret-Ablehnung Z. 10366-10370, public_dict Z. 545-553, STARTUP_ONLY Z. 257, Persistenzausschluss Z. 7964-7968.",
+      "evidenz": "A",
+      "gueltigkeit": "Authentifizierungspfade (Admin- und OpenAI-Gate)",
+      "id": "K1-18"
+    },
+    {
+      "aussage": "Es existieren zwei unabhaengige settingsRevision-Stroeme mit identischem Wire-Namen: die Server-Revision des persistenten Overlays und die monotone Session-Revision pro Session (Start 0). Optimistische Konkurrenz wird je Strom gegen baseSettingsRevision geprueft.",
+      "beleg": "api_fastapi_server/settings_control.py ServerSettingsState.settings_revision Z. 1242-1245; SessionSettingsState.settings_revision Z. 915-918; PatchResult.settings_revision Z. 238; Konfliktpruefung Session Z. 952-967, Server Z. 1272-1288; api_fastapi_server/protocol_v2/snapshot.py settingsRevision Z. 68. Tests: test_settings_control_plane.py Z. 338-345, 389-393.",
+      "evidenz": "B",
+      "gueltigkeit": "beide Ebenen; Feldname ist identisch, Scope nicht",
+      "id": "K1-19"
+    },
+    {
+      "aussage": "Scope-Konstanten session/server/client_local existieren; Schreibpfade weisen scope-fremde und nicht-schreibbare Keys maschinenlesbar ab. SCOPE_CLIENT_LOCAL wird von keiner Definition und keinem Codepfad verwendet.",
+      "beleg": "api_fastapi_server/settings_control.py SCOPE_*-Konstanten Z. 38-40; Session-Patch-Abweisung Z. 976-1000; Server-Patch-Abweisung Z. 1297-1317. Tests: test_settings_control_plane.py Z. 209-226, 395-421. Grep: SCOPE_CLIENT_LOCAL nur an Definition Z. 40.",
+      "evidenz": "B",
+      "gueltigkeit": "Schreibpfade; Detail-Scope-Semantik gehoert 03.02",
+      "id": "K1-20"
+    },
+    {
+      "aussage": "Innerhalb der Session wird effective je Apply-Policy fortgeschrieben: live und next_activation aktualisieren effective, next_session und server_restart behalten den laufenden Wert; requested wird immer aktualisiert. freeze_activation latcht nur next_activation-Werte, activation_admission_settings filtert zusaetzlich scope=session, und Runtime-Suppression wird in _new_activation_inputs nach dem Bundle live ueberlagert.",
+      "beleg": "api_fastapi_server/settings_control.py apply_patch Z. 1060-1078; freeze_activation Z. 1093-1109; activation_admission_settings Z. 1121-1143; settings_projection Z. 1145-1166; api_fastapi_server/server.py _new_activation_inputs Z. 3350-3407. Tests: test_settings_control_plane.py Z. 235-276, 699-781.",
+      "evidenz": "B",
+      "gueltigkeit": "Session-Zustand; Mechanik/Wirksamkeit gehoert 03.08/03.09",
+      "id": "K1-21"
+    },
+    {
+      "aussage": "Tuning-Profil-Ebene liegt unterhalb von YAML/CLI: nur das Profil custom existiert (leere settings), BASE_TUNING_DEFAULTS liefert acht Timing-/Batch-Werte nur dann, wenn das jeweilige CLI-Argument None ist. YAML set_defaults gewinnt gegen das Profil, CLI gegen beide; entfernte Profile werden in CLI und YAML abgewiesen.",
+      "beleg": "api_fastapi_server/server.py BASE_TUNING_DEFAULTS Z. 151-160; TUNING_PROFILES Z. 162-167; _tuning_defaults Z. 10659-10663; _value_or_default Z. 10666-10668. Tests: test_fastapi_server_protocol.py Z. 182-242.",
+      "evidenz": "B",
+      "gueltigkeit": "Startkonfiguration",
+      "id": "K1-22"
+    },
+    {
+      "aussage": "Settings-Domaene und Prozesskonfiguration sind strikt getrennt: das v2-Schema enthaelt ausschliesslich Registry-Keys, und Session-Projektionen filtern scope ungleich session heraus, sodass server-scope Keys nicht in requestedSettings/effectiveSettings der Session erscheinen. Prozessfelder haben kein v2-Settings-Schema, sondern sind ueber GET /api/config sichtbar.",
+      "beleg": "api_fastapi_server/settings_control.py builtin_definitions Z. 278-609; settings_projection Z. 1153-1166; activation_admission_settings Z. 1131-1139; api_fastapi_server/server.py Schema-Route Z. 9223-9233.",
+      "evidenz": "A",
+      "gueltigkeit": "API-Oberflaechen",
+      "id": "K1-23"
+    },
+    {
+      "aussage": "Zweite, unabhaengige Env-Ebene fuer Modellwurzeln: VOICESTT_FASTER_WHISPER_MODEL_ROOT und VOICESTT_KROKO_MODEL_ROOT werden nur als Fallback gelesen, wenn keine explizite Wurzel uebergeben wurde (Parameter schlaegt Env). Diese Variablen sind kein Bestandteil von ServerSettings.",
+      "beleg": "VoiceSTT_server/operations.py FASTER_MODEL_ROOT_ENV/KROKO_MODEL_ROOT_ENV Z. 15-16; LocalModelRegistry.__init__ Z. 142-148; VoiceSTT_server/stt_model_management.py discovery_roots Z. 666-678; docker-compose.yml Z. 34-35.",
+      "evidenz": "A",
+      "gueltigkeit": "Modell-Discovery, nicht Settings-Domaene",
+      "id": "K1-24"
+    },
+    {
+      "aussage": "Katalog-Autoritaet ist von der Settings-Autoritaet getrennt: die Settings-Domaene besitzt die Werte (wakeWord.globalDisabledIds, wakeWord.inferenceBackend), der Katalog projiziert sie nur in Verfuegbarkeit und fuehrt eine eigene catalogRevision. POST /api/v2/wake-words/refresh ist eine reine Admin-Katalog-Aktion und veraendert weder settingsRevision noch bestehende Sessions.",
+      "beleg": "api_fastapi_server/server.py Kommentar catalogRevision getrennt von settingsRevision Z. 6316-6324; _configured_global_disabled_wake_words Z. 7186-7197; wake_word_inference_backend Z. 7199-7210; refresh_wake_word_catalog Z. 7244-7258; apply_wake_word_global_disable Z. 7260-7264; Route POST /api/v2/wake-words/refresh Z. 9303-9318.",
+      "evidenz": "A",
+      "gueltigkeit": "Settings-zu-Katalog-Grenze; PATCH vs. Refresh (Konsistenz zu M2-30)",
+      "id": "K1-25"
+    },
+    {
+      "aussage": "Es gibt keinen Reset/Unset von Server-Defaults und kein Loeschen einzelner Overlay-Keys: der einzige Schreibpfad auf Server-Defaults ist patch_server; ein Ruecksetzen auf Registry-Defaults waere nur durch manuelles Entfernen des Overlays aus runtime.json denkbar, wofuer kein Code- oder API-Pfad existiert.",
+      "beleg": "api_fastapi_server/settings_control.py ServerSettingsState Z. 1171-1444 (nur patch_server, overlay, server_effective, server_public); Negativ-Grep ueber api_fastapi_server ohne Settings-Treffer fuer reset/delete/unset.",
+      "evidenz": "A",
+      "gueltigkeit": "Admin-Ebene der Server-Defaults",
+      "id": "K1-26"
+    },
+    {
+      "aussage": "Deployment-/Build-Ebene liefert ausschliesslich CLI-Argumente und Env, keine zusaetzliche Settings-Datei: Container-ENTRYPOINT startet python -m VoiceSTT_server.server mit CMD-Argumenten; Compose setzt Env und optional env_file; der Konsolen-Entry-Point stt-server zeigt auf dieselbe main-Implementierung. Ein --config wird nur in der VPS-Compose gesetzt.",
+      "beleg": "Dockerfile ENTRYPOINT/CMD Z. 98-102; docker-compose.yml Env Z. 23-39, env_file Z. 40-42, command Z. 43-55; setup.py entry_points Z. 415-417; VoiceSTT_server/server.py Re-Export Z. 8-26; engineering/deployment/vps/docker-compose.yml VOICESTT_CONFIG Z. 25 und --config Z. 39-40.",
+      "evidenz": "C",
+      "gueltigkeit": "Deployment (Build-/Compose-Artefakte)",
+      "id": "K1-27"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-01",
+      "thema": "Generisches Env-zu-ServerSettings-Mapping fuer beliebige Felder existiert nicht; nur explizit verdrahtete VOICESTT_-Variablen wirken (K1-11)."
+    },
+    {
+      "id": "N-02",
+      "thema": "Keine automatische Suche/Ladung von config.yaml; YAML wirkt nur mit --config oder VOICESTT_CONFIG (K1-10)."
+    },
+    {
+      "id": "N-03",
+      "thema": "SCOPE_CLIENT_LOCAL ist nur als Konstante definiert und wird von keiner Definition und keinem Codepfad genutzt (K1-20)."
+    },
+    {
+      "id": "N-04",
+      "thema": "Kein Reset/Unset von Server-Defaults und kein Loeschen einzelner Overlay-Keys; einziger Schreibpfad ist patch_server (K1-26)."
+    },
+    {
+      "id": "N-05",
+      "thema": "Sessionwerte werden by design nie persistiert; SessionSettingsState hat keinen Persistenzpfad (K1-16)."
+    },
+    {
+      "id": "N-06",
+      "thema": "Kein dotenv-Loader im Python-Server; .env-Dateien gelangen nur ueber Compose env_file in die Prozessumgebung (K1-11/K1-27)."
+    }
+  ],
+  "researcher_session": "ses_e464026b2ffeXhBT2nVG1p0zis",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-01",
+      "thema": "Branch feat/v2-release-cleanup ist im shallow/detached Klon nicht nachweisbar; HEAD zeigt direkt auf den Commit (K1-01)."
+    },
+    {
+      "id": "U-02",
+      "thema": "Ob das vollstaendige (nicht-Delta-)Server-Default-Overlay beabsichtigt ist: nach dem ersten Server-Patch pinnt die Datei alle damaligen Defaults; kein Migrations-/Pruning-Pfad im Code (K1-05/K1-06)."
+    },
+    {
+      "id": "U-03",
+      "thema": "Widerspruch zwischen engineering/deployment/vps/docker-compose.yml (target: cpu) und Root-Dockerfile (Stages builder/runtime); veraltetes Deployment-Artefakt nicht aus dem Code entscheidbar (K1-27)."
+    },
+    {
+      "id": "U-04",
+      "thema": "Praezedenz YAML > Env-Default nur aus dem Code abgeleitet (set_defaults nach add_argument), durch keinen Test belegt; CLI > YAML ist belegt (K1-09/K1-11)."
+    },
+    {
+      "id": "U-05",
+      "thema": "Ob secretsExposed=false dauerhaft auch fuer kuenftige Registry-Definitionen mit secret=True gilt: kein eingebauter Key setzt secret=True (K1-13)."
+    }
+  ],
+  "writer_notes": "Ebenenmodell fuer das Kapitel: (1) Code-Defaults ServerSettings (K1-02) und Registry-Definitionen (K1-03); (2) YAML-Startkonfiguration (K1-10) und Tuning-Profil-Defaults (K1-22); (3) punktuelle Env-Variablen (K1-11, K1-24) und Credential-Fallback (K1-18); (4) CLI (K1-09); (5) gespeicherte Werte in genau einer runtime.json mit zwei Sektionen (K1-06, K1-07, K1-08); (6) Settings-Domaene mit ServerSettingsState (K1-05) und SessionSettingsState (K1-04, K1-15, K1-16); (7) API/Runtime: REST v2 (K1-13), Wire session_settings.patch (K1-14), Prozess-Runtime-REST /api/config (K1-12), Handshake-Eingaben (K1-17). Prozesskonfiguration und Settings-Domaene niemals vermischen (K1-23); settingsRevision immer mit Scope nennen (K1-19); keine Kante Client -> globale Settings-Datei, keine Kante YAML -> SessionSettingsState, keine Kante Katalog-Refresh -> settingsRevision; Sessionwerte nicht persistent (K1-16). Abgrenzung: Scopes -> 03.02; Quellen/Prioritaeten -> 03.05; Persistenzformat -> 03.10; Einzelwerte -> 03.06/03.07; Apply-Policy -> 03.08; Wirksamkeit -> 03.09. Konsistenz zu 02.07 M2-30."
+}

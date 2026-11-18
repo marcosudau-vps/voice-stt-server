@@ -1,0 +1,269 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup lokal nicht als Ref belegbar (.git/refs/ existiert nicht, keine packed-refs). Belegt ist ausschliesslich die Commit-Bindung a8993c5c68042d996eab680d84a5b138a214bb5d.",
+  "chapter": "04.02",
+  "commit_verification": "Detached HEAD: .git/HEAD = a8993c5c68042d996eab680d84a5b138a214bb5d; .git/FETCH_HEAD derselbe SHA, Herkunft https://github.com/marcosudau-vps/voice-stt-server; .git/logs/HEAD = checkout: moving from main to FETCH_HEAD.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "Vier Fehlerformate nebeneinander: {error: str}, {valid: false, error}, V2-PatchResult {accepted,result,errors}, OpenAI {error:{...}} plus Framework {detail: ...}; keine einheitliche Hülle."
+    },
+    {
+      "id": "C2",
+      "thema": "422 ist dreifach belegt: Framework-Body-Validierung, abgelehnte V2-Settings und fehlgeschlagener Wake-Katalog-Refresh, jeweils mit anderem Body."
+    },
+    {
+      "id": "C3",
+      "thema": "404 ist doppelt belegt: unbekannter Pfad (Framework) gegen deaktivierte OpenAI-API bzw. nicht gefundenes OpenAI-Modell (App)."
+    },
+    {
+      "id": "C4",
+      "thema": "OpenAI-Flag-Asymmetrie: POST /v1/audio/transcriptions liefert bei openai_api_enabled=false 404, GET /v1/models ignoriert das Flag."
+    },
+    {
+      "id": "C5",
+      "thema": "401 mit WWW-Authenticate: Bearer bei Admin und OpenAI, aber ohne WWW-Authenticate bei der Log-Historie."
+    },
+    {
+      "id": "C6",
+      "thema": "Die Statusmatrix mischt Authentifizierung (401), Autorisierung (403), Konflikt (409), Validierung (422) und Verfügbarkeit (503); 403 bedeutet hier 'Remote-Verwaltung ohne Key deaktiviert', nicht fehlende Rolle."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "Client -> TCP host:8010 -> uvicorn -> FastAPI-App (ein Prozess)",
+    "Client -> GET / -> HTMLResponse (index.html)",
+    "Client -> GET /health -> JSON ok/ready/eventStore",
+    "Client -> GET /api/v2/info -> JSON-Identitaet + Cache-Control no-store",
+    "Client -> GET /api/config -> JSON public_dict + adminAuthRequired",
+    "Admin -> PATCH /api/config -> AdminGate -> 401/403 oder 200/400",
+    "Admin -> PATCH /api/v2/settings/server -> AdminGate -> 200/409/422/500",
+    "Client -> GET /api/v2/settings/schema|server -> JSON-Projektion",
+    "Client -> GET /api/v2/wake-words -> JSON-Katalog",
+    "Admin -> POST /api/v2/wake-words/refresh -> AdminGate -> 200 oder 422",
+    "Log-Client -> GET /api/logs/events?afterCursor&limit -> LogGate -> 200/400/401/503",
+    "OpenAI-Client -> POST /v1/audio/transcriptions (multipart) -> OpenAIGate -> JSON/text/vtt/SSE",
+    "OpenAI-Client -> GET /v1/models -> optional OpenAIGate -> JSON-Liste",
+    "OpenAI-Fehler -> JSON {error:{message,type,param,code}} mit 400/401/404/409/413/500",
+    "Unbekannter Pfad/Methode -> FastAPI 404/405 {detail} (ohne App-Handler)"
+  ],
+  "facts": [
+    {
+      "aussage": "Der HTTP-Server ist genau eine FastAPI-App, gestartet mit uvicorn.run(app, host, port, log_level). Defaults: host 0.0.0.0, port 8010; CLI ebenso --host/--port. Es gibt keinen root_path, keinen URL-Prefix und keine TLS-/SSL-Parameter; die App haengt ungepraefixt im ASGI-Root. Docker-Compose mappt ${VOICESTT_PORT:-8010}:8010 und prueft /health ueber http://127.0.0.1:8010.",
+      "beleg": "api_fastapi_server/server.py:405-406, 10409-10410, 10688-10689, 10830-10835; docker-compose.yml:44-47, 81-86; Grep root_path/ssl_keyfile/ssl_certfile ohne Treffer.",
+      "evidenz": "stark",
+      "gueltigkeit": "Prozess und Deployment; die oeffentliche URL kann durch Reverse Proxy abweichen.",
+      "id": "H1-01"
+    },
+    {
+      "aussage": "Der URL-Raum besteht aus fuenf Familien: / (gebündelte UI), /health (Betrieb), /api/* (Legacy-REST, unversioniert), /api/v2/* (versioniertes REST) und /v1/* (OpenAI-Kompatibilitaet) sowie /ws/* (drei WebSocket-Routen). Inventar: 34 HTTP-Routen (32 in server.py + 2 OpenAI) und 3 WebSocket-Routen, dazu die FastAPI-Defaults /openapi.json, /docs, /redoc. Es gibt keinen StaticFiles-Mount; die UI wird nur ueber GET / ausgeliefert.",
+      "beleg": "api_fastapi_server/server.py:8874-10121 (Dekoratoren), 9899-9910 (include_router ohne prefix); api_fastapi_server/openai_routes.py:43, 67; tests/unit/test_server_security_modularization.py:183-194; Konsistenz mit workflow/research/04.01.json I1-01/I1-17.",
+      "evidenz": "stark",
+      "gueltigkeit": "gesamte App; Routenanzahl inklusive OpenAI-Router.",
+      "id": "H1-02"
+    },
+    {
+      "aussage": "Ressourcen werden ueber Pfad- und Query-Parameter adressiert: Pfadparameter nur bei der Log-Historie (/api/logs/sessions/{session_id}, /api/logs/transcriptions/{transcription_id}); /api/logs/events nutzt die Query-Parameter sessionId, transcriptionId, channels, events, from, to, afterCursor und limit (Default 200). Es gibt keine Versionierung ueber Query, Header oder Media Type.",
+      "beleg": "api_fastapi_server/server.py:9453-9537; tests/unit/test_fastapi_server_multi_user.py:1424-1435.",
+      "evidenz": "stark",
+      "gueltigkeit": "REST-Logs; Query-Namen sind exakt und case-sensitiv.",
+      "id": "H1-03"
+    },
+    {
+      "aussage": "Versionierung findet ausschliesslich im Pfad statt: Legacy-REST unter /api ohne Version, neues REST unter /api/v2, OpenAI-Kompatibilitaet unter /v1. /api/v1/* und /ws/v1 existieren nicht. WebSocket V1 laeuft unversioniert unter /ws/transcribe, WebSocket V2 unter /ws/v2.",
+      "beleg": "api_fastapi_server/server.py:9223, 9294, 9912, 10121; api_fastapi_server/openai_routes.py:43, 67; Negativ-Grep der Registrierungen; workflow/research/04.01.json I1-17.",
+      "evidenz": "stark",
+      "gueltigkeit": "gesamte App.",
+      "id": "H1-04"
+    },
+    {
+      "aussage": "Es existieren vier getrennte Versionsraeume: (a) HTTP-Pfad /api/v2, (b) WebSocket-protocolVersion=2, (c) logProtocolVersion=2 nur fuer Log-Konfiguration/Log-Wire, (d) OpenAI /v1 als Kompatibilitaetsschicht, nicht als VoiceSTT-v1. Zusaetzlich liefert /api/v2/info schemaVersion=1; die OpenAPI-info.version ist die App-Version.",
+      "beleg": "api_fastapi_server/server.py:8876-8878, 9228, 9373-9375; api_fastapi_server/protocol_v2/schema.py:29-32; api_fastapi_server/protocol_v2/identity.py:91-108; tests/unit/test_server_info.py:47-55, 71.",
+      "evidenz": "stark",
+      "gueltigkeit": "Begriffe duerfen nicht synonym verwendet werden.",
+      "id": "H1-05"
+    },
+    {
+      "aussage": "GET /api/v2/info ist oeffentlich und liefert schemaVersion, protocolVersion=2, serverVersion, serverCommit, identityStatus, build, distribution, runtime und serverInstanceId; die Antwort setzt Cache-Control: no-store. Die Projektion wird beim App-Bau eingefroren, spaetere Umgebungsaenderungen wirken nicht.",
+      "beleg": "api_fastapi_server/server.py:8874-8879; api_fastapi_server/protocol_v2/identity.py:85-108; tests/unit/test_server_info.py:44-55, 58-71.",
+      "evidenz": "stark",
+      "gueltigkeit": "REST V2, oeffentlich; einziger Endpunkt mit explizitem no-store.",
+      "id": "H1-06"
+    },
+    {
+      "aussage": "GET /health ist oeffentlich und liefert ok, ready, activeSessions, activeSpeakers, rejectedSessions, scheduler, models, sttReady, sttModels, startupErrors und eventStore; ok ist nur true, wenn metrics.ok true ist und entweder Live-Logging aus ist oder der Eventstore available meldet; ready stammt separat aus metrics.ready.",
+      "beleg": "api_fastapi_server/server.py:8885-8905; docker-compose.yml:86 (Healthcheck auf /health).",
+      "evidenz": "stark",
+      "gueltigkeit": "Betriebsendpunkt; keine Authentifizierung.",
+      "id": "H1-07"
+    },
+    {
+      "aussage": "Die HTTP-Methoden sind semantisch gebunden: GET dient nur dem Lesen; PATCH aktualisiert partiell (/api/config, /api/v2/settings/server); PUT aktualisiert Konfigurationssektionen (/api/language, /api/wake-word, /api/models/lifecycle, /api/models/active, /api/logging); POST loest Aktionen aus (Modell-Refresh, Lizenz-Refresh, Load/Unload, Wake-Katalog-Refresh, Validate/Reload, OpenAI-Transkription). DELETE kommt in der gesamten App nicht vor.",
+      "beleg": "api_fastapi_server/server.py:8921, 8966, 8979, 9036, 9074, 9084, 9101, 9122, 9159, 9244, 9303, 9383, 9849, 9870; Grep @app.delete ohne Treffer.",
+      "evidenz": "stark",
+      "gueltigkeit": "alle HTTP-Routen.",
+      "id": "H1-08"
+    },
+    {
+      "aussage": "JSON-Endpunkte nehmen untypisierte dict-Bodies entgegen (keine Pydantic-Request-Modelle, keine response_model): PATCH /api/config akzeptiert {settings: {...}} oder ein flaches Objekt; PUT /api/language, /api/wake-word, /api/logging, /api/models/lifecycle und /api/models/active sowie POST /api/config/validate lesen flache Felder; PATCH /api/v2/settings/server erwartet {baseSettingsRevision: int, changes: {key: value}}. Unbekannte Felder werden je Endpunkt unterschiedlich behandelt: explizite 400 bei Lifecycle, Logging und V2-Settings; Language/Wake-Word lesen nur bekannte Keys.",
+      "beleg": "api_fastapi_server/server.py:8922-8937, 9037-9072, 9102-9113, 9123-9136, 9160-9216, 9245-9292, 9384-9444, 9850-9868.",
+      "evidenz": "stark",
+      "gueltigkeit": "REST-Bodies; OpenAI nutzt Multipart (H1-10).",
+      "id": "H1-09"
+    },
+    {
+      "aussage": "POST /v1/audio/transcriptions ist der einzige Multipart-Endpunkt: request.form() mit Pflichtfeld model und Pflicht-Upload file. Erlaubte Dateiendungen: .flac, .mp3, .mp4, .mpeg, .mpga, .m4a, .ogg, .wav, .webm; Limit openai_max_file_bytes Default 25 MiB, Ueberschreitung 413 file_too_large. Optionale Formfelder: language, prompt, response_format, temperature, timestamp_granularities[], stream, include[], threshold, known_speaker_names[], known_speaker_references[], voicestt_model/model_override. Kein JSON-Body.",
+      "beleg": "api_fastapi_server/openai_routes.py:117-154; VoiceSTT_server/openai_compat.py:9-13, 92-147, 150-157; api_fastapi_server/server.py:506-513; tests/unit/test_openai_compatible_endpoint.py:100-125.",
+      "evidenz": "stark",
+      "gueltigkeit": "/v1/audio/transcriptions; der 413-Pfad ist code-belegt, aber nicht getestet.",
+      "id": "H1-10"
+    },
+    {
+      "aussage": "Der Admin-HTTP-Guard bezieht den Key aus settings.admin_api_key oder ENV VOICESTT_ADMIN_API_KEY. Header-Praezedenz: x-voicestt-admin-key vor Authorization: Bearer vor x-admin-key; ein vorhandener falscher x-voicestt-admin-key wird nicht durch gueltigen Bearer gerettet. Bei konfiguriertem Key und fehlendem/falschem Key: 401 mit WWW-Authenticate: Bearer. Ohne konfigurierten Key ist nur Loopback erlaubt, sonst 403. Vergleich mit secrets.compare_digest.",
+      "beleg": "api_fastapi_server/security/admin.py:8, 15-45; tests/unit/test_server_security_modularization.py:35-54, 57-63.",
+      "evidenz": "stark",
+      "gueltigkeit": "21 Admin-HTTP-Routen; nicht /v1/* und nicht /api/logs/*.",
+      "id": "H1-11"
+    },
+    {
+      "aussage": "Das OpenAI-Key-Gate ist optional und unabhaengig vom AdminGate: Key aus settings.openai_api_key oder ENV VOICESTT_API_KEY. Ist er gesetzt, muss Authorization exakt Bearer <key> sein; sonst 401 mit OpenAI-Fehlerobjekt code=invalid_api_key, WWW-Authenticate: Bearer und Audit-Eintrag. Ohne Key sind /v1/* ohne Auth erreichbar. openai_api_enabled (Default true) wird nur bei der Transkription geprueft: deaktiviert liefert 404; GET /v1/models ignoriert das Flag.",
+      "beleg": "api_fastapi_server/security/openai.py:14-34; api_fastapi_server/openai_routes.py:43-47, 93-103, 104-115; api_fastapi_server/server.py:506-507; tests/unit/test_openai_compatible_endpoint.py:179-197.",
+      "evidenz": "stark",
+      "gueltigkeit": "/v1/*; der Disabled-404-Pfad ist nicht getestet.",
+      "id": "H1-12"
+    },
+    {
+      "aussage": "Die Log-HTTP-Routen nutzen das LogGate statt des AdminGate: Admin ist man bei konfiguriertem Key-Treffer oder ohne Key von Loopback; sonst zaehlt ein Session-Token aus x-voicestt-log-token oder Authorization: Bearer (24 h, sessiongebunden, nur Speicher). Ohne Scope: 401 ohne WWW-Authenticate. Nicht-Admins sehen nur audit/performance/transcription und die eigene Session. Ist der Eventstore nicht verfuegbar: 503 mit code event_store_unavailable; Query-Parsefehler: 400.",
+      "beleg": "api_fastapi_server/security/logs.py:62-81; api_fastapi_server/server.py:9453-9537; tests/unit/test_fastapi_server_multi_user.py:1413-1435.",
+      "evidenz": "stark",
+      "gueltigkeit": "GET /api/logs/events, /api/logs/sessions/{id}, /api/logs/transcriptions/{id}.",
+      "id": "H1-13"
+    },
+    {
+      "aussage": "Scope-Matrix der 34 HTTP-Routen: 8 oeffentlich (GET /, /health, /api/config, /api/metrics, /api/v2/info, /api/v2/settings/schema, /api/v2/settings/server, /api/v2/wake-words), 21 AdminGate, 3 LogGate (Log-Historie) und 2 OpenAI-Routen mit optionalem Key. Summe 34; dazu 3 WebSocket-Routen.",
+      "beleg": "api_fastapi_server/server.py:8874-10121; api_fastapi_server/openai_routes.py:43, 67; Konsistenz mit workflow/research/04.01.json I1-02/I1-04.",
+      "evidenz": "stark",
+      "gueltigkeit": "HTTP-Ebene; WebSocket-Auth separat (04.03).",
+      "id": "H1-14"
+    },
+    {
+      "aussage": "Antworten werden ueberwiegend als JSONResponse erzeugt. Ausnahmen: GET / als HTMLResponse (text/html), OpenAI response_format=text und srt als text/plain, vtt als text/vtt sowie stream=true als text/event-stream. Keine Accept-/Content-Negotiation (kein 406), keine response_model, keine eigenen Serializer; auch Fehlerantworten sind application/json.",
+      "beleg": "api_fastapi_server/server.py:8881-8883; api_fastapi_server/openai_routes.py:459-467, 549-556; VoiceSTT_server/openai_compat.py:244-258.",
+      "evidenz": "stark",
+      "gueltigkeit": "alle HTTP-Antworten; Formatwahl nur ueber Formfeld response_format.",
+      "id": "H1-15"
+    },
+    {
+      "aussage": "response_format steuert den Erfolgsbody der OpenAI-Transkription: json, verbose_json (plus words bei timestamp_granularities=word), diarized_json, text, srt, vtt. stream=true ueberschreibt das Format und liefert SSE; bei diarized_json werden zusaetzlich Segment-Events gesendet.",
+      "beleg": "VoiceSTT_server/openai_compat.py:196-258; api_fastapi_server/openai_routes.py:390-467, 549-556; tests/unit/test_openai_compatible_endpoint.py:128-155.",
+      "evidenz": "stark",
+      "gueltigkeit": "nur /v1/audio/transcriptions.",
+      "id": "H1-16"
+    },
+    {
+      "aussage": "Jede Transkriptionsantwort (Erfolg und Fehler) traegt X-Request-ID (uuid4 hex, 32 Zeichen). Nach Modellaufloesung kommen X-VoiceSTT-Requested-Model, X-VoiceSTT-Resolved-Model, X-VoiceSTT-Route (final oder realtime) sowie optional Override-Header hinzu. Auch 404 (deaktiviert) und 401 tragen X-Request-ID. GET /v1/models setzt keinen X-Request-ID-Header.",
+      "beleg": "api_fastapi_server/openai_routes.py:69-77, 99-115, 138-146; tests/unit/test_openai_compatible_endpoint.py:263-285, 544, 574.",
+      "evidenz": "stark",
+      "gueltigkeit": "/v1/audio/transcriptions; nicht /v1/models.",
+      "id": "H1-17"
+    },
+    {
+      "aussage": "SSE-Framing: data: + kompaktes JSON + LF LF (\"\\n\\n\", sse_data). Ereignistypen: transcript.text.delta, transcript.text.done, error; bei diarized_json zusätzlich Segment-Objekte. Kein [DONE]-Sentinel, kein event:-Feld, kein id:-Feld, keine Retry-Angabe. Der 0,1-s-Timeout im Stream ist ein interner Queue-Poll, kein Client-Timeout. [R1-F1 2026-11-08: CRLF->LF korrigiert, openai_compat.py:261-262.]",
+      "beleg": "api_fastapi_server/openai_routes.py:278-281, 341-467; VoiceSTT_server/openai_compat.py:261-262; tests/unit/test_openai_compatible_endpoint.py:144-155.",
+      "evidenz": "stark",
+      "gueltigkeit": "nur stream=true.",
+      "id": "H1-18"
+    },
+    {
+      "aussage": "App-eigene REST-Fehler verwenden {error: <deutsche Meldung>} mit Zusatzfeldern: {error, fields[]} bei abgeleiteten Logpfaden (400), {error, unavailableWakeWords[]} bei fehlenden Wake Words (400), {error, code: event_store_unavailable} bei fehlendem Eventstore (503). POST /api/config/validate liefert {valid: false, error} (400) bzw. {valid: true, settings} (200). Kein RFC-7807/problem+json, keine durchgaengige errorCode-Konvention.",
+      "beleg": "api_fastapi_server/server.py:8930-8933, 9173-9189, 9397-9403, 9488-9494, 9866-9868.",
+      "evidenz": "stark",
+      "gueltigkeit": "Legacy-/V2-REST ausserhalb der OpenAI-Schicht.",
+      "id": "H1-19"
+    },
+    {
+      "aussage": "OpenAI-Fehler haben die Form {error: {message, type, param, code}}; type default invalid_request_error, bei unerwarteten Ausnahmen server_error mit code transcription_failed (500). Belegte Codes/Status: invalid_api_key (401), invalid_model_override (400), model_not_loaded (409), model_not_found (404), file_too_large (413); bei deaktivierter API ist code null (404). Feldfehler 400 ohne speziellen code. Meldungen deutsch, Struktur OpenAI-kompatibel.",
+      "beleg": "VoiceSTT_server/openai_compat.py:160-161; api_fastapi_server/openai_routes.py:99-103, 120-154, 557-617; api_fastapi_server/server.py:8425-8478; tests/unit/test_openai_compatible_endpoint.py:288-300.",
+      "evidenz": "stark",
+      "gueltigkeit": "/v1/*; Fehlertexte nicht als stabile API zugesichert.",
+      "id": "H1-20"
+    },
+    {
+      "aussage": "Statusinventar: 200 Erfolg; 400 ungueltige Eingabe/unbekannte Felder/abgelehnte Legacy-Aenderung/Query-Parsefehler/OpenAI-Requestfehler; 401 fehlender/falscher Key oder Token; 403 Admin von nicht-Loopback ohne Key; 404 deaktivierte OpenAI-API/unbekanntes Modell/unbekannter Pfad (Framework); 409 Revisionskonflikt/Modell nicht geladen/Refresh-Unload-Konflikt/Modellwechsel bei aktiven Sessions; 413 Datei zu gross; 422 V2-Settings abgelehnt/Wake-Refresh fehlgeschlagen/Framework-Body-Validierung; 500 interner Fehler/Ladefehler/OpenAI-Ausnahme; 503 Eventstore nicht verfuegbar. Keine 201/204/206/301/304/429/502/504 im Code.",
+      "beleg": "api_fastapi_server/server.py:8921-9892 (alle status_code), 9287-9292, 9318, 9488-9494; api_fastapi_server/openai_routes.py:99-103, 149-154, 583-587, 613-616.",
+      "evidenz": "stark",
+      "gueltigkeit": "alle HTTP-Routen; Framework-Status siehe H1-22.",
+      "id": "H1-21"
+    },
+    {
+      "aussage": "Unbehandelte Pfade, Methoden und Bodies beantwortet FastAPI selbst: 404 {detail: Not Found}, 405 {detail: Method Not Allowed} mit Allow-Header und 422 {detail: [...]}; im App-Code kein exception_handler, keine HTTPException. Ebenfalls nicht vorhanden: CORSMiddleware, GZipMiddleware, TrustedHostMiddleware, ETag/If-None-Match, Accept-Negotiation, response_model. /docs, /redoc, /openapi.json sind Framework-Defaults; /openapi.json info.version = App-Version. TLS terminiert nicht die App (uvicorn ohne ssl_*).",
+      "beleg": "api_fastapi_server/server.py:8868-8872, 10830-10835; Grep exception_handler/HTTPException/add_middleware/CORSMiddleware/GZipMiddleware ohne Treffer; tests/unit/test_server_info.py:71.",
+      "evidenz": "mittel",
+      "gueltigkeit": "FastAPI/Starlette-Version des Checkouts; exakte Default-Bodies nicht getestet, Proxy/Deployment kann abweichen.",
+      "id": "H1-22"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "/api/v1/* und /ws/v1 existieren nicht; VoiceSTT-V1 gibt es nur als unversioniertes /ws/transcribe."
+    },
+    {
+      "id": "N2",
+      "thema": "Keine DELETE-Route und kein PATCH fuer language/wake-word/logging; dort ausschliesslich PUT."
+    },
+    {
+      "id": "N3",
+      "thema": "Keine CORSMiddleware, keine GZip-Kompression und keine TrustedHost-Middleware."
+    },
+    {
+      "id": "N4",
+      "thema": "Keine ETag-/If-None-Match-Validatoren, keine Cache-Validierung und keine Accept-basierte Content-Negotiation (kein 406)."
+    },
+    {
+      "id": "N5",
+      "thema": "Kein einheitliches Fehlerformat und keine durchgaengigen maschinenlesbaren errorCodes; kein RFC 7807."
+    },
+    {
+      "id": "N6",
+      "thema": "Keine Auth-Scopes, Rollen oder client-spezifischen API-Keys; nur Admin-Key, OpenAI-Key und Log-Token."
+    },
+    {
+      "id": "N7",
+      "thema": "Kein HTTPS/TLS in der Anwendung; uvicorn erhaelt keine ssl_*-Parameter."
+    },
+    {
+      "id": "N8",
+      "thema": "Keine Pagination-Link-Header; Cursor-Paginierung nur als JSON-Felder im Log-Body."
+    }
+  ],
+  "researcher_session": "ses_e436b6fcbffeeHB0iDL5I3H749",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Reihenfolge Body-Validierung vs. Admin-Guard: Handler mit payload: dict werden erst nach Body-Parsing aufgerufen; ob bei fehlendem/falschem JSON 422 vor 401 steht, ist nicht getestet (Framework-Reihenfolge)."
+    },
+    {
+      "id": "U2",
+      "thema": "Ob /docs und /redoc produktiv erreichbar sind; nur FastAPI-Defaults ohne Test und ohne Proxy-Code."
+    },
+    {
+      "id": "U3",
+      "thema": "Reverse-Proxy-Pfadpraefix/root_path und TLS-Terminierung ausserhalb des Repositories; die App selbst setzt keinen root_path."
+    },
+    {
+      "id": "U4",
+      "thema": "Ob produktiv HTTP/1.1 oder HTTP/2 spricht; uvicorn wird ohne explizite http-/h11-Konfiguration gestartet."
+    },
+    {
+      "id": "U5",
+      "thema": "Ob in einem konkreten Deployment admin_api_key bzw. openai_api_key gesetzt sind; Defaults sind None."
+    },
+    {
+      "id": "U6",
+      "thema": "Exakter Text der FastAPI-Default-Bodies fuer 404/405/422 in der eingesetzten FastAPI-Version; code-seitig nicht ueberschrieben."
+    }
+  ],
+  "writer_notes": "Kapitel als HTTP-Grundlagen von aussen nach innen: (1) Adressierung (host:8010, Pfadfamilien), (2) Versionierung mit vier getrennten Raeumen, (3) Requests (Methoden, Header, JSON vs. Multipart, Query/Pfad), (4) Responses (Content Types, Header, SSE, Status), (5) Fehler (vier Huellen plus Framework-Defaults). Tabellen: Routen-/Scope-Matrix, Statusinventar, Header-Praezedenz, response_format-Matrix. Streng trennen: /v1 ist OpenAI, nicht VoiceSTT-v1; logProtocolVersion=2 ist nicht das WS-Protokoll; protocolVersion=2 ist nicht schemaVersion=1. X-Request-ID nur bei /v1/audio/transcriptions. SSE nur bei stream=true ohne [DONE]-Sentinel. 422 dreifach belegt. Deutsche Fehlermeldungen sind Implementierungstext, keine stabile API. Querverweise: 04.01 Inventar, 04.03 WS V2, 05.10 Fehler-/Zugriffsantworten."
+}

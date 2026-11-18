@@ -1,0 +1,267 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (kein Branch-Name in HEAD). Nur Commit a8993c5c68042d996eab680d84a5b138a214bb5d bindend.",
+  "chapter": "06.10",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached, keine ref-Zeile).",
+  "conflicts": [
+    {
+      "id": "C6-01",
+      "thema": "Zwei Queues: BoundedPriority (Sink-Spiegel) ≠ FairInference (Scheduler); getrennte Zähler/Semantik [M6-08/13]."
+    },
+    {
+      "id": "C6-02",
+      "thema": "ready ⇏ healthy (finally-set vs load_error); ok = ready AND healthy; ready+ok-false legitim."
+    },
+    {
+      "id": "C6-03",
+      "thema": "ok ≠ HTTP-Status (/health immer 200; ok Body-Feld)."
+    },
+    {
+      "id": "C6-04",
+      "thema": "Store-Gate nur bei live-an; /api/metrics ohne Gate."
+    },
+    {
+      "id": "C6-05",
+      "thema": "load_error-Text nur startupErrors/worker.failed, nie JSON (nur healthy-bool)."
+    },
+    {
+      "id": "C6-06",
+      "thema": "Healthchecks abweichend: Prod nur 200, VPS ready and ok (Pfad nennen)."
+    },
+    {
+      "id": "C6-07",
+      "thema": "scheduler.overloaded nur Voll-Ablehnung; coalesced/stale/cancelled still (Zähler)."
+    },
+    {
+      "id": "C6-08",
+      "thema": "Sink-Drops nur in-process (Pfad nennen: Scheduler-Snapshot vs Python-API)."
+    },
+    {
+      "id": "C6-09",
+      "thema": "server.stopping nach Facade-close, vor events.close (kein Vor-Cleanup)."
+    },
+    {
+      "id": "C6-10",
+      "thema": "GET /api/metrics blockiert Event-Loop (sync in async def)."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [
+    "start -> emit server.starting [M6-15/19]",
+    "ready_worker -> emit server.ready [M6-15]",
+    "scheduler_error -> emit worker.failed + startupErrors [M6-11/15]",
+    "submit -> emit scheduler.overloaded nur voll [M6-08/15]",
+    "ingest -> emit recorder.failed [M6-15]",
+    "Module -> ChannelLogManager -> Hub.emit [M6-19]",
+    "emit -> SQLite.append kanonisch+Cursor [M6-19]",
+    "emit -> BoundedPriority file/stdout (Spiegel/Drops) [M6-13/19]",
+    "emit -> control-Queue -> Subscriber [M6-14/19]",
+    "Store -> store_status -> /health.eventStore [M6-01/12]",
+    "metrics -> /health Felder [M6-01/02/05/11]",
+    "metrics -> /api/metrics [M6-04/05/06/07/09]",
+    "Scheduler.snapshot -> metrics.scheduler [M6-07/08/09]",
+    "SessionStore.snapshots -> metrics Sessions [M6-05]",
+    "public_info -> /api/v2/info (ohne Store/metrics) [M6-10]",
+    "settings+store_status -> /api/logging.eventStore [M6-12]",
+    "SQLite.query -> /api/logs/events [M6-18]",
+    "create_log_access -> /ws/logs Token [M6-14]",
+    "/ws/logs -> latest_cursor/query -> Client [M6-14/19]",
+    "/ws/logs -> subscribe_async Weckruf [M6-14/19]",
+    "HEALTHCHECK -> /health nur 200 [M6-16]",
+    "/ws/transcribe metrics -> session.snapshot [M6-17]"
+  ],
+  "facts": [
+    {
+      "aussage": "GET /health immer 200 (kein status_code, kein Auth); Felder ok/ready/activeSessions/activeSpeakers/rejectedSessions/scheduler/models/sttReady/sttModels/startupErrors/eventStore.",
+      "beleg": "server.py Z.8885-8905; Tests Z.874-895/111-120/393-396.",
+      "evidenz": "A",
+      "gueltigkeit": "create_app (liveness ≠ Bereitschaft)",
+      "id": "M6-01"
+    },
+    {
+      "aussage": "ready = Service-Event (wait_ready); ok = ready AND healthy(+logging); finally-set → ready-true/ok-false möglich; load_error-Text nie in JSON.",
+      "beleg": "server.py Z.2003/2024-2030/2173-2178/7685-7700/8522-8523.",
+      "evidenz": "B",
+      "gueltigkeit": "Default-Scheduler",
+      "id": "M6-02"
+    },
+    {
+      "aussage": "logging_ready = !live || store.available → ok; live-aus entkoppelt Store; /api/metrics ohne Gate.",
+      "beleg": "server.py Z.8889-8894.",
+      "evidenz": "B",
+      "gueltigkeit": "nur /health",
+      "id": "M6-03"
+    },
+    {
+      "aussage": "GET /api/metrics = service.metrics() JSON; kein Auth/Cache/Format/Filter; sync in async def (blockiert Loop).",
+      "beleg": "server.py Z.8939-8941; Tests Z.2547-2561.",
+      "evidenz": "A",
+      "gueltigkeit": "alle (kein Prometheus)",
+      "id": "M6-04"
+    },
+    {
+      "aussage": "metrics: snapshots (Sessions/Speakers/pending/rejected/sessions) + ready/ok/scheduler/models/sttModelManagement/limits/startupErrors; Modelle: lifecycle (state/loaded/error/Activity/Idle/Policy/active) + readiness (revision/state/readiness/minimumReady/provisioning/refresh/Kandidaten/Diagnostik).",
+      "beleg": "server.py Z.6222-6234/7044-7047/7599-7621/7685-7700; stt_model_management.py Z.815-833.",
+      "evidenz": "B",
+      "gueltigkeit": "Aggregat (+ Session-WS M6-17)",
+      "id": "M6-05"
+    },
+    {
+      "aussage": "limits: maxSessions/Speakers/AudioQueue/RealtimeAge/FinalDepth/GlobalDepth/Degradation; Defaults 4/4/30s/1500ms/8/64/1500ms; Laufzeit-Settings.",
+      "beleg": "server.py Z.487-494/7702-7711.",
+      "evidenz": "B",
+      "gueltigkeit": "überschreibbar",
+      "id": "M6-06"
+    },
+    {
+      "aussage": "scheduler: mode low-memory-one-model (shared) vs balanced-main-plus-realtime; queues/workers.main immer, realtime nur bei eigen; shared → Aliase.",
+      "beleg": "server.py Z.2124-2204.",
+      "evidenz": "B",
+      "gueltigkeit": "laufend (sonst Platzhalter)",
+      "id": "M6-07"
+    },
+    {
+      "aussage": "FairInference: snapshot name/queued/sessions/perSession/coalesced/stale/rejected; final-Ablehnung bei Session-/Global-Tiefe; realtime ersetzt (coalesced) sonst global-Ablehnung; stale bei deadline<now; cancel → cancelled; Drop-Callback kein System-Event (Session-Zähler).",
+      "beleg": "server.py Z.1756-1939/3050-3091/8613-8627.",
+      "evidenz": "B",
+      "gueltigkeit": "pro Queue-Instanz",
+      "id": "M6-08"
+    },
+    {
+      "aussage": "Worker: name/ready/healthy/completed/failed/busyRatio/Latenzen {count,avg,max,p50,p95} (Ring 256); ready-finally; stop join 10s.",
+      "beleg": "server.py Z.1580-1615/1975-2030.",
+      "evidenz": "B",
+      "gueltigkeit": "main(+realtime); Momentaufnahme",
+      "id": "M6-09"
+    },
+    {
+      "aussage": "GET /api/v2/info: reine Identitätsprojektion (no-store): schema 1/protocol 2/Version/Commit/Status (complete-Regel)/build/distribution/runtime/instanceId; einmal beim Bau gecacht, kein Git/metrics/subprocess.",
+      "beleg": "server.py Z.8824/8874-8879; identity.py Z.1-138; schema.py Z.29; Tests.",
+      "evidenz": "A",
+      "gueltigkeit": "pro App (modell-/store-unabhängig)",
+      "id": "M6-10"
+    },
+    {
+      "aussage": "startupErrors: [] initial; nur Scheduler-Init-Fehler {type,message,where lane_engine} + worker.failed-Event + publish_all + ready-Push; monoton, nie Reset.",
+      "beleg": "server.py Z.6254/7699/8543-8545/8629-8645.",
+      "evidenz": "B",
+      "gueltigkeit": "pro Service (nicht persistiert)",
+      "id": "M6-11"
+    },
+    {
+      "aussage": "/api/logging.eventStore: {enabled,path,state,available,lastErrorType,lastTransitionAt,oldestCursor,latestCursor}; state disabled/ready/degraded (available = ready); getrennt geheilt; Invarianten/Defaults.",
+      "beleg": "server.py Z.481-484/526/540-543/9320-9381; event_logging.py Z.1099-1288; Tests.",
+      "evidenz": "A",
+      "gueltigkeit": "HTTP-Status (Mechanik → 06.08/09)",
+      "id": "M6-12"
+    },
+    {
+      "aussage": "BoundedPriority = Sink-Spiegel (file/stdout + payload-freie control); maxsize = queue_size (min 100); Verdrängung schlechter-nur-bei-besserem, Prio 0/1/2; Drops nur in-process (kein HTTP/WS); SQLite vor Enqueue (kein kanonischer Verlust).",
+      "beleg": "event_logging.py Z.189-253/732-744/900-1015/1071-1296; server.py Z.1252; Tests Z.737-805.",
+      "evidenz": "A",
+      "gueltigkeit": "nur Spiegel (≠ FairInference)",
+      "id": "M6-13"
+    },
+    {
+      "aussage": "/ws/logs sqlite-first: accept → live-aus 1008 / Store-fehlt 1011 → subscribe+Token+Scope (Nicht-Admin 3 Kanäle) → invalid_cursor/cursor_ahead 1008 → hello(v2/sqlite_first/Cursor)/subscribed → ggf. gap(retention) → Replay-1000er/replay_completed → live (replay:false)/keepalive/pong; store_error → 1011; finally unsubscribe; Pull nicht Push. Token aus create_log_access (v2-ready).",
+      "beleg": "server.py Z.149/331-342/7772-7806/9560-9847/10001-10013; Tests.",
+      "evidenz": "A",
+      "gueltigkeit": "Live-Zugriff (Security → 06.09)",
+      "id": "M6-14"
+    },
+    {
+      "aussage": "Status-Events system: starting (start, host/port), ready (healthy/models), stopping (nach Facade-close, vor hub-close), worker.failed (error/lane/Typ), scheduler.overloaded (warning, nur Voll-Ablehnung + parallel queue.limit_reached), recorder.failed (error/transport/IDs). stopping erreicht Store (shared Hub). coalesced/stale/cancelled still.",
+      "beleg": "server.py Z.7278-7323/7499-7526/8524-8530/8635-8643/3024-3034; event_logging.py Z.1298-1362.",
+      "evidenz": "B",
+      "gueltigkeit": "Kanal system",
+      "id": "M6-15"
+    },
+    {
+      "aussage": "Healthchecks nur Liveness-200 (Docker 30s/10s/60s/5, urlopen 5s; Compose gleich); Kommentar+Test: nie ready/ok/Modell (sonst Restart-Loop); VPS abweichend ready and ok.",
+      "beleg": "Dockerfile Z.88-96; compose Z.83-86; vps Z.55-56; Tests Z.141-188.",
+      "evidenz": "A",
+      "gueltigkeit": "Prod 200-only; VPS strenger",
+      "id": "M6-16"
+    },
+    {
+      "aussage": "WS metrics = session.snapshot() (pro Session, Recorder-Queues/Zähler/Ledger/Latenzen) ≠ /api/metrics (Aggregat); queueDepth = Recorder, nicht Inferenz.",
+      "beleg": "server.py Z.4624-4666/5999-6006/10087-10092.",
+      "evidenz": "B",
+      "gueltigkeit": "nur /ws/transcribe",
+      "id": "M6-17"
+    },
+    {
+      "aussage": "Historie: Scope Admin-oder-Token (sonst 401), Nicht-Admin 3 Kanäle+eigene Session, Store-fehlt 503; Filter channels/events/session/transcription/from/to/afterCursor/limit (Store 1-1000); Antwort data/Cursor/scopes/deliveryMode.",
+      "beleg": "server.py Z.9456-9558; event_logging.py Z.676; Tests Z.1413-1442.",
+      "evidenz": "A",
+      "gueltigkeit": "Store nötig",
+      "id": "M6-18"
+    },
+    {
+      "aussage": "Store: events-Tabelle (Cursor-PK/event_id-UNIQUE/Kontext/payload) + 6 Indizes + watermarks; WAL/NORMAL; emit sanitisiert→Envelope(v1/ID/UTC/Kontext/data/meldung)→append→Cursor→commit→Spiegel; ohne Store In-Memory; Fehler → None/degraded, kein JSONL-Fallback; Hub einmal/Service (Facades teilen).",
+      "beleg": "event_logging.py Z.438-589/916-1006/1268-1288; server.py Z.6313-6315; operations.py Z.327-399; Tests.",
+      "evidenz": "A",
+      "gueltigkeit": "Kanonik (Detail → 06.08/09)",
+      "id": "M6-19"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N6-01",
+      "thema": "Kein Prometheus/OpenMetrics (nur JSON) [M6-04]."
+    },
+    {
+      "id": "N6-02",
+      "thema": "Keine Liveness/Readiness-Endpunkte (nur ready-Feld) [M6-01]."
+    },
+    {
+      "id": "N6-03",
+      "thema": "Keine Zeitreihen/Histogramme (nur 256er-Momentaufnahme) [M6-09]."
+    },
+    {
+      "id": "N6-04",
+      "thema": "Keine Sink-Drop-Exposition [M6-13]."
+    },
+    {
+      "id": "N6-05",
+      "thema": "Kein load_error-Feld (nur bool + startupErrors) [M6-02/11]."
+    },
+    {
+      "id": "N6-06",
+      "thema": "Keine Request-/HTTP-Zähler [M6-05]."
+    },
+    {
+      "id": "N6-07",
+      "thema": "Kein Alerting/Webhook/Evaluator [M6-15]."
+    },
+    {
+      "id": "N6-08",
+      "thema": "Kein Inferenz-queueDepth in /health [M6-08]."
+    }
+  ],
+  "researcher_session": "ses_e3dcf3263ffeU79LcwORT9nGDj",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U6-01",
+      "thema": "metrics-sync-Absicht [M6-04]."
+    },
+    {
+      "id": "U6-02",
+      "thema": "starting-Sichtbarkeit ohne Store [M6-19]."
+    },
+    {
+      "id": "U6-03",
+      "thema": "Client-Pollfrequenz (nur Docker-Intervalle) [M6-16]."
+    },
+    {
+      "id": "U6-04",
+      "thema": "startupErrors-Reset/Wachstum [M6-11]."
+    },
+    {
+      "id": "U6-05",
+      "thema": "incomplete-Behandlung im Deployment [M6-10]."
+    }
+  ],
+  "writer_notes": "Vorausgesetzt/nur referenziert: 06.07 (Start/Stop), 06.08 (Speicher/Latenz), 06.09 (Schalter). Trägt: Health/Info/Metriken/Queues/Worker/Events/Store/Live/Docker. Hub doppelt (Schnittstelle 06.09/06.10). Konsistenz 06.01-09 keine Widersprüche. Diagramm IDEA: Quellen→Hub→Store→Leser, Kanten 1-22."
+}

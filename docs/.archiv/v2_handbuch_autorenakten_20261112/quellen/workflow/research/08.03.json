@@ -1,0 +1,401 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD). Nur Commit bindend.",
+  "chapter": "08.03",
+  "commit_verification": ".git/HEAD Literal a8993c5c68042d996eab680d84a5b138a214bb5d (detached). Quellen nur *.py/Tests: settings_control.py, protocol_v2/*, server.py, operations.py.",
+  "conflicts": [
+    {
+      "id": "C-1",
+      "thema": "live und next_activation in effective identisch; Unterschied erst freeze_activation + Live-Overlays."
+    },
+    {
+      "id": "C-2",
+      "thema": "PatchResult.values enthaelt intern Server-Keys, kein Wire-Feld; nicht als Client-API dokumentieren."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "Quellenbindung verifiziert: HEAD detached auf a8993c5c; nur *.py/Tests, keine docs/README/Legacy-STT.",
+      "beleg": ".git/HEAD:1",
+      "evidenz": "A",
+      "gueltigkeit": "Kapitel gesamt",
+      "id": "ST8-01"
+    },
+    {
+      "aussage": "builtin_definitions + SettingsRegistry einzige v2-Autoritaet; SettingsPort haelt keine Werte.",
+      "beleg": "settings_control.py:278,612-669; ports.py:36-81",
+      "evidenz": "A",
+      "gueltigkeit": "v2-Domaene",
+      "id": "ST8-02"
+    },
+    {
+      "aussage": "SOLLMENGE 19 Keys (Test set-Vergleich). 16 session/3 server/0 client_local; live 3/next_activation 11/next_session 5/server_restart 0; server_default 16; writable-false 2; secret 0.",
+      "beleg": "settings_control.py:285-609; test_protocol_v2_settings.py:790-814",
+      "evidenz": "A",
+      "gueltigkeit": "Vollstaendigkeit",
+      "id": "ST8-03"
+    },
+    {
+      "aussage": "Key-Konstanten, Backend-Enum [auto,onnx,tflite], TIMING_KEYS (6), Watchdog-Mengen zentral definiert.",
+      "beleg": "settings_control.py:71-93,99,127-149",
+      "evidenz": "A",
+      "gueltigkeit": "Metadaten",
+      "id": "ST8-04"
+    },
+    {
+      "aussage": "SettingDefinition 11 Felder; to_schema_dict liefert nur key/scope/auth/type/constraints/defaultValue/applyPolicy (+description). writable/secret/hasServerDefault nicht auf Leitung.",
+      "beleg": "settings_control.py:170-212",
+      "evidenz": "A",
+      "gueltigkeit": "Schema-Ausgabe",
+      "id": "ST8-05"
+    },
+    {
+      "aussage": "Koerzierung: bool nie fuer int/float (invalid_type); float endlich; string nicht-leer; string_list nur nicht-leere Strings.",
+      "beleg": "settings_control.py:689-732,678-682",
+      "evidenz": "A",
+      "gueltigkeit": "je Key",
+      "id": "ST8-06"
+    },
+    {
+      "aussage": "Constraint-Reihenfolge min->max->allowed(invalid_type)->allowedValues(value_not_allowed)->minItems(too_few_items); unit/calibration/lessThanKeys ignoriert aber publiziert.",
+      "beleg": "settings_control.py:735-761",
+      "evidenz": "A",
+      "gueltigkeit": "Wertepruefung",
+      "id": "ST8-07"
+    },
+    {
+      "aussage": "13 Wire-Fehlercodes (unknown_key, invalid_type, out_of_range, too_few_items, cross_field_conflict, wrong_scope, stale_settings_revision, read_only_runtime_authority, invalid_payload, wake_word_*, persistence_failed, value_not_allowed).",
+      "beleg": "settings_control.py:153-165",
+      "evidenz": "A",
+      "gueltigkeit": "Fehlervokabular",
+      "id": "ST8-08"
+    },
+    {
+      "aussage": "Cross-Field laeuft bei jedem Watchdog-Key gegen FINALEN Kandidaten (warning>=deadline -> cross_field_conflict).",
+      "beleg": "settings_control.py:784-821; test_settings_control_plane.py:278-336,537-614",
+      "evidenz": "A",
+      "gueltigkeit": "activation-Transaktionen",
+      "id": "ST8-09"
+    },
+    {
+      "aussage": "Patch-Envelope: baseSettingsRevision int (kein bool) >=0, changes nicht-leeres dict; Wire-Vorpruefung invalid_payload.",
+      "beleg": "settings_control.py:764-781; commands.py:183-190,197-203",
+      "evidenz": "A",
+      "gueltigkeit": "session patch + REST",
+      "id": "ST8-10"
+    },
+    {
+      "aussage": "Key-Reihenfolge Session-Patch: unknown_key -> wrong_scope (server) -> read_only (writable false) -> Koerzierung -> Session-Validator (nur selection).",
+      "beleg": "settings_control.py:969-1009; server.py:3195",
+      "evidenz": "A",
+      "gueltigkeit": "Session-Patch",
+      "id": "ST8-11"
+    },
+    {
+      "aussage": "Atomar: jeder Fehler verwirft alles, sortiert (field,code); no_change ohne Bump; sonst +1 pro Transaktion, changed_keys sortiert.",
+      "beleg": "settings_control.py:1011-1091; test_settings_control_plane.py:129-207",
+      "evidenz": "A",
+      "gueltigkeit": "Session-Patch",
+      "id": "ST8-12"
+    },
+    {
+      "aussage": "Stale Revision -> settings_revision_conflict + stale_settings_revision, keine Mutation; Wire in command.ack.",
+      "beleg": "settings_control.py:952-967; connection.py:535-536",
+      "evidenz": "A",
+      "gueltigkeit": "Nebenlaeufigkeit",
+      "id": "ST8-13"
+    },
+    {
+      "aussage": "live/next_activation sofort in effective; next_session/server_restart nicht; freeze latched nur next_activation; Timing ms/1000=s.",
+      "beleg": "settings_control.py:1060-1078,1093-1119; test_protocol_v2_settings.py:1182-1225",
+      "evidenz": "A",
+      "gueltigkeit": "requested/effective",
+      "id": "ST8-14"
+    },
+    {
+      "aussage": "Admission/Projektion filtern scope==session; snapshot requested/effective/settingsRevision aus EINER Projektion.",
+      "beleg": "settings_control.py:1121-1166; snapshot.py:58-78",
+      "evidenz": "A",
+      "gueltigkeit": "Wire-Projektionen",
+      "id": "ST8-15"
+    },
+    {
+      "aussage": "Session-Seed = server_effective + selection aus session_config; spaeterer Server-Patch schreibt bestehende Sessions nicht um.",
+      "beleg": "settings_control.py:899-913; server.py:3173-3196; test_settings_control_plane.py:347-361",
+      "evidenz": "A",
+      "gueltigkeit": "Session-Start",
+      "id": "ST8-16"
+    },
+    {
+      "aussage": "Server-Patch: unknown_key; ohne server_default -> wrong_scope; secret -> read_only; no_change ohne Bump.",
+      "beleg": "settings_control.py:1260-1353; test_settings_control_plane.py:395-420",
+      "evidenz": "A",
+      "gueltigkeit": "Server-Scope",
+      "id": "ST8-17"
+    },
+    {
+      "aussage": "Server prepare->persist->commit: Persist-Exception -> internal_error + persistence_failed, RAM/Revision unveraendert; requiresRestart nur server_restart (nie).",
+      "beleg": "settings_control.py:1355-1405; test_settings_control_plane.py:849-883",
+      "evidenz": "A",
+      "gueltigkeit": "Server-Atomik",
+      "id": "ST8-18"
+    },
+    {
+      "aussage": "Persistenz JSON nicht SQLite: RuntimeConfigStore settingsControlOverlay/settingsRevision, read-modify-write + os.replace; Datei <data_root>/config/runtime.json.",
+      "beleg": "operations.py:401-556; server.py:528-532,6282-6294",
+      "evidenz": "A",
+      "gueltigkeit": "Server-Defaults",
+      "id": "ST8-19"
+    },
+    {
+      "aussage": "Startup fail-fast: Overlay-Key muss existieren + has_server_default; secret -> ValueError secret_not_allowed; Koerzier/Cross brechen Start ab.",
+      "beleg": "settings_control.py:1184-1240; test_settings_control_plane.py:787-847",
+      "evidenz": "A",
+      "gueltigkeit": "Serverstart",
+      "id": "ST8-20"
+    },
+    {
+      "aussage": "REST v2: GET schema + /server oeffentlich (secretsExposed false); PATCH /server admin mit 200/409/422/500.",
+      "beleg": "server.py:9223-9292; test_protocol_v2_settings.py:759-766,881-922",
+      "evidenz": "A",
+      "gueltigkeit": "HTTP",
+      "id": "ST8-21"
+    },
+    {
+      "aussage": "WS: nur session_settings.patch -> ack + settings.changed-Gruppen POLICY_EVENT_ORDER; kein WS fuer Server-Settings (nur REST).",
+      "beleg": "schema.py:47,51-57; connection.py:505-582",
+      "evidenz": "A",
+      "gueltigkeit": "Wire-Schreibpfad",
+      "id": "ST8-22"
+    },
+    {
+      "aussage": "selection-Validator: leer bei Wake konfiguriert -> selection_required; Katalog fail-closed -> unavailable.",
+      "beleg": "server.py:3198-3259; test_settings_control_plane.py:437-478,616-697",
+      "evidenz": "A",
+      "gueltigkeit": "nur selection",
+      "id": "ST8-23"
+    },
+    {
+      "aussage": "Kein Key secret; Schema/Surface ohne Secrets; Secret-Patch -> read_only; admin_api_key kein Katalog-Key.",
+      "beleg": "settings_control.py:198,646-648,1309-1317; test_protocol_v2_settings.py:759-766",
+      "evidenz": "A",
+      "gueltigkeit": "Secrets",
+      "id": "ST8-24"
+    },
+    {
+      "aussage": "Wirkung: 6 activation -> TimingPolicy (s); sensitivity/frames/gain/cooldown/preRoll -> AttemptPolicy; noise/vad/gain -> Engine; backend/globalDisabled -> Katalog; kroko -> Lizenz.",
+      "beleg": "server.py:2490-2566,3350-3410,6386-6396,6711-6720,7183-7264",
+      "evidenz": "A",
+      "gueltigkeit": "Verbraucher",
+      "id": "ST8-25"
+    },
+    {
+      "aussage": "SCOPE_CLIENT_LOCAL nur Konstante; kein Key/Route/Verzweigung (1 Treffer repo-weit).",
+      "beleg": "settings_control.py:40",
+      "evidenz": "A",
+      "gueltigkeit": "client_local",
+      "id": "ST8-26"
+    },
+    {
+      "aussage": "server_restart voll implementiert (effective/requiresRestart/Gruppe), aber kein Key; POLICIES nicht ausgeschoepft.",
+      "beleg": "settings_control.py:54,60,1073-1074,1364-1365,1389-1404",
+      "evidenz": "B",
+      "gueltigkeit": "Policy-Menge",
+      "id": "ST8-27"
+    },
+    {
+      "aussage": "globalDisabledIds nur string_list; set_global_disabled ungeprueft; unbekannte IDs wirkungslos.",
+      "beleg": "settings_control.py:577-590; wakeword_catalog.py:1320-1332",
+      "evidenz": "A",
+      "gueltigkeit": "Server Wake-Disable",
+      "id": "ST8-28"
+    },
+    {
+      "aussage": "v1-Legacy-Settings nicht Teil v2-Katalog; gehoeren zu 03.x.",
+      "beleg": "server.py:7959-7969,8827-8828",
+      "evidenz": "A",
+      "gueltigkeit": "Abgrenzung",
+      "id": "ST8-29"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-1",
+      "thema": "client_local nur Konstante, 0 Keys, keine Route/Verzweigung."
+    },
+    {
+      "id": "N-2",
+      "thema": "server_restart vorhanden, kein Key; requiresRestart immer false."
+    },
+    {
+      "id": "N-3",
+      "thema": "Settings-Persistenz JSON (runtime.json), NICHT SQLite; SQLite nur Event-Store."
+    },
+    {
+      "id": "N-4",
+      "thema": "secret_not_allowed nur Startup-ValueError-Text, nicht Wire-Code; Patch = read_only."
+    },
+    {
+      "id": "N-5",
+      "thema": "writable/secret/hasServerDefault nicht im Schema; Read-only erst per Fehler erkennbar."
+    },
+    {
+      "id": "N-6",
+      "thema": "Keine Obergrenze Warning/minFrames/cooldown/preRoll (Pre-Roll-Clamp nur Kommentar)."
+    },
+    {
+      "id": "N-7",
+      "thema": "Kalibrierwerte pending (WW-18/19, EVIDENCE_BLOCKED); Defaults keine Empfehlung."
+    },
+    {
+      "id": "N-8",
+      "thema": "globalDisabledIds ohne Katalog-Validierung; Tippfehler wirkungslos."
+    }
+  ],
+  "researcher_session": "ses_e36b7e683ffeOBtg5n3gYyzUNg",
+  "solver_notes": [
+    {
+      "def": 15000,
+      "key": "activation.initialSpeechTimeoutMs",
+      "pol": "next_activation",
+      "scope": "session",
+      "typ": "int"
+    },
+    {
+      "def": 3000,
+      "key": "activation.followupTimeoutMs",
+      "pol": "next_activation",
+      "scope": "session",
+      "typ": "int"
+    },
+    {
+      "def": 600000,
+      "key": "activation.segmentWatchdogInitialMs",
+      "pol": "next_activation",
+      "scope": "session",
+      "typ": "int"
+    },
+    {
+      "def": 180000,
+      "key": "activation.segmentWatchdogRefreshMs",
+      "pol": "next_activation",
+      "scope": "session",
+      "typ": "int"
+    },
+    {
+      "def": 30000,
+      "key": "activation.segmentWatchdogWarningMs",
+      "pol": "next_activation",
+      "scope": "session",
+      "typ": "int"
+    },
+    {
+      "def": 5000,
+      "key": "activation.closingRecoveryTimeoutMs",
+      "pol": "next_activation",
+      "scope": "session",
+      "typ": "int"
+    },
+    {
+      "def": 0.5,
+      "key": "wakeWord.sensitivity",
+      "pol": "next_activation",
+      "scope": "session",
+      "typ": "float"
+    },
+    {
+      "def": [],
+      "key": "wakeWord.selection",
+      "pol": "next_session",
+      "scope": "session",
+      "typ": "string_list"
+    },
+    {
+      "def": false,
+      "key": "runtimeSuppression.manual",
+      "pol": "live",
+      "scope": "session",
+      "typ": "bool"
+    },
+    {
+      "def": false,
+      "key": "runtimeSuppression.wakeWord",
+      "pol": "live",
+      "scope": "session",
+      "typ": "bool"
+    },
+    {
+      "def": 1,
+      "key": "wakeWord.minConsecutivePredictionFrames",
+      "pol": "next_activation",
+      "scope": "session",
+      "typ": "int"
+    },
+    {
+      "def": 0,
+      "key": "wakeWord.cooldownMs",
+      "pol": "next_activation",
+      "scope": "session",
+      "typ": "int"
+    },
+    {
+      "def": 0,
+      "key": "wakeWord.preRollMs",
+      "pol": "next_activation",
+      "scope": "session",
+      "typ": "int"
+    },
+    {
+      "def": 1.0,
+      "key": "wakeWord.detectorGain",
+      "pol": "next_activation",
+      "scope": "session",
+      "typ": "float"
+    },
+    {
+      "def": false,
+      "key": "wakeWord.noiseSuppressionEnabled",
+      "pol": "next_session",
+      "scope": "session",
+      "typ": "bool"
+    },
+    {
+      "def": 0.0,
+      "key": "wakeWord.vadThreshold",
+      "pol": "next_session",
+      "scope": "session",
+      "typ": "float"
+    },
+    {
+      "def": "auto",
+      "key": "wakeWord.inferenceBackend",
+      "pol": "next_session",
+      "scope": "server",
+      "typ": "string"
+    },
+    {
+      "def": [],
+      "key": "wakeWord.globalDisabledIds",
+      "pol": "next_session",
+      "scope": "server",
+      "typ": "string_list"
+    },
+    {
+      "def": false,
+      "key": "kroko.forceCommunity",
+      "pol": "live",
+      "scope": "server",
+      "typ": "bool"
+    }
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-Branch",
+      "thema": "Branch feat/v2-release-cleanup nicht verifizierbar; nur Commit bindend."
+    }
+  ],
+  "writer_notes": "Reiner Referenzkatalog: 19 Keys mit Scope/Typ/Default/Constraints/Policy; Patch/Revision nur verweisen (03.x), settings.changed nur verweisen (08.01). Querschnitt: Atomaritaet ST8-12, Konflikt ST8-13, Persistenz ST8-19, REST/WS ST8-21/22, Secrets ST8-24. Keine Diagramme."
+}

@@ -161,3 +161,10 @@ Die Gesamtaktion bleibt `In Umsetzung`, bis auch die verbleibenden
 Arbeitspakete abgenommen und Umsetzung, Gegenprüfung,
 Abweichungsdokumentation und Fachdokumentation konsistent sind. Ein einzelnes
 Arbeitspaket wird erst nach Root-Abnahme als abgenommen geführt.
+## Ergänzende gesicherte V2-Arbeitsdateien
+
+Die folgenden Entwicklungs- und Dokumentationsarbeitsstände waren bislang nur außerhalb des versionierten Produktstands lokal abgelegt. Sie sind historische Archivquellen, keine zweite Produktdokumentation:
+
+- [V2-Handbuch-Autorenakten (Stand 12.11.2026)](v2_handbuch_autorenakten_20261112/README.md)
+- [Historische Architektur-, Inventur- und Kroko-V2-Arbeitsdateien](v2_entwicklungsarbeitsdateien/README.md)
+- [V2-Client-Paritätsplanung (29.09.2026)](v2-client-paritaet/README.md)

@@ -1,0 +1,285 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup lokal NICHT beweisbar (keine refs/heads/**, keine packed-refs). .git/logs/HEAD zeigt 'checkout: moving from main to FETCH_HEAD'. Branchangabe ist Auftragskontext, nur der Commit ist verifiziert.",
+  "chapter": "03.13",
+  "commit_verification": "Verifiziert: .git/HEAD enthält exakt a8993c5c68042d996eab680d84a5b138a214bb5d; .git/FETCH_HEAD nennt denselben SHA (Quelle https://github.com/marcosudau-vps/voice-stt-server); .git/shallow vorhanden. Keine refs/heads/**, keine packed-refs.",
+  "correction_round": 0,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "Quellbindung: Checkout steht detached auf a8993c5c68042d996eab680d84a5b138a214bb5d; Branch lokal nicht belegbar.",
+      "beleg": ".git/HEAD (exakter SHA); .git/FETCH_HEAD (SHA + Repo-URL); .git/logs/HEAD (main -> FETCH_HEAD); .git/shallow; fehlende refs/heads und packed-refs",
+      "evidenz": "CODE (Git-Artefakt)",
+      "gueltigkeit": "—",
+      "id": "X1-01"
+    },
+    {
+      "aussage": "Startfähigkeit: YAML settings: mappt 1:1 auf ServerSettings-Felder. Unbekannte Namen, Secrets (admin_api_key, openai_api_key), abgeleitete Pfade → SystemExit; device ausschließlich cpu. Beispiele nur ServerSettings-Felder (kein wakeWord.*, kein cpu_threads in settings).",
+      "beleg": "server.py: load_yaml_config_defaults 10333-10391; YAML_CONFIG_SECRET_KEYS 10301; YAML_CONFIG_DERIVED_KEYS 10302; device-Prüfung 10379-10380; Feld-Allowlist 10360; Tests test_fastapi_server_protocol.py:167-180",
+      "evidenz": "CODE+TEST",
+      "gueltigkeit": "STARTUP (Konfigurationsladung)",
+      "id": "X1-02"
+    },
+    {
+      "aussage": "Typ-Coercion begrenzt Beispielwerte: wake_words u. a. String-Felder müssen Zeichenfolgen sein (YAML-Liste abgelehnt); Float-Felder akzeptieren int/float, kein bool; Dict-Felder nur Objekt/null. wake_words = einzelner String, mehrere Wake Words komma-getrennt.",
+      "beleg": "server.py: coerce_setting_value 1219-1273; wake_words=args.wake_words 10740",
+      "evidenz": "CODE",
+      "gueltigkeit": "STARTUP",
+      "id": "X1-03"
+    },
+    {
+      "aussage": "Wirksamkeitsklassen harter Vertrag: STARTUP_ONLY_SETTINGS, NEW_SESSION_RUNTIME_SETTINGS, ACTIVE_RUNTIME_SETTINGS. Live-Patch weist startup-only mit reason startup_only ab, labelt appliesTo. GET /api/config + ready-Payload veröffentlichen Vertrag als runtimeSettings.",
+      "beleg": "server.py: 178-285 (Mengen), runtime_settings_contract 1211-1216, update_settings 7826-7892; Tests test_fastapi_server_protocol.py:576-590, test_fastapi_server_multi_user.py:2440-2447",
+      "evidenz": "CODE+TEST",
+      "gueltigkeit": "Klassenvertrag ACTIVE/NEW_SESSION/STARTUP_ONLY",
+      "id": "X1-04"
+    },
+    {
+      "aussage": "YAML-Werte sind CLI-Defaults, CLI überschreibt: parser.set_defaults(**yaml_defaults); None-Defaults fallen auf YAML/Basis zurück. Test: model small per CLI bei max_sessions 8 aus YAML.",
+      "beleg": "server.py: set_defaults 10655; _value_or_default 10666-10668; BASE_TUNING_DEFAULTS 151-160; Test test_fastapi_server_protocol.py:126-165",
+      "evidenz": "CODE+TEST",
+      "gueltigkeit": "STARTUP",
+      "id": "X1-05"
+    },
+    {
+      "aussage": "Nur tuning_profile custom; frühere Profile in CLI und YAML abgelehnt. Keine Presets; Batch-/Timing-/VAD-Werte explizit.",
+      "beleg": "server.py: TUNING_PROFILES 162-167, validate_tuning_profile 170-175, --profile 10411-10418; Tests :182-194, 229-242",
+      "evidenz": "CODE+TEST",
+      "gueltigkeit": "STARTUP_ONLY",
+      "id": "X1-06"
+    },
+    {
+      "aussage": "Beispiel A (Realtime, latenzorientierte Referenz, KEINE Messempfehlung): device cpu, language de, tuning_profile custom, transcription_engine faster_whisper, model faster-whisper-large-v3-turbo, realtime_engine kroko_onnx, realtime_model Kroko-DE-Community-64-L-Streaming-001.data, use_main false, pause 0.02, realtime_batch 16, batch 16, beam_rt 3, vad true, realtime_callback update, early 0.2, pre_buffer 0.75, max_realtime_queue_age_ms 1500.",
+      "beleg": "ServerSettings:419-435,447,490-491; BASE_TUNING_DEFAULTS 151-160; config.yaml:20,43,44,45,47,53,57,76,77; Test test_fastapi_server_protocol.py:182-194",
+      "evidenz": "CODE+YAML+TEST",
+      "gueltigkeit": "gemischt: NEW_SESSION (pause, realtime_batch, vad, callback, early, pre_buffer), STARTUP_ONLY (batch, beam_rt, use_main), ACTIVE (max_realtime_queue_age)",
+      "id": "X1-07"
+    },
+    {
+      "aussage": "realtime_processing_pause = Takt der Realtime-Schleife, geclampt auf min. 0.001: 0.0 nicht wirksam 0. Default 0.02.",
+      "beleg": "realtime.py: _safe_get_realtime_pause 54-63, Schleife 1019-1037; server.py: Default 431, Klasse 241, CLI 10466, Recorder-Kopie 2780; config.yaml:53; Test :221",
+      "evidenz": "CODE+TEST",
+      "gueltigkeit": "NEW_SESSION",
+      "id": "X1-08"
+    },
+    {
+      "aussage": "early_transcription_on_silence echter NEW_SESSION-Hebel im Recorder (Früh-Transkription nach Sprach-Ende). Default 0.2.",
+      "beleg": "recording.py:502-503; server.py: Default 435, Klasse 225, Recorder-Config 2796; config.yaml:57",
+      "evidenz": "CODE",
+      "gueltigkeit": "NEW_SESSION",
+      "id": "X1-09"
+    },
+    {
+      "aussage": "realtime_callback wählt beim Recorder-Aufbau stabilisierten vs. update-Kanal. Default/YAML: update.",
+      "beleg": "server.py: 2745-2749; Default 425; Klasse 238; CLI 10460; config.yaml:47",
+      "evidenz": "CODE",
+      "gueltigkeit": "NEW_SESSION",
+      "id": "X1-10"
+    },
+    {
+      "aussage": "use_main_model_for_realtime steuert Lane-Topologie: false = eigener Realtime-Worker + Queue (balanced-main-plus-realtime); true = gemeinsame Queue (low-memory-one-model). Legt Engine-Anzahl fest.",
+      "beleg": "server.py: InferenceScheduler 2124-2149; snapshot 2191-2204; Default 447; Klasse 278; config.yaml:20",
+      "evidenz": "CODE",
+      "gueltigkeit": "STARTUP_ONLY",
+      "id": "X1-11"
+    },
+    {
+      "aussage": "Beispiel B (Wake-Word): device cpu, backend openwakeword, wake_words hey_jarvis, model_paths hey_jarvis_v0.1.onnx, framework onnx, sensitivity 0.5, delay 0.0, timeout 7.0, buffer 0.1, followup 7.0. Session-seitig: requestedSession.wakeWordIds + trigger.wakeWord bzw. settings_patch wakeWord.selection.",
+      "beleg": "config.yaml:60-68; ServerSettings:438-446; CLI 10473-10481",
+      "evidenz": "CODE+YAML",
+      "gueltigkeit": "NEW_SESSION (alle acht Felder); v2-Registry next_activation/next_session",
+      "id": "X1-12"
+    },
+    {
+      "aussage": "wake_words Komma-String in IDs; wake_word_enabled() nur wenn backend UND Wörter nicht leer. v2-Auflösung normalisiert auf openwakeword, Pfade aus Katalog; unbekanntes Wort → fallback_unavailable, leeres Profil → incomplete_wake_word_profile.",
+      "beleg": "server.py: _split_wake_word_ids 756-761; wake_word_enabled 555-556; resolve_session_wake_word_config 764-793,873-925,961-965; OPENWAKEWORD_SESSION_BACKENDS 578-582",
+      "evidenz": "CODE",
+      "gueltigkeit": "NEW_SESSION",
+      "id": "X1-13"
+    },
+    {
+      "aussage": "Registry-Felder Wake: selection (session, next_session, []), sensitivity (session, next_activation, 0.5), inferenceBackend (server/admin, next_session, auto|onnx|tflite), globalDisabledIds (server/admin, next_session, []).",
+      "beleg": "settings_control.py: 367-395, 559-590; APPLY_* 51-57; WAKE_WORD_BACKEND_VALUES 99",
+      "evidenz": "CODE",
+      "gueltigkeit": "Registry-Policy",
+      "id": "X1-14"
+    },
+    {
+      "aussage": "calibration:pending nie Empfehlung: minConsecutivePredictionFrames (1, WW-18), cooldownMs (0, WW-18), preRollMs (0, WW-19), detectorGain (1.0, WW-18), vadThreshold (0.0, WW-18). CALIBRATION_PENDING = pending.",
+      "beleg": "settings_control.py: CALIBRATION_PENDING 117-120; Definitionen 424-557",
+      "evidenz": "CODE",
+      "gueltigkeit": "next_activation/next_session",
+      "id": "X1-15"
+    },
+    {
+      "aussage": "Wirksame Policy liest sensitivity aus Registry, fällt sonst auf settings.wake_words_sensitivity or 0.5 zurück → konfigurierte 0.0 wird 0.5. Policy pro Trefferbereich eingefroren.",
+      "beleg": "server.py: _wake_attempt_policy 2520-2566 (Fallback 2530, Overrides 2542-2566); Snapshot-Semantik 2455-2461",
+      "evidenz": "CODE",
+      "gueltigkeit": "next_activation",
+      "id": "X1-16"
+    },
+    {
+      "aussage": "wakeWord.selection fail-closed: leer bei aktivem Wake → required; unbekannt/deaktiviert → unavailable; Katalogfehler → Ablehnung. Draht: wakeWordIds Liste nicht-leerer Strings; Auflösung einmal pro Admission.",
+      "beleg": "server.py: _validate_wake_selection_key 3198-3259; handshake.py:134-142,190-247; settings_control.py CODE_* 162-163",
+      "evidenz": "CODE",
+      "gueltigkeit": "next_session; Admission beim Aufbau",
+      "id": "X1-17"
+    },
+    {
+      "aussage": "Beispiel C (Multiuser): device cpu, max_sessions 8, max_active_speakers 4, audio_queue_size 128, 30.0 s, final 8, global 64, realtime age 1500, pre_buffer 0.75.",
+      "beleg": "config.yaml:71-79; ServerSettings:487-493",
+      "evidenz": "CODE+YAML",
+      "gueltigkeit": "ACTIVE (sessions, speaker, final/global/realtime age) / NEW_SESSION (queue, 30s, pre_buffer)",
+      "id": "X1-18"
+    },
+    {
+      "aussage": "max_sessions begrenzt Admission: reserve/add/can_accept lehnen ab, rejectedSessions++. Test: zweite Session bei max=1 ist None, active=1, rejected=1.",
+      "beleg": "server.py: SessionStore 6133-6172; Tests multi_user:950-958; YAML-Override-Test protocol:139,156",
+      "evidenz": "CODE+TEST",
+      "gueltigkeit": "ACTIVE",
+      "id": "X1-19"
+    },
+    {
+      "aussage": "max_active_speakers erst beim Aufnahmestart: neuer Sprecher ignoriert, Chunks verworfen, Warnung; Zähler bleibt. Bestehende Session bleibt.",
+      "beleg": "server.py:5314-5327; try_activate_speaker 6201-6208; Test 934-948",
+      "evidenz": "CODE+TEST",
+      "gueltigkeit": "ACTIVE",
+      "id": "X1-20"
+    },
+    {
+      "aussage": "Queue-Grenzen: final je Session; global für final UND Realtime; Realtime je Session koalesziert (ein Slot, alter Job coalesced). Tests: Koaleszenz + Final-Vorrang.",
+      "beleg": "server.py: FairInferenceQueue.submit 1771-1818; Test protocol:630-651",
+      "evidenz": "CODE+TEST",
+      "gueltigkeit": "ACTIVE (live je submit)",
+      "id": "X1-21"
+    },
+    {
+      "aussage": "Fairness fix, nicht konfigurierbar: Round-Robin über _ordered_sessions, Final vor Realtime je Session, stale-Drop abgelaufener Realtime. Test: a→b→a.",
+      "beleg": "server.py: get 1820-1874, _ensure_session_locked 1917-1920; Tests 653-665,667-677",
+      "evidenz": "CODE+TEST",
+      "gueltigkeit": "ACTIVE fix, kein Schalter",
+      "id": "X1-22"
+    },
+    {
+      "aussage": "max_audio_queue_seconds_per_session erzwingt Force-Finalize; audio_queue_size als allowed_latency_limit (Chunk-Anzahl, alte verworfen).",
+      "beleg": "server.py:6011-6029, 2816; recording.py:191-207; YAML 73,75",
+      "evidenz": "CODE",
+      "gueltigkeit": "NEW_SESSION",
+      "id": "X1-23"
+    },
+    {
+      "aussage": "Klassenunterschied sichtbar: ACTIVE live aus service.settings (Queue, Store, Deadline), NEW_SESSION beim Aufbau kopiert (replace + Recorder-Config).",
+      "beleg": "server.py: live 1783-1818,6147,8298-8302; Snapshot 2320; Recorder-Config 2737-2848",
+      "evidenz": "CODE",
+      "gueltigkeit": "ACTIVE vs NEW_SESSION",
+      "id": "X1-24"
+    },
+    {
+      "aussage": "Beispiel D (CPU-Performance): compute_type int8, model large-v3-turbo, kroko realtime, batch 16/16, use_main false, cpu_threads 4, warmup false, idle true/3600, policy true, two_medium true; deployment cpu_threads 4.",
+      "beleg": "config.yaml:13,17,43,44,86-90,144; ServerSettings:414,417,421-422,447,498-502; CLI 10452-10517",
+      "evidenz": "CODE+YAML",
+      "gueltigkeit": "STARTUP_ONLY (compute, batch, use_main, warmup, engine_options, policy) / ACTIVE (idle)",
+      "id": "X1-25"
+    },
+    {
+      "aussage": "compute_type/beam/batch/vad fließen in EINEN geteilten Engine-Aufbau des Scheduler-Workers (TranscriptionEngineConfig), nicht in Session-Engines. V2-Sessions externe Executoren → Recorder baut keine Engines.",
+      "beleg": "server.py:2215-2231,2247-2269,2772-2776,2831-2840; initialization.py:314-319,433-448,505-509; transcription.py:206-238",
+      "evidenz": "CODE",
+      "gueltigkeit": "STARTUP_ONLY faktisch",
+      "id": "X1-26"
+    },
+    {
+      "aussage": "model_warmup zwei Effekte: Engine-Warmup mit warmup_audio.wav + warmup_vad je Recorder-Session. Test: warmup=True → warmup_vad True. API-Klasse STARTUP_ONLY.",
+      "beleg": "server.py:2101-2108,2792,268; Test multi_user:975-981",
+      "evidenz": "CODE+TEST",
+      "gueltigkeit": "STARTUP_ONLY (API) / NEW_SESSION (VAD)",
+      "id": "X1-27"
+    },
+    {
+      "aussage": "Idle-Unload echter ACTIVE-Hebel: Worker prüft enabled+timeout, Intervall min(30,max(0.1,timeout/4)), Entladen nur ohne Sprecher/pending; Lazy-Reload bei Request. Test: unloaded, health ok, Reload.",
+      "beleg": "server.py:7544-7573,7599-7621,7623-7639; Test openai_compatible:382-407,434-451",
+      "evidenz": "CODE+TEST",
+      "gueltigkeit": "ACTIVE",
+      "id": "X1-28"
+    },
+    {
+      "aussage": "CPU-Policy: memory_policy schaltet Prüfung, allow_two_medium limit 1/2. Rank: kroko 2, large-v3-turbo 3 (Medium), medium 3, large 4, small 2, base/tiny 1. large-v3-turbo+Kroko bei Limit 2 zulässig; Lifecycle-Route 400 bei Verstoß.",
+      "beleg": "server.py:8711-8741,8764-8801,9036-9072; Tests openai_compatible:206-260,409-431",
+      "evidenz": "CODE+TEST",
+      "gueltigkeit": "STARTUP (Prüfung) + Kandidaten-Validierung",
+      "id": "X1-29"
+    },
+    {
+      "aussage": "Threads kein ServerSettings-Feld: deployment.cpu_threads (4) → VOICESTT_CPU_THREADS → OMP_NUM_THREADS. Pro Engine nur transcription_engine_options.cpu_threads/num_workers; Realtime erbt Final bei null. Kein Server-CLI-Flag.",
+      "beleg": "compose.py:135; docker-compose:38-39; faster_whisper_engine.py:52-63; server.py:1276-1305,10432-10433; Test test_project_config.py:138-151",
+      "evidenz": "CODE+BUILD+TEST",
+      "gueltigkeit": "STARTUP (Deployment/Engine-Aufbau)",
+      "id": "X1-30"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "realtime_min/max_audio_seconds deklariert, kein Konsument (nur Feld/CLI/veröffentlicht)."
+    },
+    {
+      "id": "N2",
+      "thema": "vad_energy_threshold deklariert, nie an Recorder/Engine übergeben."
+    },
+    {
+      "id": "N3",
+      "thema": "realtime_degradation_threshold_ms nur in limits_dict, keine Auswertung."
+    }
+  ],
+  "researcher_session": "ses_e438c7a10ffesYYD3vrc4Za9Ni",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "N4",
+      "thema": "compute_type-Werte nicht validiert/enumeriert; int8 Default, Alternativen unbelegt."
+    },
+    {
+      "id": "N5",
+      "thema": "Kein Thread-Optimum-Beleg; cpu_threads 4 Deployment-Default ohne Kalibrierung."
+    },
+    {
+      "id": "N6",
+      "thema": "Keine Latenzmessung realtime_processing_pause; nur Kadenz + Clamp belegt."
+    },
+    {
+      "id": "N7",
+      "thema": "Fairness ohne Schalter; nur Tiefen/Limits einstellbar, Rotation fix."
+    }
+  ],
+  "writer_notes": "Beispiele nur belegte Werte; keine Empfehlungen. calibration:pending nie Empfehlung. Keine Latenzversprechen. wakeWord.*/cpu_threads nicht unter settings (Abbruch). Klasse je Beispiel ausweisen. C-01/C-03 nicht live-vereinfachen. Modelle provisioniert vorausgesetzt (keine impliziten Downloads). Kein Diagramm (NOT_REQUESTED).",
+  "conflicts": [
+    {
+      "id": "C-01",
+      "thema": "realtime_batch_size/vad_filter: NEW_SESSION-Label, faktisch STARTUP_ONLY (externer Executor, kein Recorder-Enginebau)."
+    },
+    {
+      "id": "C-02",
+      "thema": "Zwei Sensitivity-Ebenen: YAML wake_words_sensitivity (Startwert) vs. Registry wakeWord.sensitivity (wirksam)."
+    },
+    {
+      "id": "C-03",
+      "thema": "memory_policy/allow_two_medium ACTIVE gelistet, nur Startprüfung + Kandidaten-Validierung."
+    },
+    {
+      "id": "C-04",
+      "thema": "config.yaml weicht von Klassendefaults ab (Modell, max_sessions, warmup, Timeouts, Wake); Quelle je Wert nennen."
+    },
+    {
+      "id": "C-05",
+      "thema": "wake_words_sensitivity 0.0 zulässig, wird via or 0.5 zu 0.5."
+    },
+    {
+      "id": "C-06",
+      "thema": "wakeword_backend beliebige Strings möglich, v2 normalisiert auf openwakeword."
+    },
+    {
+      "id": "C-07",
+      "thema": "audio_queue_size benannt Queue-Größe, genutzt als allowed_latency_limit (Chunk-Anzahl)."
+    }
+  ]
+}

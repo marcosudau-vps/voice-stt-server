@@ -1,0 +1,267 @@
+{
+  "branch_note": "feat/v2-release-cleanup laut Auftrag; aus .git/HEAD nicht verifizierbar, nur Commit bindend.",
+  "chapter": "09.04",
+  "commit_verification": ".git/HEAD gelesen: nur Hash a8993c5c68042d996eab680d84a5b138a214bb5d, keine Ref.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "extend->refresh Docstring veraltet; keine Implementierung, Tests widerlegen."
+    },
+    {
+      "id": "C2",
+      "thema": "v1-Zweitnamen sind nicht v2-Namen."
+    },
+    {
+      "id": "C3",
+      "thema": "v1 source wake_word ok, v2 nicht."
+    },
+    {
+      "id": "C4",
+      "thema": "Branch nur laut Auftrag."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [
+    "E1 V1_SESSION->V2_CONNECT [MG9-01,MG9-02]",
+    "E2 V2_CONNECT->HELLO_SENT [MG9-02,MG9-05]",
+    "E3 HELLO_SENT->CLOSE_4400 [MG9-05,MG9-06]",
+    "E4 HELLO_SENT->CLOSE_4408 [MG9-06]",
+    "E5 HELLO_SENT->PROTOCOL_INCOMPATIBLE [MG9-06,MG9-07]",
+    "E6 HELLO_SENT->SESSION_REJECTED [MG9-06,MG9-08,MG9-09]",
+    "E7 HELLO_SENT->ACCEPTED [MG9-05,MG9-18,MG9-23,MG9-24]",
+    "E8 ACCEPTED->AUDIO_STREAM [MG9-04,MG9-20]",
+    "E9 ACCEPTED->COMMAND_ACTIVATE [MG9-11,MG9-12]",
+    "E10 COMMAND_ACTIVATE->ACK [MG9-13,MG9-19]",
+    "E11 ACK->EVENTS [MG9-15,MG9-16]",
+    "E12 ACCEPTED->SNAPSHOT [MG9-18]",
+    "E13 ACCEPTED->SETTINGS_PATCH [MG9-17]",
+    "E14 AUDIO_STREAM->AUDIO_AVAILABILITY [MG9-14]",
+    "E15 EVENTS->SNAPSHOT [MG9-15,MG9-18]",
+    "E16 V1_SESSION->REST_CLIENT [MG9-22]"
+  ],
+  "facts": [
+    {
+      "aussage": "Ein Prozess /ws/transcribe + /ws/v2; v1 required compatibility path.",
+      "beleg": "server.py:9912,10121-10141",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "MG9-01"
+    },
+    {
+      "aussage": "v1 Session aus Query + Server-hello; v2 nichts vor validiertem Client-hello.",
+      "beleg": "server.py:1110-1150,10002-10014; connection.py:218-255,307-343",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "MG9-02"
+    },
+    {
+      "aussage": "IDs v1 32-Hex/Integer; v2 nur kanonische UUIDs, keine Umformatierung.",
+      "beleg": "server.py:9938,1312-1342; schema.py:12-23,214-233",
+      "evidenz": "A/B",
+      "gueltigkeit": "Commit",
+      "id": "MG9-03"
+    },
+    {
+      "aussage": "v1 start vor Audio; v2 atomar ab accepted, kein start.",
+      "beleg": "server.py:3011-3018,2850-2863; connection.py:181-198,326-328",
+      "evidenz": "A/B",
+      "gueltigkeit": "Commit",
+      "id": "MG9-04"
+    },
+    {
+      "aussage": "v2-hello 9 Felder (type/Versions/Identitaet/RunId/Trigger/Ids/Suppression).",
+      "beleg": "handshake.py:83-178",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "MG9-05"
+    },
+    {
+      "aussage": "Close v2 4400/4406/4409/4408 10s/1011; v1 error-Frames 1008/1013.",
+      "beleg": "schema.py:202-209; handshake.py:8-21; server.py:9925-9985,10230-10239",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "MG9-06"
+    },
+    {
+      "aussage": "Nur Version 2 verhandelbar; [1] -> incompatible+4406.",
+      "beleg": "schema.py:28-32; handshake.py:181-187",
+      "evidenz": "A/B",
+      "gueltigkeit": "Commit",
+      "id": "MG9-07"
+    },
+    {
+      "aussage": "v2 Trigger Pflicht + Wake-IDs bei wakeWord; sonst 4409; v1 legacy ohne Flags.",
+      "beleg": "handshake.py:201-247; server.py:1161-1208",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "MG9-08"
+    },
+    {
+      "aussage": "v2 nur kanonische Katalog-IDs atomar; Aliase/Fallbacks entfallen.",
+      "beleg": "ports.py:119-168; server.py:9294-9302",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "MG9-09"
+    },
+    {
+      "aussage": "v2 nur 5 Typen; start/stop/clear/ping/metrics fehlen, unbekannt still.",
+      "beleg": "schema.py:50-57; connection.py:347-369; server.py:10074-10105",
+      "evidenz": "A/B",
+      "gueltigkeit": "Commit",
+      "id": "MG9-10"
+    },
+    {
+      "aussage": "v2 activate nur manual ohne ID; Control ohne source mit UUID.",
+      "beleg": "commands.py:143-167; schema.py:62-80",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "MG9-11"
+    },
+    {
+      "aussage": "v2 commandId nur UUID sonst kein Ack/Slot; v1 freier String.",
+      "beleg": "schema.py:236-244; commands.py:105-114; activation_commands.py:189-202",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "MG9-12"
+    },
+    {
+      "aussage": "v1 trigger_ack offen; v2 ack 15 Codes, accepted nur applied/no_change.",
+      "beleg": "server.py:3414-3425; connection.py:620-652; schema.py:105-143",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "MG9-13"
+    },
+    {
+      "aussage": "audio_availability -> audio_availability.set; v1 Ack-Typ vs v2 ack.",
+      "beleg": "server.py:3730-3780,3825; connection.py:392-406; schema.py:46",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "MG9-14"
+    },
+    {
+      "aussage": "v1 timeline ohne Seq/Version; v2 Events mit Id/Seq/Version/Zeit.",
+      "beleg": "server.py:5900-5920; session.py:105-144",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "MG9-15"
+    },
+    {
+      "aussage": "Umbenannt: refreshed->phase_changed, closed->input_closed, started->accepted.",
+      "beleg": "events.py:54-80; schema.py:168-187; server.py:5921-5936",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "MG9-16"
+    },
+    {
+      "aussage": "v2 Settings patch baseRevision + Ms-Keys; Konflikt vs v1 Sekunden-Query/config.",
+      "beleg": "commands.py:183-190; settings_control.py:71-76,1260-1288; server.py:9223-9292",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "MG9-17"
+    },
+    {
+      "aussage": "snapshot.request -> Ack + Snapshot; v1 metrics.",
+      "beleg": "connection.py:584-592,781-797; snapshot.py:36-89; server.py:10087-10092",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "MG9-18"
+    },
+    {
+      "aussage": "v2 immer controlled; v1 ohne Flags legacy ohne Controller.",
+      "beleg": "connection.py:272-282; server.py:1161-1173,2421-2442",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "MG9-19"
+    },
+    {
+      "aussage": "Binaerformat + logAccess identisch v1/v2.",
+      "beleg": "protocol.py:40-75; server.py:7653-7806; connection.py:186-198,331-342",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "MG9-20"
+    },
+    {
+      "aussage": "Unparsebar/unbekannt v1 error, v2 still (nur Debug).",
+      "beleg": "server.py:10054-10105; connection.py:168-179,347-354",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "MG9-21"
+    },
+    {
+      "aussage": "OpenAI-REST /v1/* unveraendert; REST-only keine Migration.",
+      "beleg": "openai_routes.py:41-67; server.py:9899-9910",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "MG9-22"
+    },
+    {
+      "aussage": "accepted nur 6 Felder; limits/engines/runtime fehlen (Snapshot+REST).",
+      "beleg": "connection.py:332-343; server.py:7702-7770,10002-10020",
+      "evidenz": "A",
+      "gueltigkeit": "Commit",
+      "id": "MG9-23"
+    },
+    {
+      "aussage": "Version/Commit identisch accepted/snapshot/incompatible/rejected/settings/info.",
+      "beleg": "handshake.py:62-67; server.py:8874-9242",
+      "evidenz": "A/B",
+      "gueltigkeit": "Commit",
+      "id": "MG9-24"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Kein v2 stop/clear/ping/metrics; kein clear-Pendant."
+    },
+    {
+      "id": "N2",
+      "thema": "Kein v2 ready/Startup-Fehlerframes."
+    },
+    {
+      "id": "N3",
+      "thema": "Kein v2 Wire-Feld limits/engines/runtime/sessionConfig."
+    },
+    {
+      "id": "N4",
+      "thema": "Keine v1->v2-ID-Migration."
+    },
+    {
+      "id": "N5",
+      "thema": "extend existiert nicht (auch v1 nicht)."
+    },
+    {
+      "id": "N6",
+      "thema": "Kein Session-Resume/Re-Attach."
+    }
+  ],
+  "researcher_session": "ses_e340c7b1bffe0TPW9BAEXDxzV3",
+  "solver_notes": [
+    "24 Fakten MG9-01..24; Kanten E1-E16."
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Deprecation-Zeitplan /ws/transcribe (nur required compatibility path)."
+    },
+    {
+      "id": "U2",
+      "thema": "Handshake-Timeout Konfigurierbarkeit (nur Konstante 10s)."
+    },
+    {
+      "id": "U3",
+      "thema": "limits via v1-REST fuer v2-Clients Absicht unklar."
+    },
+    {
+      "id": "U4",
+      "thema": "Fortsetzung nach 1011-Close Client-Verhalten unbekannt."
+    },
+    {
+      "id": "U5",
+      "thema": "wakeWordIds Backend-Wahl Absicht unbekannt."
+    }
+  ],
+  "writer_notes": "Ketten UUID-Wurzel, hello-Grenze, Close-Versionen, Events+Versionen, Audio-Freigabe. Diagramm an VV9-01/02/03/07/10/12/13/14/16/21 (hier MG). Keine Phasen/Zahlen ausser Codes/Timeout."
+}

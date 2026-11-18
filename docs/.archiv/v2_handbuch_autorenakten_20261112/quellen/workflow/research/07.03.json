@@ -1,0 +1,293 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD). Nur Commit bindend.",
+  "chapter": "07.03",
+  "commit_verification": ".git/HEAD = a8993c5c68042d996eab680d84a5b138a214bb5d (Z.1, detached, kein ref:); nur Commit bindend.",
+  "conflicts": [
+    {
+      "id": "C-07.03-1",
+      "thema": "compute_type: Docstring default=default vs. Signatur default=int8 (Signatur/Test gelten)."
+    },
+    {
+      "id": "C-07.03-2",
+      "thema": "Drei Paketnamen: VoiceSTT_server (Fassade), voice_stt_server (Import), api_fastapi_server (Impl)."
+    },
+    {
+      "id": "C-07.03-3",
+      "thema": "Zwei Server-Implementierungen: api_fastapi_server.server vs. VoiceSTT_server.stt_server (legacy)."
+    },
+    {
+      "id": "C-07.03-4",
+      "thema": "voice_stt_server-Docstring 'complete product', enthaelt aber keine Server-Symbole."
+    },
+    {
+      "id": "C-07.03-5",
+      "thema": "transcribe_with_options nur auf FasterWhisperEngine, nicht im Basisvertrag (hasattr-Seam)."
+    },
+    {
+      "id": "C-07.03-6",
+      "thema": "Teardown uneinheitlich: close() nur bei Kroko-Engine und Streaming-Session."
+    }
+  ],
+  "correction_round": 2,
+  "diagram_edges": [
+    "app -> AudioToTextRecorder.__init__ -> build_recorder_init_args -> initialize_recorder",
+    "AudioToTextRecorder -> TranscriptionWorker (Kindprozess) -> create_transcription_engine -> BaseTranscriptionEngine",
+    "AudioToTextRecorder -> _initialize_realtime_transcription_model -> create_transcription_engine",
+    "AudioToTextRecorder -.transcription_executor.-> call_transcription_executor",
+    "create_app -> VoiceSTTService -> ConnectionManager|SessionStore|InferenceScheduler",
+    "admit_session -> RecorderBackedRealtimeSession -> recorder_factory(**config)",
+    "Session -> SchedulerTranscriptionExecutor -> transcribe_for_recorder -> SharedEngineWorker -> Engine",
+    "KrokoOnnxEngine -.supports_streaming.-> KrokoOnnxStreamingSession",
+    "console_scripts -> VoiceSTT_server.server:main -> api_fastapi_server.server:main",
+    "stt-server-legacy -> VoiceSTT_server.stt_server:main (eigene Implementierung)",
+    "voice_stt_server.__getattr__ -> VoiceSTT.<Name>"
+  ],
+  "facts": [
+    {
+      "aussage": "VoiceSTT.__all__ 8 Namen; Klassen lazy via __getattr__, keine Engine/Torch-Importe.",
+      "beleg": "VoiceSTT/__init__.py:7-55",
+      "evidenz": "A",
+      "gueltigkeit": "oeffentliche Import-Flaeche",
+      "id": "TS7-01"
+    },
+    {
+      "aussage": "AudioToTextRecorder.__init__: 86 Parameter, POSITIONAL_OR_KEYWORD; Reihenfolge/Defaults testgepinnt; model=tiny, language=de, compute_type=int8.",
+      "beleg": "VoiceSTT/audio_recorder.py:103-220; test_audio_recorder_public_api.py:37-190",
+      "evidenz": "A+B",
+      "gueltigkeit": "stabile Recorder-Signatur",
+      "id": "TS7-02"
+    },
+    {
+      "aussage": "Fassadenmethoden start/stop/listen/wait_audio/text/transcribe/perform_final/feed_audio, 5 Controlled-Gates, wakeup/abort/shutdown + enter/exit; 20 private Wrapper verboten.",
+      "beleg": "VoiceSTT/audio_recorder.py:628-839; test_audio_recorder_public_api.py:242-269",
+      "evidenz": "A+B",
+      "gueltigkeit": "Fassaden-API",
+      "id": "TS7-03"
+    },
+    {
+      "aussage": "Executor-Vertrag: transcribe(audio,language,use_prompt), optional transcribe_with_context; sonst Callable.",
+      "beleg": "VoiceSTT/core/transcription.py:176-199; core/realtime.py:285-295",
+      "evidenz": "A",
+      "gueltigkeit": "Erweiterungspunkt Recorder-Scheduler",
+      "id": "TS7-04"
+    },
+    {
+      "aussage": "Konstanten: INIT_MODEL_TRANSCRIPTION=tiny, SILERO_SENSITIVITY=0.4, SAMPLE_RATE=16000, BUFFER_SIZE=512, LATENCY_LIMIT=100, SILENCE_CONFIRM=0.16.",
+      "beleg": "test_audio_recorder_public_api.py:192-217",
+      "evidenz": "B",
+      "gueltigkeit": "Recorder-Defaults",
+      "id": "TS7-05"
+    },
+    {
+      "aussage": "__init__ baut init_args via build_recorder_init_args und ruft initialize_recorder mit 3 Callbacks.",
+      "beleg": "VoiceSTT/audio_recorder.py:514-623; core/recorder_config.py:6; core/initialization.py:38",
+      "evidenz": "A",
+      "gueltigkeit": "interne Init-Naht",
+      "id": "TS7-06"
+    },
+    {
+      "aussage": "AudioToTextRecorderClient: Remote-Fassade, feed_audio(chunk,meta,rate=16000), set/get_parameter, call_method; keine Engine-Optionen im Konstruktor.",
+      "beleg": "VoiceSTT/audio_recorder_client.py:87-92,363,879,924",
+      "evidenz": "A",
+      "gueltigkeit": "optionale Client-API",
+      "id": "TS7-07"
+    },
+    {
+      "aussage": "AudioInput(input_device_index=None,debug=False,target=16000,chunk=1024,paInt16,1ch,resample=True); oeffnet keinen Stream.",
+      "beleg": "VoiceSTT/audio_input.py:10-29",
+      "evidenz": "A",
+      "gueltigkeit": "optionale Audio-Eingabe",
+      "id": "TS7-08"
+    },
+    {
+      "aussage": "BaseTranscriptionEngine: engine_name=base, supports_streaming=False, warmup(audio), abstrakt transcribe; create_streaming_session wirft Error.",
+      "beleg": "VoiceSTT/transcription_engines/base.py:111-167",
+      "evidenz": "A+B",
+      "gueltigkeit": "zentrale Engine-Schnittstelle",
+      "id": "TS7-09"
+    },
+    {
+      "aussage": "StreamingTranscriptionSession: abstrakt reset/accept_audio(audio,rate)/get_result; konkret decode/finish/close.",
+      "beleg": "VoiceSTT/transcription_engines/base.py:67-108",
+      "evidenz": "A",
+      "gueltigkeit": "Streaming-Vertrag (nur Kroko)",
+      "id": "TS7-10"
+    },
+    {
+      "aussage": "TranscriptionInfo/Result/Config: 12 Felder (model Pflicht, compute default, batch 0).",
+      "beleg": "VoiceSTT/transcription_engines/base.py:10-48",
+      "evidenz": "A",
+      "gueltigkeit": "Rueckgabe-/Config-Vertrag",
+      "id": "TS7-11"
+    },
+    {
+      "aussage": "Faster-Whisper details: duration, duration_after_vad, segments[] (id/seek/start/end/text/tokens/temp/logprob/ratio/no_speech/words), words[] (word/start/end/prob).",
+      "beleg": "VoiceSTT/transcription_engines/faster_whisper_engine.py:107-151",
+      "evidenz": "A",
+      "gueltigkeit": "Ergebnisstruktur",
+      "id": "TS7-12"
+    },
+    {
+      "aussage": "factory: ENGINE_CLASS_PATHS nur faster_whisper+kroko_onnx, DEFAULT faster_whisper; create erzwingt device=cpu, gpu_index=0.",
+      "beleg": "VoiceSTT/transcription_engines/factory.py:16-76; test_v2_engine_boundary.py:75-86",
+      "evidenz": "A+B",
+      "gueltigkeit": "einziger Erzeugungsweg",
+      "id": "TS7-13"
+    },
+    {
+      "aussage": "FasterWhisperEngine: engine_name faster_whisper; baut WhisperModel/BatchedPipeline; transcribe + transcribe_with_options nur hier.",
+      "beleg": "VoiceSTT/transcription_engines/faster_whisper_engine.py:33-105",
+      "evidenz": "A",
+      "gueltigkeit": "Engine-1",
+      "id": "TS7-14"
+    },
+    {
+      "aussage": "KrokoOnnxEngine: kroko_onnx, supports_streaming=True, __init__(config,backend,backend_cls), create_streaming_session, close.",
+      "beleg": "VoiceSTT/transcription_engines/kroko_onnx_engine.py:591-658",
+      "evidenz": "A+B",
+      "gueltigkeit": "Engine-2 + Streaming-Pfad",
+      "id": "TS7-15"
+    },
+    {
+      "aussage": "Drei Bau-Stellen: Recorder-Final Kindprozess, Recorder-Realtime, Server-Lanes - alle via create_transcription_engine.",
+      "beleg": "core/transcription.py:93-109; core/initialization.py:500-535; server.py:2206-2270",
+      "evidenz": "A",
+      "gueltigkeit": "Recorder/Server-Engine",
+      "id": "TS7-16"
+    },
+    {
+      "aussage": "RecorderBackedRealtimeSession(service,session_id,client_id,settings,session_config,activation_config,canonical_ids); Defaults aus service.settings.",
+      "beleg": "api_fastapi_server/server.py:2308-2450",
+      "evidenz": "A",
+      "gueltigkeit": "einziges Session-Objekt",
+      "id": "TS7-17"
+    },
+    {
+      "aussage": "Session nutzt: set_activation_policy, flush_buffered_audio, shutdown, abort, feed_audio(samples,rate=16000), open/close/abort_controlled, controlled_*_state, text.",
+      "beleg": "api_fastapi_server/server.py:147,2422,2875,2930,3020,3938,4671,5338,6064",
+      "evidenz": "A",
+      "gueltigkeit": "implizite Recorder-Schnittstelle",
+      "id": "TS7-18"
+    },
+    {
+      "aussage": "Session-API: start/stop_streaming, close, clear, ingest_audio_packet, apply_settings_patch, snapshot, public_settings, trigger_command, protocol_replay_*.",
+      "beleg": "api_fastapi_server/server.py:2850-3500,4621-4624",
+      "evidenz": "A",
+      "gueltigkeit": "Programmier-Flaeche",
+      "id": "TS7-19"
+    },
+    {
+      "aussage": "admit_session(session_id,wake,client_id,activation,canonical_ids); Timeouts 15.0s initial, 3.0s Followup.",
+      "beleg": "api_fastapi_server/server.py:603-652,7325-7332; activation.py:93-94",
+      "evidenz": "A",
+      "gueltigkeit": "Session-Fabrik",
+      "id": "TS7-20"
+    },
+    {
+      "aussage": "SchedulerTranscriptionExecutor(service,session_id,kind): transcribe/transcribe_with_context -> transcribe_for_recorder; final laedt segment_context.",
+      "beleg": "api_fastapi_server/server.py:2273-2305",
+      "evidenz": "A",
+      "gueltigkeit": "Naht Recorder-Session-Scheduler",
+      "id": "TS7-21"
+    },
+    {
+      "aussage": "ServerSettings: host=0.0.0.0, port=8010, model=small, realtime Kroko-DE-data, Engines faster_whisper+kroko_onnx, device=cpu.",
+      "beleg": "api_fastapi_server/server.py:403-557",
+      "evidenz": "A",
+      "gueltigkeit": "Settings-Objekt",
+      "id": "TS7-22"
+    },
+    {
+      "aussage": "create_app(settings,scheduler_factory,recorder_factory): Runtime-Config, post_init, cpu_policy, VoiceSTTService; lifespan, app.state.voicestt_service.",
+      "beleg": "api_fastapi_server/server.py:8816-8872,10290",
+      "evidenz": "A+B",
+      "gueltigkeit": "App-Fabrik-Einstieg",
+      "id": "TS7-23"
+    },
+    {
+      "aussage": "main(argv): parse_args -> settings_from_args -> uvicorn.run(create_app(settings),host,port); Defaults 0.0.0.0:8010, --config/VOICESTT_CONFIG.",
+      "beleg": "api_fastapi_server/server.py:10394,10684,10813-10835",
+      "evidenz": "A",
+      "gueltigkeit": "Prozess-Einstieg",
+      "id": "TS7-24"
+    },
+    {
+      "aussage": "console_scripts: voice-stt-server|stt-server -> VoiceSTT_server.server:main, stt-server-legacy -> stt_server:main, stt -> client, stt-install-kroko.",
+      "beleg": "setup.py:409-423",
+      "evidenz": "A",
+      "gueltigkeit": "CLI-Flaeche",
+      "id": "TS7-25"
+    },
+    {
+      "aussage": "VoiceSTT_server.server re-exportiert 5 Symbole aus api; stt_server.py eigene asyncio-WS-Implementierung mit eigenem main(); __init__ leer.",
+      "beleg": "VoiceSTT_server/server.py:8-26; VoiceSTT_server/stt_server.py:907-916",
+      "evidenz": "A",
+      "gueltigkeit": "Einstiegspfad-Aufloesung",
+      "id": "TS7-26"
+    },
+    {
+      "aussage": "voice_stt_server: __all__ 10 Namen inkl. embedded_kroko(_variant), get_version, lazy Re-Export; _embedded Manifest Schema 1.",
+      "beleg": "voice_stt_server/__init__.py:6-53; _embedded.py:14-61",
+      "evidenz": "A",
+      "gueltigkeit": "Import-Flaeche Produkt",
+      "id": "TS7-27"
+    },
+    {
+      "aussage": "VoiceSTTService(settings,manager,scheduler_factory,recorder_factory); _create_recorder nutzt factory, sonst AudioToTextRecorder mit ~60 kwargs.",
+      "beleg": "api_fastapi_server/server.py:6240-6264,2737-2843",
+      "evidenz": "A+B",
+      "gueltigkeit": "Injektionssehne",
+      "id": "TS7-28"
+    },
+    {
+      "aussage": "InferenceScheduler(settings,result/drop/error_callback) mit FairInferenceQueue + SharedEngineWorker(engine_factory); use_main nur eine Lane.",
+      "beleg": "api_fastapi_server/server.py:1942-1959,2111-2149",
+      "evidenz": "A",
+      "gueltigkeit": "Engine-Lebenszyklus",
+      "id": "TS7-29"
+    },
+    {
+      "aussage": "enforce_supported_engines prueft beide Engine-Felder (ValueError vor Import); cpu_policy setzt device=cpu, prueft Profil/Kroko/Raenge.",
+      "beleg": "api_fastapi_server/server.py:8744-8793; test_v2_engine_boundary.py:88-105",
+      "evidenz": "A+B",
+      "gueltigkeit": "Engine-Auswahl-Grenze",
+      "id": "TS7-30"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-07.03-1",
+      "thema": "Kein close()/reset() in Basis; Freigabe nur Kroko."
+    },
+    {
+      "id": "N-07.03-2",
+      "thema": "Kein abstraktes transcribe_with_options (nur FasterWhisper; hasattr-Pruefung)."
+    },
+    {
+      "id": "N-07.03-3",
+      "thema": "Keine Server-API in voice_stt_server."
+    },
+    {
+      "id": "N-07.03-4",
+      "thema": "stt_server nutzt create_app/Service nicht (eigene Impl)."
+    }
+  ],
+  "researcher_session": "ses_e3d3f8cb3ffe0z3ePZB3xqu73Z",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-07.03-1",
+      "thema": "Branch nicht verifizierbar."
+    },
+    {
+      "id": "U-07.03-2",
+      "thema": "Legacy-Ports 8011/8012 nur Docstring."
+    },
+    {
+      "id": "U-07.03-3",
+      "thema": "WS-Drahtformat Client nicht bewertet (04.x)."
+    }
+  ],
+  "writer_notes": "Kern: Recorder TS7-01/02/03, Engine TS7-09/11/13/14/15, Session TS7-17/18/21, Server TS7-22/23/24/26, Verbindungen TS7-16/27/28. Nicht duplizieren: 04.x Protokolle, 03.x Mechanik, 02.x/06.x Verhalten. Achse: Editor->Recorder->Executor->Fabrik(2 Engines)->Session->create_app/main. NOT_REQUESTED."
+}

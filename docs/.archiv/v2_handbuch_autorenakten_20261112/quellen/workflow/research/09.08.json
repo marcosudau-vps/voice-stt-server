@@ -1,0 +1,327 @@
+{
+  "branch_note": "feat/v2-release-cleanup NICHT verifizierbar: .git/refs ohne Dateien, .git/packed-refs fehlt, .git/config (7 Z.) ohne [remote]/[branch] => detached HEAD; Branch existiert nur als source_branch T5 / source_ref der Kapitel. Nur der SHA ist bindend.",
+  "chapter": "09.08",
+  "commit_verification": "bestaetigt: .git/HEAD Z.1 = a8993c5c68042d996eab680d84a5b138a214bb5d; .git/shallow Z.1 = derselbe SHA (Tiefe 1, Tip = Shallow-Grenze); .git/FETCH_HEAD Z.1 = SHA-only-Fetch von https://github.com/marcosudau-vps/voice-stt-server; .git/logs/HEAD Z.1 = checkout moving from main to FETCH_HEAD",
+  "conflicts": [
+    {
+      "id": "C9-01",
+      "thema": "'43 Diagramme' = 43 Briefs / 1 VERIFIED / 42 IDEA: Zahl belegt Briefs, nicht gepruefte Diagramme."
+    },
+    {
+      "id": "C9-02",
+      "thema": "Top-Level source_commit null vs 103 Kapitel mit Hash: Kapitelfeld massgeblich."
+    },
+    {
+      "id": "C9-03",
+      "thema": "Registry-Branch vs detached HEAD ohne Refs/Remote: Branch nicht verifizierbar, nur SHA bindend."
+    },
+    {
+      "id": "C9-04",
+      "thema": "04.08 Evidenz nennt 0 und 1, Feld sagt 1 - Evidenz ist Chronik."
+    },
+    {
+      "id": "C9-05",
+      "thema": "04.09 correction_round 3, Evidenz Runde 4 PASS - Rundennummer != Korrekturrundenzahl."
+    },
+    {
+      "id": "C9-06",
+      "thema": "Recherchezeitpunkt-Zahlen vs. Snapshot 2026-11-12 (103+1/21-67-14-1/42-IDEA vs. 104/104/18-54-28/4/43-VERIFIED, final 18/54/28/3/0/0/1); Zeitstand, kein Fehler."
+    },
+    {
+      "id": "C9-07",
+      "thema": "Keine Zeilenanker als Belege; nur Kapitel-IDs und Feldnamen."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "Bindende Quellreferenz ist Commit-SHA, nicht Branch; alle Aussagen gelten fuer diesen Commit.",
+      "beleg": ".git/HEAD:1",
+      "evidenz": "stark",
+      "gueltigkeit": "gesamter Commit",
+      "id": "DS9-01"
+    },
+    {
+      "aussage": "Checkout Shallow Tiefe 1: keine Vorfahren/Historie/Diff-Basis.",
+      "beleg": ".git/shallow:1",
+      "evidenz": "stark",
+      "gueltigkeit": "Commit",
+      "id": "DS9-02"
+    },
+    {
+      "aussage": "Branch steht nur in Registry, nicht in Git-Metadaten.",
+      "beleg": "task-registry.json:5,16; .git/refs leer",
+      "evidenz": "stark",
+      "gueltigkeit": "Arbeitsstand",
+      "id": "DS9-03"
+    },
+    {
+      "aussage": "Produktversion 2.0.0 aus resolve_version(), nicht setup-Konstante.",
+      "beleg": "VERSION:1; setup.py:19,27; _version.py:15-24",
+      "evidenz": "stark",
+      "gueltigkeit": "Commit",
+      "id": "DS9-04"
+    },
+    {
+      "aussage": "Registry Statusautoritaet: schema 1, plan 0.2, 104 Kapitel, pilot 02.03.",
+      "beleg": "task-registry.json:1-9",
+      "evidenz": "stark",
+      "gueltigkeit": "Arbeitsstand",
+      "id": "DS9-05"
+    },
+    {
+      "aussage": "104 Kapitelobjekte vorhanden, nicht nur Feld behauptet.",
+      "beleg": "task-registry.json 104x main_section/state",
+      "evidenz": "stark",
+      "gueltigkeit": "Arbeitsstand",
+      "id": "DS9-06"
+    },
+    {
+      "aussage": "9 Bereiche 01-09 Verteilung 9/8/13/13/11/15/13/14/8 Summe 104.",
+      "beleg": "task-registry.json:14-2788",
+      "evidenz": "stark",
+      "gueltigkeit": "Arbeitsstand",
+      "id": "DS9-07"
+    },
+    {
+      "aussage": "43 = Briefs, davon 42 IDEA, 1 VERIFIED (02.03), 61 NOT_REQUESTED.",
+      "beleg": "task-registry.json:318; briefs 43",
+      "evidenz": "stark",
+      "gueltigkeit": "Arbeitsstand",
+      "id": "DS9-08"
+    },
+    {
+      "aussage": "Recherchezeitpunkt 103 INTEGRATED/PLANNED; aktuell 103 INTEGRATED + 1 IN_REVIEW; verdicts 103 PASS + 1 CHANGES_REQUESTED.",
+      "beleg": "task-registry.json:2793; verdicts 103",
+      "evidenz": "stark",
+      "gueltigkeit": "Momentaufnahme",
+      "id": "DS9-09"
+    },
+    {
+      "aussage": "Korrekturrunden 0/1/2/3 = 21/67/14/1; 09.08 zusaetzlich 0.",
+      "beleg": "task-registry.json:1055; correction_round",
+      "evidenz": "stark",
+      "gueltigkeit": "Arbeitsstand",
+      "id": "DS9-10"
+    },
+    {
+      "aussage": "09.08 Recherche PLANNED/source null; aktuell IN_REVIEW/source gefuellt, nur integriert/updated null; verdict CHANGES_REQUESTED.",
+      "beleg": "task-registry.json:2786-2807",
+      "evidenz": "stark",
+      "gueltigkeit": "Recherchezeitpunkt",
+      "id": "DS9-11"
+    },
+    {
+      "aussage": "Top-Level source_commit null, waehrend alle 104 Kapitel den Hash tragen (103+09.08).",
+      "beleg": "task-registry.json:6 vs 17,44,71",
+      "evidenz": "stark",
+      "gueltigkeit": "Arbeitsstand",
+      "id": "DS9-12"
+    },
+    {
+      "aussage": "Kein U-Feld; U-IDs nur in 2 Evidenz-Strings (07.04, 09.06).",
+      "beleg": "task-registry.json:1971,2750; 21 Keys",
+      "evidenz": "stark",
+      "gueltigkeit": "Arbeitsstand",
+      "id": "DS9-13"
+    },
+    {
+      "aussage": "Code referenziert Handbuch nicht; 104/9/43 keine Konstanten.",
+      "beleg": "grep v2-handbuch in *.py: 0",
+      "evidenz": "stark",
+      "gueltigkeit": "Commit",
+      "id": "DS9-14"
+    },
+    {
+      "aussage": "Handbuch nicht im Artefakt: nur VoiceSTT/VoiceSTT_server/api_fastapi_server.",
+      "beleg": "setup.py:359-373; MANIFEST.in:1-30",
+      "evidenz": "stark",
+      "gueltigkeit": "Commit",
+      "id": "DS9-15"
+    },
+    {
+      "aussage": "Nur Repo-Markdown test-/CI-ueberwacht; Handbuch ohne Guard.",
+      "beleg": "test_docs_surface.py:1-90; ci.yml:187-191",
+      "evidenz": "stark",
+      "gueltigkeit": "Commit",
+      "id": "DS9-16"
+    },
+    {
+      "aussage": "Release/Merge/Push separat dispatch; CI veroeffentlicht nichts.",
+      "beleg": "ci.yml:9-34; release-publish:20-33",
+      "evidenz": "stark",
+      "gueltigkeit": "Commit",
+      "id": "DS9-17"
+    },
+    {
+      "aussage": "Release bindet Commit+Tree: dirty verweigert, Preflight clean/exact.",
+      "beleg": "candidate.py:247-252; preflight.py:87-109",
+      "evidenz": "stark",
+      "gueltigkeit": "Commit",
+      "id": "DS9-18"
+    },
+    {
+      "aussage": "Build erfasst Commit/Tree/Dirty/Date via git; ohne .git manual.",
+      "beleg": "build_identity_support.py:19-68",
+      "evidenz": "stark",
+      "gueltigkeit": "Buildverhalten",
+      "id": "DS9-19"
+    },
+    {
+      "aussage": "updated_at Stichprobe 2026-11-08 bis 11; 09.08 null; nur tagesgenau.",
+      "beleg": "task-registry.json:36,1870,2621,2806",
+      "evidenz": "mittel",
+      "gueltigkeit": "Stichprobe",
+      "id": "DS9-20"
+    },
+    {
+      "id": "DS9-21",
+      "aussage": "Top-Level source_commit null, waehrend alle 104 Kapitelobjekte a8993c5c tragen.",
+      "beleg": "task-registry.json Kopf vs. 104 Kapitelobjekte",
+      "evidenz": "stark",
+      "gueltigkeit": "Arbeitsstand"
+    },
+    {
+      "id": "DS9-22",
+      "aussage": "104/104 state INTEGRATED (Abschluss dieses Kapitels).",
+      "beleg": "task-registry.json 104 Treffer state",
+      "evidenz": "stark",
+      "gueltigkeit": "Arbeitsstand"
+    },
+    {
+      "id": "DS9-23",
+      "aussage": "104/104 review_verdict PASS (Abschluss dieses Kapitels).",
+      "beleg": "task-registry.json 104 Treffer verdict",
+      "evidenz": "stark",
+      "gueltigkeit": "Arbeitsstand"
+    },
+    {
+      "id": "DS9-24",
+      "aussage": "Snapshot 2026-11-12 Runden 0/1/2/3/4 = 18/54/28/4/0; Abschluss-Delta 09.08 4->6 mit Zwischen 5 ergibt final 18/54/28/3/0/0/1.",
+      "beleg": "workflow/reports/REGISTRY-SNAPSHOT_2026-11-12_ROOT-R01.json counts.rounds; task-registry.json correction_round",
+      "evidenz": "stark",
+      "gueltigkeit": "Arbeitsstand"
+    },
+    {
+      "id": "DS9-25",
+      "aussage": "diagram_status 43 VERIFIED / 61 NOT_REQUESTED, deckungsgleich mit 43 Briefs.",
+      "beleg": "task-registry.json Status vs. Briefs",
+      "evidenz": "stark",
+      "gueltigkeit": "Arbeitsstand"
+    },
+    {
+      "id": "DS9-26",
+      "aussage": "Snapshot: correction_round 3 nur 03.03, 04.06, 04.09, 09.08; Abschluss-Delta 09.08->6 (final nur 03.03/04.06/04.09 bei 3, 09.08 allein bei 6).",
+      "beleg": "workflow/reports/REGISTRY-SNAPSHOT_2026-11-12_ROOT-R01.json counts.round3_ids",
+      "evidenz": "stark",
+      "gueltigkeit": "Arbeitsstand"
+    },
+    {
+      "id": "DS9-27",
+      "aussage": "Feld zaehlt Korrekturrunden, nicht Review-Rundennummern (Runde 4 bei Feld 3).",
+      "beleg": "03.03/04.09/09.08 Evidence vs. Feld",
+      "evidenz": "stark",
+      "gueltigkeit": "Arbeitsstand"
+    },
+    {
+      "id": "DS9-28",
+      "aussage": "Feld 0 vs. Evidence Korrekturrunde 1 bei 01.01/01.02/04.11; 69 Evidenz-Zeilen vs. 58 Felder.",
+      "beleg": "task-registry.json Felder vs. Evidence",
+      "evidenz": "stark",
+      "gueltigkeit": "Arbeitsstand"
+    },
+    {
+      "id": "DS9-29",
+      "aussage": "Keine Summenfelder; alle Verteilungen aus 104 Objekten gezaehlt.",
+      "beleg": "task-registry.json Kopf/Ende",
+      "evidenz": "stark",
+      "gueltigkeit": "Arbeitsstand"
+    },
+    {
+      "id": "DS9-30",
+      "aussage": "Snapshot 2026-11-12: updated_at null 1, 11-08:21, 11-09:27, 11-10:5, 11-11:44, 11-12:6 (darin 09.08); kein Delta.",
+      "beleg": "REGISTRY-SNAPSHOT_2026-11-12_ROOT-R01.json counts.updated_at",
+      "evidenz": "stark",
+      "gueltigkeit": "Arbeitsstand"
+    },
+    {
+      "id": "DS9-31",
+      "aussage": "source_branch in Registry nicht verifizierbar; Quelle SHA-Fetch detached HEAD.",
+      "beleg": ".git/HEAD/shallow/FETCH_HEAD/logs",
+      "evidenz": "stark",
+      "gueltigkeit": "Bindung"
+    },
+    {
+      "id": "DS9-32",
+      "aussage": "Zeilenanker Alt-Recherche veraltet; nur Kapitel-IDs/Feldnamen zitieren.",
+      "beleg": "09.08.json vs. registry 2862 Zeilen",
+      "evidenz": "stark",
+      "gueltigkeit": "Arbeitsstand"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N9-01",
+      "thema": "findings=[] 104/104, Befunde nur Freitext evidence; kein Registry-Schema."
+    },
+    {
+      "id": "N9-02",
+      "thema": "Kein U-Feld/Datei/Codepfad; U-Typen nicht aggregierbar."
+    },
+    {
+      "id": "N9-03",
+      "thema": "Keine Code-/CI-Pruefung des Handbuchs; kein Docs-Job."
+    },
+    {
+      "id": "N9-04",
+      "thema": "Keine PROGRESS-Anbindung; nur state, kein Artefakt-Link."
+    },
+    {
+      "id": "N9-05",
+      "thema": "Keine Summen-/Kennzahlenfelder in der Registry; alle Verteilungen sind Ableitung des Lesers."
+    }
+  ],
+  "researcher_session": "ses_e33c65677ffejF9oxw3q2cv5Mk",
+  "solver_notes": [
+    "Zaehler nur Arbeitsstand; Code-Belege: SHA/Shallow/2.0.0/Build-CI-Release."
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U9-01",
+      "thema": "U-Anzahl/-menge nur research/notes/reviews, nicht freigegeben."
+    },
+    {
+      "id": "U9-02",
+      "thema": "updated_at-Verteilung/letzte Aenderung nur Stichprobe."
+    },
+    {
+      "id": "U9-03",
+      "thema": "Commit-Datum/Autor/Message ohne Git nicht lesbar."
+    },
+    {
+      "id": "U9-04",
+      "thema": "Registry vs PROGRESS/Notes nicht geprueft."
+    },
+    {
+      "id": "U9-05",
+      "thema": "Arbeitsbaum-dirty ohne Git nicht feststellbar."
+    },
+    {
+      "id": "U9-06",
+      "thema": "Erlaubte Wertebereiche von state/diagram_status/review_verdict/correction_round in der Datei nicht deklariert."
+    },
+    {
+      "id": "U9-07",
+      "thema": "Feld-gegen-Evidenz-Widerspruch nur an drei Einzelfaellen plus aggregiert geprueft."
+    },
+    {
+      "id": "U9-08",
+      "thema": "Bereichsverteilung 01-09 nicht neu nachgezaehlt."
+    }
+  ],
+  "writer_notes": "Code: SHA/Shallow/2.0.0/Build-CI-Release. Arbeitsstand: 104/9/43-Briefs/103+1/Korrekturrunden. Nicht: Branch/Datum/U-Anzahl/PROGRESS. Kein Diagramm.",
+  "snapshot_ref": "workflow/reports/REGISTRY-SNAPSHOT_2026-11-12_ROOT-R01.json"
+}

@@ -1,0 +1,289 @@
+{
+  "branch_note": "Der Branch (feat/v2-release-cleanup) ist im Checkout nicht als Ref belegbar, weil .git/refs/ und packed-refs fehlen (Shallow-Fetch). Belegt ist ausschliesslich die Commit-Bindung a8993c5c68042d996eab680d84a5b138a214bb5d.",
+  "chapter": "04.03",
+  "commit_verification": "Detached HEAD im Checkout C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src: .git/HEAD enthaelt exakt a8993c5c68042d996eab680d84a5b138a214bb5d; .git/FETCH_HEAD nennt denselben SHA mit Herkunft https://github.com/marcosudau-vps/voice-stt-server; Shallow-Clone (.git/shallow vorhanden), keine refs/ im Checkout.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "'accepted' hat zwei Bedeutungen: ProtocolV2Connection.accepted meint 'Handshake erledigt', command.ack.accepted meint 'result ist applied oder no_change'. Nicht gleichsetzen."
+    },
+    {
+      "id": "C2",
+      "thema": "Vertragsvektor idle_snapshot ohne requestedSettings, Code sendet es immer; Test prueft nur Teilmengen (additives Feld)."
+    },
+    {
+      "id": "C3",
+      "thema": "4409 dreifach belegt: Admission-Fehler, Sitzungslimit (session_limit_reached), Katalog nicht verfuegbar. Nur errors[].code unterscheidet."
+    },
+    {
+      "id": "C4",
+      "thema": "4400 mehrfach belegt: kein hello, unparsebar, ungueltige Huelle, Binaerframe vor hello. Code allein sagt nichts ueber Ursache."
+    },
+    {
+      "id": "C5",
+      "thema": "Auth-Asymmetrie: /ws/v2 ohne Auth, liefert aber sessiongebundenes Log-Token; HTTP-Admin-/Log-Routen verlangen Key."
+    },
+    {
+      "id": "C6",
+      "thema": "Ablehnungsnutzlasten asymmetrisch: protocol.incompatible und session.rejected mit Version/Commit, aber nur session.rejected mit errors[]."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "Client -> WS-Upgrade /ws/v2 -> FastAPI-Handler -> websocket.accept() (W1-01)",
+    "Query clientId | Header x-voicestt-client-id -> normalized_client_id -> ProtocolV2Connection.client_id (W1-01)",
+    "Client -> hello (Text, erstes Frame) -> parse_hello (W1-04, W1-05)",
+    "parse_hello -> Huelle ungueltig -> Close 4400 ohne Nachricht (W1-04, W1-05)",
+    "parse_hello -> supportedProtocolVersions schneiden mit (2,) -> negotiate = max(gemeinsam) (W1-06)",
+    "negotiate -> keine gemeinsame Version -> protocol.incompatible -> Close 4406 (W1-06)",
+    "parse_hello -> admit_requested_session -> errors[] (W1-07)",
+    "admit_requested_session -> WakeWordPort.resolve_selection -> Katalog einmal atomar (W1-07)",
+    "errors[] -> session.rejected -> Close 4409 (W1-07)",
+    "selection -> service.admit_session(new_canonical_id, canonical_ids=True) (W1-08)",
+    "Session None -> session.rejected code=session_limit_reached -> Close 4409 (W1-08)",
+    "SessionConfigurationError -> session.rejected invalid_requested_session -> Close 4409 (W1-08)",
+    "unerwartete Admission-Ausnahme -> Close 1011 (W1-08, W1-20)",
+    "Session -> Runtime-Suppression setzen -> Observer setzen -> start_streaming() (W1-11)",
+    "Session -> ProtocolSessionState(sessionId, 2, settingsRevision) -> EventProjector (W1-11)",
+    "Session -> build_snapshot -> embedded_snapshot -> hello.accepted (W1-09, W1-10)",
+    "Session -> create_log_access -> logAccess (W1-12)",
+    "Client -> Binaerframe -> decode_audio_packet -> ingest_audio_packet (W1-23)",
+    "Client -> Kommando -> parse_command (W1-13, W1-14)",
+    "parse_command -> commandId nicht kanonisch -> keine ack (W1-13)",
+    "parse_command -> fremde sessionId -> stale_session (W1-13)",
+    "parse_command -> Envelope-Verstoss -> invalid_payload (W1-14)",
+    "parse_command -> Replay-Cache -> memo|command_id_conflict|neu (W1-16)",
+    "Kommando -> Domain/Controller -> command.ack (W1-15)",
+    "session_settings.patch -> settings.changed je Policy-Gruppe (W1-19)",
+    "session.snapshot.request -> command.ack -> session.snapshot (W1-10)",
+    "Domain-Lebenszyklus -> EventProjector -> Event -> Writer (W1-17, W1-18)",
+    "Close-Pfad -> request_close -> close -> close_session -> remove_session + Audit (W1-20, W1-21)"
+  ],
+  "facts": [
+    {
+      "aussage": "WebSocket V2 ist eigene Route /ws/v2, getrennt von /ws/transcribe und /ws/logs. Handler ruft sofort await websocket.accept() ohne Subprotokoll und ohne Auth-Gate. Client-Identifier aus Query clientId oder Header x-voicestt-client-id, normalisiert 1..128 Zeichen (Unicode-alphanumerisch plus \"._:-\", server.py:1362-1372; [R2 2026-11-08]), sonst client-<uuid4hex>. Verbindung nicht im gemeinsamen ConnectionManager; Session im service.sessions-Register, zaehlt in /health activeSessions.",
+      "beleg": "api_fastapi_server/server.py:10121-10146, 10133-10136, 1362-1372, 3125; tests/unit/test_protocol_v2_e2e.py:240-264",
+      "evidenz": "stark",
+      "gueltigkeit": "WS-Transport der App; Pfad/TLS/Proxy kann abweichen.",
+      "id": "W1-01"
+    },
+    {
+      "aussage": "Ausgehende Nachrichten ueber thread-sichere Queue und genau einen Writer-Task. Jede Nachricht als Text-Frame mit json.dumps(payload, separators=(',',':')) kompakt, Nicht-ASCII als \\uXXXX. Kein Binaerframe vom Server. None im Kanal = schliessen + transport_close-Event.",
+      "beleg": "api_fastapi_server/server.py:10147-10152, 10154-10169, 10171-10192",
+      "evidenz": "stark",
+      "gueltigkeit": "alle Server-zu-Client-Nachrichten auf /ws/v2.",
+      "id": "W1-02"
+    },
+    {
+      "aussage": "Vor hello.accepted Handshake-Timeout 10,0 s (schema.DEFAULT_HANDSHAKE_TIMEOUT_SECONDS) pro Empfangsversuch via asyncio.wait_for; Ablauf -> 4408. Nach Acceptance kein Lese-Timeout: wait auf receive() ODER transport_close; nur Transport-Close beendet Schleife.",
+      "beleg": "api_fastapi_server/protocol_v2/schema.py:204, 209; api_fastapi_server/protocol_v2/connection.py:72-78; api_fastapi_server/server.py:10193-10228, 10229-10239; tests/unit/test_protocol_v2_e2e.py:502-508; tests/unit/test_protocol_v2_terminal_recovery.py:380-401",
+      "evidenz": "stark",
+      "gueltigkeit": "App-Ebene; TCP-/Proxy-Idle-Timeouts unabhaengig.",
+      "id": "W1-03"
+    },
+    {
+      "aussage": "Erste Client-Nachricht muss hello sein. Jede andere Textnachricht, unparsebares JSON und jedes Binaerframe vor hello.accepted -> 4400 ohne Server-Nachricht. Keine Session, kein Recorder, kein Audio-Pfad.",
+      "beleg": "api_fastapi_server/protocol_v2/handshake.py:83-89; api_fastapi_server/protocol_v2/connection.py:168-171, 181-185, 218-223; api_fastapi_server/protocol_v2/schema.py:202; tests/unit/test_protocol_v2_e2e.py:363-377, 436-449, 484-500",
+      "evidenz": "stark",
+      "gueltigkeit": "Zustand vor hello.accepted; Close endgueltig.",
+      "id": "W1-04"
+    },
+    {
+      "aussage": "hello-Pflichtfelder: type=hello; supportedProtocolVersions nichtleere Liste echter ints (bool zaehlt nicht); clientVersion/clientCommit nichtleere Strings (kein Semver-Check); clientRunId kanonische UUID; requestedSession Objekt mit trigger.manual/.wakeWord (bool) und wakeWordIds Liste nichtleerer Strings; runtimeSuppression Objekt mit manual/wakeWord (bool). Unbekannte Zusatzfelder ignoriert. Verstoss -> 4400 ohne Nutzlast.",
+      "beleg": "api_fastapi_server/protocol_v2/handshake.py:30-40, 83-153, 250-253; api_fastapi_server/protocol_v2/schema.py:219-233; tests/unit/test_protocol_v2_e2e.py:379-391; tests/contracts/protocol-v2-vectors.json:16-42",
+      "evidenz": "stark",
+      "gueltigkeit": "Hello-Huelle; Feldnamen case-sensitiv.",
+      "id": "W1-05"
+    },
+    {
+      "aussage": "Versionsaushandlung hoechste gemeinsame Version: negotiate() schneidet Client-Liste mit SUPPORTED_PROTOCOL_VERSIONS=(2,) und nimmt max(). Ohne Treffer: protocol.incompatible mit reason=no_common_protocol_version, serverVersion, serverCommit, supportedProtocolVersions=[2], Close 4406 – ohne sessionId/Session. hello kennt kein protocolVersion-Feld; nur Kommandos tragen es.",
+      "beleg": "api_fastapi_server/protocol_v2/handshake.py:62-73, 155-165, 181-187; api_fastapi_server/protocol_v2/schema.py:29-32; tests/unit/test_protocol_v2_e2e.py:393-404; tests/unit/test_protocol_v1_v2_boundary.py:307-308",
+      "evidenz": "stark",
+      "gueltigkeit": "nur Version 2 verhandelbar.",
+      "id": "W1-06"
+    },
+    {
+      "aussage": "Session-Admission in fester Reihenfolge, sammelt errors[]: (1) keine Triggerquelle -> activation_trigger_required; (2) wakeWord=true ohne IDs -> wake_word_selection_required; (3) IDs ohne wakeWord=true -> wake_word_selection_not_allowed; (4) Auswahl -> Katalog genau einmal atomar (resolve_selection); unbekannt/deaktiviert/nicht-kanonisch/nicht-ladbar lehnt ganze Auswahl ab (u.a. wake_word_unavailable). Nichtleer -> session.rejected reason=invalid_requested_session + errors[], Close 4409, keine sessionId.",
+      "beleg": "api_fastapi_server/protocol_v2/handshake.py:76-80, 201-247; api_fastapi_server/protocol_v2/ports.py:119-147; api_fastapi_server/protocol_v2/connection.py:236-240, 297-305; tests/unit/test_protocol_v2_e2e.py:406-434; tests/contracts/protocol-v2-vectors.json:180-205",
+      "evidenz": "stark",
+      "gueltigkeit": "Admission-Regeln; Fehlercodes Draht-Vertrag, Meldungstexte deutsch/nicht stabil.",
+      "id": "W1-07"
+    },
+    {
+      "aussage": "Session entsteht mit neu erzeugter kanonischer UUID (new_canonical_id) via service.admit_session(..., canonical_ids=True); validierte Wake-Auswahl als selection durchgereicht (kein Re-Resolve). Reservierung fehlgeschlagen (max_sessions Default 4) -> session.rejected code=session_limit_reached, Close 4409; SessionConfigurationError -> invalid_requested_session mit field/code/message; andere Ausnahme -> 1011.",
+      "beleg": "api_fastapi_server/protocol_v2/connection.py:242-305; api_fastapi_server/server.py:7325-7370, 487, 6147-6169; api_fastapi_server/protocol_v2/schema.py:214-216; tests/unit/test_protocol_v2_e2e.py:510-518",
+      "evidenz": "stark",
+      "gueltigkeit": "max_sessions konfigurierbar (Default 4).",
+      "id": "W1-08"
+    },
+    {
+      "aussage": "hello.accepted einzige positive Antwort: type=hello.accepted, protocolVersion 2, sessionId (kanonische UUID), serverVersion, serverCommit, snapshot (eingebettet ohne inneres type), logAccess. Kein separater ready/start-Schritt; Audio-Annahme Teil der Admission. Reihenfolge: Session anlegen, Suppression setzen, Observer setzen, start_streaming(), Snapshot bauen, hello.accepted senden.",
+      "beleg": "api_fastapi_server/protocol_v2/connection.py:307-343; api_fastapi_server/protocol_v2/snapshot.py:82-89; tests/unit/test_protocol_v2_e2e.py:269-295",
+      "evidenz": "stark",
+      "gueltigkeit": "genau einmal pro Verbindung.",
+      "id": "W1-09"
+    },
+    {
+      "aussage": "session.snapshot Felder: protocolVersion, serverVersion, serverCommit, sessionId, stateVersion, lastEventSeq, settingsRevision, input{phase, activationId, primarySource, deadlineAtUnixMs, remainingMs, closeRequested}, pendingActivations[] (nur inputClosed=true, sortiert), trigger{configured, suppressed, effective}, audioAvailable, requestedSettings, effectiveSettings, wakeWordCapabilities{catalogRevision, availableWakeWordIds}. idle: activationId/primarySource/deadline/remaining null, closeRequested false. Zeiten aus monotonem Deadline-Wert + Wanduhr-Anker.",
+      "beleg": "api_fastapi_server/protocol_v2/snapshot.py:36-79, 92-139, 142-184; tests/contracts/protocol-v2-vectors.json:133-177; tests/unit/test_protocol_v2_contract.py:243-260",
+      "evidenz": "stark",
+      "gueltigkeit": "reine Projektion; requestedSettings additiv.",
+      "id": "W1-10"
+    },
+    {
+      "aussage": "Mit Annahme: SettingsPort, ProtocolSessionState(sessionId, 2, revision), EventProjector; Runtime-Suppression an ActivationController, Observer registriert, start_streaming() sofort. start_streaming() publiziert nur Legacy-Status an ConnectionManager, nicht an v2-Observer. Kein start-Kommando.",
+      "beleg": "api_fastapi_server/protocol_v2/connection.py:307-332; api_fastapi_server/server.py:2850-2863, 3102-3137",
+      "evidenz": "stark",
+      "gueltigkeit": "Zustand direkt nach hello.accepted.",
+      "id": "W1-11"
+    },
+    {
+      "aussage": "logAccess pro akzeptierter Verbindung via create_log_access(sessionId): available, websocketPath=/ws/logs, historyPath=/api/logs/events, sessionId, logProtocolVersion=2, deliveryMode=sqlite_first, replayAvailable, serverInstanceId, oldestCursor, latestCursor; bei Store zusaetzlich accessToken+expiresAt. Live aus -> code=log_live_disabled; nur Store weg -> event_store_unavailable, dann ohne Token. Token 2x uuid4hex (64 Hex), 24 h, sessiongebunden, nur Speicher. [R1-F1 2026-11-08: 48->64 korrigiert, security/logs.py:24-26.]",
+      "beleg": "api_fastapi_server/server.py:7772-7806; api_fastapi_server/security/logs.py:9, 24-38; tests/unit/test_protocol_v2_e2e.py:289-336",
+      "evidenz": "stark",
+      "gueltigkeit": "Bootstrap-Datum, nicht Teil spaeterer Snapshots.",
+      "id": "W1-12"
+    },
+    {
+      "aussage": "Nach hello.accepted fuenf Kommandotypen: activation.command, trigger_suppression.set, audio_availability.set, session_settings.patch, session.snapshot.request. Jedes Kommando braucht kanonische commandId (sonst keine Antwort/kein Replay), protocolVersion exakt 2 (sonst invalid_payload), kanonische sessionId; fremde gueltige -> stale_session ohne Wirkung; nicht-kanonische -> invalid_payload. Unbekannte types still ignoriert (kein ack, kein Wechsel); zweites hello wirkungslos.",
+      "beleg": "api_fastapi_server/protocol_v2/commands.py:90-138, 197-203; api_fastapi_server/protocol_v2/schema.py:37-57, 236-244; api_fastapi_server/protocol_v2/connection.py:347-369; tests/unit/test_protocol_v2_e2e.py:811-860, 533-544",
+      "evidenz": "stark",
+      "gueltigkeit": "Kommando-Huelle; fehlende commandId bewusst ohne Antwort.",
+      "id": "W1-13"
+    },
+    {
+      "aussage": "v2-Huelle strenger als v1: activate verlangt source=manual (wake_word serverseitig -> invalid_payload), kein activationId; refresh/finish/cancel verlangen kanonische activationId, kein source; Alias extend existiert nicht. Verstoss -> command.ack result=invalid_payload, accepted=false, ohne Wechsel/Close.",
+      "beleg": "api_fastapi_server/protocol_v2/commands.py:143-167; api_fastapi_server/protocol_v2/schema.py:62-77; tests/unit/test_protocol_v2_e2e.py:566-628; tests/contracts/protocol-v2-vectors.json:206-253",
+      "evidenz": "stark",
+      "gueltigkeit": "nur v2-Envelope.",
+      "id": "W1-14"
+    },
+    {
+      "aussage": "command.ack Felder: type, protocolVersion, sessionId, commandId, accepted, result, activationId, inputPhase, stateVersion, settingsRevision, optional errors[]. inputPhase normiert (idle, waiting_first_speech, segment_active, followup_wait, closing_input). accepted=true nur fuer applied/no_change. 15 Codes: applied, no_change, activation_locked, not_active, invalid_phase, closing_input, stale_session, stale_activation, command_id_conflict, invalid_payload, trigger_suppressed, audio_unavailable, settings_revision_conflict, settings_rejected, internal_error.",
+      "beleg": "api_fastapi_server/protocol_v2/connection.py:620-652; api_fastapi_server/protocol_v2/schema.py:105-143; tests/unit/test_protocol_v2_e2e.py:1017-1042",
+      "evidenz": "stark",
+      "gueltigkeit": "jede erkennbare Kommando-Nachricht mit commandId genau eine ack.",
+      "id": "W1-15"
+    },
+    {
+      "aussage": "Replay-Cache pro Session: Schluessel commandId + typstabiler Freeze der Nutzlast ohne commandId (inkl. verbotener source-Felder). Identische Wiederholung -> memoisierte ack ohne Re-Ausfuehrung; gleiche commandId andere Nutzlast -> command_id_conflict ohne Wirkung. Auch abgelehnte Nutzlast behaelt Replay-Identitaet. Unbekanntes additives Feld aendert Antwort nicht.",
+      "beleg": "api_fastapi_server/protocol_v2/connection.py:27-37, 408-450, 594-616, 654-661; api_fastapi_server/protocol_v2/commands.py:19-28, 65-77; api_fastapi_server/activation_commands.py:285-286; tests/unit/test_protocol_v2_e2e.py:700-809",
+      "evidenz": "stark",
+      "gueltigkeit": "pro Verbindung/Session; Reconnect neue Historie.",
+      "id": "W1-16"
+    },
+    {
+      "aussage": "Domain-Event: type, protocolVersion, sessionId, eventId (UUID), eventSeq, stateVersion, occurredAtUnixMs. eventSeq ab 1 strikt monoton luecklos pro Verbindung; stateVersion ab 0 nur bei sichtbaren Aenderungen. 18 kanonische Typen; watchdog.warning, activation.trigger_suppressed, transcription.interim als NON_STATE_EVENTS ohne stateVersion-Anstieg. Retry derselben Occurrence -> gleiche eventId/eventSeq (logical_key-Memo).",
+      "beleg": "api_fastapi_server/protocol_v2/session.py:29-150; api_fastapi_server/protocol_v2/schema.py:146-197; tests/unit/test_protocol_v2_e2e.py:1078-1101; tests/unit/test_protocol_v2_contract.py:543-613",
+      "evidenz": "stark",
+      "gueltigkeit": "Zaehler nur Verbindungslebensdauer, nicht persistiert.",
+      "id": "W1-17"
+    },
+    {
+      "aussage": "EventProjector mappt Legacy->v2: activation_started->activation.started, refreshed->phase_changed, closed->input_closed, recording_started/ended->segment.recording_started/ended, transcription_started->accepted, realtime_transcript->interim, final_transcript->completed, discarded/cancelled->discarded, failed->failed, watchdog_warning->warning, wakeword_detected->detected, availability_changed->changed. activation_drained faechert nach state (completed/cancelled/failed); unbekannte verworfen. Phasenaenderung vorangestellt wenn noetig; spaete Interims nach Terminal verworfen.",
+      "beleg": "api_fastapi_server/protocol_v2/events.py:51-92, 114-200, 451-508; api_fastapi_server/protocol_v2/schema.py:146-187",
+      "evidenz": "stark",
+      "gueltigkeit": "nur Domain-Ereignisse durch Lifecycle-Funnel.",
+      "id": "W1-18"
+    },
+    {
+      "aussage": "session_settings.patch verlangt baseSettingsRevision int>=0 und nichtleeres changes (sonst invalid_payload). Erfolg: settingsRevision gespiegelt, Keys nach Apply-Policy gruppiert (live, next_activation, next_session, server_restart), lexikografisch sortiert; pro Gruppe settings.changed mit Revision/scope=session/changedKeys/applyPolicy. Nur erstes Event sichtbarer Sprung: Transaktion +1 stateVersion, alle Events gleiche Revision. Veraltet -> settings_revision_conflict, abgelehnt -> settings_rejected (mit errors[]).",
+      "beleg": "api_fastapi_server/protocol_v2/connection.py:505-582; api_fastapi_server/protocol_v2/commands.py:183-190; api_fastapi_server/settings_control.py:60; tests/unit/test_protocol_v2_e2e.py:975-1015",
+      "evidenz": "stark",
+      "gueltigkeit": "nur Session-Settings; Server-Settings via HTTP (04.02).",
+      "id": "W1-19"
+    },
+    {
+      "aussage": "v2-Close-Tabelle: 4400 invalid handshake, 4406 protocol.incompatible, 4408 handshake timeout, 4409 session.rejected (inkl. Limit), 1011 interner Fehler. Ohne Code Fallback 1000. 1001/1008/1012/1013/4xxx-Zwischen kommen nicht vor; close() ohne reason-Text.",
+      "beleg": "api_fastapi_server/protocol_v2/schema.py:200-209; api_fastapi_server/server.py:10186-10190, 10259-10281; api_fastapi_server/protocol_v2/connection.py:140-152, 688-702; tests/unit/test_protocol_v2_e2e.py:463-508; tests/unit/test_protocol_v2_terminal_recovery.py:380-455",
+      "evidenz": "stark",
+      "gueltigkeit": "Drahtvertrag; Proxy kann Codes veraendern.",
+      "id": "W1-20"
+    },
+    {
+      "aussage": "Teardown deterministisch: Close-Code lesen, request_close(code or 1000) fixieren (first-wins, idempotent), bis 5,0 s auf Writer warten (sonst cancel), connection.close_session() mit Observer-Loesung und remove_session(sessionId); websocket.close(code), nur bei Session Audit session.closed mit sessionId/clientId/transport=websocket_v2. Disconnect vor hello: keine Session/kein Audit.",
+      "beleg": "api_fastapi_server/server.py:10259-10288; api_fastapi_server/protocol_v2/connection.py:200-214; tests/unit/test_protocol_v2_terminal_recovery.py:185-217",
+      "evidenz": "stark",
+      "gueltigkeit": "jedes Ende einer /ws/v2-Verbindung.",
+      "id": "W1-21"
+    },
+    {
+      "aussage": "Draht-IDs kanonische UUIDs: 36 Zeichen, Bindestriche, lowercase, gleich str(uuid.UUID(...)). Kompakt/Gross abgelehnt ohne Umformatierung. sessionId serverseitig + validiert (sonst ValueError); commandId nur validiert (normalize liefert None). v1-kompakt nicht migriert.",
+      "beleg": "api_fastapi_server/protocol_v2/schema.py:212-244; api_fastapi_server/protocol_v2/session.py:41-43; api_fastapi_server/protocol_v2/commands.py:105-126; tests/unit/test_protocol_v2_contract.py:324-345, 543-547",
+      "evidenz": "stark",
+      "gueltigkeit": "sessionId, clientRunId, commandId, activationId, eventId, segmentId.",
+      "id": "W1-22"
+    },
+    {
+      "aussage": "Nach hello.accepted Binaerframes = Audiopfad: decode_audio_packet + ingest_audio_packet, bool accepted zurueck. Ungueltiges Paket (AudioPacketError) geloggt/verworfen ohne Close/Wechsel; unerwartete Ausnahmen ebenso. Vor hello.accepted jedes Binaerframe -> 4400.",
+      "beleg": "api_fastapi_server/protocol_v2/connection.py:181-198; tests/unit/test_protocol_v2_e2e.py:436-449, 488-500",
+      "evidenz": "stark",
+      "gueltigkeit": "Binaerkanal v2; Paketformat nicht Teil des Kapitels.",
+      "id": "W1-23"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Kein start-Kommando und kein server-initiierter hello: Audio-Annahme startet atomar mit hello.accepted, kein ready/start."
+    },
+    {
+      "id": "N2",
+      "thema": "Keine Subprotokoll-Aushandlung und kein app-seitiger Ping/Pong-Keepalive."
+    },
+    {
+      "id": "N3",
+      "thema": "Kein Auth-/Admin-Gate auf /ws/v2: ohne Key, Token oder Loopback-Pruefung."
+    },
+    {
+      "id": "N4",
+      "thema": "Keine Session-Wiederaufnahme: kein Resume-Token, kein Replay verpasster Events; Resync nur per session.snapshot.request."
+    },
+    {
+      "id": "N5",
+      "thema": "Kein Close-Reason-Text: close() nur mit Code."
+    },
+    {
+      "id": "N6",
+      "thema": "Kein 1001/1008/1012/1013-Close, kein Shutdown-Code; Fallback 1000."
+    },
+    {
+      "id": "N7",
+      "thema": "Keine Binaerframes vom Server; nur Textframes mit JSON."
+    },
+    {
+      "id": "N8",
+      "thema": "Kein periodischer Server-Push des Snapshots; nur bei hello.accepted und auf request."
+    }
+  ],
+  "researcher_session": "ses_e434e8509ffeBVHJZXA3Ju8cZn",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Maximale Groesse von Text-/Binaernachrichten: kein Limit im App-Code; Starlette/uvicorn-Default, nicht konfiguriert."
+    },
+    {
+      "id": "U2",
+      "thema": "Fragmentierte Frames/mehrteilige Textnachrichten; Code behandelt nur fertige Nachrichten aus receive()."
+    },
+    {
+      "id": "U3",
+      "thema": "Idle-/Read-Timeouts eines Proxys auf langen v2-Verbindungen; app-seitig nach hello kein Read-Timeout."
+    },
+    {
+      "id": "U4",
+      "thema": "Obergrenze supportedProtocolVersions und verschachtelter hello-Objekte; keine Groessenpruefung im Parser."
+    },
+    {
+      "id": "U5",
+      "thema": "Race konkurrierender Close-Codes (z.B. 4409 vs 1011): first-wins, Reihenfolge nicht getestet."
+    },
+    {
+      "id": "U6",
+      "thema": "Ob stateVersion=0/lastEventSeq=0 im hello.accepted-Snapshot unter Last garantiert; kein Test der Startwerte."
+    }
+  ],
+  "writer_notes": "Kapitel von aussen nach innen: (1) Aufbau (Route, accept, clientId, kein Auth/Manager), (2) Zeitfenster vor hello (10,0 s, 4408), danach kein Read-Timeout, (3) hello-Felder Tabelle, (4) Verhandlung (nur 2), (5) drei Ablehnungsstufen 4400/4406/4409 + errors[], (6) atomare Admission inkl. Katalog und max_sessions=4, (7) hello.accepted mit Snapshot/logAccess, (8) Snapshot-Felder, (9) Kommando-Huelle/ack/15 Codes/Replay, (10) Event-Envelope/Sequenzen, (11) Close-Tabelle + Teardown/Audit. Trennen: hello ohne protocolVersion; accepted doppelt (C1); requestedSettings additiv (C2); 4409/4400 Sammelcodes (C3/C4); unauthentifiziert (C5); kein start/ready (N1); keine Wiederaufnahme (N4); Close ohne reason (N5); Nicht-ASCII escaped (W1-02). Zahlen nur W1-03 (10,0 s), W1-08 (max 4), W1-12 (24 h, 48 Hex), W1-21 (5,0 s). Querverweise: 04.01, 04.02, 04.04/04.05, 02.01, 03.09, 05.10."
+}

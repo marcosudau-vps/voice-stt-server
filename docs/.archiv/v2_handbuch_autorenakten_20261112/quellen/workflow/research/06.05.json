@@ -1,0 +1,270 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD, kein Ref). Nur Commit a8993c5c68042d996eab680d84a5b138a214bb5d bindend.",
+  "chapter": "06.05",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached, kein Branch-Ref).",
+  "conflicts": [
+    {
+      "id": "C6-01",
+      "thema": "Compose-Kommentar fordert dist/voicestt + dist/kroko; Dockerfile kopiert nur dist/voicestt (Test verbietet COPY dist/kroko); dist/kroko kein Build-Input [D6-03]."
+    },
+    {
+      "id": "C6-02",
+      "thema": "build_production-Docstring nennt beide COPY-Zeilen; Dockerfile nur eine: Doku-Drift ohne Laufzeitfolge."
+    },
+    {
+      "id": "C6-03",
+      "thema": "Compose/config-Default free vs Pipeline+Produkt pro (Label free bei Pro-Wheel; offizielle Labelvalidierung gilt nicht) [D6-14/D6-20/D6-24]."
+    },
+    {
+      "id": "C6-04",
+      "thema": "Compose ohne Version/Commit/BUILD_DATE → unknown-Labels/unknown-Commit → Identität incomplete (kein Absturz) [D6-08/D6-14]."
+    },
+    {
+      "id": "C6-05",
+      "thema": "Zwei CPU-Prüfungen (Inline vs Werkzeug), Inline schwächer; Reichweite trennen [D6-04/D6-22]."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [
+    "E1 Repo-Kontext -> builder (COPY requirements + dist/voicestt/*.whl) [D6-03/D6-23]",
+    "E2 builder -> runtime (COPY --from=builder /opt/venv) [D6-06]",
+    "E3 Image -> Prozess (ENTRYPOINT; Compose nur CMD) [D6-09/D6-15]",
+    "E4 Prozess -> /health immer 200 (ok/ready Nutzlast) [D6-13]",
+    "E5 Image-Healthcheck -> /health (Liveness) [D6-12]",
+    "E6 Compose-Healthcheck -> /health (überschreibt) [D6-19]",
+    "E7 Host ${VOICESTT_PORT:-8010} -> Container 8010 (EXPOSE Metadatum) [D6-18/D6-07]",
+    "E8 Host ${VOICESTT_DATA_PATH:-./data} <-> /var/lib/voicestt rw (logs/config-runtime/models) [D6-17]",
+    "E9 Host-Modellverzeichnisse <-> /models/custom/* ro optional [D6-17]",
+    "E10 /models/custom/* + MODEL_ROOTs -> Discovery [D6-16/D6-17]",
+    "E11 Compose-ENV -> Prozess-ENV (CPU_ONLY Marker ohne Consumer) [D6-11/D6-16]",
+    "E12 Compose-build (context ., target runtime, Arg variant) -> Image; offiziell build_production.py [D6-14/D6-20]",
+    "E13 KEIN config.yaml -> Container (Nicht-Kante) [D6-10/D6-21]"
+  ],
+  "facts": [
+    {
+      "aussage": "Zwei Stages builder/runtime, beide gleicher ubuntu:24.04-Digest; Autorität build_production.py; Test erzwingt 2 FROM + Digest.",
+      "beleg": "Dockerfile Z.7/43/5; build_production.py Z.45-53; Tests Z.59-88.",
+      "evidenz": "A+Test",
+      "gueltigkeit": "Produktions-Image",
+      "id": "D6-01"
+    },
+    {
+      "aussage": "Builder: Python-3.12-venv /opt/venv (PATH vorn), Bauwerkzeuge nur dort.",
+      "beleg": "Dockerfile Z.9-19 (python3.12/venv/dev/pip/build-essential/portaudio19-dev/libsndfile1-dev/ca; venv; ENV).",
+      "evidenz": "A",
+      "gueltigkeit": "nur builder",
+      "id": "D6-02"
+    },
+    {
+      "aussage": "Builder installiert ein vorproduziertes Produkt-Wheel + Extras + requirements; kein Checkout/editable, kein Kroko-Bau; openwakeword 0.6.0 --no-deps ohne tflite.",
+      "beleg": "Dockerfile Z.22-23/28-38 + Kommentar Z.3-4/25-27; Tests kein-e/editable/kroko-builder/COPY-kroko/--from-kroko.",
+      "evidenz": "A+Test",
+      "gueltigkeit": "builder Build-Zeit",
+      "id": "D6-03"
+    },
+    {
+      "aussage": "CPU-Only inline: Torch CPU-Index, Constraint-Pin, cuda/hip-None-Assertion, pip-list-Grep.",
+      "beleg": "Dockerfile Z.30-32/39-40; Test Z.119-127.",
+      "evidenz": "A+Test",
+      "gueltigkeit": "builder Build-Zeit",
+      "id": "D6-04"
+    },
+    {
+      "aussage": "Runtime: voicestt 10001 (nologin, /var/lib/voicestt), nur Laufzeitlibs, Modellverzeichnisse fasterwhisper/kroko_asr.",
+      "beleg": "Dockerfile Z.70-78; Tests Z.119-121.",
+      "evidenz": "A+Test",
+      "gueltigkeit": "runtime",
+      "id": "D6-05"
+    },
+    {
+      "aussage": "Runtime erhält nur fertiges venv via COPY --from=builder; /opt/venv via PATH.",
+      "beleg": "Dockerfile Z.80/63; build_production.py Z.594-599.",
+      "evidenz": "A",
+      "gueltigkeit": "Stage-Übergang",
+      "id": "D6-06"
+    },
+    {
+      "aussage": "Layout: USER voicestt, WORKDIR + VOLUME /var/lib/voicestt, EXPOSE 8010 (Metadatum; Bindung via --host/--port).",
+      "beleg": "Dockerfile Z.82-86 + Z.99-102.",
+      "evidenz": "A",
+      "gueltigkeit": "runtime/Container",
+      "id": "D6-07"
+    },
+    {
+      "aussage": "Build-Args unknown/unknown/pro/unknown → OCI-Labels + VOICESTT_SERVER_COMMIT; KROKO_VARIANT nur Label, kein Schalter.",
+      "beleg": "Dockerfile Z.45-48/50-57/60; Grep nur Z.47/57; Tests Z.124-138; Consumer identity.py Z.134-138, _build_identity.py Z.42-48.",
+      "evidenz": "A+Test",
+      "gueltigkeit": "Bild-Metadaten",
+      "id": "D6-08"
+    },
+    {
+      "aussage": "ENTRYPOINT python3.12 -m VoiceSTT_server.server (Delegator); CMD 0.0.0.0/8010/cpu/int8/local_files_only; device CLI-erzwungen.",
+      "beleg": "Dockerfile Z.98-102; server.py Z.8-14/25-26; server.py Z.10452-10453.",
+      "evidenz": "A",
+      "gueltigkeit": "Container-Start",
+      "id": "D6-09"
+    },
+    {
+      "aussage": "Kein config.yaml-Erbe: --config default VOICESTT_CONFIG, ohne Wert kein YAML ({}); keine COPY/kein Mount; nur CLI/Env.",
+      "beleg": "server.py Z.10394-10408/10333-10401; Dockerfile Z.22-23/80; compose Z.43-80.",
+      "evidenz": "A",
+      "gueltigkeit": "Container-Laufzeit",
+      "id": "D6-10"
+    },
+    {
+      "aussage": "Runtime-ENV: DATA_ROOT gesetzt, Offline-Marker, CPU_ONLY=1 deklarativ ohne Consumer; HF/TRANSFORMERS ohne Repo-Consumer.",
+      "beleg": "Dockerfile Z.59-68; Grep CPU_ONLY nur Dockerfile/compose/vps; model_resolver.py Z.12/23-31 (OFFLINE); HF/TRANSFORMERS nur Dockerfile/Compose/quali Z.201.",
+      "evidenz": "A",
+      "gueltigkeit": "Laufzeit (Fremdwirkung UNKNOWN)",
+      "id": "D6-11"
+    },
+    {
+      "aussage": "Image-Healthcheck nur Liveness: /health 200 (127.0.0.1:8010), kein ready/ok; 30s/10s/60s/5, urlopen 5s.",
+      "beleg": "Dockerfile Z.95-96 + Begründung Z.88-94; Tests Z.141-148.",
+      "evidenz": "A+Test",
+      "gueltigkeit": "Image (Compose überschreibt D6-19)",
+      "id": "D6-12"
+    },
+    {
+      "aussage": "/health immer HTTP 200; ok/ready nur Nutzlast (kein Modell-Gate belegt).",
+      "beleg": "server.py Z.8885-8905 (ohne status_code).",
+      "evidenz": "A",
+      "gueltigkeit": "jeder Zustand",
+      "id": "D6-13"
+    },
+    {
+      "aussage": "Compose-build: context ., target runtime, nur Arg VARIANT (default free), image local; kein Version/Commit/Datum → unknown.",
+      "beleg": "compose Z.15-20; Test Z.264-266.",
+      "evidenz": "A+Test",
+      "gueltigkeit": "Compose-Pfad (≠ Pipeline D6-20)",
+      "id": "D6-14"
+    },
+    {
+      "aussage": "Compose nur CMD-Override (gleiche Flags) + restart unless-stopped + init; ENTRYPOINT/PID1 bleibt.",
+      "beleg": "compose Z.21-22/43-55; Dockerfile Z.98.",
+      "evidenz": "A+Docker-Semantik",
+      "gueltigkeit": "Compose-Container",
+      "id": "D6-15"
+    },
+    {
+      "aussage": "Compose-ENV deklarativ (CPU/Offline/ROOT/Modellwurzeln/Keys/OMP/CT2) + optionales env_file (voicestt.env fehlt); Consumer Keys/Modellwurzeln belegt, OMP/CT2 ohne.",
+      "beleg": "compose Z.23-42; openai.py Z.15, server.py Z.10521, stt_model_management.py Z.674-681, model_resolver.py Z.78/124; Glob voicestt.env leer.",
+      "evidenz": "A (Wirkung OMP/CT2 UNKNOWN)",
+      "gueltigkeit": "Compose-Deployment",
+      "id": "D6-16"
+    },
+    {
+      "aussage": "Drei Bind-Mounts: Datenwurzel rw (logs/Event-Store/audio/config-runtime/models) + zwei Modellverzeichnisse ro optional.",
+      "beleg": "compose Z.56-80 + Kommentar Z.57-59/65-68; server.py Z.519-532; stt_model_management.py Z.662-664; Dockerfile Z.76-77.",
+      "evidenz": "A",
+      "gueltigkeit": "Compose-Deployment",
+      "id": "D6-17"
+    },
+    {
+      "aussage": "Ports ${VOICESTT_PORT:-8010}:8010; Container-Port via CMD/command; EXPOSE nur Doku; Server-Default 8010.",
+      "beleg": "compose Z.81-82/46-47; Dockerfile Z.86/100; server.py Z.10410; Test Z.197-203.",
+      "evidenz": "A",
+      "gueltigkeit": "Compose/Container",
+      "id": "D6-18"
+    },
+    {
+      "aussage": "Compose-Healthcheck = gleiche Liveness-Prüfung/Parameter, überschreibt Image-Check.",
+      "beleg": "compose Z.83-90; Tests Z.181-188.",
+      "evidenz": "A+Test",
+      "gueltigkeit": "Compose",
+      "id": "D6-19"
+    },
+    {
+      "aussage": "Offizieller Build via build_production.py (target runtime, linux/amd64, 4 Args, Versions+Commit-Tags); nur Variante pro, Name voice-stt-server; Label/Env-Validierung.",
+      "beleg": "build_production.py Z.55-65/121-151/521-560/581-593; Details → 06.02.",
+      "evidenz": "A",
+      "gueltigkeit": "Release-Pfad",
+      "id": "D6-20"
+    },
+    {
+      "aussage": ".dockerignore: dist bleibt Kontext, Dockerfile/compose/build/.git/.env/data/logs/Caches aus; config.yaml/docs/tests/engineering/examples NICHT aus (config im Kontext, aber nie COPY).",
+      "beleg": ".dockerignore Z.1-31 + Kommentar Z.22-26; Dockerfile Z.22-23/80.",
+      "evidenz": "A",
+      "gueltigkeit": "Root-Build-Kontext",
+      "id": "D6-21"
+    },
+    {
+      "aussage": "Zwei CPU-Prüfungen (Werkzeug vs Inline); Inline schwächer (nur cuda/hip + Namen, kein Tensor/Requires-Dist/onnx-gpu/cupy).",
+      "beleg": "cpu_only.py Z.4-25/40/44-45/92-128 + Nutzung Tests Z.105-117/quali Z.202-210 vs Dockerfile Z.30-40 + Test Z.119-127.",
+      "evidenz": "A+Test",
+      "gueltigkeit": "Container vs CI/Quali",
+      "id": "D6-22"
+    },
+    {
+      "aussage": "Kein dist/ im Commit: compose build scheitert ohne Pipeline-Wheel an COPY (Artefakt-Vorbedingung).",
+      "beleg": "Dockerfile Z.23; Glob dist/* leer; .dockerignore Z.22-26; build_production.py Z.527-529; compose Z.8-12.",
+      "evidenz": "A",
+      "gueltigkeit": "lokaler Compose-Build",
+      "id": "D6-23"
+    },
+    {
+      "aussage": "Laufzeit-Variante aus Wheel (eingebettet/WHEEL-Tag), voice-stt-server erzwingt pro; Label ändert nichts.",
+      "beleg": "identity.py Z.31-71/66-70/111-127; Dockerfile Z.47/57.",
+      "evidenz": "A",
+      "gueltigkeit": "Laufzeit/Identität",
+      "id": "D6-24"
+    },
+    {
+      "aussage": "compose.py übersetzt config.yaml deployment → Compose-Env + docker compose -p (Host-Komfort; keine Datei in Container).",
+      "beleg": "compose.py Z.1/13-15/111-138/159-183; config.yaml Z.133-142.",
+      "evidenz": "A",
+      "gueltigkeit": "Host-Pfad (ohne ihn lauffähig D6-26)",
+      "id": "D6-25"
+    },
+    {
+      "aussage": "Öffentliches Compose: ein Service server, keine Betreiber-Marker, nur :-Defaults, kein nginx/browserclient.",
+      "beleg": "compose Z.1-14; Tests Z.170-174/191-208.",
+      "evidenz": "A+Test",
+      "gueltigkeit": "öffentliches Compose",
+      "id": "D6-26"
+    },
+    {
+      "aussage": "Secrets nur Laufzeit: keine Key-Build-Args (Tests verbieten), Keys via Env/env_file; voicestt.env via *.env ignoriert.",
+      "beleg": "Tests Z.151-162; compose Z.36-42; .dockerignore Z.8-10; openai.py Z.15.",
+      "evidenz": "A+Test",
+      "gueltigkeit": "Build vs Laufzeit",
+      "id": "D6-27"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N6-01",
+      "thema": "Kein networks/deploy/user/read_only-rootfs/Compose-secrets (compose Z.1-90)."
+    },
+    {
+      "id": "N6-02",
+      "thema": "Kein Modellbereitschafts-Healthcheck (bewusst; Dockerfile Z.88-94, Test Z.141-148)."
+    }
+  ],
+  "researcher_session": "ses_e3e23f6f3ffeeopGOs4d5OgKPc",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U6-01",
+      "thema": "HF_HUB/TRANSFORMERS/OMP/CT2-Wirkung: kein Repo-Consumer (Fremdlibs); keine Repo-Garantie."
+    },
+    {
+      "id": "U6-02",
+      "thema": "Compose-Image vs Release-Identitätscheck: nur Pipeline geprüft; belegbar nur Label-Differenz (C6-04)."
+    },
+    {
+      "id": "U6-03",
+      "thema": "Modellverzeichnisse unter Bind-Mount /var/lib/voicestt: Mount-Semantik ungetestet; Code legt Wurzeln an."
+    },
+    {
+      "id": "U6-04",
+      "thema": "Branch nicht verifizierbar (detached); nur Commit bindend."
+    },
+    {
+      "id": "U6-05",
+      "thema": "dist/ und voicestt.env fehlen im Commit (Vorbedingung D6-23/D6-16)."
+    }
+  ],
+  "writer_notes": "06.01 Zahlen nur zitieren; 06.02 Build-Pipeline nur Kontext; 06.03/06.04 Host-Komfort (compose.py/config.yaml erbt nichts); CLI/Env/Secrets nur Container-Perspektive. Diagramm Idee 1 flowchart ohne Netz-Knoten; E1-E13 mit Fakten-ID; Liveness nie Bereitschaft."
+}

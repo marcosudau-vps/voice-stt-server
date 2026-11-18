@@ -1,0 +1,201 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD, kein Ref). Nur Commit a8993c5c68042d996eab680d84a5b138a214bb5d bindend.",
+  "chapter": "07.01",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (Zeile 1, kein ref:). Quellen nur *.py/pyproject/MANIFEST/requirements/ini/ps1/VERSION/gitignore/engineering/tools/tests/ci.",
+  "conflicts": [
+    {
+      "id": "K-07.01-1",
+      "thema": "Drei Bootstrap-Pfade divergieren: ps1 (CPU-Index, editable Extras, ohne Dev-Deps/Constraint) vs activate-Skript (nur requirements.txt, kein CPU/editable) vs CI (install-torch+Constraint, editable [recommended,server], requirements-dev, checks). Nur CI erfüllt CPU-Vertrag nachweislich."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "Checkout an Commit gebunden; Branch nicht belegbar.",
+      "beleg": ".git/HEAD Z.1 (detached, kein ref).",
+      "evidenz": "A",
+      "gueltigkeit": "Kapitelbasis (Branch UNKNOWN)",
+      "id": "T7-01"
+    },
+    {
+      "aussage": "Version aus VOICESTT_BUILD_VERSION sonst Root-VERSION (2.0.0); Checkout ignoriert veraltete generierte Ressourcen; installierte Wheels nutzen eingebettete Ressource.",
+      "beleg": "_version.py Z.11-19/42/145; VERSION:1.",
+      "evidenz": "A",
+      "gueltigkeit": "Dev/Versionsanzeige",
+      "id": "T7-02"
+    },
+    {
+      "aussage": "pyproject nur [build-system] (setuptools>=68/wheel/packaging>=24, setuptools.build_meta); keine [project]-Tabelle, keine pytest/ruff/mypy-Config; alles in setup.py.",
+      "beleg": "pyproject.toml Z.1-3 (vollständig).",
+      "evidenz": "A",
+      "gueltigkeit": "Tooling (Lint UNKNOWN)",
+      "id": "T7-03"
+    },
+    {
+      "aussage": "requirements.txt = Legacy-Dev-Laufzeit (17 Zeilen, torch ungepinnt/ohne Index → CUDA möglich); CPU-Sicherung erst via Werkzeug.",
+      "beleg": "requirements.txt Z.1-17 (torch Z.10); setup.py Z.172/230.",
+      "evidenz": "A",
+      "gueltigkeit": "Abgrenzung Install",
+      "id": "T7-04"
+    },
+    {
+      "aussage": "requirements-dev.txt = API-Requirements + pytest/httpx/multipart (6 Zeilen); ohne build/wheel/twine.",
+      "beleg": "requirements-dev.txt Z.1/3-6.",
+      "evidenz": "A",
+      "gueltigkeit": "Dev (Lücke N)",
+      "id": "T7-05"
+    },
+    {
+      "aussage": "API-Requirements: fastapi/uvicorn/numpy/scipy/PyYAML/tzdata (6 Zeilen); sse-starlette nur im server-Extra, nirgends importiert (0 Treffer) → keine Laufzeitwirkung belegbar.",
+      "beleg": "api_fastapi_server/requirements.txt Z.1-6; setup.py Z.265; Grep 0.",
+      "evidenz": "A",
+      "gueltigkeit": "Dev/Test",
+      "id": "T7-06"
+    },
+    {
+      "aussage": "Windows-Bootstrap: .venv py-3.12 (nur bei Fehlen), pip/setuptools/wheel-Upgrade, torch CPU-Index, editable mit 6 Extras; ohne requirements-dev/Constraint; Kroko-Wheel separat.",
+      "beleg": "install_windows_cpu.ps1 Z.1-14; setup.py Z.280-317.",
+      "evidenz": "A",
+      "gueltigkeit": "primärer Dev-Bootstrap (N: keine Test-Deps)",
+      "id": "T7-07"
+    },
+    {
+      "aussage": "activate-Skript: sucht .venv/venv/env, bricht ohne ab; installiert nur requirements.txt (kein editable/Extras/Dev-Deps/CPU-Index/Constraint). Widerspruch zum CPU-Vertrag.",
+      "beleg": "activate_venv_install_reqs.ps1 Z.1-107.",
+      "evidenz": "A",
+      "gueltigkeit": "Legacy (C)",
+      "id": "T7-08"
+    },
+    {
+      "aussage": "pytest.ini: testpaths=tests/unit, python_files=test_*.py, keine addopts/marker → Blanko-pytest sammelt nur Unit.",
+      "beleg": "pytest.ini Z.1-4 (vollständig).",
+      "evidenz": "A",
+      "gueltigkeit": "Testausführung (N: falsches Grün)",
+      "id": "T7-09"
+    },
+    {
+      "aussage": "3 Suiten + Skripte: unit (mit __init__/conftest, ~90 Module), compatibility (ohne __init__, opt-in), packaging (ohne __init__, explizit); tests/*.py manuelle Skripte.",
+      "beleg": "Glob + __init__.py-Präsenz.",
+      "evidenz": "A",
+      "gueltigkeit": "Dev",
+      "id": "T7-10"
+    },
+    {
+      "aussage": "Unit-Isolation: autouse-Fixture resetet Kroko-Native-Guard vor/nach jedem Test; Pro nur via Fixture.",
+      "beleg": "tests/unit/conftest.py Z.12-23.",
+      "evidenz": "A",
+      "gueltigkeit": "Unit (braucht Produkt-Extras)",
+      "id": "T7-11"
+    },
+    {
+      "aussage": "Kanonischer Dev-Pfad (CI): install-torch→Constraint → editable [recommended,server] + PIP_CONSTRAINT → requirements-dev + PIP_CONSTRAINT → pip check → cpu_only check → pytest unit+compatibility → pytest packaging → git diff --check.",
+      "beleg": "ci.yml Z.17-194 (70/76/81-82/88/104-111/173-194); Test Z.105-111 pinnt Zeilen.",
+      "evidenz": "A",
+      "gueltigkeit": "Dev (C: Extra-Satz ≠ ps1)",
+      "id": "T7-12"
+    },
+    {
+      "aussage": "cpu_only.py (stdlib): install-torch (CPU-Index + Pin-Datei) + check (cuda/hip None, GPU-Dists, markerbewusste Requires-Dist, Tensorprobe); is_available kein Beweis; CLI Exit 0/1.",
+      "beleg": "engineering/tools/cpu_only.py Z.1-162; Tests Z.45-127.",
+      "evidenz": "A",
+      "gueltigkeit": "CPU-Prüfung",
+      "id": "T7-13"
+    },
+    {
+      "aussage": "tools/* Shims auf engineering/tools/* (sys.modules-Identität, <30 Zeilen, exakte Importzeile, Tests); Aufruf beider Pfade ok.",
+      "beleg": "tools/cpu_only.py Z.1-21; Tests Z.186-229.",
+      "evidenz": "A",
+      "gueltigkeit": "Layout",
+      "id": "T7-14"
+    },
+    {
+      "aussage": "qualify_build_identity: keine Publikation/Promotion/Tags/Downloads; frische stdlib-venv außerhalb Checkout; --candidate-dir Pflicht, --platform, --install (Evidenz-JSON), --check-reports; CPU-Tool mit Constraint; Fehler→Exit 1.",
+      "beleg": "engineering/tools/qualify_build_identity.py Z.1-363; Tests Z.113-117.",
+      "evidenz": "A",
+      "gueltigkeit": "Qualifizierung (nicht Endnutzer)",
+      "id": "T7-15"
+    },
+    {
+      "aussage": "tests/packaging baut echte Artefakte (python -m build --wheel --sdist, returncode 0-Assert); identity-Tests brauchen Host-build/setuptools/wheel (+Evidenz-Env). build fehlt in requirements-dev (CI installiert separat).",
+      "beleg": "test_v2_distribution_contents.py Z.1-47; test_identity_installation.py Z.3-40; requirements-dev Z.1-6; ci.yml Z.70.",
+      "evidenz": "A",
+      "gueltigkeit": "Dev-Tests (Lücke N)",
+      "id": "T7-16"
+    },
+    {
+      "aussage": "compatibility opt-in: ohne VOICESTT_CLIENT_V2_ROOT+COMMIT → skip (grün ohne Aussage); mit → rev-parse/sauberer-Baum/Vektoren-Abgleich.",
+      "beleg": "test_client_v2_identity.py Z.1-44.",
+      "evidenz": "A",
+      "gueltigkeit": "Dev",
+      "id": "T7-17"
+    },
+    {
+      "aussage": "Dev/CI CPython 3.12 (CI-Variable, ps1 py-3.12); public >=3.12,<3.13 (cp312-native-Runtime, Kommentar), legacy voicestt >=3.11.",
+      "beleg": "ci.yml Z.36-37/58-61; ps1 Z.5-7; setup.py Z.37-43/378-380.",
+      "evidenz": "A/C",
+      "gueltigkeit": "Dev/Versionswahl",
+      "id": "T7-18"
+    },
+    {
+      "aussage": "Editable = Dev-Standard (ps1/CI); Distributionsbau nur für packaging/Release; Tests importieren aus Checkout (find_packages + sys.path).",
+      "beleg": "ps1 Z.11; ci.yml Z.178; setup.py Z.359-373; Tests.",
+      "evidenz": "A",
+      "gueltigkeit": "Dev (vs 06.04 Wheel)",
+      "id": "T7-19"
+    },
+    {
+      "aussage": "MANIFEST.in: prune engineering/examples/docs-dev/dev-log/roadmap/caches/tests_private; include requirements/README/RELEASE_NOTES/LICENSE/VERSION/build_identity/wakeword-Ressourcen/Channel-JSON.",
+      "beleg": "MANIFEST.in Z.1-30.",
+      "evidenz": "A",
+      "gueltigkeit": "Dev-vs-Dist",
+      "id": "T7-20"
+    },
+    {
+      "aussage": "Nur stt-install-kroko ist Dev-/Release-Helfer (Kommentar: Endnutzer bauen nie); 4 andere Scripts Produkt-CLI.",
+      "beleg": "setup.py Z.409-424; Tests Z.123-138.",
+      "evidenz": "A/C",
+      "gueltigkeit": "Dev",
+      "id": "T7-21"
+    },
+    {
+      "aussage": "venv-Namen/.idea/.vscode/Workspace ignoriert; keine committete Editor-Config; generierte Build-Identität/pytest-cache/Build-Artefakte ignoriert (mit Allowlist).",
+      "beleg": ".gitignore Z.16/84/111/184-254.",
+      "evidenz": "A",
+      "gueltigkeit": "Dev (Editor UNKNOWN)",
+      "id": "T7-22"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "K-07.01-2",
+      "thema": "build/wheel/twine fehlen in requirements-dev (packaging braucht sie; CI ergänzt separat)."
+    },
+    {
+      "id": "K-07.01-3",
+      "thema": "Blanko-pytest nur tests/unit (compatibility/packaging brauchen Pfade)."
+    },
+    {
+      "id": "K-07.01-4",
+      "thema": "ps1 installiert keine Test-Deps (kein pytest/httpx nach Skript)."
+    },
+    {
+      "id": "K-07.01-7",
+      "thema": "sse-starlette ohne Import/Laufzeitwirkung."
+    }
+  ],
+  "researcher_session": "ses_e3d5e872dffec8lvrCTVVBKfxs",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "K-07.01-5",
+      "thema": "Kein Lint/Format/Typecheck-Setup belegbar."
+    },
+    {
+      "id": "K-07.01-6",
+      "thema": "Branch nicht verifizierbar."
+    }
+  ],
+  "writer_notes": "Abhängigkeiten: T7-02→Version/06.01; T7-04/06→06.03/04/05; T7-07/08/12/19→06.02/04/CI; T7-09/10/11/16/17→Test/CI; T7-13/15→CPU/Quali/Release; T7-14→Layout; T7-20/21→06.04/Release. Nicht duplizieren: 06.02-05, CI-Ablauf, Build-Tools (nur Existenz/Shim). Nur Dev-Setup; Rest referenzieren. Writer: CI-Pfad T7-12 kanonisch; ps1 bequem-aber-test-unvollständig; activate = Legacy ohne CPU; Blanko-pytest-Falle prominent. Brief null → NOT_REQUESTED."
+}

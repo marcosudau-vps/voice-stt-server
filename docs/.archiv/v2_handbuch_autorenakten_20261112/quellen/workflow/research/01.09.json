@@ -1,0 +1,194 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup lokal nicht beweisbar (keine refs/heads/**, keine packed-refs); Auftragskontext. Commit verifiziert.",
+  "chapter": "01.09",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached, 40-stellig, selbst verifiziert 2026-11-12); .git/shallow identisch",
+  "correction_round": 0,
+  "diagram_edges": [
+    "E01 V1C->APP | WS /ws/transcribe [C-06,K-11,D-03]",
+    "E02 V2C->APP | WS /ws/v2 [C-09,K-12,D-02]",
+    "E03 OAI->APP | HTTP /v1/audio/transcriptions [C-25,K-04,D-44]",
+    "E04 OPS->APP | HTTP /api/* + WS /ws/logs [C-24,K-37,K-39]",
+    "E05 APP->SVC | eine Instanz, lifespan [G9-03,C-02,K-01/02]",
+    "E06 APP->PRS | Log-Cursor/History [K-37,K-35]",
+    "E07 SVC->SST | reserve/add/remove [C-04/05,K-16/17]",
+    "E08 SST->SES | 0..n Sessions [C-05,K-16]",
+    "E09 SVC->SES | Konstruktion (Settings-Kopie) [C-04,K-17,K-21]",
+    "E10 V1-Route->SVC | admit_session Query vor hello [C-06,K-11,G9-04]",
+    "E11 V2-Conn->SVC | admit_session nach hello [C-10,K-13,D-41]",
+    "E12 OAI-Router->SVC | transcribe_openai sitzungslos [C-25/K-34,D-45]",
+    "E13 V1-Route->SES | Audio + Text-Kommandos [C-06/07,D-03]",
+    "E14 V2-Conn->SES | Audio + Kommandos [C-10,D-02,D-41]",
+    "E15 SES->ACT | activate/refresh/finish/cancel [C-12/13]",
+    "E16 ACT->REC | Gate open/close identitaetsgebunden [C-13/15,K-23,D-10]",
+    "E17 SES->REC | feed_audio + Callbacks [C-07/16,D-07,D-43]",
+    "E18 REC->EXE | final/realtime Executor [C-16,K-27,D-22]",
+    "E19 EXE->SVC | transcribe_for_recorder (Holder) [K-28,D-24]",
+    "E20 SVC->SCH | submit(InferenceJob) [C-18,K-29,D-25]",
+    "E21 SCH->Worker | queue.get() Fairness/Rotation [K-30/31,D-25]",
+    "E22 Worker->ENG | transcribe [C-30,K-31/32,D-27]",
+    "E23 Worker->SVC | InferenceResult callback [C-19,K-33,D-28]",
+    "E24 SVC->EXE | Recorder-Holder -> blockierender Aufrufer [G9-07,D-28]",
+    "E25 SVC->OAI-Router | API-Holder -> HTTP-Antwort [C-19,K-34,D-28]",
+    "E26 SVC->MDL | Snapshot -> Scheduler-Austausch [C-27,K-19]",
+    "E27 SES->LED | accept/resolve/close [C-20,K-24,D-36]",
+    "E28 SES->V1C | type:final nur nach Ledger-Freigabe [G9-17,D-35/36]",
+    "E29 SES->V2C | Observer -> completed/.interim [D-34,D-39/40]",
+    "E30 SES->HUB | strukturierte Events ein Trichter [C-21/22,K-25,D-39]",
+    "E31 HUB->PRS | SQLite-Append + JSONL [C-22,K-35]",
+    "E32 SVC->PRS | runtime.json, Audit/Performance [C-23,K-09,K-38]",
+    "E33 SVC->SEC | Admin-/OpenAI-/Log-Gate [C-24,K-39]",
+    "E34 SVC -(gestrichelt)-> KROKO | Lizenzprobe nur Pro+Key [G9-11]",
+    "E35 SVC -(gestrichelt)-> HF | Download nur opt-in [G9-11]"
+  ],
+  "diagram_layout": "D1 Systemuebersicht/Kontext (7 Pfeile): E01-E05, E34, E35 (Prozessrechteck um APP/SVC; Aussen nur hier). D2 Komponenten (18): E06-E17, E19, E20, E26, E29, E32, E33. D3 Datenfluss (17): E13, E14, E16-E25, E27-E31. 42 Pfeilinstanzen, distinkt 35; 7 in zwei Diagrammen (E13,E14,E16,E17,E19,E20,E29). Kein Pfeil ausserhalb E01-E35.",
+  "do_not_draw": [
+    "Keine Kante V2->ConnectionManager (C-08/09,K-12,D-39; server.py 10133-10136)",
+    "Kein Scheduler/Queue/Worker->Session direkt (Rueckweg Service-Holder; C-19,K-33,D-28; G9-07)",
+    "Keine Engine pro Session (K-31,N-2)",
+    "Kein Recorder-Kindprozess/run_transcription_worker (C-17,K-27)",
+    "Kein SegmentLedger->Wire (Ledger gibt frei, Session publiziert; G9-17,C-20/21,D-36)",
+    "Kein Final-/Interim-Abgleich, kein Retract (D-32,N-01/02)",
+    "Kein Interim nach Terminal (D-34)",
+    "Kein OpenAI->Session/Recorder (K-34,D-45)",
+    "Kein Log-Client->Session (Store-Lesen; K-37, server.py 9571)",
+    "Keine GPU/CUDA-Kante (cpu erzwungen; G9-18,C-30,K-32)",
+    "Kein Broker/Redis/Celery/DB-Server, keine Split-Prozesse V1/V2 (G9-01,N-01)",
+    "Nur gestrichelte Lizenz-/Download-Kante mit Bedingung (G9-11,C-03)",
+    "Keine Kante VoiceSTT_server/index.html (8011/8012)->App (G9-12)",
+    "Keine Phasen/Deadlines/Timeouts/Latenzen/Queue-Tiefen als Label (G9-15,C-12/K-22)",
+    "Kein Admin-Auth-Pfeil an /ws/v2 (N-4,G9-10)",
+    "Kein v2-start-Kommando (N-3,D-41)",
+    "Kein Client->SessionStore (nur admit_session; G9-05)",
+    "Kein Zeit-/Sequenzdiagramm mit gemessenen Dauern (keine Garantie-Latenzen)"
+  ],
+  "facts": [
+    {
+      "aussage": "Ein Python-Prozess, eine ASGI-App, uvicorn.run(create_app). Kein Worker/Broker/Verbund. Docker EXPOSE 8010, ENTRYPOINT python3.12 -m VoiceSTT_server.server; server.py reiner Re-Export. Kein multiprocessing/Process/spawn/celery/redis (einziger subprocess-Treffer Docstring).",
+      "beleg": "server.py main 10813-10835, create_app 8816-8872; VoiceSTT_server/server.py 8-22; Dockerfile 86,98-99; grep api_fastapi_server/**",
+      "evidenz": "A+CONFIG",
+      "gueltigkeit": "prozessweit/Deployment",
+      "id": "G9-01"
+    },
+    {
+      "aussage": "35 Endpunkte: 30 HTTP, 3 WS (/ws/logs 9560, /ws/transcribe 9912, /ws/v2 10121), 2 OpenAI-Router (/v1/models 43, /v1/audio/transcriptions 67). Genau ein include_router (9899); kein mount/middleware.",
+      "beleg": "grep Decorators server.py; openai_routes.py 41-67",
+      "evidenz": "A",
+      "gueltigkeit": "serverweit (Admin/Log als ein Knoten)",
+      "id": "G9-02"
+    },
+    {
+      "aussage": "create_app: Settings -> enforce_cpu_model_policy -> ConnectionManager -> ein VoiceSTTService -> FastAPI(lifespan). lifespan start(loop)/stop() im finally.",
+      "beleg": "server.py 8826-8850, 8852-8866; Test boundary.py:315",
+      "evidenz": "A+B",
+      "gueltigkeit": "prozessweit",
+      "id": "G9-03"
+    },
+    {
+      "aussage": "V1+V2 teilen Prozess/Service/Store, zwei Wire-Welten: V1 Query-Admission vor Server-hello, V2 nach validiertem Client-hello; V2 nicht im ConnectionManager.",
+      "beleg": "boundary-Test 3-9,229-238,315; server.py 9938-9988, 10133-10136; connection.py 218-282",
+      "evidenz": "A+B",
+      "gueltigkeit": "pro Verbindung",
+      "id": "G9-04"
+    },
+    {
+      "aussage": "V1 (SessionConfig Query), V2 (Wake/Activation-Request, canonical_ids) und NICHT OpenAI laufen durch admit_session; OpenAI keine Session (synthetische ID, nur Holder+submit).",
+      "beleg": "server.py 7325-7370, Aufrufe 9940, connection 276-282; Gegenprobe OpenAI 8362-8413",
+      "evidenz": "A",
+      "gueltigkeit": "pro Erzeugung",
+      "id": "G9-05"
+    },
+    {
+      "aussage": "V1+V2 muenden in Session -> Recorder (use_microphone=False) mit zwei Executors (final/realtime) auf Service -> transcribe_for_recorder -> Scheduler.",
+      "beleg": "server.py 2831-2840,3011-3042,8251-8351; C-16/17,K-27/28,D-22-24",
+      "evidenz": "A",
+      "gueltigkeit": "pro Session, Autoritaet serverweit",
+      "id": "G9-06"
+    },
+    {
+      "aussage": "Rueckweg strikt: Performance-Event -> complete_pending_api (return) -> complete_pending_recorder (return) -> session.handle_inference_result. Recorder via Holder, nicht Session.",
+      "beleg": "server.py 8576-8611,8353-8360,8272-8322",
+      "evidenz": "A",
+      "gueltigkeit": "serverweit (Diagramm Service->Executor/Holder, Service->OAI)",
+      "id": "G9-07"
+    },
+    {
+      "aussage": "Ein Trichter: V1-Payload (manager.publish_session) -> strukturiertes Event (optional) -> Observer V2 (Fehler gefangen). Reihenfolge 5920->5944->5950. V2 keine Legacy-Payloads.",
+      "beleg": "server.py 5880-5950,5852-5878,5976-5991",
+      "evidenz": "A",
+      "gueltigkeit": "pro Session",
+      "id": "G9-08"
+    },
+    {
+      "aussage": "Hub: optional SQLiteEventStore, JSONL-Sinks je Kanal, drei Threads (file/stdout/control). Audit/Performance-Logs + runtime.json unter data_root. Kein externer DB-Dienst.",
+      "beleg": "event_logging.py 697-763; C-22/23,K-35/38",
+      "evidenz": "A",
+      "gueltigkeit": "serverweit",
+      "id": "G9-09"
+    },
+    {
+      "aussage": "SecurityService: Admin/OpenAI/LogToken/Kroko-Gates; Delegation an HTTP-Routen. V2-Handshake ohne Admin-Check; /health unauthentifiziert.",
+      "beleg": "server.py 8979-8987,9894-9897,9590-9594,8885-8905,10137-10146; C-24,K-39,N-4",
+      "evidenz": "A+B",
+      "gueltigkeit": "serverweit",
+      "id": "G9-10"
+    },
+    {
+      "aussage": "Kein HTTP-Client im Serverpaket (requests/httpx/urlopen 0 Treffer). Zwei bedingte ausgehende: Kroko-Lizenzprobe wss (nur Pro-Modell+Key, nicht forceCommunity/bestaetigt; synchron im Init-Thread) + HF-Download via urllib (nur auto_download opt-in, Default False). Nicht im Audio-/Inferenzpfad -> gestrichelt/Prosa.",
+      "beleg": "license_api.py 57-62; kroko.py 146-200; server.py 6304,6581-6709; stt_model_management.py; grep-Null",
+      "evidenz": "A",
+      "gueltigkeit": "bedingt/opt-in",
+      "id": "G9-11"
+    },
+    {
+      "aussage": "GET / liefert static/index.html; UI verbindet /ws/transcribe?clientId + /ws/logs, fetch HTTP-API - KEIN /ws/v2, KEIN /v1/audio. VoiceSTT_server/index.html NICHT ausgeliefert (8011/8012 Legacy-Client).",
+      "beleg": "server.py 139-140,8881-8883; index.html 1130-1157,1269,1330; audio_recorder_client.py 28-29",
+      "evidenz": "A",
+      "gueltigkeit": "UI = V1-Client",
+      "id": "G9-12"
+    },
+    {
+      "aussage": "/ws/v2-Clients nur tests/** + engineering/tools/qualify_build_identity.py; examples + UI nur /ws/transcribe. Drittclients unbelegbar.",
+      "beleg": "grep /ws/v2 29 Treffer, 0 in examples/; client.js 4,28",
+      "evidenz": "A",
+      "gueltigkeit": "Repo-Sicht (->U-02)",
+      "id": "G9-13"
+    },
+    {
+      "aussage": "154 Einzelkanten (45+46+63) verdichtet auf 35 distinkte Uebersichtspfeile (33 fest + 2 gestrichelt-optional). Rest Detail-in-Knoten (Chunk/Pre-Roll/Format/Event-Namen/Close-Codes). Kuratierung, kein neuer Sachverhalt.",
+      "beleg": "G9-01..G9-13 + C-/K-/D-Fakten",
+      "evidenz": "redaktionell auf Faktenbasis",
+      "gueltigkeit": "Kapitel 01.09",
+      "id": "G9-14"
+    },
+    {
+      "aussage": "Phasen/Deadline-Arten/Defaults belegt, gehoeren 02.03/08.06 - KEINE Kantenbeschriftung in 01.09.",
+      "beleg": "C-12/K-22; activation.py 93-98; server.py 158,491",
+      "evidenz": "A (Abgrenzung)",
+      "gueltigkeit": "Kapitelabgrenzung",
+      "id": "G9-15"
+    },
+    {
+      "aussage": "Labels nur gequotet sicher bei /, :, ., (, ). VERMEIDEN: </> (openai-<uuid> HTML-Fehler, real openai-{request_id}), #, ;, %%, unescaped \". IDs ASCII (V1C,APP,SES), Labels [\"...\"].",
+      "beleg": "Literale server.py 5901,4821,4959/5060,10003,8375; schema.py 38,158-159,202-206",
+      "evidenz": "A (Strings) + F (Syntaxregel, kein Produktfakt)",
+      "gueltigkeit": "Dokuformat",
+      "id": "G9-16"
+    },
+    {
+      "aussage": "Ledger schreibt NICHT auf Wire: gibt frei (drain), Session publiziert. Genau EINE Kante Session->V1C (type:final nur nach Freigabe).",
+      "beleg": "server.py 4796-4898; drain 490-510; 01.02 do_not_draw; D-36",
+      "evidenz": "A",
+      "gueltigkeit": "pro Session",
+      "id": "G9-17"
+    },
+    {
+      "aussage": "Kein Broker/Out-of-Process/GPU: cpu erzwungen, Factory nur 2 Engines cpu/0.",
+      "beleg": "server.py 8764-8801,8843; factory.py 16-22,59-69; C-30/K-32/N-1/2",
+      "evidenz": "A+B",
+      "gueltigkeit": "prozessweit",
+      "id": "G9-18"
+    }
+  ],
+  "review_notes": "2026-11-08 R1 PASS (Info: D2 17->18 + 41->42 Instanzen korrigiert). Render-Pruefung im Integrationsschritt (U-04).",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d"
+}

@@ -1,0 +1,233 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup gemäß Auftrag; .git/HEAD enthält Roh-Hash (detached) – Commit-Hash ist bindende Identität, nicht der Branchname.",
+  "chapter": "03.07",
+  "commit_verification": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src\\.git\\HEAD enthält exakt 'a8993c5c68042d996eab680d84a5b138a214bb5d' (kein 'ref:'-Präfix) – Commit direkt verifiziert.",
+  "correction_round": 0,
+  "diagram_edges": [
+    "client --session_settings.patch--> SessionSettingsState.apply_patch [E1-18, E1-20]",
+    "apply_patch --scope==server--> reject wrong_scope [E1-16]",
+    "apply_patch --writable==false--> reject read_only_runtime_authority [E1-15]",
+    "apply_patch --baseSettingsRevision mismatch--> settings_revision_conflict/stale_settings_revision [E1-18]",
+    "apply_patch --invalid field--> atomarer Reject der ganzen Transaktion [E1-18, E1-24]",
+    "SessionSettingsState.requested/effective --settings_projection (atomar)--> session.snapshot.settingsRevision/requestedSettings/effectiveSettings [E1-20]",
+    "SessionSettingsState --activation_admission_settings--> ActivationTimingPolicy --activate.--> ActivationController Timer (initial, watchdog, followup, closing recovery) [E1-04, E1-05, E1-06, E1-07]",
+    "SessionSettingsState --_wake_attempt_policy--> WakeAttemptPolicy --Freeze am ersten Prediction-Frame--> WakeHitTracker.observe (score >= sensitivity, min frames) [E1-08, E1-09]",
+    "WakeHit --policy.pre_roll_ms--> resolve_wake_audio_boundary --clamp(history_start)--> release_sample [E1-11]",
+    "WakeDetectionEvaluator --cooldown_ms--> _cooldown_until, verwirft Offers bis Ablauf [E1-10]",
+    "WakeAttemptPolicy.detector_gain --engine.process(gain=)--> PCM-Kopie der Inferenz [E1-12]",
+    "Session-Bau --_wake_engine_options (next_session)--> OpenWakeWordEngine(noiseSuppression, vadThreshold) [E1-13]",
+    "Handshake-Admission --admitted selection--> SessionSettingsState Override wakeWord.selection [E1-14]",
+    "Session-Patch wakeWord.selection --catalog.resolve + available_ids--> accept|reject wake_word_unavailable [E1-14, E1-21]",
+    "Server-Patch wakeWord.globalDisabledIds --set_global_disabled--> Katalog-Verfuegbarkeit (nur neue Admissions) [E1-16, E1-21]",
+    "ActivationController.set_runtime_suppression --trigger_state().suppressed--> Snapshot-Overlay requested/effective [E1-15]",
+    "ServerSettingsState.server_effective --nur beim Session-Bau--> SessionSettingsState Basis [E1-02, E1-17]",
+    "server settings patch --persist(settingsControlOverlay, settingsRevision)--> Runtime-JSON [E1-19]",
+    "SessionSettingsState --kein persist--> Session-Ende verwirft Werte [E1-19]",
+    "registry[19] --> session_keys[16] [E1-01]",
+    "registry[19] --> server_keys[3] [E1-01]"
+  ],
+  "facts": [
+    {
+      "aussage": "Eine Registry definiert 19 Keys: 16 scope=session (6 activation.*, sensitivity, selection, minFrames, cooldown, preRoll, gain, noiseSuppressionEnabled, vadThreshold, 2 runtimeSuppression) + 3 scope=server (inferenceBackend, globalDisabledIds, forceCommunity). Jede Definition: key, scope, auth, type, constraints, default_value, apply_policy, description, has_server_default, writable, secret.",
+      "beleg": "settings_control.py :: builtin_definitions() Z. 278-609, SettingDefinition Z. 170-199, Registry Z. 612-669; Test test_protocol_v2_settings.py Z. 790-814 (alle 19).",
+      "evidenz": "A+B",
+      "gueltigkeit": "serverweiter Vertrag, pro Session instanziiert",
+      "id": "E1-01"
+    },
+    {
+      "aussage": "Pro Session genau ein SessionSettingsState: registry.defaults() + server_effective() + Admission-Override (nur wakeWord.selection, nur wenn effective_enabled). Start: revision=0, requested == effective. _requested über alle registry.keys() (auch Server-Keys als Basiskopie), Wire-Projektionen filtern scope!=session → Server-Keys nie auf Session-Oberfläche.",
+      "beleg": "server.py :: _build_settings_state() Z. 3173-3196, Attribut Z. 2376; settings_control.py :: SessionSettingsState.__init__ Z. 885-913, Filter Z. 1133, 1158.",
+      "evidenz": "A",
+      "gueltigkeit": "je Session; ein State pro Sessionobjekt",
+      "id": "E1-02"
+    },
+    {
+      "aussage": "Sechs Activation-Timings, session-scoped, int, ms öffentlich (intern /1000.0), applyPolicy=next_activation, alle mit Server-Default: initial 15000/100..3600000; followup 3000/100..60000; watchdogInitial 600000/60000..3600000; watchdogRefresh 180000/30000..600000; watchdogWarning 30000/min 5000 ohne max (nur lessThanKeys); closingRecovery 5000/1000..30000.",
+      "beleg": "settings_control.py Z. 285-366, TIMING_KEYS Z. 127-134, activation_timings_seconds Z. 1111-1119; Test test_settings_control_plane.py Z. 52-70.",
+      "evidenz": "A+B",
+      "gueltigkeit": "je Session, wirksam zur nächsten Activation-Admission",
+      "id": "E1-03"
+    },
+    {
+      "aussage": "activation.initialSpeechTimeoutMs → INITIAL_SPEECH_DEADLINE = now + timeout in Phase waiting_first_speech; refresh dort invalid_phase.",
+      "beleg": "server.py :: _new_activation_inputs Z. 3350-3406; activation.py :: ActivationTimingPolicy Z. 172-188, activate() Z. 464-509 (501-505), Z. 538-541, _timing_locked Z. 272-288.",
+      "evidenz": "A",
+      "gueltigkeit": "je Activation, eingefroren",
+      "id": "E1-04"
+    },
+    {
+      "aussage": "activation.followupTimeoutMs: recording_ended() setzt FOLLOWUP_DEADLINE = now + followup_timeout; in followup_wait setzt refresh Deadline auf now + followup_timeout (nicht kumulativ).",
+      "beleg": "activation.py :: recording_ended Z. 598-616 (608-612), refresh Z. 511-570 (563-566).",
+      "evidenz": "A",
+      "gueltigkeit": "je Activation",
+      "id": "E1-05"
+    },
+    {
+      "aussage": "Watchdog-Trio: initial setzt SEGMENT_WATCHDOG_DEADLINE bei Segmentstart; refresh verlängert auf max(now+refresh, Deadline); warning als warning_after an beide. Querfeldregel warning < initial UND refresh, läuft sobald einer der drei Keys in Transaktion, geprüft am finalen Kandidaten; warning >= deadline → cross_field_conflict.",
+      "beleg": "settings_control.py :: validate_timing_bundle Z. 784-821, WATCHDOG_CROSS_FIELD_KEYS Z. 146-149; activation.py Z. 584-592, 549-562; Tests Z. 278-334, 537-563.",
+      "evidenz": "A+B",
+      "gueltigkeit": "je Session/Transaktion",
+      "id": "E1-06"
+    },
+    {
+      "aussage": "activation.closingRecoveryTimeoutMs setzt Recovery-Deadline in closing_input (now + timeout); Ablauf → closing_recovery_due.",
+      "beleg": "activation.py Z. 696, Z. 816.",
+      "evidenz": "A",
+      "gueltigkeit": "je Activation",
+      "id": "E1-07"
+    },
+    {
+      "aussage": "wakeWord.sensitivity (float 0.0-1.0, Default 0.5, next_activation): Score-Schwelle (score >= sensitivity), gelesen via _wake_attempt_policy, eingefroren am ersten Frame eines neuen Runs; Patch während Utterance gilt erst nächsten Versuch.",
+      "beleg": "settings_control.py Z. 367-381; server.py :: _wake_attempt_policy Z. 2520-2566; wake_detection.py Z. 20-24, 413, 424, Freeze Z. 445-450; Test c3 Z. 603-615.",
+      "evidenz": "A+B",
+      "gueltigkeit": "je Wake-Versuch (eingefroren)",
+      "id": "E1-08"
+    },
+    {
+      "aussage": "wakeWord.minConsecutivePredictionFrames (int, min 1, kein max, Default 1, next_activation, WW-18 pending): nur echte neue Prediction-Frames, keine Recorder-Chunks; Default 1 neutraler Startwert, kein kalibrierter Betriebspunkt.",
+      "beleg": "settings_control.py Z. 424-448; wake_detection.py :: min_frames Z. 117-119, Qualifikation Z. 433-434.",
+      "evidenz": "A",
+      "gueltigkeit": "je Wake-Versuch",
+      "id": "E1-09"
+    },
+    {
+      "aussage": "wakeWord.cooldownMs (int, min 0, kein max, Default 0, next_activation, WW-18): Operator-Cooldown nach akzeptiertem Hit (_cooldown_until = timestamp + ms/1000, Offers verworfen). Nicht die interne Gruppierung desselben Trefferbereichs.",
+      "beleg": "settings_control.py Z. 449-472; wake_detection.py Z. 696-699, _arm_cooldown_locked Z. 729-732; Test c2 Z. 536 ff.",
+      "evidenz": "A+B",
+      "gueltigkeit": "je Session",
+      "id": "E1-10"
+    },
+    {
+      "aussage": "wakeWord.preRollMs (int, min 0, kein max, Default 0, next_activation, WW-19): release = max(history_start, zero_point - pre_roll); aus Versuchs-Snapshot; zur Laufzeit gegen Audiohistorie geclampt; keine receptive-field-Obergrenze.",
+      "beleg": "settings_control.py Z. 473-498; recording.py :: _wake_detection_step Z. 91-102; wake_audio_boundary.py Z. 113-139, pre_roll_clamped Z. 94-97.",
+      "evidenz": "A",
+      "gueltigkeit": "je akzeptiertem Hit",
+      "id": "E1-11"
+    },
+    {
+      "aussage": "wakeWord.detectorGain (float 0.0-3.0, Default 1.0, next_activation, WW-18): linearer Gain nur auf PCM-Kopie für Inferenz (sättigend int16-clip); Originalaudio unverändert. Pro Versuch via engine.process(gain=...); Engine-Startwert aus _wake_engine_options().",
+      "beleg": "settings_control.py Z. 499-519; wake_detection.py Z. 654-666; openwakeword_engine.py Z. 65 ff., Z. 184-185; server.py Z. 2489-2518.",
+      "evidenz": "A",
+      "gueltigkeit": "je Wake-Versuch",
+      "id": "E1-12"
+    },
+    {
+      "aussage": "wakeWord.noiseSuppressionEnabled (bool false) + vadThreshold (float 0.0-1.0, 0.0 = Gate aus): beide next_session, wirken nur beim Engine-Bau (Konstruktor enable_speex_noise_suppression/vad_threshold); keine Setter, keine Umschaltung laufend.",
+      "beleg": "settings_control.py Z. 520-557; server.py Z. 2489-2518, Z. 2807-2814; wakeword.py Z. 262-277; openwakeword_engine.py Z. 99-119.",
+      "evidenz": "A",
+      "gueltigkeit": "nächste Session / neu gebaute Engine",
+      "id": "E1-13"
+    },
+    {
+      "aussage": "wakeWord.selection (string_list, minItems 0, Default [], next_session, kein Server-Default): kanonische ID-Liste, Override aus Admission (nur wenn Wake aktiviert). Patch fail-closed: leer bei konfiguriertem Wake → required; unbekannt/deaktiviert/unladbar → unavailable; Katalogfehler → dieselbe Familie. next_session → effective laufend unverändert.",
+      "beleg": "settings_control.py Z. 382-395; server.py Z. 3187-3190, Z. 3198-3259; ports.py Z. 119-168; handshake.py Z. 201-247; Tests protocol_v2_settings Z. 1182-1200, control_plane Z. 244-251, 437-480, 616-697.",
+      "evidenz": "A+B",
+      "gueltigkeit": "je Session; wirksam erst neue Session",
+      "id": "E1-14"
+    },
+    {
+      "aussage": "runtimeSuppression.manual/.wakeWord: read-only Metadaten (writable=false, bool false, live, kein Server-Default). Patch → read_only_runtime_authority; einzige Schreibautorität ActivationController.set_runtime_suppression via trigger_suppression.set. Gated nur Admission neuer Trigger, ändert/beendet keine laufende Activation, nicht im Freeze, nie persistiert; Snapshot/Events live aus Controller überlagert.",
+      "beleg": "settings_control.py Z. 396-423, Ablehnung Z. 988-1000; activation.py Z. 316-335, Z. 310-314; commands.py Z. 199; connection.py Z. 483-503; server.py Z. 3282-3300, Z. 3364-3378; Test Z. 215-219.",
+      "evidenz": "A+B",
+      "gueltigkeit": "je Session, live",
+      "id": "E1-15"
+    },
+    {
+      "aussage": "Server-Keys im Session-Patch gesperrt (wrong_scope): inferenceBackend (auto/onnx/tflite, next_session, admin), globalDisabledIds ([], next_session, admin), forceCommunity (false, live, admin). Nur via PATCH /api/v2/settings/server (Admin-Guard) → patch_server, eigener Revisionsstrom.",
+      "beleg": "settings_control.py Z. 971-987, Z. 558-608, Z. 1260-1405; server.py Z. 9223-9292; Test Z. 209-213.",
+      "evidenz": "A+B",
+      "gueltigkeit": "serverweit, nicht sessionseitig änderbar",
+      "id": "E1-16"
+    },
+    {
+      "aussage": "Server-Default-Änderung schreibt bestehende Session nicht um (Seeding nur Konstruktor); neue Sessions erben neuen Default.",
+      "beleg": "server.py Z. 3173-3196 (Docstring 3176-3180); Test Z. 347-361.",
+      "evidenz": "A+B",
+      "gueltigkeit": "Inheritanz beim Bau",
+      "id": "E1-17"
+    },
+    {
+      "aussage": "Requested/Effective je Policy: live + next_activation → sofort effective; next_session/server_restart → continue (laufend bleibt). changedKeys nur echte Änderungen; no_change bumpt nicht; Revision genau +1 pro Transaktion; baseMismatch → conflict + stale; ungültiges Feld → ganze Transaktion atomar sortiert abgelehnt.",
+      "beleg": "settings_control.py Z. 933-1091 (changed 1043-1046, no_change 1047-1058, Policy 1060-1078, Revision 1076); Tests protocol_v2_settings Z. 157-229, control_plane Z. 129-207, 483-530.",
+      "evidenz": "A+B",
+      "gueltigkeit": "je Session und Transaktion",
+      "id": "E1-18"
+    },
+    {
+      "aussage": "Isolation: eigene monotone settingsRevision je Session; Session-Settings nie persistiert (kein Callback); nur Server-Overlay (settingsControlOverlay/settingsRevision) im Runtime-JSON. Mit Session-Close endet Zustand (kein Persistenzpfad; kein eigener Close-Test → A/D).",
+      "beleg": "settings_control.py Z. 885-913, Docstring Z. 940-942; ServerSettingsState Z. 1174-1181, Z. 21-23; operations.py Z. 406-511; Tests Z. 338-345, runtime_persistence.",
+      "evidenz": "A+B",
+      "gueltigkeit": "RAM je Session, Overlay persistent",
+      "id": "E1-19"
+    },
+    {
+      "aussage": "Session-Settings nur via WebSocket: session_settings.patch → command.ack (rejected/conflict) + settings.changed-Events gruppiert nach POLICY_EVENT_ORDER (live, next_activation, next_session, server_restart; Keys sortiert); nur erstes Event erhöht stateVersion. Snapshot: settingsRevision/requestedSettings/effectiveSettings aus atomarer Projektion. Kein HTTP für Session-Settings; nur schema/server-Reads.",
+      "beleg": "schema.py Z. 47, 119-120, 165; ports.py Z. 36-81; snapshot.py Z. 55-78; connection.py Z. 523-582; server.py Z. 9223-9292; Tests Z. 157-217.",
+      "evidenz": "A+B",
+      "gueltigkeit": "pro V2-Session/Verbindung",
+      "id": "E1-20"
+    },
+    {
+      "aussage": "Keine beliebigen Wake-IDs: Validator löst jede ID via Katalog-Resolver und verlangt Verfügbarkeit; global deaktivierte (Server-Key, projiziert) nicht wählbar; unbekannt/deaktiviert → wake_word_unavailable. Handshake verlangt kanonische IDs (kein Alias).",
+      "beleg": "server.py Z. 3207-3259; ports.py Docstring Z. 22-26, Z. 159-168; wakeword_catalog.py Z. 101, Z. 542, 1246; server.py Z. 7183-7197, Z. 7260-7264; Tests Z. 437-480, 616-697.",
+      "evidenz": "A+B",
+      "gueltigkeit": "je Auswahl und Katalog-Snapshot",
+      "id": "E1-21"
+    },
+    {
+      "aussage": "Konfliktpotenzial: Patch von selection prüft Alias tolerant (catalog.resolve), speichert aber unveränderten Eingabewert (keine Kanonisierung) → Alias könnte als requestedSettings erscheinen, obwohl Wire kanonisch fordert. Kein Test; Detection-Wirkung ohnehin erst next_session. Offene Kante, nicht als normalisiert darstellen.",
+      "beleg": "server.py Z. 3243-3258; settings_control.py Z. 1001-1009, 1060-1061; ports.py Z. 22-26.",
+      "evidenz": "A+C",
+      "gueltigkeit": "Session-Patch von selection",
+      "id": "E1-22"
+    },
+    {
+      "aussage": "NOT_IMPLEMENTED: server_restart als Konstante/Mechanikzweig vorhanden, aber kein Builtin-Key nutzt sie. Kein produktiver Key.",
+      "beleg": "settings_control.py Z. 51-60, Z. 1073-1074, Z. 1362-1365, 1389-1393; builtin_definitions Z. 285-609 ohne server_restart.",
+      "evidenz": "A",
+      "gueltigkeit": "gesamte Registry",
+      "id": "E1-23"
+    },
+    {
+      "aussage": "Typ-Schranken: bool nie als Zahl; float endlich; string nicht leer; string_list nur nicht-leere Strings; inklusiv; allowedValues → value_not_allowed; minItems → too_few_items. Mechanik gehört 03.04, hier nur Schranke referenziert.",
+      "beleg": "settings_control.py Z. 689-732, Z. 735-761; Test Z. 227-231.",
+      "evidenz": "A+B",
+      "gueltigkeit": "alle Registry-Keys",
+      "id": "E1-24"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-01",
+      "thema": "server_restart deklariert, keinem Key zugeordnet (E1-23)."
+    },
+    {
+      "id": "N-02",
+      "thema": "Kein Rebuild/Umschalt-Seam in laufender Session: next_session-Keys wirken nur bei neu gebauter Session/Engine; kein Pfad baut Engine während Session neu (E1-13, E1-14)."
+    }
+  ],
+  "researcher_session": "ses_e45e1071effeY62fYcOIRf1gGQ",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-01",
+      "thema": "Ob akzeptierter Alias in requestedSettings als kanonisch gelten darf: nicht spezifiziert, keine Normalisierung/Tests (E1-22)."
+    },
+    {
+      "id": "U-02",
+      "thema": "Expliziter Close-Test für Session-State-Verwurf fehlt; folgt aus Lebenszyklus ohne Persistenzpfad (E1-19)."
+    },
+    {
+      "id": "U-03",
+      "thema": "Alias-Behandlung Handshake (kanonisch) vs. Patch (tolerant) widersprüchlich dokumentiert; keine gemeinsame normative Regel (E1-14, E1-21, E1-22)."
+    }
+  ],
+  "writer_notes": "Fokus Overrides/Isolation/Schranken: 16 Session-Keys als Einzelwerte (Default/Range/Policy/Facetten/Wirkung). Typmechanik nur referenzieren (03.04), Wirksamkeit nur andeuten (03.09), Scopes verweisen (03.02), Prioritäten verweisen (03.05), Session-Lebenszyklus 02.01, Wake-Nutzung 02.04. Diagramme nur belegte Kanten: (1) Patch-/Schranken-Fluss mit drei Reject-Klassen, (2) State → Activation-/Wake-Verbraucher mit Freeze-Punkten, (3) Seeding/Isolation. calibration=pending nicht als Betriebsempfehlung. E1-22/C-01, N-01/N-02, U-01..U-03 als offene Kanten, nicht Funktionen.",
+  "conflicts": [
+    {
+      "id": "C-01",
+      "thema": "Alias-tolerant validierte, aber nicht kanonisch gespeicherte wakeWord.selection im Session-Patch vs. kanonischer Wire-Vertrag (E1-22). Keine weitere Konfliktkante."
+    }
+  ]
+}

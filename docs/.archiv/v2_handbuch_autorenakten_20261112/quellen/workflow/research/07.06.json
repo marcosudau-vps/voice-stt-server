@@ -1,0 +1,228 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD). Nur Commit bindend.",
+  "chapter": "07.06",
+  "commit_verification": ".git/HEAD a8993c5c68042d996eab680d84a5b138a214bb5d (detached). Keine Tests ausgefuehrt; nur Lesefakten, keine Ergebnis-/Laufzeitbehauptungen.",
+  "conflicts": [
+    {
+      "id": "K1",
+      "thema": "Lasttest-Defaults cuda/small.en/tiny.en vs Launcher cpu/small/tiny/faster_whisper (Gitter nagelt Launcher fest)."
+    },
+    {
+      "id": "K2",
+      "thema": "pytest.ini nur unit vs Workflow unit+compatibility/packaging (Korpus vs Ablauf 07.09)."
+    },
+    {
+      "id": "K3",
+      "thema": "Modul-Allowlist (base/factory/resolver/utils) != Engine-Registry (2 Engines)."
+    },
+    {
+      "id": "K4",
+      "thema": "FakeAudio existiert nicht; real FakeAudioQueue/AudioVector/WARMUP_AUDIO."
+    }
+  ],
+  "correction_round": 0,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "Default sammelt nur tests/unit/test_*.py; keine addopts/Marker/Plugins; packaging/compatibility nur mit Pfad.",
+      "beleg": "pytest.ini:1-3; kein setup.cfg/tox/.coveragerc/Root-conftest; pyproject:1-3 nur build-system",
+      "evidenz": "E1",
+      "gueltigkeit": "jeder Aufruf ohne Pfade",
+      "id": "TV7-01"
+    },
+    {
+      "aussage": "Autouse Guard-Reset vor/nach jedem Test (leases/identity/revision/confirmed); pro_capable patcht installed_kroko_variant=pro.",
+      "beleg": "tests/unit/conftest.py:12-23; native_guard; Nutzung u.a. pr15_b1b2:21",
+      "evidenz": "E1",
+      "gueltigkeit": "nur tests/unit",
+      "id": "TV7-02"
+    },
+    {
+      "aussage": "Produktdefault model_warmup=True; False kehrt vor Modellzugriff zurueck; Tests setzen False + warmup_vad abgeleitet.",
+      "beleg": "server.py:498,2101-2108,2792; controlled_e2e:269; multi_user:361; asr_integration:63",
+      "evidenz": "E1",
+      "gueltigkeit": "Server-Verfahren",
+      "id": "TV7-03"
+    },
+    {
+      "aussage": "Kontrolliertes E2E faehrt echten Eingang (WS->Parser->Admission->Session->Gate); nur Hardware/Modell Fake; feed_audio gleiche Gate-Bedingung; VAD armiert.",
+      "beleg": "controlled_e2e:66-303; server.py:1110,1153; Negativ 464-471",
+      "evidenz": "E1",
+      "gueltigkeit": "Voraussetzung testclient sonst skip",
+      "id": "TV7-04"
+    },
+    {
+      "aussage": "Harness Hintergrund-Thread+Queue; Waits je 15s Deadline, settle via metrics-Roundtrip; Fehlen -> AssertionError.",
+      "beleg": "controlled_e2e:306-408; Wiederverwendung protocol_v2_e2e:39-45",
+      "evidenz": "E1",
+      "gueltigkeit": "alle kontrollierten E2E",
+      "id": "TV7-05"
+    },
+    {
+      "aussage": "FakeRecorder + Manual/AutoScheduler (jobs liegen/complete nachschiebt/Daemon); Segment/Final gezaehlt; Counting/Blocking Varianten.",
+      "beleg": "multi_user:202-386; controlled_e2e:226-264; make_service warmup False + Zeiten",
+      "evidenz": "E1",
+      "gueltigkeit": "ohne Modelle",
+      "id": "TV7-06"
+    },
+    {
+      "aussage": "Opt-in Kompatibilitaet echter uvicorn Loopback Port 0 + unveraenderter Client; nur ASR/Hardware Fixture (3200 Frames); Checkout rev-parse/sauber/Vektoren sonst skip.",
+      "beleg": "test_client_v2_identity:28-109; backend Ready 20s join 15s",
+      "evidenz": "E1",
+      "gueltigkeit": "nur explizit; CI faktisch skip",
+      "id": "TV7-07"
+    },
+    {
+      "aussage": "Golden-Transkription ein Test echter Recorder (Env tiny/cpu/int8), 1024-Bloecke, 5s Deadline + 0.2s Settle, 2-Wort-Praefix; ohne ENV skip.",
+      "beleg": "test_audio_fixtures:146-197; Normalisierung 57-60",
+      "evidenz": "E1",
+      "gueltigkeit": "kein WER-Budget",
+      "id": "TV7-08"
+    },
+    {
+      "aussage": "Manifest LJ Speech 1.1 22050Hz mono16 5 Samples; Tests Manifest/WAV-Header, PCM-Chunks 512->1024B, Resample 22050->16k bytegenau; FakeAudioQueue.",
+      "beleg": "audio/manifest:1-47; test_audio_fixtures:64-143; audio_engine_fixtures:1-37",
+      "evidenz": "E1",
+      "gueltigkeit": "FakeAudio=FakeAudioQueue",
+      "id": "TV7-09"
+    },
+    {
+      "aussage": "CPU-Vertrag via _fake_torch (cuda/hip/version/ones) + sys.modules/metadata-Patch; Plattform-Guard anderes OS zaehlt nicht.",
+      "beleg": "test_cpu_only_contract:23-101; cpu_only.py real",
+      "evidenz": "E1",
+      "gueltigkeit": "Logik, nicht Installation",
+      "id": "TV7-10"
+    },
+    {
+      "aussage": "Native 4 Szenarien nur mit ENV1 + 3 Pfade (Key/Modell/WAV) sonst skip NOT_RUN; frischer Interpreter RESULT-Zeile, Key-Leak-Check, Env bereinigt.",
+      "beleg": "test_kroko_native_integration:27-137; kroko_native_child:1-59",
+      "evidenz": "E1",
+      "gueltigkeit": "braucht kroko_onnx + Artefakte",
+      "id": "TV7-11"
+    },
+    {
+      "aussage": "Grenzen: aussen 1200s (Wechsel 2400s) via ENV, innen Kind 900s exit, Ready 420s, Poll 600s, Barrieren 180s; Ueberschreiten = FAIL.",
+      "beleg": "native_integration:44,67-68,110; kroko_child:27,164,173,209,223,240",
+      "evidenz": "E1",
+      "gueltigkeit": "Konstanten, keine Messung",
+      "id": "TV7-12"
+    },
+    {
+      "aussage": "Live nur mit ENV1 vs wss license: R1 Grant, R2 invalid->Community, R3 Smoke Kind 300s, R4 Widerruf ohne Netz; counter/URL/Leak-Checks; ohne Key/Modell/UUID skip.",
+      "beleg": "test_kroko_live_license:25-237; nicht fuer CI",
+      "evidenz": "E1",
+      "gueltigkeit": "Ausfuehrungshoheit 07.09",
+      "id": "TV7-13"
+    },
+    {
+      "aussage": "Last ein Test nur mit ENV1/PERF1: echter Service+Engine, Barrier-Start, WAV-Scheiben chunk_ms/speed, Latenz p50/p95, Kadenz, Zaehler, WER vs static JSON; Budget WER 0.30, final>0, p95-Skew, Threads, fehlerfrei; JSON-Report.",
+      "beleg": "asr_integration:291-295,374-864; Defaults clients2 chunk32 speed1 timeout240 cuda small.en/tiny.en",
+      "evidenz": "E1",
+      "gueltigkeit": "K1-Konflikt beachten",
+      "id": "TV7-14"
+    },
+    {
+      "aussage": "Queues modellos deterministisch: Realtime koalesziert, Finals vor Realtime, round-robin a,b,a, stale verworfen; Speaker nur neu verworfen, max_sessions explizit, Reservierung, Rueckstau gekuerzt, Dauer erzwingt Final.",
+      "beleg": "protocol:630-677; multi_user:934-958,1235-1295,2642-2652; server.py:487-493 Limits 4/8/64/1500",
+      "evidenz": "E1",
+      "gueltigkeit": "Fake + FairInferenceQueue",
+      "id": "TV7-15"
+    },
+    {
+      "aussage": "Deadline-Projektion injizierte Uhren (remaining/deadlineAt/null, nie negativ, idle null/closeRequested); Aktivierungs-Deadline Close-Barriere initial_speech_timeout.",
+      "beleg": "contract:807-848; snapshot.py:126-138; activation_controller:377-391",
+      "evidenz": "E1",
+      "gueltigkeit": "deterministisch",
+      "id": "TV7-16"
+    },
+    {
+      "aussage": "Vektor-Drift: laden ohne Inline; mit ENV byteweise vs Original; Version + Pflichtnamen; echter Parser/Projektion; ohne ENV nur intern (N8).",
+      "beleg": "contract:44-107; vectors.json",
+      "evidenz": "E1",
+      "gueltigkeit": "optional Drift",
+      "id": "TV7-17"
+    },
+    {
+      "aussage": "Engine-Gitter 2 Engines auf Registry/get_supported/26-Ablehnungen/Policy-CPU/Import-Allowlist/Layout-2-0-5/AST/Extras/prune.",
+      "beleg": "test_v2_engine_boundary:32-223",
+      "evidenz": "E1",
+      "gueltigkeit": "Lesen/AST/Subprozess, kein Build",
+      "id": "TV7-18"
+    },
+    {
+      "aussage": "Doku-Gitter 14 Seiten >2500 Zeichen, Primaerquellen-Link, Index, Links loesen, kein docs/-Baum; Routen>=30, COMMAND/RESULT/EVENT, Registry-Keys, ENGINE_KEYS; Surface kein engines, 2 Guides.",
+      "beleg": "code_reference:27-200; docs_surface:26-76",
+      "evidenz": "E1",
+      "gueltigkeit": "Nennung, keine Prosa",
+      "id": "TV7-19"
+    },
+    {
+      "aussage": "Regression nach Befund deterministisch ohne Provider/Modelle: B1/B2, P0/P1 FakeLicense/Leasing, Wake F1-F10 RED-first, Slow-CPU Fenster/queued/Early-Final + generate/compare WAV->JSON.",
+      "beleg": "pr15_b1b2:1-58; pr15_final:1-31; wake_c2/c3; slow_gap:81-...; gap_regression:1-70",
+      "evidenz": "E1",
+      "gueltigkeit": "braucht pro_capable",
+      "id": "TV7-20"
+    },
+    {
+      "aussage": "Release-Fixtures offline (Manifest/Wheel-Hashes/Digest, RecordingRunner assert_no_writes docker/imagetools/git/gh/twine, pypi_fetcher Daten).",
+      "beleg": "release_support:1-200; Nutzung release_adapters:21,38",
+      "evidenz": "E1",
+      "gueltigkeit": "Logik, nicht Publish",
+      "id": "TV7-21"
+    },
+    {
+      "aussage": "Race Barrier/Event nie Sleeps; slow_uuid4 sleep 0.02 in Sektion; Invarianten je Quelle 1/1/1/1; alter Final blockiert naechste nicht.",
+      "beleg": "wake_admission:13-14; controlled_e2e:797-820,1088-1240",
+      "evidenz": "E1",
+      "gueltigkeit": "Invarianten, nicht Timing",
+      "id": "TV7-22"
+    },
+    {
+      "aussage": "Packaging build --wheel --sdist in tmp, Archive statt setup.py: verbotene Module/Extras/Requirements; ausserhalb testpaths.",
+      "beleg": "test_v2_distribution_contents:1-45",
+      "evidenz": "E1",
+      "gueltigkeit": "braucht build-Toolchain",
+      "id": "TV7-23"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Keine Marker/addopts (nur Env+skip) [TV7-01]."
+    },
+    {
+      "id": "N2",
+      "thema": "Kein Timeout/Parallel/Coverage (nur pytest>=8,httpx,multipart) [TV7-01]."
+    },
+    {
+      "id": "N3",
+      "thema": "Kein Soak/Dauer/Rampen (ein Test, Default 2/Launcher 4) [TV7-14]."
+    },
+    {
+      "id": "N4",
+      "thema": "Keine WER-Baseline-Pflege (static JSON, Budget) [TV7-14]."
+    },
+    {
+      "id": "N8",
+      "thema": "Kein erzwungener Drift-Vergleich ohne ENV [TV7-17]."
+    }
+  ],
+  "researcher_session": "ses_e3773cfe2ffeMircbFfNyABR91",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "N5",
+      "thema": "CI Kompatibilitaet ausgefuehrt vs skip (nur Pfade genannt) [TV7-07]."
+    },
+    {
+      "id": "N6",
+      "thema": "Laufzeiten/Flakiness/ob opt-in je gruen (nichts ausgefuehrt)."
+    },
+    {
+      "id": "N7",
+      "thema": "Tote Fixture prebuffer2.json ohne Referenz."
+    }
+  ],
+  "writer_notes": "Zwei Achsen: ohne Modell (Default, Fake, warmup False) vs mit Modell (Golden->Last->Native/Live opt-in, skip!=pass). Zeiten exakt (1200/2400/900/420/600/180/300) nie als Messung. Regression nach Befund, nicht Ordner. NOT_REQUESTED."
+}

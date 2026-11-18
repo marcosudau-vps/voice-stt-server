@@ -1,0 +1,517 @@
+{
+  "chapter": "03.04",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "commit_verification": "Verifiziert am Checkout C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src: .git/HEAD enthaelt den rohen Hash a8993c5c68042d996eab680d84a5b138a214bb5d (kein 'ref: refs/heads/...'); .git/FETCH_HEAD nennt denselben Hash als ''a8993c5c68042d996eab680d84a5b138a214bb5d' of https://github.com/marcosudau-vps/voice-stt-server'; .git/logs/HEAD zeigt '0000000000000000000000000000000000000000 a8993c5c68042d996eab680d84a5b138a214bb5d ... checkout: moving from main to FETCH_HEAD'; .git/shallow enthaelt nur diesen Commit. Commit-Hash damit exakt bestaetigt, Shallow-Clone, detached HEAD.",
+  "branch_note": "Die im Auftrag genannte Branch feat/v2-release-cleanup ist im Checkout NICHT nachweisbar: es existiert kein Verzeichnis .git/refs/heads/**, HEAD ist detached, der Reflog dokumentiert 'moving from main to FETCH_HEAD'. Empfehlung an den Orchestrator: Commit-Hash als bindend behandeln und in workflow/task-registry.json bei 03.04 das Feld source_commit (derzeit null, Z. 553) auf a8993c5c68042d996eab680d84a5b138a214bb5d setzen; Branch-Angabe nur als Beauftragung, nicht als verifizierten Fakt fuehren.",
+  "correction_round": 0,
+  "facts": [
+    {
+      "id": "V1-01",
+      "aussage": "Der untersuchte Stand ist der per SHA gefetchte Commit a8993c5c68042d996eab680d84a5b138a214bb5d. Der Checkout ist detached (Reflog: moving from main to FETCH_HEAD), es existiert keine Branch-Ref. Der Commit ist ein Shallow-Clone mit genau diesem einen Commit.",
+      "beleg": ".git/HEAD Z. 1 (a8993c5c68042d996eab680d84a5b138a214bb5d); .git/FETCH_HEAD Z. 1; .git/logs/HEAD Z. 1; .git/shallow Z. 1; .git/refs/heads/** nicht vorhanden (Glob).",
+      "evidenz": "A",
+      "gueltigkeit": "gesamte Faktenakte",
+      "diagram_edges": [],
+      "not_implemented": "Branch-Ref feat/v2-release-cleanup im Checkout nicht vorhanden.",
+      "unknown": "Ob der Commit auf der genannten Branch liegt, ist ohne Remote-Ref (kein git-Aufruf erlaubt) UNKNOWN.",
+      "konflikte": "Auftragstext nennt die Branch als bestaetigt; der Checkout widerspricht nur der Nachweisbarkeit, nicht dem Code-Inhalt.",
+      "abhaengigkeiten": "keine"
+    },
+    {
+      "id": "V1-02",
+      "aussage": "Das Registry-Typsystem kennt exakt fuenf Typen: int, float, bool, string, string_list (Konstanten TYPE_INT/TYPE_FLOAT/TYPE_BOOL/TYPE_STRING/TYPE_STRING_LIST). Ein unbekannter Typ ist kein Passthrough, sondern erzeugt invalid_type mit der Meldung 'besitzt einen unbekannten Typ'.",
+      "beleg": "api_fastapi_server/settings_control.py, Konstanten Z. 45-49; Fallback-Zweig in coerce_definition_value Z. 728-729.",
+      "evidenz": "A",
+      "gueltigkeit": "Settings-Domaene (Registry), alle 19 Definitionen",
+      "diagram_edges": [
+        "SettingDefinition --type in {int,float,bool,string,string_list}--> coerce_definition_value"
+      ],
+      "not_implemented": "Kein enum-Typ und kein object-/dict-Typ; Enumerationen laufen ueber die Constraint allowedValues auf string.",
+      "unknown": "keine",
+      "konflikte": "keine",
+      "abhaengigkeiten": "V1-04, V1-07"
+    },
+    {
+      "id": "V1-03",
+      "aussage": "Koerzionsregeln sind strikt, ohne stilles Casting: int akzeptiert nur int, nie bool und nie float; float akzeptiert numbers.Real ausser bool, castet nach float und verlangt Endlichkeit (NaN/Inf -> invalid_type); bool akzeptiert nur bool; string verlangt einen nicht-leeren str; string_list verlangt list oder tuple aus nicht-leeren Strings und normalisiert auf list. Erst danach laeuft die Constraint-Pruefung.",
+      "beleg": "api_fastapi_server/settings_control.py, coerce_definition_value Z. 689-732 (Bool-Ausschluss vorab Z. 698-699, int Z. 702-705, float Z. 706-711, bool Z. 712-714, string Z. 715-717, string_list Z. 718-727, unbekannter Typ Z. 728-729); _finite Z. 678-682. Tests: tests/unit/test_settings_control_plane.py::test_bool_never_accepted_for_numeric_types Z. 227-231; tests/unit/test_wakeword_root_findings_c3.py Z. 583-601.",
+      "evidenz": "A",
+      "gueltigkeit": "jede Wertpruefung der Settings-Domaene (Session-Patch, Server-Patch, Startup-Overlay)",
+      "diagram_edges": [
+        "raw value --type check--> coerce_definition_value --invalid_type--> FieldError"
+      ],
+      "not_implemented": "keine",
+      "unknown": "Ob leere Strings bei string fachlich gewollt waeren, ist nicht kommentiert; die Regel 'nicht leer' ist die einzige Laengenregel.",
+      "konflikte": "keine",
+      "abhaengigkeiten": "V1-02"
+    },
+    {
+      "id": "V1-04",
+      "aussage": "Das Constraint-Vokabular ist geschlossen und wird in fester Reihenfolge geprueft, mit nur dem ersten Fehler: min (-> out_of_range), max (-> out_of_range), allowed (-> invalid_type), allowedValues (-> value_not_allowed), minItems (-> too_few_items). Grenzen sind inklusiv (value < min bzw. value > max).",
+      "beleg": "api_fastapi_server/settings_control.py, _validate_constraints Z. 735-761 (min Z. 737-740, max Z. 741-742, allowed Z. 743-745, allowedValues Z. 749-757, minItems Z. 758-760); Code-Konstanten Z. 153-165. Tests: tests/unit/test_wakeword_root_findings_c3.py::test_allowed_values_is_a_generic_registry_constraint Z. 573-588; test_the_backend_key_is_an_admin_server_setting_with_allowed_values Z. 590-601.",
+      "evidenz": "A",
+      "gueltigkeit": "alle Registry-Werte",
+      "diagram_edges": [
+        "coerce_definition_value --> _validate_constraints --erster Fehler--> FieldError"
+      ],
+      "not_implemented": "allowed ist implementiert, wird aber von keiner eingebauten Definition genutzt; allowedValues nutzt nur wakeWord.inferenceBackend (Z. 563).",
+      "unknown": "Warum allowed auf invalid_type und allowedValues auf value_not_allowed abbildet, ist im Code nicht begruendet.",
+      "konflikte": "Zwei Constraint-Namen mit derselben Semantik, aber zwei verschiedenen Fehlercodes - im Kapitel benennen, nicht als Fehler darstellen.",
+      "abhaengigkeiten": "V1-03"
+    },
+    {
+      "id": "V1-05",
+      "aussage": "Ein Teil der constraints sind nur veroeffentlichte Metadaten: Der Docstring nennt als known keys auch lessThanKeys, _validate_constraints liest es jedoch nie; die Cross-Field-Regel vergleicht stattdessen gegen die Modulkonstante WATCHDOG_WARNING_LESS_THAN_KEYS. Ebenso sind unit, calibration und calibrationTraceabilityIds reine Anzeige- und Herkunftsmetadaten ohne Pruef- oder Rechenwirkung und werden ueber to_schema_dict unveraendert an Clients ausgeliefert.",
+      "beleg": "api_fastapi_server/settings_control.py, Docstring Z. 174-180; WATCHDOG_WARNING_LESS_THAN_KEYS Z. 138-141; lessThanKeys in der Definition Z. 346; Verwendung im Vergleich validate_timing_bundle Z. 805; to_schema_dict Z. 200-212; Metadaten-Beispiele Z. 429-434, 454-459, 478-483, 504-509, 540-545. Grep: kein Code liest constraints[lessThanKeys], constraints[unit] oder constraints[calibration]. Test: tests/unit/test_wakeword_root_findings_c2.py::F5ProvisionalCalibrationTests Z. 500-523 (calibration-Marker im Schema).",
+      "evidenz": "A",
+      "gueltigkeit": "Schema-Payload und Cross-Field-Pruefung",
+      "diagram_edges": [
+        "SettingDefinition.constraints --> schema_payload (nur Anzeige)",
+        "validate_timing_bundle --> WATCHDOG_WARNING_LESS_THAN_KEYS (nicht constraints)"
+      ],
+      "not_implemented": "LessThanKeys ist nicht generisch auswertbar; eine zweite Definition mit lessThanKeys wuerde nicht geprueft.",
+      "unknown": "Ob lessThanKeys bewusst nur Schema-Dokumentation ist, ist nicht kommentiert.",
+      "konflikte": "Docstring (known keys inkl. lessThanKeys) vs. Implementierung (nur Konstante) - Spannung innerhalb des Codes, im Kapitel klarstellen.",
+      "abhaengigkeiten": "V1-12"
+    },
+    {
+      "id": "V1-06",
+      "aussage": "SettingDefinition hat Pflichtfelder ohne Default (key, scope, auth, type, constraints, default_value, apply_policy) und optionale Facetten mit Default (description='', has_server_default=False, writable=True, secret=False). constraints ist immer ein JSON-sicheres Dict, auch leer, nie None. has_server_default ist ein von scope unabhaengiges Merkmal.",
+      "beleg": "api_fastapi_server/settings_control.py, SettingDefinition Z. 170-198; to_schema_dict Z. 200-212; SettingsRegistry.session_keys Z. 634-638, server_default_keys Z. 640-644, defaults_for_server_defaults Z. 656-661. Konsistenz: workflow/research/03.02.json S-04.",
+      "evidenz": "A",
+      "gueltigkeit": "Vertrags- und Schema-Ebene der Settings-Domaene",
+      "diagram_edges": [
+        "SettingDefinition --has_server_default--> server_default_keys",
+        "SettingDefinition --scope--> session_keys"
+      ],
+      "not_implemented": "Kein required-Flag pro Key: Pflicht/Optional existiert nur als 'hat Default'; jeder Key besitzt einen default_value, ein explizit als Pflicht markierter Wert existiert nicht.",
+      "unknown": "keine",
+      "konflikte": "keine",
+      "abhaengigkeiten": "V1-07; 03.02/S-04; 03.01/K1-03"
+    },
+    {
+      "id": "V1-07",
+      "aussage": "Vollstaendige Wertetabelle der 19 Registry-Keys in Code-Reihenfolge (Code = Autoritaet). Spalten: Key | Typ | pruefende constraints | Default | apply_policy | scope/auth | has_server_default | Position.\n1) activation.initialSpeechTimeoutMs | int | min 100, max 3600000, unit ms | 15000 | next_activation | session/session | ja | Z. 286-298\n2) activation.followupTimeoutMs | int | min 100, max 60000, unit ms | 3000 | next_activation | session/session | ja | Z. 299-312\n3) activation.segmentWatchdogInitialMs | int | min 60000, max 3600000, unit ms | 600000 | next_activation | session/session | ja | Z. 313-323\n4) activation.segmentWatchdogRefreshMs | int | min 30000, max 600000, unit ms | 180000 | next_activation | session/session | ja | Z. 324-337\n5) activation.segmentWatchdogWarningMs | int | min 5000, KEIN max, lessThanKeys [initial, refresh] | 30000 | next_activation | session/session | ja | Z. 338-355\n6) activation.closingRecoveryTimeoutMs | int | min 1000, max 30000, unit ms | 5000 | next_activation | session/session | ja | Z. 356-366\n7) wakeWord.sensitivity | float | min 0.0, max 1.0 | 0.5 | next_activation | session/session | ja | Z. 367-381\n8) wakeWord.selection | string_list | minItems 0 | [] | next_session | session/session | nein | Z. 382-395\n9) runtimeSuppression.manual | bool | {} (keine) | False | live | session/session | nein | Z. 396-409 (writable=False)\n10) runtimeSuppression.wakeWord | bool | {} (keine) | False | live | session/session | nein | Z. 410-423 (writable=False)\n11) wakeWord.minConsecutivePredictionFrames | int | min 1, unit predictionFrames, calibration pending (WW-18) | 1 | next_activation | session/session | ja | Z. 424-448\n12) wakeWord.cooldownMs | int | min 0, KEIN max, calibration pending (WW-18) | 0 | next_activation | session/session | ja | Z. 449-472\n13) wakeWord.preRollMs | int | min 0, KEIN max, calibration pending (WW-19) | 0 | next_activation | session/session | ja | Z. 473-498\n14) wakeWord.detectorGain | float | min 0.0, max 3.0, calibration pending (WW-18) | 1.0 | next_activation | session/session | ja | Z. 499-519\n15) wakeWord.noiseSuppressionEnabled | bool | {} (keine) | False | next_session | session/session | ja | Z. 520-534\n16) wakeWord.vadThreshold | float | min 0.0, max 1.0, calibration pending (WW-18) | 0.0 | next_session | session/session | ja | Z. 535-557\n17) wakeWord.inferenceBackend | string | allowedValues [auto, onnx, tflite] | auto | next_session | server/admin | ja | Z. 558-576\n18) wakeWord.globalDisabledIds | string_list | minItems 0 | [] | next_session | server/admin | ja | Z. 577-590\n19) kroko.forceCommunity | bool | {} (keine) | False | live | server/admin | ja | Z. 591-608",
+      "beleg": "api_fastapi_server/settings_control.py, builtin_definitions Z. 278-609 (Einzelpositionen wie in der Tabelle angegeben); Typkonstanten Z. 45-49; Apply-Konstanten Z. 51-57; WAKE_WORD_BACKEND_VALUES Z. 99; CALIBRATION_PENDING Z. 120. Test: tests/unit/test_protocol_v2_settings.py::test_schema_is_deterministic_and_complete Z. 777-815 (18 Keys ohne runtimeSuppression.* geprueft? nein: alle 19 inkl. runtimeSuppression.manual/wakeWord in der Mengengleichheit Z. 790-814).",
+      "evidenz": "A",
+      "gueltigkeit": "Contract-Werte der Settings-Domaene; fachliche Einzelwerte nur als Beispiel (Detailkapitel 03.06/03.07)",
+      "diagram_edges": [
+        "builtin_definitions --> SettingDefinition[19]",
+        "SettingDefinition --default_value--> SessionSettingsState.__init__"
+      ],
+      "not_implemented": "16 session-Keys, davon 13 mit Serverdefault; 3 server-Keys; kein Builtin-Key nutzt APPLY_SERVER_RESTART (Konstante existiert Z. 54/57/60, Grep zeigt nur Definitions- und Vergleichsstellen).",
+      "unknown": "Kalibrierte Betriebswerte der Keys mit calibration pending sind ausdruecklich offen (Kommentar Z. 437-446, 462-470, 486-496); keine Zielwerte erfinden.",
+      "konflikte": "keine",
+      "abhaengigkeiten": "V1-06, V1-08; 03.02/S-04; Detailwerte -> 03.06/03.07"
+    },
+    {
+      "id": "V1-08",
+      "aussage": "Zwei Keys haben bewusst keine Obergrenze: wakeWord.cooldownMs und wakeWord.preRollMs tragen min 0 und kein max. Der Code begruendet das explizit damit, dass keine Range aus dem Classifier-Receptive-Field abgeleitet wird (1960/3400 ms sind nur Diagnose) und die Pre-Roll zur Laufzeit gegen die real vorhandene Audiohistorie geklemmt wird.",
+      "beleg": "api_fastapi_server/settings_control.py, WAKE_WORD_MIN_RECEPTIVE_FIELD_MS/WAKE_WORD_MAX_RECEPTIVE_FIELD_MS Z. 114-115; Begruendung Z. 100-113; Definitionen cooldownMs Z. 449-472, preRollMs Z. 473-498. Test: tests/unit/test_wakeword_root_findings_c3.py::test_the_pre_roll_range_is_no_longer_derived_from_the_receptive_field Z. 564-571 (assertNotIn max).",
+      "evidenz": "A",
+      "gueltigkeit": "Bereichspruefung dieser beiden Keys",
+      "diagram_edges": [
+        "coerce_definition_value --nur min, kein max--> preRollMs/cooldownMs"
+      ],
+      "not_implemented": "keine",
+      "unknown": "Die tatsaechliche Laufzeit-Obergrenze liegt ausserhalb dieser Domaene (Audiohistorie) und ist nicht Teil von 03.04.",
+      "konflikte": "keine",
+      "abhaengigkeiten": "V1-07"
+    },
+    {
+      "id": "V1-09",
+      "aussage": "Die Patch-Envelope hat zwei Pflichtfelder mit zwei Fehlercodes: baseSettingsRevision muss int, nicht bool und >= 0 sein (sonst invalid_type bzw. out_of_range, Feld baseSettingsRevision); changes muss ein nicht-leeres Dict sein (sonst invalid_type, Feld changes). Beides wird vor jeder Wertpruefung geprueft.",
+      "beleg": "api_fastapi_server/settings_control.py, validate_patch_envelope Z. 764-781; Aufrufe SessionSettingsState.apply_patch Z. 944-951 und ServerSettingsState.patch_server Z. 1264-1271. Test: tests/unit/test_protocol_v2_e2e.py::test_settings_patch_with_empty_changes_is_invalid_payload Z. 1006-1015 (Wire-Vorstufe).",
+      "evidenz": "A",
+      "gueltigkeit": "beide Schreibpfade (Session, Server)",
+      "diagram_edges": [
+        "Patch --> validate_patch_envelope --invalid_type/out_of_range--> settings_rejected"
+      ],
+      "not_implemented": "keine",
+      "unknown": "Warum bool bei int generell ausgeschlossen wird (Python-Subtyp), ist nicht kommentiert; das Verhalten ist eindeutig getestet.",
+      "konflikte": "keine",
+      "abhaengigkeiten": "V1-19 (Wire-Vorstufe), V1-20 (HTTP)"
+    },
+    {
+      "id": "V1-10",
+      "aussage": "Die Pruefreihenfolge pro Key im Session-Patch ist strikt: unbekannt -> unknown_key; scope == server -> wrong_scope; writable == False -> read_only_runtime_authority; dann Typ/Constraints (invalid_type, out_of_range, too_few_items, value_not_allowed); dann der optionale Session-Validator (wake_word_selection_required, wake_word_unavailable); erst danach die Cross-Field-Regel ueber den Gesamtkandidaten. Pro Key wird nur der erste Fehler gemeldet, alle Keys werden gesammelt, die Fehlerliste wird deterministisch nach (field, code) sortiert.",
+      "beleg": "api_fastapi_server/settings_control.py, Schleife Z. 969-1009 (unbekannt Z. 972-975, scope Z. 976-987, writable Z. 988-1000, coerce Z. 1001-1004, Validator Z. 1005-1008); Cross-Field Z. 1011-1016; Sortierung Z. 1018-1027. Tests: tests/unit/test_settings_control_plane.py Z. 166-231.",
+      "evidenz": "A",
+      "gueltigkeit": "SessionSettingsState.apply_patch",
+      "diagram_edges": [
+        "apply_patch --> unknown_key --> wrong_scope --> read_only --> coerce --> sessionValidator --> crossField",
+        "errors --> sort(field, code)"
+      ],
+      "not_implemented": "Kein Sammeln aller Fehler eines einzelnen Keys (Fail-fast pro Key).",
+      "unknown": "keine",
+      "konflikte": "keine",
+      "abhaengigkeiten": "V1-03, V1-04, V1-12, V1-22; Scope-Semantik -> 03.02/S-06, S-07"
+    },
+    {
+      "id": "V1-11",
+      "aussage": "Der Server-Patch nutzt dieselbe Mechanik mit anderer Zulassungsschranke: er prueft nicht scope, sondern has_server_default (fehlt -> wrong_scope), danach secret (-> read_only_runtime_authority), dann dieselbe Typ-/Constraint-Pruefung und dieselbe Cross-Field-Regel gegen overlay+coerced.",
+      "beleg": "api_fastapi_server/settings_control.py, patch_server Z. 1290-1336 (has_server_default Z. 1297-1308, secret Z. 1309-1317, coerce Z. 1318-1322, cross Z. 1324-1327, Sortierung Z. 1329-1336). Tests: tests/unit/test_settings_control_plane.py Z. 395-421 (session-only Key, synthetische Secret-Definition).",
+      "evidenz": "A",
+      "gueltigkeit": "Admin-Schreibflaeche der Serverdefaults",
+      "diagram_edges": [
+        "patch_server --not has_server_default--> wrong_scope",
+        "patch_server --secret--> read_only_runtime_authority"
+      ],
+      "not_implemented": "Kein Builtin-Key hat secret=True; der Secret-Zweig ist implementiert, im ausgelieferten Registry aber ungenutzt (nur per synthetischer Test-Definition belegt).",
+      "unknown": "keine",
+      "konflikte": "keine",
+      "abhaengigkeiten": "V1-10; 03.02/S-04, S-06"
+    },
+    {
+      "id": "V1-12",
+      "aussage": "Die Cross-Field-Regel Watchdog-Warnung < Watchdog-Fristen laeuft, sobald irgendeiner der drei Keys (segmentWatchdogWarningMs, segmentWatchdogInitialMs, segmentWatchdogRefreshMs) in einer Transaktion vorkommt. Sie vergleicht die Warnung des finalen Kandidaten (vollstaendig angewendetes Proposal, nicht die Eingabereihenfolge) gegen initial UND refresh und verlangt strikt kleiner; Gleichheit wird abgelehnt. Der Fehler wird auf das Feld activation.segmentWatchdogWarningMs mit Code cross_field_conflict gemeldet, mit beiden Werten im Text. Dadurch kann eine Folge von Patches die Frist nicht unter eine bereits akzeptierte Warnung senken.",
+      "beleg": "api_fastapi_server/settings_control.py, WATCHDOG_CROSS_FIELD_KEYS Z. 146-149; validate_timing_bundle Z. 784-821 (Gate Z. 797-798, Typfilter Z. 799-803, Vergleich Z. 805-820); Aufrufe Session Z. 1011-1016, Server Z. 1324-1327, Startup Z. 1222-1231. Tests: tests/unit/test_settings_control_plane.py Z. 277-334 (atomar, finaler Kandidat, Gleichheit), Z. 537-593 (sequenzieller Bypass Session und Server).",
+      "evidenz": "A",
+      "gueltigkeit": "Session-Patch, Server-Patch, Startup-Overlay",
+      "diagram_edges": [
+        "candidate(warning, initial, refresh) --> validate_timing_bundle --warning >= deadline--> cross_field_conflict",
+        "apply_patch --> proposal(effective + coerced) --> validate_timing_bundle"
+      ],
+      "not_implemented": "Nur diese eine Cross-Field-Regel existiert in der Settings-Domaene; keine generische Constraint-Engine fuer Key-zu-Key-Regeln (siehe V1-05).",
+      "unknown": "keine",
+      "konflikte": "keine",
+      "abhaengigkeiten": "V1-05, V1-07"
+    },
+    {
+      "id": "V1-13",
+      "aussage": "Es gibt vier Validierungszeitpunkte in der Settings-Domaene und einen fuenften im Legacy-Pfad: (1) Start: RuntimeConfigStore.load_control fail-fast plus ServerSettingsState.__init__ strikt, ValueError bricht den Start ab; (2) Session-Aufbau: SessionSettingsState.__init__ validiert nicht, es uebernimmt bereits gepruefte Serverdefaults; (3) Patch: apply_patch (Session, atomar) bzw. patch_server (Server, atomar mit Persist vor Commit); (4) Admission: der v2-Handshake prueft requestedSession (Typen -> Close 4400, Semantik/Katalog -> session_rejected + Close 4409); (5) Legacy-Runtime: update_settings prueft pro Feld und wendet den Rest an, nicht atomar.",
+      "beleg": "VoiceSTT_server/operations.py load_control Z. 471-516; api_fastapi_server/server.py Service-Init Z. 6282-6294 und update_settings Z. 7826-7957; api_fastapi_server/settings_control.py Z. 885-913, 933-1091, 1174-1240, 1260-1405; api_fastapi_server/protocol_v2/handshake.py Z. 83-178, 201-247; api_fastapi_server/protocol_v2/connection.py Z. 225-240, 297-305.",
+      "evidenz": "A",
+      "gueltigkeit": "Zeitpunkt-Matrix des Kapitels",
+      "diagram_edges": [
+        "Start --> load_control --> ServerSettingsState.__init__",
+        "SessionBuild --> SessionSettingsState.__init__",
+        "Patch --> apply_patch/patch_server",
+        "Handshake --> parse_hello --> admit_requested_session",
+        "LegacyREST --> update_settings --> coerce_setting_value"
+      ],
+      "not_implemented": "Kein separater Dry-Run-/Validate-only-Endpunkt.",
+      "unknown": "keine",
+      "konflikte": "keine",
+      "abhaengigkeiten": "V1-14, V1-15, V1-16, V1-18, V1-21, V1-24"
+    },
+    {
+      "id": "V1-14",
+      "aussage": "Die Startpruefung ist fail-fast, nicht normalisierend: settingsRevision als bool, negative Revision, Overlay ungleich Objekt, unbekannter Key, has_server_default == False, secret == True, Typ-/Constraint-Verstoss und Cross-Field-Konflikt fuehren jeweils zu ValueError mit Praefix 'Invalid settingsControlOverlay: ...' und damit zum Startabbruch. Nur fehlende Sektionen defaulten auf ({}, 0). Unlesbares JSON ist ebenfalls ein Fehler.",
+      "beleg": "api_fastapi_server/settings_control.py, ServerSettingsState.__init__ Z. 1184-1231 (Revision Z. 1187-1197, Objekt Z. 1200-1203, Key/has_server_default Z. 1205-1211, secret Z. 1212-1215, coerce Z. 1216-1221, Cross-Field Z. 1222-1231); VoiceSTT_server/operations.py load_control Z. 478-516. Tests: tests/unit/test_settings_control_plane.py::TestStartupPersistenceValidation Z. 786-843; tests/unit/test_settings_runtime_persistence.py Z. 229-251.",
+      "evidenz": "A",
+      "gueltigkeit": "Serverstart mit vorhandener runtime.json",
+      "diagram_edges": [
+        "load_control --invalid section--> ValueError --> Startabbruch"
+      ],
+      "not_implemented": "Kein Repair-/Quarantaene-Pfad, kein Backup der fehlerhaften Datei.",
+      "unknown": "Dass die fehlerhafte Datei unveraendert bleibt, ist aus dem rein lesenden Code ableitbar, aber nicht getestet.",
+      "konflikte": "keine",
+      "abhaengigkeiten": "V1-13; Persistenzformat -> 03.10/K1-06"
+    },
+    {
+      "id": "V1-15",
+      "aussage": "Asymmetrie zwischen den Ebenen: SessionSettingsState.__init__ prueft die eingesetzten Werte nicht erneut (nur defensive Kopie) und klemmt eine negative Revision still auf 0, statt zu werfen; ServerSettingsState wirft in derselben Situation. Begruendung im Code: Serverdefaults/Request stammen aus bereits validierten Quellen, die Session-Revision ist nicht persistiert.",
+      "beleg": "api_fastapi_server/settings_control.py, SessionSettingsState.__init__ Z. 885-913 (Revision Z. 896, Merge Z. 899-905, Vollkopie Z. 907-913) vs. ServerSettingsState.__init__ Z. 1187-1197. Konsistenz: 03.01/K1-19 (zwei Revisionsstroeme).",
+      "evidenz": "A",
+      "gueltigkeit": "Session-Aufbau, nicht der Patch-Pfad",
+      "diagram_edges": [
+        "SessionSettingsState.__init__ --keine Nachvalidierung--> requested/effective"
+      ],
+      "not_implemented": "keine",
+      "unknown": "keine",
+      "konflikte": "Unterschiedliche Fehlerstrategie bei gleichem Feldnamen settingsRevision - im Kapitel mit Scope nennen.",
+      "abhaengigkeiten": "V1-13; 03.01/K1-19"
+    },
+    {
+      "id": "V1-16",
+      "aussage": "Bei mindestens einem Fehler wird nichts mutiert: accepted=false, result=settings_rejected, settingsRevision unveraendert, values/effectiveValues/changedKeys leer, keine settings.changed-Events, keine Revision-Erhoehung. Der Fehlerblock ist die sortierte FieldError-Liste; die Wire-Schicht reicht genau diese Liste in command.ack.errors weiter.",
+      "beleg": "api_fastapi_server/settings_control.py, Fehlerrueckgabe apply_patch Z. 1018-1027, patch_server Z. 1329-1336; RESULT_REJECTED Z. 65; PatchResult.to_dict Z. 250-264; api_fastapi_server/protocol_v2/connection.py _bind_settings_patch Z. 523-542 (Rejected-Zweig Z. 537-538). Tests: tests/unit/test_settings_control_plane.py::test_invalid_field_rejects_the_whole_transaction Z. 166-178; tests/unit/test_protocol_v2_settings.py::test_invalid_field_alongside_valid_field_is_atomic Z. 219-245 (kein Event, keine Revisionserhoehung); Sequenz-Tests Z. 537-576.",
+      "evidenz": "A",
+      "gueltigkeit": "Session- und Server-Patch",
+      "diagram_edges": [
+        "errors[] --> PatchResult(settings_rejected, revision unveraendert)",
+        "PatchResult --> command.ack(result=settings_rejected, errors[])"
+      ],
+      "not_implemented": "Der Zweig 'not coerced -> invalid_payload' (Z. 1029-1041) ist nach Codeanalyse nicht erreichbar, weil die Envelope-Pruefung leere changes vorher abweist und jeder Key entweder einen Fehler erzeugt oder in coerced landet (defensiver Rest, kein beobachtbarer Pfad).",
+      "unknown": "Ob der Zweig bewusst als Sicherheitsnetz bleibt, ist nicht kommentiert.",
+      "konflikte": "invalid_payload darf NICHT als Domaenen-Code fuer 'nichts aenderbar' erklaert werden; beobachtbar ist er auf Protokoll-/HTTP-Ebene (V1-19, V1-20).",
+      "abhaengigkeiten": "V1-09, V1-10, V1-19"
+    },
+    {
+      "id": "V1-17",
+      "aussage": "Sind alle geprueften Werte identisch zum bisherigen requested (bzw. zum Server-overlay), lautet das Ergebnis accepted=true, result=no_change, Revision unveraendert, changedKeys=() und es wird kein settings.changed erzeugt.",
+      "beleg": "api_fastapi_server/settings_control.py, apply_patch Z. 1043-1058; patch_server Z. 1338-1353; api_fastapi_server/protocol_v2/connection.py Z. 533-534. Tests: tests/unit/test_settings_control_plane.py Z. 200-207, 381-387; tests/unit/test_protocol_v2_settings.py::test_no_change_does_not_bump_anything Z. 266-288.",
+      "evidenz": "A",
+      "gueltigkeit": "beide Schreibpfade",
+      "diagram_edges": [
+        "coerced == requested --> no_change (keine Revision, kein Event)"
+      ],
+      "not_implemented": "keine",
+      "unknown": "keine",
+      "konflikte": "keine",
+      "abhaengigkeiten": "V1-16"
+    },
+    {
+      "id": "V1-18",
+      "aussage": "Der Server-Patch arbeitet Prepare -> Persist -> Commit: der neue Zustand wird als Kopie gebaut und vor jeder RAM-Mutation persistiert; scheitert der Store, bleiben overlay, server_effective und Revision unveraendert, das Ergebnis ist accepted=false, result=internal_error, errors[0].code=persistence_failed (Feld persistence). Ein Retry mit derselben baseSettingsRevision ist danach erfolgreich, die Revision bleibt lueckenlos. requiresRestart wird nur gesetzt, wenn ein geaenderter Key server_restart traegt (kein Builtin-Key, siehe V1-07).",
+      "beleg": "api_fastapi_server/settings_control.py, patch_server Z. 1355-1405 (Kopien Z. 1359-1366, persist Z. 1367-1385, Commit Z. 1386-1388, requires_restart Z. 1389-1393); VoiceSTT_server/operations.py _write_merged Z. 518-545 (Temp-Datei plus os.replace, Aufraeumen bei Fehler). Tests: tests/unit/test_settings_control_plane.py Z. 848-902; tests/unit/test_protocol_v2_settings.py Z. 1275-1314 (HTTP 500, Revision 0, kein Leak von 'disk full').",
+      "evidenz": "A",
+      "gueltigkeit": "Serverdefaults, persistenter Pfad",
+      "diagram_edges": [
+        "patch_server --> next_overlay/next_revision --> persist --ok--> commit",
+        "persist --Exception--> internal_error/persistence_failed (kein Commit)"
+      ],
+      "not_implemented": "Session-Patches persistieren nie; dort existiert kein solcher Schritt (03.01/K1-16).",
+      "unknown": "keine",
+      "konflikte": "keine",
+      "abhaengigkeiten": "V1-16; Persistenz -> 03.10/K1-06, K1-07"
+    },
+    {
+      "id": "V1-19",
+      "aussage": "Die Wire-Vorstufe prueft vor jeder Domaenenpruefung: baseSettingsRevision muss int, nicht bool und >= 0 sein, changes ein nicht-leeres Dict - sonst command.ack mit result=invalid_payload und ohne Domaenenaufruf. Erst danach laeuft SettingsPort.patch -> SessionSettingsState.apply_patch, und _bind_settings_patch projiziert applied/no_change/settings_revision_conflict/settings_rejected (mit errors[]) in den Ack. Der Ack-Ergebnissatz ist geschlossen (RESULT_CODES); accepted=true ist nur fuer applied und no_change erlaubt.",
+      "beleg": "api_fastapi_server/protocol_v2/commands.py, _validate_session_settings_patch Z. 183-190, _VALIDATORS Z. 197-203, _reject-Pfad Z. 128-131; api_fastapi_server/protocol_v2/schema.py RESULT-Konstanten Z. 107-121, RESULT_CODES Z. 124-140, ACCEPTED_RESULTS Z. 143; api_fastapi_server/protocol_v2/ports.py SettingsPort.patch Z. 75-81; api_fastapi_server/protocol_v2/connection.py Z. 505-542. Tests: tests/unit/test_protocol_v2_e2e.py::test_settings_patch_with_empty_changes_is_invalid_payload Z. 1006-1015; tests/unit/test_protocol_v2_settings.py Z. 219-264.",
+      "evidenz": "A",
+      "gueltigkeit": "v2-Wire, nicht REST",
+      "diagram_edges": [
+        "raw command --> commands.parse --invalid_payload--> command.ack",
+        "parse ok --> SettingsPort.patch --> apply_patch --> _bind_settings_patch --> command.ack"
+      ],
+      "not_implemented": "keine",
+      "unknown": "keine",
+      "konflikte": "Zwei Stufen, zwei Codes fuer dieselbe Fehlform: leerer changes -> Wire invalid_payload; ueber REST (ohne Parser) -> settings_rejected + invalid_type (V1-20). Im Kapitel trennen, nicht als Widerspruch darstellen.",
+      "abhaengigkeiten": "V1-09, V1-16, V1-20; Patch-Mechanik/Events -> 03.08"
+    },
+    {
+      "id": "V1-20",
+      "aussage": "PATCH /api/v2/settings/server ist admin-gated (401 ohne oder mit falschem Key) und mappt applied/no_change -> 200, settings_revision_conflict -> 409, settings_rejected -> 422, internal_error -> 500. Ein Nicht-Objekt-Body wird bereits vor der Domaene mit 400 und result=settings_rejected, errors[0]={field: body, code: invalid_payload} beantwortet.",
+      "beleg": "api_fastapi_server/server.py, patch_settings_server_v2 Z. 9244-9292 (Body-Check Z. 9249-9258, Status-Map Z. 9287-9292); Schema-/Server-Read Z. 9223-9242. Tests: tests/unit/test_protocol_v2_settings.py Z. 827-893 (401/409/422), Z. 895-910 (422 und unveraendert), Z. 912-922 (wrong_scope), Z. 1275-1297 (500).",
+      "evidenz": "A",
+      "gueltigkeit": "Admin-REST der Settings-Domaene; kein REST-Patch fuer Sessionwerte (Konsistenz 03.01/K1-13)",
+      "diagram_edges": [
+        "Admin --> PATCH /api/v2/settings/server --> patch_server --> status{200,409,422,500}",
+        "Nicht-Objekt-Body --> 400 settings_rejected/invalid_payload"
+      ],
+      "not_implemented": "keine",
+      "unknown": "keine",
+      "konflikte": "400 (Bodyform) vs. 422 (Wertfehler) bei gleichem result - als bewusste Stufung erklaeren.",
+      "abhaengigkeiten": "V1-11, V1-18, V1-19; Status-Map auch 03.02/S-05"
+    },
+    {
+      "id": "V1-21",
+      "aussage": "Admission trennt Typpruefung und Semantik: Der hello-Parser prueft streng supportedProtocolVersions (nicht-leere Liste von int), clientVersion/clientCommit (nicht-leere Strings), clientRunId (kanonische UUID), requestedSession (Objekt), trigger.manual/trigger.wakeWord (beide bool), wakeWordIds (Liste nicht-leerer Strings) und runtimeSuppression.manual/wakeWord (beide bool); jede Verletzung -> Close 4400 mit Grund. Danach prueft admit_requested_session semantisch: mindestens eine Triggerquelle (activation_trigger_required), Auswahl nur mit Wake-Trigger (wake_word_selection_not_allowed), Auswahl Pflicht bei Wake-Trigger (wake_word_selection_required) und Katalogaufloesung (wake_word_unavailable) -> session_rejected mit reason=invalid_requested_session plus errors[] und Close 4409.",
+      "beleg": "api_fastapi_server/protocol_v2/handshake.py, parse_hello Z. 83-178; admit_requested_session Z. 201-247; session_rejected Z. 76-80; api_fastapi_server/protocol_v2/schema.py CLOSE_INVALID_HANDSHAKE=4400 Z. 202, CLOSE_SESSION_REJECTED=4409 Z. 205; api_fastapi_server/protocol_v2/connection.py Z. 225-240, _reject_session Z. 297-305.",
+      "evidenz": "A",
+      "gueltigkeit": "nur v2-Handshake (Session-Admission)",
+      "diagram_edges": [
+        "hello --> parse_hello --Typfehler--> close 4400",
+        "parse_hello ok --> admit_requested_session --errors--> session_rejected + close 4409",
+        "admit_requested_session --> WakeWordPort.resolve_selection"
+      ],
+      "not_implemented": "keine",
+      "unknown": "keine",
+      "konflikte": "keine",
+      "abhaengigkeiten": "V1-13, V1-22; 03.01/K1-17"
+    },
+    {
+      "id": "V1-22",
+      "aussage": "Der sessionbewusste Validator prueft ausschliesslich wakeWord.selection, fail-closed: ist Wake Word fuer die Session konfiguriert und die Auswahl leer -> wake_word_selection_required; nicht aufloesbare, global deaktivierte oder unbekannte IDs -> ein wake_word_unavailable mit den unbekannten IDs; ein Katalog-/Lookup-Fehler -> wake_word_unavailable ohne Exception-Leak. Ein leeres Ergebnis ist zulaessig, wenn Wake Word nicht konfiguriert ist.",
+      "beleg": "api_fastapi_server/server.py, _validate_wake_selection_key Z. 3198-3259 (Pflicht Z. 3216-3224, Abbruch bei leer Z. 3225-3226, Katalog Z. 3229-3242, unbekannt Z. 3243-3259); Einbindung _build_settings_state Z. 3191-3196; Auswertung in api_fastapi_server/settings_control.py Z. 1005-1008. Tests: tests/unit/test_settings_control_plane.py Z. 437-480, 616-693.",
+      "evidenz": "A",
+      "gueltigkeit": "pro Session (Session-Patch)",
+      "diagram_edges": [
+        "apply_patch --> _validate_wake_selection_key --> wake_word_selection_required|wake_word_unavailable"
+      ],
+      "not_implemented": "keine",
+      "unknown": "Der Wire-Port akzeptiert laut Modul-Docstring nur kanonische IDs, der Session-Validator nutzt dagegen den toleranten catalog.resolve; die Divergenz ist dokumentiert (ports.py Z. 22-26), aber nicht durch einen gemeinsamen Test abgesichert - als offen fuehren, nicht als Widerspruch behaupten.",
+      "konflikte": "keine",
+      "abhaengigkeiten": "V1-10, V1-21; Katalog-Details -> 03.06/AP-SRV-060"
+    },
+    {
+      "id": "V1-23",
+      "aussage": "Die Legacy-Typpruefung coerce_setting_value arbeitet ohne SettingDefinition-System ueber Namensmengen: BOOL_SETTINGS strikt bool; INT_SETTINGS mit bool-Verbot und Namenskonventionen (*_max_bytes > 0, *_backup_count >= 0, *_retention_days >= 0) plus Sonderfall event_log_queue_size >= 100; FLOAT_SETTINGS (Zahl, bool verboten, -> float); TUPLE_FLOAT_SETTINGS (Liste von Zahlen -> Tupel); DICT_SETTINGS (Dict oder None); OPTIONAL_STRING_SETTINGS (String oder None); sonst muss der Wert ein String sein. Sonderfaelle: log_level wird auf den Level-Namen normalisiert, realtime_log_detail in {off, summary, events}, transcript_log_mode in {none, final, full}, log_calendar_timezone gegen resolve_calendar_timezone geprueft. Verstoesse -> ValueError mit deutschem Klartext.",
+      "beleg": "api_fastapi_server/server.py, coerce_setting_value Z. 1219-1273; Mengen INT_SETTINGS Z. 303-332, FLOAT_SETTINGS Z. 334-353, BOOL_SETTINGS Z. 355-379, OPTIONAL_STRING_SETTINGS Z. 381-390, DICT_SETTINGS Z. 392-398, TUPLE_FLOAT_SETTINGS Z. 400; Aufrufstellen u. a. Z. 8839 (Start), 7848 (Runtime), 9061 (Lifecycle), 10376 (Settings/CLI).",
+      "evidenz": "A",
+      "gueltigkeit": "Prozesskonfiguration (ServerSettings), nicht Settings-Domaene",
+      "diagram_edges": [
+        "update_settings --> coerce_setting_value --ValueError--> rejected[field]{reason: invalid_value}",
+        "Startup(runtime.json settings) --> coerce_setting_value"
+      ],
+      "not_implemented": "Keine generische Schema-/Constraint-Datei fuer diese Felder; die Regeln sind Code (Namensendungen, Sonderfaelle). Es gibt keine generischen Min/Max fuer FLOAT_SETTINGS.",
+      "unknown": "Ob einzelne Float-Felder ohne Suffix je eine Obergrenze haben, ist nur an den Aufrufstellen (Wake/Sensitivitaet) geregelt, nicht zentral.",
+      "konflikte": "Zwei parallele Validierungswelten (Registry vs. Namensmengen) - klar trennen, sonst entsteht ein falscher einheitlicher Eindruck.",
+      "abhaengigkeiten": "V1-24, V1-25; Ebenen -> 03.01/K1-02, K1-12"
+    },
+    {
+      "id": "V1-24",
+      "aussage": "Die Legacy-Runtime arbeitet pro Feld, Teil-Apply ist Absicht: startup_only -> rejected{reason: startup_only}, unbekannt -> unknown, Typfehler -> invalid_value; alle uebrigen Felder werden angewendet (applied mit appliesTo active_sessions/new_sessions/model_refresh) und danach persistiert. Eine Cross-Field-Abhaengigkeit wird punktuell nachgezogen: log_live_enabled mit inaktivem event_store_enabled -> rejected{reason: invalid_dependency} und der Wert wird aus den Aenderungen entfernt. Es gibt keine atomare Gesamtablehnung.",
+      "beleg": "api_fastapi_server/server.py, update_settings Z. 7826-7957 (startup_only Z. 7835-7840, unbekannt Z. 7841-7846, coerce Z. 7847-7854, Abhaengigkeit Z. 7857-7877, Apply Z. 7879-7904, Persist Z. 7947); persist_settings Z. 7959-7969; runtime_settings_contract Z. 1211-1216. Test: tests/unit/test_fastapi_server_protocol.py::test_runtime_settings_update_distinguishes_safe_and_startup_only_fields Z. 576-591.",
+      "evidenz": "A",
+      "gueltigkeit": "Legacy-REST (PATCH /api/config, /api/logging, Lifecycle-Routen), nicht v2-Settings",
+      "diagram_edges": [
+        "update_settings --> perField{applied|rejected}",
+        "log_live_enabled --invalid_dependency--> rejected"
+      ],
+      "not_implemented": "Kein All-or-nothing und keine Revisions-/Konflikterkennung auf dieser Achse.",
+      "unknown": "keine",
+      "konflikte": "Bewusster Gegensatz zu V1-16 - als zwei verschiedene Vertragsmodelle kennzeichnen, nicht als Inkonsistenz.",
+      "abhaengigkeiten": "V1-23, V1-25; 03.01/K1-12"
+    },
+    {
+      "id": "V1-25",
+      "aussage": "Die Prozesskonfiguration hat eigene Start- und Cross-Field-Regeln: ServerSettings.__post_init__ leitet Pfade ab, normalisiert realtime_log_detail und wirft bei ungueltigem Wert; log_live_enabled=true ohne event_store_enabled ist ein Fehler. Nach dem Anwenden persistierter Legacy-Werte laufen __post_init__ und enforce_cpu_model_policy erneut. Diese erzwingt device=cpu, unterstuetzte Engines (faster_whisper, kroko_onnx), tuning_profile == custom (einziger Wert), setzt use_main_model_for_realtime bei identischer Engine und identischem Modell und prueft die Modellgroessen-Richtlinie (max. Rang 3; Medium-Aequivalente <= allow_two_medium_models ? 2 : 1); Verstoss -> ValueError.",
+      "beleg": "api_fastapi_server/server.py, ServerSettings.__post_init__ Z. 519-543; BASE_TUNING_DEFAULTS/TUNING_PROFILES/validate_tuning_profile Z. 151-175; enforce_supported_engines Z. 8744-8761; enforce_cpu_model_policy Z. 8764-8801; model_size_rank Z. 8710-8741; Startanwendung persistierter Werte und erneute Pruefung Z. 8826-8843; Lifecycle-Kandidatenpruefung Z. 9064-9069.",
+      "evidenz": "A",
+      "gueltigkeit": "Prozesskonfiguration (Start) plus Lifecycle-PATCH",
+      "diagram_edges": [
+        "runtime.json(settings) --> coerce --> __post_init__ --> enforce_cpu_model_policy --ValueError--> Startabbruch"
+      ],
+      "not_implemented": "Nur ein Tuning-Profil (custom); andere Profile sind kein stiller Default, sondern Fehler.",
+      "unknown": "Die exakte Rangfolge und die Modellnamen-Aliase der Groessenklassifikation sind String-Matching-Heuristik - nicht als harte Norm darstellen.",
+      "konflikte": "keine",
+      "abhaengigkeiten": "V1-23; Prozesswerte -> 03.05/03.06"
+    },
+    {
+      "id": "V1-26",
+      "aussage": "Der v1-Session-Aufbau nutzt zwei unterschiedliche Strategien pro Feldgruppe: Activation-Flags und Timings sind hart - nicht parsebare Flags -> invalid_activation_flag, Timings muessen endlich und in [0.01, 3600.0] liegen (sonst invalid_activation_timing), jeweils als SessionConfigurationError mit Feld und Wert; die Bounds sind bewusst weit und delegieren die Vertragsbereiche an die Settings-Control-Plane. Wake-Word-Tuningfelder sind weich - ungueltige Werte werden auf den Serverwert zurueckgesetzt und als fallbacks[{reason: invalid_value}] plus warnings[{code: session_config_value_fallback}] gemeldet, ohne Abbruch. Doppelte Felder sind Fehler (duplicate_session_config_field, duplicate_wake_word_enabled). Die Trigger-Semantik erzwingt mindestens eine Quelle (activation_trigger_required) und lehnt nur-Wake ohne Profil ab (activation_wake_word_unavailable).",
+      "beleg": "api_fastapi_server/server.py, SESSION_ACTIVATION_TIMING_FIELDS Z. 1044-1079; _parse_activation_flag Z. 1085-1107; parse_session_activation_query Z. 1110-1145; SESSION_WAKE_WORD_TUNING_FIELDS Z. 570-576; weiche Pruefung Z. 931-959; Duplikate Z. 655-710; resolve_session_activation_config Z. 1153-1208.",
+      "evidenz": "A",
+      "gueltigkeit": "v1-Session-Aufbau (Query-Parameter), nicht v2-hello",
+      "diagram_edges": [
+        "Query(timings) --invalid--> SessionConfigurationError",
+        "Query(wakeTuning) --invalid--> fallback + warning"
+      ],
+      "not_implemented": "keine",
+      "unknown": "keine",
+      "konflikte": "Hart vs. weich innerhalb desselben Session-Aufbaus - didaktisch trennen und nicht mit der atomaren v2-Admission (V1-21) vermischen.",
+      "abhaengigkeiten": "V1-21; 03.06 (Sessionwerte)"
+    },
+    {
+      "id": "V1-27",
+      "aussage": "Fehlercode-Inventar (Code-Tabelle als Text; Code | Quelle | Stufe | Bedeutung):\nunknown_key | settings_control.py Z. 153 | Domaene (beide Patches) | Key nicht in der Registry\ninvalid_type | Z. 154 | Domaene + Envelope | falscher Typ, inkl. leerer String, NaN/Inf, bool fuer Zahl, allowed-Verstoss\nout_of_range | Z. 155 | Domaene + Envelope | min/max bzw. negative baseSettingsRevision\ntoo_few_items | Z. 156 | Domaene | minItems\ncross_field_conflict | Z. 157 | Domaene (finaler Kandidat, auch Startup) | Watchdog-Warnung >= Frist\nwrong_scope | Z. 158 | Domaene | falsche Ebene oder fehlende Serverdefault-Facette (03.02/S-06, S-07)\nstale_settings_revision | Z. 159 | Domaene | baseSettingsRevision != aktuelle Revision\nread_only_runtime_authority | Z. 160 | Domaene | writable=False oder secret=True (Auftrag sagt verkuerzt read_only: tatsaechlicher String ist read_only_runtime_authority)\ninvalid_payload | Z. 161 | Wire-Parser / REST-Body / (unerreichbarer Domaenen-Zweig) | Formfehler\nwake_word_selection_required | Z. 162 | Session-Validator | Wake aktiv, Auswahl leer\nwake_word_unavailable | Z. 163 | Session-Validator | ID unbekannt/deaktiviert/Katalogfehler\npersistence_failed | Z. 164 | Server-Patch | Store-Fehler\nvalue_not_allowed | Z. 165 | Domaene | allowedValues-Verstoss\nsettings_rejected | Z. 65 | Ergebnis | Sammel-Ergebnis jeder Ablehnung\nsettings_revision_conflict | Z. 64 | Ergebnis | Konflikt (kein Wertfehler)\ninternal_error | Z. 66 | Ergebnis | Persistenz-/Unerwartet-Fehler\nactivation_trigger_required, wake_word_selection_not_allowed, session_limit_reached, invalid_requested_session | handshake.py Z. 212-237; connection.py Z. 248-252, 288-292 | Admission | semantische Admission-Ablehnungen\ninvalid_activation_flag, invalid_activation_timing, duplicate_session_config_field, duplicate_wake_word_enabled, incomplete_wake_word_profile, activation_wake_word_unavailable | server.py Z. 1102-1143, 655-710, 961-965, 1178-1195 | v1-Session-Aufbau | SessionConfigurationError-Codes\nHinweis: read_only und invalid_payload sind im Auftrag verkuerzt genannt; die exakten Strings lauten read_only_runtime_authority und invalid_payload - nicht umbenennen.",
+      "beleg": "api_fastapi_server/settings_control.py Z. 62-66, 153-165; api_fastapi_server/protocol_v2/handshake.py Z. 76-80, 212-237; api_fastapi_server/protocol_v2/connection.py Z. 248-252, 288-292; api_fastapi_server/server.py Z. 655-710, 961-965, 1102-1143, 1178-1195.",
+      "evidenz": "A",
+      "gueltigkeit": "Nachschlagetabelle fuer Fehlercodes aller Validierungsstufen",
+      "diagram_edges": [
+        "FieldError.code --> command.ack.errors[]",
+        "PatchResult.result --> command.ack.result bzw. HTTP-Status"
+      ],
+      "not_implemented": "Kein zentraler Code-Enum fuer SessionConfigurationError-Codes (String-Literale an den Raise-Stellen).",
+      "unknown": "keine",
+      "konflikte": "Doppelter Code fuer Enum-Verstoesse (invalid_type bei allowed, value_not_allowed bei allowedValues) - siehe V1-04.",
+      "abhaengigkeiten": "V1-04, V1-10, V1-16, V1-19, V1-20, V1-21, V1-26"
+    }
+  ],
+  "diagram_edges": [
+    "Client --session_settings.patch{baseSettingsRevision, changes}--> commands.parse [V1-09, V1-19]",
+    "commands.parse --invalid_payload--> command.ack [V1-19]",
+    "commands.parse --ok--> SettingsPort.patch --> SessionSettingsState.apply_patch [V1-13, V1-19]",
+    "apply_patch --> SettingDefinition(type, constraints) --> coerce_definition_value --> _validate_constraints [V1-02, V1-03, V1-04]",
+    "apply_patch --> _validate_wake_selection_key [V1-22]",
+    "apply_patch --> proposal(effective + coerced) --> validate_timing_bundle [V1-12]",
+    "apply_patch --errors[]--> PatchResult(settings_rejected, revision unveraendert) [V1-16]",
+    "apply_patch --applied--> revision+1 --> connection._bind_settings_patch --> command.ack + settings.changed [V1-17, V1-19]",
+    "Admin --PATCH /api/v2/settings/server--> patch_server [V1-11, V1-20]",
+    "patch_server --> next_overlay/next_revision --> RuntimeConfigStore.save_settings_control --ok--> commit [V1-18]",
+    "patch_server --Exception--> internal_error/persistence_failed (kein Commit) [V1-18]",
+    "Start --> RuntimeConfigStore.load_control --> ServerSettingsState.__init__ --ValueError--> Startabbruch [V1-14]",
+    "SessionBuild --> SessionSettingsState.__init__ (keine Nachvalidierung) [V1-15]",
+    "hello --> parse_hello --Typfehler--> close 4400 [V1-21]",
+    "parse_hello --> admit_requested_session --errors--> session_rejected + close 4409 [V1-21]",
+    "Legacy: update_settings --> coerce_setting_value --> perField{applied|rejected} [V1-23, V1-24]",
+    "NICHT zeichnen: keine Kante SettingDefinition.constraints.lessThanKeys --> Validator [V1-05]",
+    "NICHT zeichnen: keine Kante SessionPatch --> Persistenz [K1-16]",
+    "NICHT zeichnen: keine Kante ServerDefault-Patch --> laufende Session [03.02/S-09]"
+  ],
+  "not_implemented": [
+    {
+      "id": "N-01",
+      "thema": "Generische Auswertung von constraints.lessThanKeys existiert nicht; die Cross-Field-Regel nutzt die Modulkonstante WATCHDOG_WARNING_LESS_THAN_KEYS (V1-05, V1-12)."
+    },
+    {
+      "id": "N-02",
+      "thema": "Kein required-Flag und kein als Pflicht markierter Wert in der Registry; jeder Key hat einen default_value (V1-06)."
+    },
+    {
+      "id": "N-03",
+      "thema": "Kein enum-Typ und kein object-/dict-Typ im Registry-Typsystem; Enumerationen nur ueber allowedValues auf string (V1-02, V1-04)."
+    },
+    {
+      "id": "N-04",
+      "thema": "APPLY_SERVER_RESTART ist als Konstante definiert, wird aber von keinem Builtin-Key verwendet; requiresRestart bleibt fuer das ausgelieferte Registry immer false (V1-07, V1-18)."
+    },
+    {
+      "id": "N-05",
+      "thema": "Kein Builtin-Key hat secret=True; der Redaktions-/Ablehnungszweig ist nur per synthetischer Test-Definition belegt (V1-11)."
+    },
+    {
+      "id": "N-06",
+      "thema": "Kein Dry-Run-/Validate-only-Endpunkt fuer Settings; Validierung ist immer an Start, Patch oder Admission gebunden (V1-13)."
+    },
+    {
+      "id": "N-07",
+      "thema": "Kein Repair-/Quarantaene- und kein Backup-Pfad fuer eine vorhandene, aber ungueltige settingsControlOverlay-Sektion; der Start bricht ab (V1-14)."
+    },
+    {
+      "id": "N-08",
+      "thema": "Keine generischen Min/Max-Regeln fuer die Legacy-FLOAT_SETTINGS; Bereichsgrenzen existieren nur an einzelnen Aufrufstellen (V1-23)."
+    },
+    {
+      "id": "N-09",
+      "thema": "Kein Sammeln aller Fehler eines einzelnen Keys; pro Key wird nur der erste Verstoss gemeldet (Fail-fast je Key, V1-10)."
+    },
+    {
+      "id": "N-10",
+      "thema": "Legacy-update_settings ist bewusst nicht atomar; Teil-Apply mit per-Feld-rejected ist implementiert (V1-24)."
+    },
+    {
+      "id": "N-11",
+      "thema": "Kein zentraler Code-Enum fuer SessionConfigurationError; die Codes sind String-Literale an den Raise-Stellen (V1-26, V1-27)."
+    }
+  ],
+  "unknown": [
+    {
+      "id": "U-01",
+      "thema": "Zugehoerigkeit des Commits zur Branch feat/v2-release-cleanup ist im Checkout nicht nachweisbar (detached HEAD, keine refs/heads) (V1-01)."
+    },
+    {
+      "id": "U-02",
+      "thema": "Ob der unerreichbare invalid_payload-Zweig in SessionSettingsState.apply_patch (Z. 1029-1041) bewusst als Sicherheitsnetz bleibt, ist nicht kommentiert (V1-16)."
+    },
+    {
+      "id": "U-03",
+      "thema": "Ob lessThanKeys absichtlich nur Schema-Dokumentation ohne Auswertung ist, ist im Code nicht begruendet (V1-05)."
+    },
+    {
+      "id": "U-04",
+      "thema": "Ob leere Strings beim Typ string fachlich zugelassen sein sollten, ist nicht kommentiert; die Regel 'nicht leer' ist die einzige Laengenregel (V1-03)."
+    },
+    {
+      "id": "U-05",
+      "thema": "Divergenz kanonische IDs (Wire-Port) vs. toleranter catalog.resolve (Session-Validator) ist dokumentiert, aber nicht durch einen gemeinsamen Test abgesichert (V1-22)."
+    },
+    {
+      "id": "U-06",
+      "thema": "Dass eine ungueltige runtime.json nach dem Startabbruch unveraendert bleibt, ist aus dem rein lesenden Code ableitbar, aber nicht getestet (V1-14)."
+    },
+    {
+      "id": "U-07",
+      "thema": "Kalibrierte Betriebswerte der Keys mit calibration pending (cooldownMs, preRollMs, minConsecutivePredictionFrames, detectorGain, vadThreshold) sind EVIDENCE_BLOCKED; keine Zielwerte erfinden (V1-07)."
+    },
+    {
+      "id": "U-08",
+      "thema": "Modellgroessen-Rang und Modellnamen-Aliase in enforce_cpu_model_policy/model_size_rank sind String-Matching-Heuristik, keine harte Norm (V1-25)."
+    },
+    {
+      "id": "U-09",
+      "thema": "Warum allowed auf invalid_type und allowedValues auf value_not_allowed abbildet, ist nicht begruendet (V1-04, V1-27)."
+    },
+    {
+      "id": "U-10",
+      "thema": "Ob die Statusstufung 400 (Nicht-Objekt-Body) vs. 422 (Wertfehler) bei gleichem result bewusst so gewaehlt ist, ist nicht kommentiert (V1-20)."
+    }
+  ],
+  "writer_notes": "Kern des Kapitels ist NICHT das Ebenenmodell (03.01/03.02), sondern das Typsystem. Dreigliedrige Struktur empfohlen: (1) Typ- und Constraint-System der Registry (V1-02, V1-03, V1-04, V1-05, V1-06, V1-07, V1-08) mit der 19-Key-Tabelle als zentralem Artefakt und dem klaren Hinweis, dass min/max/inklusiv, minItems und allowedValues die einzigen pruefenden Constraints sind, waehrend unit/calibration/calibrationTraceabilityIds/lessThanKeys nur Metadaten sind; (2) Validierungszeitpunkte (V1-13) mit vier Stufen - Start fail-fast (V1-14), Session-Aufbau ohne Nachvalidierung (V1-15), Patch atomar (V1-09, V1-10, V1-11, V1-12, V1-16, V1-17, V1-18), Admission zweistufig typ/semantisch (V1-21, V1-22) - plus Legacy-Gegenmodell (V1-23, V1-24, V1-25, V1-26); (3) Fehlercode-Referenz (V1-27) als Tabelle mit exakten Strings. Wichtig fuer die Didaktik: Atomaritaet gilt fuer die Settings-Domaene (Session- und Server-Patch), NICHT fuer Legacy-update_settings - das ist ein bewusster Gegensatz, kein Widerspruch. Ebenfalls betonen: 'Pflicht' existiert in der Registry nicht als Flag (jeder Key hat Default), Pflichtfelder gibt es nur im Patch-Envelope (baseSettingsRevision, nicht-leere changes) und im Handshake. Exakte Codes immer ausschreiben: read_only_runtime_authority (nicht read_only), settings_rejected als result, invalid_payload nur auf Protokoll-/HTTP-Ebene (bzw. unerreichbarer Domaenenzweig). Keine Kante Client -> globale Settings-Datei, keine Kante SessionPatch -> Persistenz, keine Kante constraints.lessThanKeys -> Validator. Fuer 03.06/03.07 nur Beispielzeilen aus V1-07 uebernehmen, keine Wirkungserklaerung (das ist 03.09). Konsistenzzitate: 03.01/K1-05 (Startvalidierung), 03.01/K1-20 (Abweisungen), 03.02/S-04 (has_server_default unabhaengig von scope), 03.02/S-06/S-07 (wrong_scope-Richtungen).",
+  "researcher_session": "ses_e46217adeffegbuRO9BmNG5fTk",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src"
+}

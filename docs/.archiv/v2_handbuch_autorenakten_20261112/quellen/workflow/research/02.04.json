@@ -1,0 +1,433 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup NICHT verifizierbar (detached HEAD, leere .git/refs, shallow). Nur Commit belegt. -> U-01",
+  "chapter": "02.04",
+  "commit_verification": ".git/HEAD = a8993c5c68042d996eab680d84a5b138a214bb5d (detached, nicht ref: refs/heads/...)",
+  "correction_round": 0,
+  "diagram_edges": [
+    "service --> catalog_authority | owns [W-01]",
+    "catalog_authority --> snapshot | swap atomically [W-01]",
+    "manifest --> snapshot | validates [W-02]",
+    "asset_file -.-> diagnostics | unmanaged only [W-02]",
+    "human_value --> resolver_index | normalize+exact [W-03]",
+    "collision --> manifest_error | abort whole catalog [W-03]",
+    "wire_ids --> admit_selection | canonical_only [W-04]",
+    "human_value --> resolve_human_selection | tolerant [W-04]",
+    "admit_selection --> session_rejected | reason/wakeWordId [W-04]",
+    "hello --> admit_requested_session | atomic [W-05]",
+    "refused --> session.rejected | errors[] [W-05]",
+    "selection --> common_backends | Schnittmenge healthy [W-06]",
+    "common_backends --> select_common_backend | preference order [W-06]",
+    "select_common_backend --> engine | one backend [W-06]",
+    "no_common --> session_rejected [W-06]",
+    "artifact --> probe_backend_health | ordered checks [W-07]",
+    "probe_fail --> unavailableReason [W-07]",
+    "runtime_missing --> runtime_unavailable [W-07]",
+    "refresh --> build_candidate [W-08]",
+    "candidate --ok--> commit_swap | revision++ if visible [W-08]",
+    "candidate --fail--> keep_last_known_good [W-08]",
+    "catalog_commit --> availability_event | per live session [W-09]",
+    "client --> GET_wake_words [W-09]",
+    "admin --> POST_refresh [W-09]",
+    "admitted_selection --> backend_openwakeword | forced [W-10]",
+    "porcupine -.-> legacy_only [W-10]",
+    "manifest/models.json --> package_data_list [W-11]",
+    "ci --> unit_tests_without_backend [W-11]",
+    "handshake --> catalog | admit once [W-12]",
+    "selection --> recorder.wake_word_selection [W-12]",
+    "selection --> engine | selected-only [W-12]",
+    "engine --> recorder | model_key_to_id [W-12]",
+    "chunk --> engine.process [W-13]",
+    "engine --> prediction_frame* | 0..n new frames [W-13]",
+    "short_chunk --> no_frame [W-13]",
+    "policy --> gain | per chunk [W-14]",
+    "pcm --> copy --> model.predict [W-14]",
+    "original_pcm --> recording [W-14]",
+    "frame(score>=S) --> region.grow [W-16]",
+    "region.frames>=N --> qualified [W-16]",
+    "frame(score<S) & qualified --> finalized_hit [W-16]",
+    "frame(score<S) & !qualified --> run_discarded [W-16]",
+    "finalized_hit --> zero_point=last_qualifying_frame_end [W-16]",
+    "hit --> event | score=peak [W-17]",
+    "finalized_hits --> arbitrate | first finalization [W-18]",
+    "tie --> key [W-18]",
+    "losers --> discarded [W-18]",
+    "first_frame_of_new_run --> freeze_policy [W-19]",
+    "policy --> {threshold, min_frames, pre_roll, cooldown, gain} [W-19]",
+    "patch --> next_attempt [W-19]",
+    "hit --> evaluator.offered? | latch/cooldown [W-20]",
+    "latched --> drop_audio/no_offer [W-20]",
+    "accepted --> latch [W-20]",
+    "accept|refuse --> arm_cooldown [W-20]",
+    "cooldown_active --> offer_dropped [W-20]",
+    "hit --> admit [W-21]",
+    "guard_fail --> refused_no_trace [W-21]",
+    "refused --> cooldown_only [W-21]",
+    "admit --> activate(wake_word) | commit point [W-22]",
+    "activate --accepted--> commit [W-22]",
+    "activate --refused--> refusal [W-22]",
+    "exception --> committed_probe [W-22]",
+    "post_commit_error --> activation_stays [W-22]",
+    "activation.input_closed --> release_latch [W-23]",
+    "segment_end/vad_end -.-> no_release [W-23]",
+    "release --> rearm [W-23]",
+    "release --> engine.reset [W-24]",
+    "reset_fail --> latch_stays + inference_disabled [W-24]",
+    "reset_ok --> tracker.reset/new_generation [W-24]",
+    "stop/clear/close/audio_loss --> epoch++ [W-25]",
+    "stale_hit --> inert [W-25]",
+    "reset --> generation++ [W-25]",
+    "hit.generation != evaluator.generation --> dropped [W-25]",
+    "suppression_mask --> next_admission_only [W-26]",
+    "latch --> whole_activation [W-26]",
+    "controlled --> controller_followup [W-26]",
+    "legacy --> recorder_followup_timer [W-26]",
+    "hit.zero_point --> resolve_boundary | -preRoll, clamp [W-27]",
+    "boundary --> trim_frames | cut at release_sample [W-27]",
+    "no_boundary --> legacy_fixed_cut [W-27]",
+    "not_recording & delay_passed --> detect [W-28]",
+    "recording --> no_detect [W-28]",
+    "controlled_gate --> start_recording [W-28]",
+    "commit --> voice_window/wakeword_detected [W-29]",
+    "recording_ended --> followup_wait [W-29]",
+    "followup_deadline --> input_close [W-29]",
+    "input_close --> activation.input_closed [W-23]",
+    "settings_registry --> attempt_policy [W-30]",
+    "pending_keys --> not_calibrated [W-30]",
+    "next_activation --> next_attempt [W-19]",
+    "next_session --> rebuilt_session [W-15]",
+    "session_settings_bundle --> attempt_policy [W-31]",
+    "evaluator --> diagnostics | dict [W-32]",
+    "diagnostics -.-> no_wire_route [W-32]",
+    "accepted_detection --> wakeword.detected [W-33]",
+    "catalog_snapshot --> GET_wake_words [W-33]",
+    "catalog_snapshot --> wakeWordCapabilities [W-33]",
+    "accept --> mint [W-35]",
+    "mint --> transport | fallible [W-35]",
+    "transport_fail --> event_stays_undelivered [W-35]",
+    "retry --> same_event [W-35]",
+    "settings_next_session --> engine_loader_kwargs [W-15]",
+    "recorder_chunk --> engine.process alias [W-13-dup]",
+    "hello(wakeWordIds) --> admit_requested_session [W-05-dup]",
+    "settings --> engine keine-Dopplung [entfernt-Dedup]"
+  ],
+  "facts": [
+    {
+      "aussage": "Service erzeugt EINE serverweite thread-sichere Autoritaet (RLock): last-known-good Snapshot, catalogRevision, Resolver. refresh() + set_global_disabled() unter Lock. catalogRevision != settingsRevision.",
+      "beleg": "server.py:6321-6325; wakeword_catalog.py:1147-1210 (Lock, refresh, disable; Docstring 1148-1161)",
+      "evidenz": "E1 (+E3 Docstring)",
+      "gueltigkeit": "pro Serverprozess",
+      "id": "W-01"
+    },
+    {
+      "aussage": "models.json einzige Katalogquelle: manifestVersion 2, catalogRevision 2, 2 Pipeline-Sektionen (onnx/tflite je melspectrogram+embedding). 25 wakeWords-Eintraege (Liste), je beide Backends + artifactVersion 1. Nicht-deklarierte Dateien nur diagnostics.unmanagedArtifacts, nie Capability.",
+      "beleg": "assets/wakeword_models/models.json; catalog.load_snapshot :879-935, _parse_entries :968-1086 (unmanaged 906-919)",
+      "evidenz": "E1",
+      "gueltigkeit": "Build-Artefakt des Commits",
+      "id": "W-02"
+    },
+    {
+      "aussage": "Normalisierung NFKC->trim->Separatorlaeufe zu _->casefold. id MUSS Normalform sein, sonst ManifestError. id/displayName/jeder Alias in EINEN Resolver-Index; Token mit 2 Ownern bricht Katalog (keine Heuristik). Zwei Eintraege duerfen Stem je Backend nicht teilen. Aliase: 17 (Liste), 8 ohne.",
+      "beleg": "normalize_wake_word_token :145-156; claim :980-994,:1051-1058; Kollision :1071-1085",
+      "evidenz": "E1",
+      "gueltigkeit": "Load + Refresh",
+      "id": "W-03"
+    },
+    {
+      "aussage": "v2-Wire NUR kanonische IDs: tolerierbar (Alias/Anzeige) -> not_canonical, unbekannt -> unknown; code IMMER wake_word_unavailable (eingefroren), field requestedSession.wakeWordIds, wakeWordId nennt Wert. Menschliche Config (selection-Patch, CLI-Legacy) tolerant via resolve() (z.B. Hey Jarvis/jarvis).",
+      "beleg": "admit_selection :542-647 (canonical_only Default True); resolve_human_selection :682-684; SelectionError :378-401; WakeWordPort.resolve_selection :119-147",
+      "evidenz": "E1 + E2 (c3 :916-935; contract :1119-1205)",
+      "gueltigkeit": "Wire-Admission (+ Session-Validierung 3198-3259)",
+      "id": "W-04"
+    },
+    {
+      "aussage": "Atomare Auswahl: kein Teilladen/Default/stilles Entfernen. Jeder Problemwert eigener SelectionError; Fehler verhindern Selektion. Duplikate kanonisch dedup (kein Fehler). Leer bei aktivem Trigger -> wake_word_selection_required. IDs ohne Trigger -> not_allowed.",
+      "beleg": "admit_selection :565-627; handshake :201-247",
+      "evidenz": "E1 + E2 (handshake :220-247; e2e :409-416; catalog :237)",
+      "gueltigkeit": "Session-Admission",
+      "id": "W-05"
+    },
+    {
+      "aussage": "Genau EIN gemeinsames Backend pro Live-Engine (Upstream-Modell = Framework). healthy = Schnittmenge je gewaehltem Eintrag. auto: ONNX Windows-first, TFLite sonst; darf GESAMT wechseln (fallbackUsed). Explizit: kein Fallback (fehlt -> backend_unavailable); auto ohne Schnittmenge -> no_common_backend.",
+      "beleg": "wake_backend.py:40-85,114-146; common_backends :649-660",
+      "evidenz": "E1 + E2 (c3 :720-770)",
+      "gueltigkeit": "Admission, inferenceBackend (Server-Scope, admin)",
+      "id": "W-06"
+    },
+    {
+      "aussage": "Health = echter Ladeversuch (nicht Dateiexistenz): Deklaration -> Datei -> sha256 -> bytes -> Pipeline -> Runtime -> Classifier-Probe (ORT-Session/TFLite-allocate) -> Pipeline-Probe. Gruende artifact_missing/integrity_mismatch/pipeline_unavailable/runtime_unavailable/unloadable/globally_disabled. Fehlende Runtime NIE bestanden.",
+      "beleg": "probe_backend_health :793-835; _entry_with_backend_health :838-855; Prober :1089-1138; Reasons :101-121",
+      "evidenz": "E1 + E2 (c3 :901-1010)",
+      "gueltigkeit": "Load, Refresh, Disable-Projektion",
+      "id": "W-07"
+    },
+    {
+      "aussage": "Kandidat voll bauen (Manifest, IDs, Integritaet, Formate, Runtime, Pipeline, echter Probe) und nur bei Erfolg atomar tauschen. changed via revisionsfreie JSON-sortierte Sichtbarkeitsprojektion; ohne sichtbare Aenderung Revision stehen (Snapshot trotzdem adoptiert). Fehlschlag unbehelligt + RefreshResult ok=false + error. Global-Disable im gleichen Lock, tolerant aufgeloest.",
+      "beleg": "refresh :1308-1318; _reload_locked :1336-1373; _commit_locked :1375-1429; visible_projection :514-523; with_global_disabled :726-763",
+      "evidenz": "E1 + E2 (c3 :1030-1120 last-known-good)",
+      "gueltigkeit": "POST refresh, Admin-Patch globalDisabledIds",
+      "id": "W-08"
+    },
+    {
+      "aussage": "GET /api/v2/wake-words (ohne Auth) {protocolVersion, catalogRevision, wakeWords[]} aus EINEM Snapshot; POST refresh Admin, 200 ok / 422 ok=false + voller Snapshot. Jede sichtbare Aenderung an JEDE laufende v2-Session als wakeword.availability_changed (Revision + availableWakeWordIds); katalogweit, kein activationId.",
+      "beleg": "server.py:9294-9301,9303-9318,7214-7242,2721-2728; schema.py:163-164; events.py:439-449",
+      "evidenz": "E1 + E2 (catalog_api :23-95; c2 :922-991)",
+      "gueltigkeit": "Admin-/Client-API",
+      "id": "W-09"
+    },
+    {
+      "aussage": "Bei Selektion Session-Backend ZWINGEND openwakeword; anderer sessionlokal-Wert -> session_config_value_fallback + Warnung. Porcupine NUR Legacy/Standalone (process_wakeword, Integer-Index). Katalog/Engine: onnx/tflite = Inferenz-Backends, keine Produkte.",
+      "beleg": "wakeword.py:37-44; server.py:712-729,770-793; setup.py:259-260,280-336",
+      "evidenz": "E1",
+      "gueltigkeit": "v2-Session vs Standalone",
+      "id": "W-10"
+    },
+    {
+      "aussage": "Rad/Sdist: nur Manifest-Dateien + models.json + silero_vad.onnx (kein Glob). CI installiert .[recommended,server] OHNE openwakeword/wakewords; pytest tests/unit+compatibility; testpaths=tests/unit. Reale OWW-Inferenz NICHT CI-abgedeckt (Fakes); CI prueft nur nicht-leeren Asset-Ordner.",
+      "beleg": "wakeword_package_resources.py:39-73; setup.py:78-90,399-405; ci.yml:165-191; requirements.txt:12; vps-requirements:7; pytest.ini:1-3",
+      "evidenz": "E1",
+      "gueltigkeit": "Build/CI",
+      "id": "W-11"
+    },
+    {
+      "aussage": "Handshake fragt Katalog EINMAL (errors+selection). session_config.wake_word_selection an Recorder; bei Selektion OpenWakeWordEngine mit selection.loader_kwargs (nur gewaehlte Pfade, ein Framework, geteilte Pipeline) + model_key->canonical-id-Bindung. Ohne Selektion/Controller KEIN v2-Pfad (frueher Return, _wake_admission None).",
+      "beleg": "handshake admit_requested_session :201-247; WakeWordPort :84-168; _install_wake_word_runtime :2452-2477; setup_wakeword_detection :180-333; bind :336-354; Engine.__init__ :93-129",
+      "evidenz": "E1 + E2 (selected_only :87,219,235; session_e2e :107-115)",
+      "gueltigkeit": "v2 controlled",
+      "id": "W-12"
+    },
+    {
+      "aussage": "Upstream puffert; pro 1280 Samples (80ms@16k) neue Prediction; kuerzere Chunks -> voriger Score erneut. Engine zaehlt _pending_samples; pro WIRKLICH neuem Frame genau ein PredictionFrame(index,end_sample,scores); kurze verworfen. Tail-Luecke: aeltester Wert vorn wiederholt. Nur Selektions-Keys liefern Scores.",
+      "beleg": "OpenWakeWordEngine PREDICTION_FRAME_SAMPLES=1280 :40-46, process :167-224, _tail_scores :226-246",
+      "evidenz": "E1 + E2 (c3 :339-380)",
+      "gueltigkeit": "v2-Pfad",
+      "id": "W-13"
+    },
+    {
+      "aussage": "detectorGain NUR auf Kopie (float32 multipliziert, int16-Clamp, kein Wrap); Original byte-identisch. Gain EINMAL pro Recorder-Chunk aus tracker.current_policy(); Schwelle/Frame-Zaehler pro Prediction-Frame aus eingefrorenem Attempt-Snapshot.",
+      "beleg": "apply_detector_gain :65-80, Aufruf process :184-185; Evaluator.process :650-676",
+      "evidenz": "E1 + E2 (c3 :390-410)",
+      "gueltigkeit": "v2-Pfad",
+      "id": "W-14"
+    },
+    {
+      "aussage": "noiseSuppression + vadThreshold in Loader-Kwargs des EINEN Upstream-Modells -> erst bei neu gebauter Session (next_session). vadThreshold 0.0 deaktiviert OWW-internes VAD-Gate; KEIN zweiter Betriebsstrang in Activation.",
+      "beleg": "Engine.__init__ :108-124; _wake_engine_options :2489-2518; Registry 520-557",
+      "evidenz": "E1 + E2 (c3 :423-435)",
+      "gueltigkeit": "Session-Aufbau",
+      "id": "W-15"
+    },
+    {
+      "aussage": "Pro Wake-Word EIN Lauf: waechst bei score>=sensitivity; verworfen wenn vor Minimum darunter (kein Treffer, neu). Qualifikation = Frame mit frames>=min (nicht Treffer/Event). Finalisierung = erster Frame darunter; operational_zero_point = last_sample letzter Frame>=Schwelle (Trailing Edge). Modell ohne Score = darunter (Lauf ueberlebt stummes Modell nicht).",
+      "beleg": "wake_detection.py Modell 8-56, _HitRegion 276-313, observe 384-460, _build_hit 462-484",
+      "evidenz": "E1 + E2 (c3 :114-157; wake_detection)",
+      "gueltigkeit": "v2 (Tracker ID-agnostisch)",
+      "id": "W-16"
+    },
+    {
+      "aussage": "Domain-Score = peak_score des Bereichs (nicht Final/Quali-Frame). wakeword.detected.score = Peak. Diagnose: wakeWordId/peakScore/start/quali/final/zeroPoint/predictionFrameCount/detectorGeneration/policy.",
+      "beleg": "WakeHit.score :206-209; _HitRegion.extend :299-303; AcceptedWakeDetection.score :227-244; Evaluator.accept :704-727",
+      "evidenz": "E1 + E2 (c3 :129-135; session_e2e :305-320)",
+      "gueltigkeit": "v2-Pfad",
+      "id": "W-17"
+    },
+    {
+      "aussage": "Zuerst finalisierter qualifizierter Kandidat gewinnt; alle anderen derselben Entscheidung verworfen (regions.clear, attempt_policy=None). Kein Warten, kein Laengen-Vorzug, kein Peak-Vergleich. Nur Gleichstand im SELBEN Frame: Minimum (quali_frame, start_frame, canonical_id).",
+      "beleg": "arbitration_key :247-265; arbitrate_finalized :268-273; Discard observe :455-460; Docstring :40-45",
+      "evidenz": "E1 + E2 (c3 :159-218)",
+      "gueltigkeit": "v2, mehrere Wake-Words",
+      "id": "W-18"
+    },
+    {
+      "aussage": "WakeAttemptPolicy{sensitivity,min_frames,gain,cooldown,pre_roll,settings_revision} eingefroren wenn neuer Lauf startet WAEHREND kein anderer offen (Linearisierung). Gilt fuer Vergleich/Zaehler/Quali/Finale/PreRoll/Cooldown/effektive Settings. Patch wirkt erst NAECHSTER Versuch; kein gemischter Versuch. Hit traegt Snapshot.",
+      "beleg": "WakeAttemptPolicy :101-129; _attempt_policy/current_policy :322-368; Freeze :445-450; server._wake_attempt_policy :2520-2569",
+      "evidenz": "E1 + E2 (c3 :459-500, :617-668 Race)",
+      "gueltigkeit": "v2-Pfad",
+      "id": "W-19"
+    },
+    {
+      "aussage": "Nur 2 Blocker: (a) Latch: ab akzeptierter Detection, frei NUR am sicheren Eingabeschluss derselben Activation. (b) cooldownMs (Default 0): passiv via monotonic (timestamp<until -> finalisierter Treffer verworfen), kein Timer/Thread. Latch aktiv -> process() sofort () (Engine ungefuellt), observe setzt Tracker ohne Generationssprung zurueck. Gruppierung = Tracker, nicht Cooldown.",
+      "beleg": "Evaluator Docstring :516-545, active_policy :571-584, process :650-676, observe_scores :677-702, _arm_cooldown :729-733",
+      "evidenz": "E1 + E2 (admission :176-182; c3 :528-...)",
+      "gueltigkeit": "v2-Pfad",
+      "id": "W-20"
+    },
+    {
+      "aussage": "Vor activate: Koordinator hit.detector_generation==evaluator.generation + not latched; Session streaming/nicht-closed/Epochen-match/Controller-nicht-None/_audio_available/Activation-Settings. Ablehnung -> refused() (nur Cooldown) -> None: KEIN Latch/Event/zweite Activation/Merge. Recorder bei None: nichts, kein accepted_wake_detection.",
+      "beleg": "admit :248-312; _activate_from_wake_candidate :2588-2660",
+      "evidenz": "E1 + E2 (admission :150-174 locked/suppressed; c3 :1306)",
+      "gueltigkeit": "v2-Pfad",
+      "id": "W-21"
+    },
+    {
+      "aussage": "activate EINZIGER Commit: phase!=idle -> activation_locked; Quelle nicht konfiguriert/unterdrueckt -> trigger_disabled; activation_id mitgegeben -> invalid_payload. Nach Commit keine Umdeutung: committed + ID; bei Exception committed_probe (_open_wake_activation_id auf primarySource wake_word), dann Refusal vs Post-Commit-Fehler.",
+      "beleg": "activate :464-509; _configured/_source_enabled :303-315; Ablehnung server :2623-2631",
+      "evidenz": "E1 + E2 (admission :184-198; c3 :1230-1310)",
+      "gueltigkeit": "v2 controlled",
+      "id": "W-22"
+    },
+    {
+      "aussage": "Latch NUR am Activation-Close geloest: Seam publish activation_closed (Wire input_closed). Nicht VAD/Segment/Inferenz-Ende, nicht Cooldown-Ablauf. release(id) loescht accepted_detection, NICHT gemintete Events. Cooldown NICHT geloescht. Fremde ID loest nichts.",
+      "beleg": "publish_timeline :5880-5899; _release_wake_latch :2699-2713; release_latch :746-762; release :359-370",
+      "evidenz": "E1 + E2 (admission :202-236; session_e2e :211-247)",
+      "gueltigkeit": "v2-Pfad",
+      "id": "W-23"
+    },
+    {
+      "aussage": "release zuerst engine.reset(); wirft/fehlt -> Latch bleibt, return False, ERROR-Log (Wake gesperrt, manuell verfuegbar). Engine reset setzt _reset_failed vor/nach; solange True process()->(). Erfolg: Tracker-Reset (neue Generation) + Policy neu.",
+      "beleg": "_reset_engine_locked :635-646; Engine.reset :250-266,_reset_failed; process :187-189",
+      "evidenz": "E1 + E2 (session_e2e :359-380)",
+      "gueltigkeit": "v2-Pfad",
+      "id": "W-24"
+    },
+    {
+      "aussage": "Zwei Stale-Achsen: (1) Detector-Generation - reset() erhoeht; hit.generation muss Evaluator-Generation entsprechen sonst None; Recorder verwirft accepted mit unpassender Generation. (2) Lifecycle-Epoche - _wake_detection_epoch nur beim Recorder-Eintritt wakeword gesetzt; start/stop/close erhoehen + None; clear -> None. Treffer aus frueherem Stream wirkungslos. clear/stream-stop/close -> _reset_wake_detector (koordinator-weit, ausserhalb Locks); clear nutzt suspend_admission().",
+      "beleg": "tracker.reset :370-380; new_generation :624-633; admit-Guard :255-262; recording 115-121; server 2609-2611,5743-5749,2850-2873,2891-2909,2950-2970",
+      "evidenz": "E1 + E2 (session_e2e :249-260, :322-357)",
+      "gueltigkeit": "v2-Pfad",
+      "id": "W-25"
+    },
+    {
+      "aussage": "Drei Aus-Mechanismen: (1) Runtime-Suppression Live-Maske, nur NAECHSTE Admission (trigger_disabled), beendet nichts, kein Merge; Schreiben nur trigger_suppression.set. (2) Latch wake-Zustand ganze Activation inkl Follow-up. (3) Konfiguration (TriggerEnabled/ProfileEnabled) ob Quelle laeuft (Snapshot). Zusaetzlich Legacy-Follow-up NUR ohne Controller (wake_word_followup_window Default 0.0); controlled: Controller einzige Follow-up-Autoritaet.",
+      "beleg": "runtimeSuppression :122-123,410-423 (writable False); set_runtime_suppression/_source_enabled :303-335; Wire-Setter :321,488; Latch W-20/23; Config snapshot :1025-1041; Legacy :5526-5531,5600-5680",
+      "evidenz": "E1 + E2 (admission :169-174; control_plane :98; e2e :962)",
+      "gueltigkeit": "v2/controlled vs legacy",
+      "id": "W-26"
+    },
+    {
+      "aussage": "releaseBoundary = operationalZeroPoint - preRoll, beidseitig auf history_start_sample geclampt (aus REAL gehaltener Historie audio_buffer+frames, nicht Receptive-Field). preRollMs=0 -> Audio exakt Nullpunkt (Wort aus). pre_roll_clamped/releasedPreRollSamples ausgewiesen. Schnitt NUR bei WakeAudioBoundary-Instanz; sonst Legacy-Fixdauer. Pre-Roll aus hit.policy (Root F11), kein Nachlesen.",
+      "beleg": "wake_audio_boundary BASIS :54, WakeAudioBoundary :67-110, resolve :113-139, trim :142-174; recording history 40-57, step 60-121, Trim 401-431",
+      "evidenz": "E1 + E2 (c3 :674-715; boundary :50-145; recording_path)",
+      "gueltigkeit": "v2 Boundary vs Legacy-Fixdauer",
+      "id": "W-27"
+    },
+    {
+      "aussage": "Detector laeuft NUR ausserhalb Aufnahme + erst nach wake_word_activation_delay. Waerend Aufnahme KEIN Detector/Score. Controlled-Aufnahme nur via Controller-Gate; wakeword_detected NICHT konsultiert. Recorder spiegelt wakeword_detected=evaluator.latched im Nicht-Aufnahme-Zweig.",
+      "beleg": "recording run_recording_worker :242-347 (delay 250-253), Trim-Zweig :401-450, gate :191-226",
+      "evidenz": "E1",
+      "gueltigkeit": "Recorder, beide Modi",
+      "id": "W-28"
+    },
+    {
+      "aussage": "Nach akzeptiertem Treffer Session wakeword_detected (sonst wakeword_wait bei Wake-Words / listening). Segmentende -> followup_wait + now+followupTimeoutMs; neues Segment im selben Kontext ohne Re-Trigger (Latch aktiv). Legacy-Recorder-Follow-up (timeout/start_on_voice/deactivity) in controlled AUS.",
+      "beleg": "_activate_from_wake_candidate :2645-2646 (voice_window, followup_generation); _waiting_state_locked :5589-5598; recording_ended :598-616; followupTimeoutMs 299-312 (Default 3000, 100-60000, next_activation)",
+      "evidenz": "E1",
+      "gueltigkeit": "controlled; Legacy separat",
+      "id": "W-29"
+    },
+    {
+      "aussage": "Wake-Settings-Tabelle (11 Keys): sensitivity float 0..1 Default 0.5 next_activation; minFrames int>=1 Default 1 next_activation PENDING WW-18; cooldownMs int>=0 Default 0 next_activation PENDING WW-18; preRollMs int>=0 KEIN Max Default 0 next_activation PENDING WW-19; detectorGain float 0..3 Default 1.0 next_activation PENDING WW-18; vadThreshold float 0..1 Default 0.0 next_session PENDING WW-18; noiseSuppression bool Default false next_session; inferenceBackend server/admin auto/onnx/tflite Default auto next_session; selection string_list Default [] next_session; globalDisabledIds server/admin Default [] next_session; runtimeSuppression.wakeWord session live Default false writable False. KEINE receptive-Obergrenze mehr (bewusste C3-Korrektur); Defaults neutral, keine Betriebspunkte (Docstrings).",
+      "beleg": "settings_control.py:78-88,99,108-120,367-590",
+      "evidenz": "E1 + E2 (c3 :519-573; c2 :500-523)",
+      "gueltigkeit": "Settings-Control-Plane",
+      "id": "W-30"
+    },
+    {
+      "aussage": "Alle 6 Attempt-Werte aus EINEM Bundle activation_admission_settings() inkl settings_revision. Nicht-numerisch/bool -> Default; sensitivity-Fallback settings.wake_words_sensitivity or 0.5. Kein zweiter Wake-Wert-Speicher.",
+      "beleg": "server._wake_effective_settings :2479-2487; _wake_attempt_policy :2520-2569; _wake_engine_options :2489-2518",
+      "evidenz": "E1",
+      "gueltigkeit": "v2-Session",
+      "id": "W-31"
+    },
+    {
+      "aussage": "Diagnose-Felder vorhanden (Evaluator: threshold/minFrames/cooldown/preRoll/gain/policy/generation/latch/cooldownUntil/tracker/lastHit/engine; Tracker: frameIndex/generation/attemptPolicy/lastScores/runningRegions; Engine: backend/ids/frames/samples/gain/ns/vad/closed/resetFailed; Koordinator: evaluator/acceptedDetection/logicalEvents). server.wake_detection_diagnostics() OHNE Aufrufer im Repo (kein HTTP/WS/Snapshot).",
+      "beleg": "wake_detection.py:766-790,494-513; openwakeword_engine :276-289; wake_admission.py:196-204,388-395; server.py:2730-2735",
+      "evidenz": "E1 (+Negativ-Grep nur Definition)",
+      "gueltigkeit": "interne Diagnose",
+      "id": "W-32"
+    },
+    {
+      "aussage": "Oeffentliche Projektionen: GET /api/v2/wake-words {id,displayName,aliases,artifactVersion,available,backends{onnx,tflite{available,reason}},unavailableReason?,catalogRevision} - nie Pfade/source/interne Maps; Nicht-ladbare mit available=false+Grund. snapshot.wakeWordCapabilities={catalogRevision,availableWakeWordIds}. wakeword.detected: activationId/wakeWordId/score/primarySource=wake_word; Timeline-Variante + logicalEventId. NUR akzeptierte Detektionen (Rohscores nie). Events: wait_started/ended, followup_started/timeout, timeout, availability_changed.",
+      "beleg": "WakeWordEntry.public_dict :301-323; public_catalog :489-502; capabilities :507-512; snapshot.py:77; _build_wakeword_detected :428-437; _deliver_wake_detected_event :2662-2682; schema.py:150,163-164,73-80",
+      "evidenz": "E1 + E2 (catalog_api :23-70; contract :250-260; session_e2e :311-320)",
+      "gueltigkeit": "v2-Wire",
+      "id": "W-33"
+    },
+    {
+      "aussage": "Kalibrier-Harness faehrt ECHTE Produktionsregeln (Engine/Tracker/Boundary), misst Receptive-Field/Ressourcen/Score-Traces. KEINE Positiv-Aufnahmen im Repo (nur Falsch-Positiv vs Negativ). Threshold/Min/Cooldown/PreRoll/Gain EVIDENCE_BLOCKED.",
+      "beleg": "engineering/tools/wakeword_calibration.py:1-39,272; tools/wakeword_calibration.py",
+      "evidenz": "E1 (+E3 Docstring)",
+      "gueltigkeit": "Offline-Messung, nicht CI",
+      "id": "W-34"
+    },
+    {
+      "aussage": "Logisches Event VOR fehlbarem Transport unter Koordinator-Lock gemintet, pro activationId idempotent (zweiter Mint = Bestand). Transportfehler setzt nichts zurueck (delivered=false + attempts sichtbar); redeliver() mintet nie neu. release()/reset() loeschen Inhalt NICHT (Event un-geschieht nicht; Treffer kein zweites).",
+      "beleg": "wake_admission.py LogicalWakeEvent/Ledger :108-204, admit-Mint+delivery :300-332, redeliver :334-345, release/reset :359-386; server._deliver :2662-2682",
+      "evidenz": "E1 + E2 (c3 :1230-1310 Fault A-D)",
+      "gueltigkeit": "v2-Session",
+      "id": "W-35"
+    }
+  ],
+  "investigated_sources": [
+    "wakeword_catalog.py (Autoritaet/Snapshot/Health/Revision)",
+    "assets/wakeword_models/models.json (Manifest)",
+    "wake_backend.py (Backendwahl)",
+    "wake_detection.py (Tracker/Evaluator/Arbitration/Attempt)",
+    "openwakeword_engine.py (Frames/Gain/Reset)",
+    "wake_admission.py (Koordinator/Ledger)",
+    "protocol_v2/{ports,events,schema,handshake} (Wire)",
+    "server.py (_install/_activate/_deliver/latch-settings)",
+    "voice_activity/wake_audio_boundary/recording (Boundary/Trim)",
+    "settings_control.py (Wake-Keys, Policies)",
+    "diagnostics (Evaluator/Tracker/Engine/Koordinator/Server)",
+    "Tests (wakeword_catalog, catalog_api, root_findings_c2/c3, wake_admission, wakeword_session_e2e, selected_only, boundary, recording_path, wake_detection, contract, e2e)",
+    "pytest.ini, ci.yml, requirements, setup.py, wakeword_package_resources.py"
+  ],
+  "not_implemented": [
+    {
+      "id": "N-01",
+      "thema": "Keine kalibrierten Betriebswerte (pending WW-18/19, EVIDENCE_BLOCKED; keine Zahlen erfinden)"
+    },
+    {
+      "id": "N-02",
+      "thema": "Kein HTTP-/WS-Zugang Detektor-Diagnose (nur intern)"
+    },
+    {
+      "id": "N-03",
+      "thema": "Kein v2-Wake via Porcupine (nur Legacy; Katalog/Engine nur onnx/tflite)"
+    },
+    {
+      "id": "N-04",
+      "thema": "Keine echte Backend-Inferenz in CI (Fakes; gruen != ladefaehig)"
+    },
+    {
+      "id": "N-05",
+      "thema": "Kein Rearm-Timer/Nachlauf (passiv via Release; Cooldown timestamp, kein Abräumen)"
+    }
+  ],
+  "researcher_session": "ses_e46b8efe6ffePLxz24xSJ49s4b",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-01",
+      "thema": "Branch feat/v2-release-cleanup lokal nicht verifizierbar (nur detached Commit)"
+    }
+  ],
+  "writer_notes": [
+    "Frames->Tracker->Evaluator->Admission->activate->Ledger/Transport->Release: W-13,W-16,W-18,W-19,W-20,W-21,W-22,W-35,W-33,W-27,W-23,W-24 fuer Sequenz.",
+    "KEINE Schwellen raten. Belegt: 1280/80ms, 25 IDs, Registry-Defaults/Ranges (W-30), followup 3000 (100-60000), catalogRevision 2. Operativ: pending/EVIDENCE_BLOCKED.",
+    "Trennungen: Wire-kanonisch vs Config-tolerant (C-02); Legacy-Recorder vs controlled-Pfad (C-03)."
+  ],
+  "conflicts": [
+    {
+      "id": "C-01",
+      "thema": "Gain-Kopplung: Gain pro Chunk (W-14) vs Schwelle/Frame aus eingefrorenem Snapshot (W-19); kein atomarer Patch, kein Test",
+      "beleg": "W-14, W-19"
+    },
+    {
+      "id": "C-02",
+      "thema": "kanonisch (Wire) vs tolerant (Config)",
+      "beleg": "W-04"
+    },
+    {
+      "id": "C-03",
+      "thema": "Legacy-Pfad ist kein v2-Pfad",
+      "beleg": "W-10, W-26, W-27, W-29"
+    },
+    {
+      "id": "C-04",
+      "thema": "catalogRevision vs settingsRevision",
+      "beleg": "W-01, W-08"
+    }
+  ]
+}

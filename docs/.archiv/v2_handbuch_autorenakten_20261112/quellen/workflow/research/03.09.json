@@ -1,0 +1,395 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup am Checkout NICHT verifizierbar: .git/refs/heads leer, keine packed-refs. Nur Commit-Hash belegt; Branch-Angabe UNKNOWN.",
+  "chapter": "03.09",
+  "commit_verification": "Verifiziert: .git/HEAD des Checkouts C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src enthält exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached HEAD).",
+  "correction_round": 0,
+  "diagram_edges": [
+    {
+      "fakten": [
+        "W1-02"
+      ],
+      "kante": "client -> SessionSettingsState (session_settings.patch)"
+    },
+    {
+      "fakten": [
+        "W1-02"
+      ],
+      "kante": "SessionSettingsState -> requested (immer neu)"
+    },
+    {
+      "fakten": [
+        "W1-02"
+      ],
+      "kante": "SessionSettingsState -> effective (nur live/next_activation)"
+    },
+    {
+      "fakten": [
+        "W1-03"
+      ],
+      "kante": "effective(next_activation) -> ActivationAdmissionBundle (ein Snapshot, eine Revision)"
+    },
+    {
+      "fakten": [
+        "W1-03",
+        "W1-04"
+      ],
+      "kante": "AdmissionBundle -> ActivationTimingPolicy (sechs Zeiten, ms->s)"
+    },
+    {
+      "fakten": [
+        "W1-04"
+      ],
+      "kante": "ActivationController.activate -> _timing_policy (Latch genau einmal)"
+    },
+    {
+      "fakten": [
+        "W1-05"
+      ],
+      "kante": "_timing_locked -> fünf Timerstellen (keine Retargetierung)"
+    },
+    {
+      "fakten": [
+        "W1-05",
+        "W1-06"
+      ],
+      "kante": "Activation A offen + Patch -> A unverändert (Deadline bleibt)"
+    },
+    {
+      "fakten": [
+        "W1-06",
+        "W1-09"
+      ],
+      "kante": "Activation A input_closed -> Activation B (neue Werte gelten)"
+    },
+    {
+      "fakten": [
+        "W1-07"
+      ],
+      "kante": "snapshot.requested vs snapshot.effective (Latch-Overlay)"
+    },
+    {
+      "fakten": [
+        "W1-08"
+      ],
+      "kante": "activation.started.effectiveSettings (gelatcht)"
+    },
+    {
+      "fakten": [
+        "W1-11",
+        "W1-12"
+      ],
+      "kante": "next_session -> effective unverändert (kein Rebuild)"
+    },
+    {
+      "fakten": [
+        "W1-13",
+        "W1-17"
+      ],
+      "kante": "neue Session <- Server-Defaults + hello.wakeWordIds"
+    },
+    {
+      "fakten": [
+        "W1-14"
+      ],
+      "kante": "Session-Bau -> Recorder-Config -> OpenWakeWordEngine (Engine-Werte einmalig)"
+    },
+    {
+      "fakten": [
+        "W1-19"
+      ],
+      "kante": "Hit-Region Frame 1 -> freeze(AttemptPolicy)"
+    },
+    {
+      "fakten": [
+        "W1-20"
+      ],
+      "kante": "wake activate -> Latch bis input_closed (keine neue Policy)"
+    },
+    {
+      "fakten": [
+        "W1-21"
+      ],
+      "kante": "hit.policy.preRollMs -> Audio-Boundary (pro Hit)"
+    },
+    {
+      "fakten": [
+        "W1-22"
+      ],
+      "kante": "trigger_suppression.set -> _suppressed -> nächste Admission"
+    },
+    {
+      "fakten": [
+        "W1-23"
+      ],
+      "kante": "patch(kroko.forceCommunity) -> Grant invalid -> reconcile (live, ggf. deferred)"
+    },
+    {
+      "fakten": [
+        "W1-24"
+      ],
+      "kante": "PATCH Modell -> refreshRequired -> POST refresh -> Scheduler-Tausch (busy => Abbruch)"
+    },
+    {
+      "fakten": [
+        "W1-26"
+      ],
+      "kante": "PATCH(server default) -> runtime.json -> Prozessstart -> neue Sessions"
+    },
+    {
+      "fakten": [
+        "W1-27"
+      ],
+      "kante": "patch(mixed policies) -> settings.changed-Gruppen (1x stateVersion)"
+    },
+    {
+      "fakten": [
+        "W1-28"
+      ],
+      "kante": "patch(globalDisabledIds) -> catalog.set_global_disabled (sofort) und -> Engine-Bau (nächste Session)"
+    }
+  ],
+  "facts": [
+    {
+      "aussage": "Genau vier öffentliche Wirksamkeitspolitiken (live, next_activation, next_session, server_restart), ohne Synonyme; Reihenfolge fixiert für Event-Gruppierung.",
+      "beleg": "settings_control.py Z. 51-60 (Konstanten, APPLY_POLICIES, POLICY_EVENT_ORDER Z. 60; Kommentar 'No mixed/deferred/later synonyms'); connection.py _emit_settings_changed Z. 554-566.",
+      "evidenz": "B",
+      "gueltigkeit": "alle Sessions/Server, global; Auflösung im Patch = 03.08",
+      "id": "W1-01"
+    },
+    {
+      "aussage": "apply_patch: live + next_activation → sofort effective; next_session/server_restart → effective unverändert, requested fortgeschrieben.",
+      "beleg": "settings_control.py Z. 1060-1091 (1062-1074, live 1065-1066, next_activation 1067-1068, next_session 1069-1072 mit Reconnect-Kommentar, else 1073-1074, requested 1077); Tests control_plane Z. 235-243, Z. 244-251; c3 Z. 603-615.",
+      "evidenz": "A",
+      "gueltigkeit": "Session-Ebene; unabhängig von laufender Activation",
+      "id": "W1-02"
+    },
+    {
+      "aussage": "Ein atomarer Lesezeitpunkt für next_activation: Admission-Bundle mit settingsRevision, effectiveSettings, timing_seconds (ms→s) aus einem Lock-Snapshot; nie zwei Revisionen gemischt.",
+      "beleg": "settings_control.py activation_admission_settings Z. 1121-1143, Dataclass Z. 844-856, 1137-1138, _freeze 1141-1142; Tests control_plane Z. 699-709, 711-722, Race 724-770.",
+      "evidenz": "A",
+      "gueltigkeit": "pro Activation-Admission",
+      "id": "W1-03"
+    },
+    {
+      "aussage": "Drei Admissionspfade bauen ActivationTimingPolicy aus Bundle; Controller latcht genau einmal bei activate().",
+      "beleg": "server.py _new_activation_inputs Z. 3350-3407 (Bundle 3362, Overlay 3367-3378, Policy 3379-3405, Legacy 3407); Aufrufer Z. 2615-2628, Z. 3700-3705, Z. 5797-5802; activation.py activate Z. 464-509, Latch Z. 496, Arming 501-505; Tests protocol_v2_settings Z. 505-628.",
+      "evidenz": "A",
+      "gueltigkeit": "v2 (canonical_ids true Z. 3361); Legacy → Konstruktor-Defaults",
+      "id": "W1-04"
+    },
+    {
+      "aussage": "Laufende Activation immun gegen Timing-Patches: alle fünf Timerstellen lesen nur _timing_locked() (gelatchter Snapshot).",
+      "beleg": "activation.py _timing_locked Z. 272-288 (279-280 Snapshot, sonst Konstruktor); Lesestellen 501-505, 548, 551/561, 587, 590-591, 611, 696; Aufhebung _clear_locked Z. 840; Test Z. 514-527.",
+      "evidenz": "A",
+      "gueltigkeit": "pro Activation bis _clear_locked/reset",
+      "id": "W1-05"
+    },
+    {
+      "aussage": "Ende-zu-Ende: Followup-Patch während A lässt A-Deadline unverändert (Draht zeigt alte effective); B latcht neu (8,0 s real).",
+      "beleg": "Tests protocol_v2_settings Z. 628-689 (Patch 647-658, Deadline 661-662, effective 663-668, B 681-689).",
+      "evidenz": "A",
+      "gueltigkeit": "v2-Session; Beispiel followupTimeoutMs",
+      "id": "W1-06"
+    },
+    {
+      "aussage": "Offene Activation: Draht-Projektion zeigt gelatchte (alte) effectiveSettings, requestedSettings den neuen Wunsch.",
+      "beleg": "server.py _latched_wire_effective Z. 3265-3280 (leer bei idle 3277-3278, sonst Snapshot 3279-3280), settings_projection_for_wire Z. 3302-3327 (Latch 3314-3318, Suppression 3319-3322), settings_effective_for_wire Z. 3329-3338; ports.py Z. 55-73; snapshot.py Z. 55-58, 75-76; Tests Z. 1148-1164, Z. 1202-1219.",
+      "evidenz": "A",
+      "gueltigkeit": "nur v2 (canonical_ids Z. 3271)",
+      "id": "W1-07"
+    },
+    {
+      "aussage": "activation.started-Event und Segment-Ledger tragen gelatchte effectiveSettings, nicht aktuelle.",
+      "beleg": "events.py _build_activation_started Z. 308-319 (Z. 318); server.py _open_ledger_activation Z. 4507-4515 (Z. 4514); Quelle activation.py _snapshot_locked Z. 416, Latch activate Z. 495; Test Z. 680-683.",
+      "evidenz": "A",
+      "gueltigkeit": "pro Activation",
+      "id": "W1-08"
+    },
+    {
+      "aussage": "Idle: next_activation-Patch sofort effective und gilt für nächste Activation.",
+      "beleg": "Tests control_plane Z. 235-243 (values==effective==8000, freeze 8000); protocol_v2_settings Z. 1166-1180 (beide 8000); Code Z. 1067-1068.",
+      "evidenz": "A",
+      "gueltigkeit": "Idle",
+      "id": "W1-09"
+    },
+    {
+      "aussage": "freeze_activation() produktiv ungenutzt: einziger Aufrufer activation_timings_seconds() (nur Tests); realer Pfad = activation_admission_settings. Nicht als Diagrammkante verwenden.",
+      "beleg": "settings_control.py freeze_activation Z. 1093-1109, activation_timings_seconds Z. 1111-1119; Volltextsuche: nur Tests Z. 241, 259, Z. 977.",
+      "evidenz": "B",
+      "gueltigkeit": "tote/zweite Latch-Naht",
+      "id": "W1-10"
+    },
+    {
+      "aussage": "next_session: nur requested neu, effective bleibt (Session-Leben).",
+      "beleg": "settings_control.py Z. 1069-1072; Tests control_plane Z. 244-251 (effective []), protocol_v2_settings Z. 1182-1200 (requested [hey_jarvis], effective []), c3 Z. 611-615.",
+      "evidenz": "A",
+      "gueltigkeit": "Session-Lebensdauer",
+      "id": "W1-11"
+    },
+    {
+      "aussage": "Kein Seam next_session→effective in Session (kein commit/rebuild/promote; kein Engine-Rebuild bei Stream-Stop/Start). Nächste Session = neuer Objektaufbau.",
+      "beleg": "settings_control.py Z. 875-1166 (nur apply_patch/freeze/admission/projection); _effective nur Konstruktor Z. 913 + apply_patch 1062-1078; server.py Recorder einmalig __init__ Z. 2416 (_create_recorder Z. 2737), _reset_wake_detector Z. 2715-2719, stop/start_streaming Z. 2850-2873 bauen nichts neu.",
+      "evidenz": "B",
+      "gueltigkeit": "v2-Session",
+      "id": "W1-12"
+    },
+    {
+      "aussage": "Neue Session erbt Vorgänger-Patches nicht: State aus Server-Defaults + Hello Wake-Auswahl. next_session wirkt nur bei Wiederholung im neuen Hello. Session-Settings nie persistiert.",
+      "beleg": "server.py _build_settings_state Z. 3173-3196 (server_defaults Z. 3185, overrides Z. 3187-3190, Konstruktion Z. 3191-3196), __init__ Z. 2376; connection.py _admit Z. 257-282 → admit_session Z. 7330-7365; Docstring Z. 938-942.",
+      "evidenz": "B",
+      "gueltigkeit": "jede neue v2-Session",
+      "id": "W1-13"
+    },
+    {
+      "aussage": "Wake-Engine next_session-Werte nur beim Engine-Bau gelesen (effective aus Admission); kein Rebuild nach Patch.",
+      "beleg": "server.py _wake_engine_options Z. 2489-2518 (effective 2501-2517) → Recorder-Config Z. 2814 → recorder_config.py Z. 160-163 → wakeword.py Z. 262-279 → openwakeword_engine.py Z. 107-124; Tests c3 Z. 431-433, 424-429.",
+      "evidenz": "A",
+      "gueltigkeit": "Session-Aufbau",
+      "id": "W1-14"
+    },
+    {
+      "aussage": "detectorGain doppelt: Startwert Engine-Bau, Laufwert pro Versuch aus eingefrorenem Attempt-Snapshot.",
+      "beleg": "server.py Docstring Z. 2490-2494; wake_detection.py process Z. 650-667 (gain=policy.detector_gain Z. 664-666, policy=current_policy Z. 664); openwakeword_engine.py Z. 107, Z. 65, 184-185.",
+      "evidenz": "B",
+      "gueltigkeit": "Wake-Pfad mit wake_engine",
+      "id": "W1-15"
+    },
+    {
+      "aussage": "Server-Default-Patch: server_effective sofort neu (außer server_restart); Sessions erben erst bei Aufbau.",
+      "beleg": "settings_control.py patch_server Z. 1361-1365 (next_effective), Persist-vor-Commit 1355-1388, requires_restart 1389-1393, server_effective() Z. 1255-1258, server_public() Z. 1407-1444; Erben server.py Z. 3182-3185.",
+      "evidenz": "B",
+      "gueltigkeit": "Server-Ebene",
+      "id": "W1-16"
+    },
+    {
+      "aussage": "Server-Default-Patch schreibt bestehende Session nicht um; neu konstruierte sieht neuen Default.",
+      "beleg": "Tests control_plane Z. 347-361 (before unverändert 352-356, after 8000 mit server_effective 358-361).",
+      "evidenz": "A",
+      "gueltigkeit": "has_server_default-Keys (Z. 196)",
+      "id": "W1-17"
+    },
+    {
+      "aussage": "server_restart implementiert, aber kein Builtin-Key nutzt sie; requiresRestart für Produktivschlüssel unerreichbar.",
+      "beleg": "settings_control.py builtin_definitions Z. 278-609 (nur next_activation/next_session/live); Volltextsuche nur Konstanten 54/57/60, Docstring 911, Zweige 1073/1364, Auswertung 1391; connection.py Kommentar 548.",
+      "evidenz": "B",
+      "gueltigkeit": "eingefrorene Registry",
+      "id": "W1-18"
+    },
+    {
+      "aussage": "Wake-Versuch friert Policy am ersten Prediction-Frame einer Hit-Region ein (Threshold, Min-Frames, Gain, Cooldown, Pre-Roll aus Snapshot).",
+      "beleg": "wake_detection.py observe Z. 384-460 (Freeze 445-448, Release 449-450, Finalisierung 455-460), current_policy Z. 358-368, _read_policy Z. 486-490, Evaluator active_policy Z. 571-584; Tests c2 Z. 249-266, c3 Z. 617-660.",
+      "evidenz": "A",
+      "gueltigkeit": "pro Hit-Region/Versuch",
+      "id": "W1-19"
+    },
+    {
+      "aussage": "Solange wake-Activation gelatcht: keine neue Wake-Policy, keine Detektion; erst sicheres input_close liest neu.",
+      "beleg": "wake_detection.py process Z. 662-663, observe_scores Z. 687-691, accept Z. 704-727 (active_policy Z. 718), release_latch Z. 746-762 (read Z. 761); server.py _release_wake_latch Z. 2700-2713; Test c2 Z. 249-266.",
+      "evidenz": "A",
+      "gueltigkeit": "Wake-Pfad; Activation-Lebensdauer",
+      "id": "W1-20"
+    },
+    {
+      "aussage": "Pre-Roll aus eingefrorenem Snapshot, Recorder-Wert nur Startwert.",
+      "beleg": "recording.py _wake_detection_step Z. 60-99 (pre_roll_ms Z. 93, Recorder Z. 94, Kommentar 91-92); server.py Z. 2471; Test c2 Z. 268-287.",
+      "evidenz": "A",
+      "gueltigkeit": "pro Hit",
+      "id": "W1-21"
+    },
+    {
+      "aussage": "live Session = Runtime-Suppression: eigene Schreibautorität, nicht patchbar, nur neue Admissions, beendet keine laufende Activation.",
+      "beleg": "settings_control.py Z. 396-423 (APPLY_LIVE, writable False), Ablehnung Z. 988-1000; connection.py _apply_trigger_suppression Z. 483-503 (kein Event 494-499, advance_state 500) → activation.py set_runtime_suppression Z. 316-335 → Gate Z. 310-314, genutzt activate Z. 482-485; Hello-Suppression Z. 319-324; Tests e2e Z. 922-939, 941-960, 962 ff.",
+      "evidenz": "A",
+      "gueltigkeit": "Session, nächster Trigger",
+      "id": "W1-22"
+    },
+    {
+      "aussage": "live Server = kroko.forceCommunity: Patch invalidiert Pro-Freigabe synchron, Reconcile im Daemon, bei Arbeit aufgeschoben.",
+      "beleg": "settings_control.py Z. 591-608; server.py patch_settings_server_v2 Z. 9244-9290 (Lock 9264, force 9269-9280); apply_kroko_force_change Z. 6711-6720 → refresh (background, reconcile); _kroko_force_community liest server_effective Z. 6386-6396; Aufschub reconcile Z. 6745-6770.",
+      "evidenz": "B",
+      "gueltigkeit": "serverweit, sofort; Modellwechsel ggf. deferred",
+      "id": "W1-23"
+    },
+    {
+      "aussage": "STT-Modellwechsel: Wunsch sofort (appliesTo model_refresh), Aktivierung erst via Refresh und nur ohne laufende Arbeit; dann Scheduler-Tausch.",
+      "beleg": "server.py update_settings Z. 7826-7957 (7883-7894, 7956); _refresh_stt_models_locked Z. 7071-7179 (Busy/Rollback 7114-7128, Tausch 7129-7144, Reset 7174); _models_busy Z. 7537-7542; Route POST /api/models/refresh Z. 8966-8977; Executor Z. 2273-2305; Tests stt_model_management Z. 793, 901.",
+      "evidenz": "B",
+      "gueltigkeit": "serverweit beide Lanes; bei Arbeit gesperrt",
+      "id": "W1-24"
+    },
+    {
+      "aussage": "Legacy drei Mengen (activeSessionSafe, newSessionOnly, startupOnly); appliesTo nur Label, geschrieben immer sofort ins gemeinsame Objekt.",
+      "beleg": "server.py Z. 178-221, 223-254, 256-285, 287-291, runtime_settings_contract Z. 1211-1216; update_settings Z. 7826-7957 (Ablehnung 7835-7846, setattr 7879-7880, Label 7883-7891, Persist 7959-7969); Session-Kopie Z. 2320; Tests protocol Z. 576-590, multi_user Z. 2445-2446.",
+      "evidenz": "A",
+      "gueltigkeit": "v1/Legacy parallel zur Registry",
+      "id": "W1-25"
+    },
+    {
+      "aussage": "Neustart wirkt nur für persistierten Server-Overlay (settingsControlOverlay + settingsRevision); Session-Settings überleben nicht.",
+      "beleg": "server.py Z. 6282-6293 (load_control → ServerSettingsState); save_settings_control Z. 451-469; load_control Z. 471-509; Startvalidierung Z. 1184-1240; Test runtime_persistence Z. 66-77.",
+      "evidenz": "A",
+      "gueltigkeit": "Prozessstart",
+      "id": "W1-26"
+    },
+    {
+      "aussage": "settings.changed gruppiert nach Policy (fest, lexikografisch); eine Transaktion = genau ein stateVersion-Anstieg, alle Events gleiche Revision.",
+      "beleg": "connection.py _emit_settings_changed Z. 544-582 (Gruppen 554-558, sortiert 564, mint 567-571, state_change erstens 570/579, Payload 572-577, dispatch 582); _bind_settings_patch Z. 523-542; Tests Z. 179-217, Z. 157-177.",
+      "evidenz": "A",
+      "gueltigkeit": "v2-Draht",
+      "id": "W1-27"
+    },
+    {
+      "aussage": "Server-next_session teils sofort: globalDisabledIds sofort auf Katalog + live angekündigt; inferenceBackend je Admission gelesen; Engine-Konfiguration erst Session-Bau.",
+      "beleg": "settings_control.py Z. 558-576, Z. 577-590; server.py patch→apply Z. 9281-9286, apply Z. 7260-7264, _configured Z. 7183-7197, _on_changed Z. 7214-7236, backend Z. 7199-7212 (Docstring per admission); ports.py Z. 119-152.",
+      "evidenz": "B",
+      "gueltigkeit": "Server-Defaults; Engine erst Session-Bau",
+      "id": "W1-28"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "W1-12",
+      "thema": "Kein requested→effective-Promotionsseam für next_session in Session (kein commit/rebuild; Stream-Stop/Start baut nichts neu)."
+    },
+    {
+      "id": "W1-13",
+      "thema": "Kein Mitführen von Session-Patch-Werten in nächste Session (nie persistiert; neu aus Defaults + Hello)."
+    },
+    {
+      "id": "W1-14",
+      "thema": "Kein Engine-Rebuild nach Patch (einmalig Session-Aufbau)."
+    },
+    {
+      "id": "W1-18",
+      "thema": "Kein Schlüssel mit server_restart; requiresRestart toter Zweig."
+    },
+    {
+      "id": "W1-10",
+      "thema": "freeze_activation/activation_timings_seconds produktiv ungenutzt (nur Tests)."
+    }
+  ],
+  "researcher_session": "ses_e43fb410dffeNBPqkZGOom9Jhg",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "W1-24",
+      "thema": "Idle-v2-Session nach Scheduler-Tausch garantiert neues Modell? Code deutet ja (transcribe_for_recorder/aktueller Scheduler), kein Test."
+    },
+    {
+      "id": "META-branch",
+      "thema": "Branch feat/v2-release-cleanup nicht als Ref vorhanden; nur Commit verifiziert."
+    }
+  ],
+  "writer_notes": "Drei reale Grenzen: (1) sofort = live (Suppression, forceCommunity), (2) nächste Activation = Latch + Wake-Freeze, (3) nächster Aufbau = Engine/Selektion + Server-Default-Erbschaft. Neustart nur Overlay. server_restart deklariert ohne Schlüssel. Offene Activation: requested=neu, effective=alt; started-Event gelatcht. Keine Kante freeze_activation (W1-10), server_restart-Schlüssel (W1-18), Session-Rebuild (W1-12). Nicht duplizieren: Policy-Auflösung 03.08, Typregeln 03.04, Einzelwerte 03.06/03.07. Legacy (W1-25) klar trennen; stt_*-Doppelstatus als model_refresh-Vorrang.",
+  "conflicts": [
+    {
+      "id": "W1-25",
+      "thema": "stt_*-Schlüssel in ACTIVE + MODEL_MANAGEMENT: Antwort weist model_refresh aus, activeSessionSafe listet sie auch. Vorrang model_refresh nennen."
+    },
+    {
+      "id": "W1-28",
+      "thema": "next_session Server ungleich Engine: globalDisabledIds sofort/projiziert, inferenceBackend pro Admission, Engine erst Session-Bau."
+    }
+  ]
+}

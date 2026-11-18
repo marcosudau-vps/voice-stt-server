@@ -1,0 +1,188 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup NICHT verifizierbar (kein Ref, kein [branch]-Eintrag im Checkout); nur der Commit ist bindend",
+  "chapter": "09.07",
+  "commit_verification": ".git/HEAD enthaelt den SHA direkt (detached); .git/shallow = gleicher SHA; .git/logs/HEAD: 'checkout: moving from main to FETCH_HEAD'; .git/FETCH_HEAD: a8993c5... of https://github.com/marcosudau-vps/voice-stt-server; kein refs/, kein packed-refs; .git/config nur [core] (7 Zeilen)",
+  "conflicts": [
+    {
+      "id": "C-1",
+      "thema": "Zeitfenster doppelt: settings_control 15000/3000/600000 ms vs activation 15.0/3.0/600.0 s - getrennte Autoritaeten."
+    },
+    {
+      "id": "C-2",
+      "thema": "Laufzeit-Identitaet (unknown-Fallback) vs Checkout-Commit aus .git - zwei Identitaeten."
+    },
+    {
+      "id": "C-3",
+      "thema": "docs/ verboten, test_v2_code_reference.py erlaubt: Mechanismus ja, Seiteninhalt nein."
+    }
+  ],
+  "correction_round": 2,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "Anhang hat maschinell geprueften Zuordnungsvertrag Kapitel<->Code (AP-DOC-V2-100), nicht nur Prosa",
+      "beleg": "tests/unit/test_v2_code_reference.py:1-13,165-200",
+      "evidenz": "A",
+      "gueltigkeit": "docs/v2-code-reference; keine Buchkapitel-Nummern",
+      "id": "QV9-01"
+    },
+    {
+      "aussage": "Kapitelraster = 14-Elemente-Tupel (README + 13 Sachseiten), im Test hart kodiert, jede Seite >2500 Zeichen",
+      "beleg": "tests/unit/test_v2_code_reference.py:27-42,114-119",
+      "evidenz": "A",
+      "gueltigkeit": "Seitenliste als Raster; Dateien existieren",
+      "id": "QV9-02"
+    },
+    {
+      "aussage": "Jede Sachseite endet mit '## Primaere Quellen' + >=1 Link; Quellenmatrix-Seite 12 ausgenommen",
+      "beleg": "tests/unit/test_v2_code_reference.py:121-129,44",
+      "evidenz": "A",
+      "gueltigkeit": "nur Test; 'primaer' nicht definiert",
+      "id": "QV9-03"
+    },
+    {
+      "aussage": "Routen-Zuordnung per AST ueber Top-Level-Module api_fastapi_server/*.py, nicht Doku/OpenAPI",
+      "beleg": "tests/unit/test_v2_code_reference.py:45,93-110,166-171",
+      "evidenz": "A",
+      "gueltigkeit": "protocol_v2/security 0 Dekoratoren -> aktuell vollstaendig",
+      "id": "QV9-04"
+    },
+    {
+      "aussage": "37 Routen: 35 in server.py, 2 in openai_routes.py; Guard fordert >=30",
+      "beleg": "server.py:8874-10121 (35); openai_routes.py:43,67",
+      "evidenz": "B",
+      "gueltigkeit": "nur api_fastapi_server; v1-standalone ausserhalb",
+      "id": "QV9-05"
+    },
+    {
+      "aussage": "v2-Vokabular: 5 Commands, 15 Results, 18 Events, 3 NON_STATE, 5 Close, Version 2 einzige",
+      "beleg": "schema.py:29,32,51-57,124-140,143,168-197,202-209",
+      "evidenz": "A",
+      "gueltigkeit": "Guard-Zwang Doku-Seite; frozen = Kommentar",
+      "id": "QV9-06"
+    },
+    {
+      "aussage": "Settings ueber Registry: 19 Schluessel aus builtin_definitions()",
+      "beleg": "settings_control.py:278-609,663,672",
+      "evidenz": "B",
+      "gueltigkeit": "19 = 6+10+2+1, distinkt",
+      "id": "QV9-07"
+    },
+    {
+      "aussage": "Exakt 2 Engines (faster_whisper, kroko_onnx), Default faster_whisper, Drafts nicht importierbar",
+      "beleg": "factory.py:16-22,50-76; test_v2_engine_boundary.py:1-9",
+      "evidenz": "B",
+      "gueltigkeit": "engineering/drafts nicht Produkt",
+      "id": "QV9-08"
+    },
+    {
+      "aussage": "EventStore-Schema ist SQLite-DDL (VoiceSTT_server/event_logging.py): events 14 Spalten, 6 Indizes, watermarks, WAL",
+      "beleg": "VoiceSTT_server/event_logging.py:438-492,712-719",
+      "evidenz": "A",
+      "gueltigkeit": "Datei/Spalten; Retention nicht belegt",
+      "id": "QV9-09"
+    },
+    {
+      "aussage": "v1->v2-Events als Tabelle: 15 Legacy-Namen + Terminal-Faecherung 3 Ziele",
+      "beleg": "api_fastapi_server/protocol_v2/events.py:51-92,478",
+      "evidenz": "B",
+      "gueltigkeit": "Namen-Ebene; Felder nur _build_*",
+      "id": "QV9-10"
+    },
+    {
+      "aussage": "Metriken: Service.metrics() Aggregat, Session.snapshot() pro Session; /api/metrics ohne Auth",
+      "beleg": "server.py:7685-7700,7702-7711,4624-4645,6222,8939-8941",
+      "evidenz": "B",
+      "gueltigkeit": "Feldnamen exakt; öffentlich aus Code-Pfad",
+      "id": "QV9-11"
+    },
+    {
+      "aussage": "/health Teilmenge + store_status(); /api/v2/info ruft metrics() nicht auf",
+      "beleg": "server.py:8885-8905; test_server_info.py:84-95",
+      "evidenz": "B",
+      "gueltigkeit": "sttReady Ableitung, kein Zaehler",
+      "id": "QV9-12"
+    },
+    {
+      "aussage": "Identitaet: primaer Build-Identitaet sourceCommit, Fallback Env VOICESTT_SERVER_COMMIT, sonst unknown",
+      "beleg": "api_fastapi_server/protocol_v2/identity.py:28,95-96,134-138",
+      "evidenz": "B",
+      "gueltigkeit": "Laufzeit != Checkout; kein Git zur Laufzeit",
+      "id": "QV9-13"
+    },
+    {
+      "aussage": "Settings<->Protokoll: patch via WS + Server-Patch via HTTP, Revisionskonflikt-Codes",
+      "beleg": "schema.py:47,119-120,165; commands.py:183; settings_control.py:916,1260,1407",
+      "evidenz": "B",
+      "gueltigkeit": "zwei Schichten, nicht ein Endpunkt",
+      "id": "QV9-14"
+    },
+    {
+      "aussage": "ActivationController alleinige Foreground-Autoritaet; Protokoll delegiert, ohne Replay/Ledger",
+      "beleg": "api_fastapi_server/protocol_v2/connection.py:8-38; api_fastapi_server/segment_ledger.py:1-16",
+      "evidenz": "B",
+      "gueltigkeit": "Ownership Docstring C; Defaults != Settings",
+      "id": "QV9-15"
+    },
+    {
+      "aussage": "Testanker nur CI-Pfade unit+compatibility+packaging; tests/unit einzige pytest-Default-Quelle",
+      "beleg": "pytest.ini:1-3; ci.yml:188,191",
+      "evidenz": "A",
+      "gueltigkeit": "tests/*.py Manualskripte keine Anker",
+      "id": "QV9-16"
+    },
+    {
+      "aussage": "Vertragsvektor Datei protocol-v2-vectors.json (schema 1, protocol 2)",
+      "beleg": "protocol-v2-vectors.json:1-14; test_protocol_v2_contract.py:44-104",
+      "evidenz": "B",
+      "gueltigkeit": "Nachrichtenform, nicht Vollschema",
+      "id": "QV9-17"
+    },
+    {
+      "aussage": "Kein committetes JSON-Schema/OpenAPI; Autoritaet Konstanten + Vektoren, OpenAPI nur Laufzeit",
+      "beleg": "Glob json/yaml/yml; test_server_info.py:71",
+      "evidenz": "A",
+      "gueltigkeit": "Schemas = Konstanten/Vektoren/DDL",
+      "id": "QV9-18"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N-1",
+      "thema": "Kein committetes Wire-Schema (JSON Schema/OpenAPI-Datei)."
+    },
+    {
+      "id": "N-2",
+      "thema": "Keine Mapping-Datei Buchkapitel->Codepfad; Vertrag seitenorientiert."
+    },
+    {
+      "id": "N-3",
+      "thema": "Kein Guard für Routen in Unterpaketen (aktuell 0 dort)."
+    }
+  ],
+  "researcher_session": "ses_e33d31835ffeh7edcnOTOdLGiN",
+  "solver_notes": [
+    "Raster: protocol_v2/activation/settings/Engines/EventStore/Metriken/v1-v2/Build-CI mit Primaerquelle + CI-Testanker."
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-1",
+      "thema": "Buchkapitel 09.07 <-> Repo-Seite im Code nicht definiert."
+    },
+    {
+      "id": "U-2",
+      "thema": "Retention/Rotation über DDL hinaus nicht verifiziert."
+    },
+    {
+      "id": "U-3",
+      "thema": "Branch nicht verifizierbar, nur Commit bindend."
+    },
+    {
+      "id": "U-4",
+      "thema": "Seiteninhalte docs/v2-code-reference nicht geprüft; Guard hier nicht ausgeführt."
+    }
+  ],
+  "writer_notes": "Zuordnung je Bereich: Primaerquelle + CI-Testanker; Evidenz A/B/C; kein Diagramm."
+}

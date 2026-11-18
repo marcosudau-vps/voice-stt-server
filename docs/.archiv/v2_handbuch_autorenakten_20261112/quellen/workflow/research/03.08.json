@@ -1,0 +1,281 @@
+{
+  "branch_note": "Checkout ist detached FETCH_HEAD bei a8993c5c68042d996eab680d84a5b138a214bb5d. Branch 'feat/v2-release-cleanup' aus Git-Metadaten NICHT verifizierbar (UNKNOWN). Kapitel nennt den Commit.",
+  "chapter": "03.08",
+  "commit_verification": "Verifiziert: .git/HEAD enthält direkt a8993c5c68042d996eab680d84a5b138a214bb5d; .git/FETCH_HEAD derselbe Commit von https://github.com/marcosudau-vps/voice-stt-server; .git/logs/HEAD 'checkout: moving from main to FETCH_HEAD'; .git/refs leer (shallow).",
+  "correction_round": 0,
+  "diagram_edges": [
+    "Client -> ProtocolV2Connection: session_settings.patch(baseSettingsRevision, changes) [R1-04]",
+    "ProtocolV2Connection -> parse_command: Envelope-Prüfung; ungültig -> command.ack(result=invalid_payload) [R1-04, R1-14]",
+    "ProtocolV2Connection -> SettingsPort.patch: unter _event_dispatch_lock [R1-16, R1-11]",
+    "SettingsPort -> SessionSettingsState.apply_patch [R1-11, R1-05]",
+    "apply_patch -> validate_patch_envelope [R1-03]",
+    "apply_patch -> Revisionsvergleich; ungleich -> PatchResult(settings_revision_conflict) [R1-05, R1-08]",
+    "apply_patch -> Zulassung/Coerce/Key-Validator (Typregeln = 03.04) [R1-05, R1-06]",
+    "apply_patch -> validate_timing_bundle(finaler Kandidat); Verletzung -> PatchResult(settings_rejected) [R1-10, R1-06]",
+    "apply_patch -> keine Änderung -> PatchResult(no_change) [R1-07]",
+    "apply_patch -> effective je Apply-Policy, revision+1, PatchResult(applied, changedKeys) [R1-08, R1-09]",
+    "_bind_settings_patch -> ProtocolSessionState.set_settings_revision (nur applied) [R1-11, R1-15]",
+    "_bind_settings_patch -> settings.changed je nicht-leerer Policy-Gruppe, Reihenfolge POLICY_EVENT_ORDER [R1-12]",
+    "settings.changed#1 -> stateVersion+1; settings.changed#n>1 -> gleicher stateVersion, eventSeq+1 [R1-13]",
+    "apply_path -> command.ack(accepted, result, stateVersion, settingsRevision, errors?) [R1-14]",
+    "Replay/commandId-Konflikt -> memoisiertes Ack ohne zweiten Effekt [R1-14]",
+    "session.snapshot.request -> build_snapshot <- settings_projection (atomar, unter _event_dispatch_lock) [R1-15, R1-16]",
+    "SessionSettingsState -> ProtocolSessionState: Revision bei Admission (Start 0) [R1-02, R1-01]",
+    "ServerSettingsState.server_effective -> neue Session: Seed der server_defaults bei Admission [R1-01]",
+    "Admin -> PATCH /api/v2/settings/server -> Admin-Guard -> patch_server [R1-20, R1-17]",
+    "patch_server -> validate_patch_envelope (VOR dem Lock) [R1-17, R1-03]",
+    "patch_server -> has_server_default/secret-Schranken [R1-17]",
+    "patch_server -> persist(next_overlay, next_revision) -> RuntimeConfigStore.save_settings_control -> os.replace [R1-18, R1-26]",
+    "persist Fehler -> 500 internal_error/persistence_failed ohne Commit [R1-18, R1-20]",
+    "patch_server -> 200 applied/no_change | 409 settings_revision_conflict | 422 settings_rejected [R1-20]",
+    "changed(kroko.forceCommunity) -> apply_kroko_force_change unter _kroko_policy_lock [R1-20]",
+    "changed(wakeWord.globalDisabledIds) -> apply_wake_word_global_disable [R1-20]",
+    "runtime.json -> load_control -> ServerSettingsState.__init__ -> ValueError oder bereit [R1-22]",
+    "Admin -> GET /api/v2/settings/schema und GET /api/v2/settings/server (read-only) [R1-21]",
+    "Admin -> PATCH /api/config -> update_settings -> applied(appliesTo)/rejected(reason) -> persist_settings [R1-23]",
+    "Admin -> POST /api/config/validate -> Kandidat(replace) -> __post_init__ -> valid|400 [R1-24]",
+    "Admin -> POST /api/config/reload -> config_store.load -> split{runtime, models, skipped} -> update_settings/switch_models [R1-25]",
+    "NICHT ZEICHNEN: Server-Patch -> settings.changed (existiert nicht)",
+    "NICHT ZEICHNEN: Session-Patch -> Persistenz (Session-Werte nicht persistiert)",
+    "NICHT ZEICHNEN: requiresRestart als regelmäßigen Ausgang (unerreichbar)",
+    "NICHT ZEICHNEN: 400 als regulären Ausgang von PATCH /api/v2/settings/server"
+  ],
+  "facts": [
+    {
+      "aussage": "Zwei getrennte, ungekoppelte settingsRevision-Ströme: Session startet immer bei 0 (kein revision-Argument), Server-Revision nur aus persistiertem Dokument. Server-Patch zieht keine Session-Revision mit.",
+      "beleg": "settings_control.py: SessionSettingsState.__init__ L885-913, ServerSettingsState.__init__ L1174-1240; server.py: _build_settings_state L3173-3196, __init__ L6282-6294; Tests test_settings_control_plane.py L338-345, L347-361.",
+      "evidenz": "A",
+      "gueltigkeit": "jede v2-/aktivierungsgesteuerte Session; Overlay global",
+      "id": "R1-01"
+    },
+    {
+      "aussage": "Beim hello.accepted wird ProtocolSessionState mit SettingsPort.revision initialisiert (= Session-Revision, Start 0). Port speichert nichts, liest Session-Autorität.",
+      "beleg": "connection.py: _activate_session L311-317; ports.py: SettingsPort.revision L50-53; session.py: ProtocolSessionState.__init__ L32-53; Test e2e L564.",
+      "evidenz": "A",
+      "gueltigkeit": "pro v2-Verbindung, einmal bei Admission",
+      "id": "R1-02"
+    },
+    {
+      "aussage": "validate_patch_envelope: baseSettingsRevision int/nicht-bool/>=0 (sonst invalid_type/out_of_range, Feld baseSettingsRevision); changes nicht-leeres dict (sonst invalid_type, Feld changes). Keine Schlüssel-/Wertprüfung. Kein eigener HTTP-/WS-validate-Endpunkt.",
+      "beleg": "settings_control.py :: validate_patch_envelope L764-781; Aufrufer apply_patch L944 (im Lock), patch_server L1264 (vor Lock).",
+      "evidenz": "A",
+      "gueltigkeit": "Session- und Server-Patch",
+      "id": "R1-03"
+    },
+    {
+      "aussage": "Strengere Wire-Vorstufe im Command-Parser: ungültige Envelope → RESULT_INVALID_PAYLOAD (nicht settings_rejected), vor SessionSettingsState. Abgelehntes Kommando erhält Ack + Replay-Cache-Memoisierung.",
+      "beleg": "commands.py :: _validate_session_settings_patch L183-190, _VALIDATORS L197-203, parse_command L90-138; connection.py :: _handle_command L347-369; Test contract L471-480.",
+      "evidenz": "A",
+      "gueltigkeit": "nur v2-Wire; REST nutzt R1-03",
+      "id": "R1-04"
+    },
+    {
+      "aussage": "apply_patch-Ablauf: Lock → Envelope im Lock → Revisionsvergleich (conflict ohne Mutation) → pro Key: unbekannt→unknown_key, scope==server→wrong_scope, writable False→read_only_runtime_authority, coerce, optionaler Key-Validator → nur wenn fehlerfrei: Cross-Field gegen finalen Kandidaten → Fehler sortiert nach (field, code) → rejected.",
+      "beleg": "settings_control.py :: apply_patch L933-1091 (Lock 943, Envelope 944, Revision 952-967, Zulassung 969-1009, Cross-Field 1011-1016, Sortierung 1018-1021); server.py :: _validate_wake_selection_key L3198 ff.",
+      "evidenz": "A",
+      "gueltigkeit": "Session-Patch (Wire + direkte Aufrufe); Typregeln = 03.04",
+      "id": "R1-05"
+    },
+    {
+      "aussage": "Atomar: _requested/_effective/_revision erst nach fehlerfreier Prüfung gemeinsam gesetzt (revision += 1). Ablehnung: keine Mutation, keine Revisionserhöhung. Zweig 'if not coerced' praktisch nicht erreichbar (Code vorhanden, C).",
+      "beleg": "settings_control.py L1018-1027, L1029-1041, Mutation nur L1076-1078; Tests protocol_v2_settings L219-245, control_plane L166-178.",
+      "evidenz": "A",
+      "gueltigkeit": "jede Session-Transaktion",
+      "id": "R1-06"
+    },
+    {
+      "aussage": "changedKeys = Vergleich coerced gegen _requested (nicht _effective), sortiertes Tupel. Keine Änderung → accepted/no_change, Revision unverändert, changed_keys=(), values=requested, effective_values=effective. Analog patch_server gegen _overlay.",
+      "beleg": "settings_control.py L1043-1058, L1087, patch_server L1338-1353; Tests control_plane L200-207, protocol_v2_settings L266-288.",
+      "evidenz": "A",
+      "gueltigkeit": "Session-Patch (analog Server); no_change: kein Event/Version",
+      "id": "R1-07"
+    },
+    {
+      "aussage": "Revision genau +1 pro applied-Transaktion; RLock pro Instanz serialisiert: zwei Threads gleiche Basis → ein applied + ein conflict, +1 exakt. Zwei sequentielle → lückenlos. Kein Zeitstempel/ETag/Retry.",
+      "beleg": "settings_control.py L1076, RLock L895; Tests protocol_v2_settings L341-393, control_plane L517-523.",
+      "evidenz": "A",
+      "gueltigkeit": "pro Session-Zustand",
+      "id": "R1-08"
+    },
+    {
+      "aussage": "Requested/Effective je Policy: live + next_activation → next_effective; next_session/server_restart → continue (laufend bleibt). freeze_activation nur next_activation, nie live. Wirksamkeit selbst = 03.09.",
+      "beleg": "settings_control.py L1060-1074, freeze L1093-1109, admission_settings L1121-1143, projection L1145-1166; Tests control_plane L234-262, protocol_v2_settings L1182-1200.",
+      "evidenz": "A",
+      "gueltigkeit": "Session-Zustand",
+      "id": "R1-09"
+    },
+    {
+      "aussage": "Cross-Field Watchdog: läuft sobald einer der drei Keys in changes; vergleicht Warnung strikt (<) gegen finale Fristen; warning >= deadline → cross_field_conflict. Bool/nicht-int übersprungen. Gilt Patch (Session+Server) UND Startup.",
+      "beleg": "settings_control.py :: validate_timing_bundle L784-821; Konstanten L138-141, L146-149; Aufrufe L1016, L1327, L1226; Test TestSequentialCrossFieldBypass L528-593.",
+      "evidenz": "A",
+      "gueltigkeit": "Patch + Startup-Validierung",
+      "id": "R1-10"
+    },
+    {
+      "aussage": "_bind_settings_patch 1:1: no_change → (no_change, None) ohne Mirror/Events; conflict → (conflict, errors); rejected → (rejected, errors); applied → set_settings_revision + _emit_settings_changed → (applied, None). internal_error nur patch_server, keine Wire-Projektion.",
+      "beleg": "connection.py :: _apply_settings_patch L505-521, _bind_settings_patch L523-542; ports.py SettingsPort.patch L75-81; schema.py L119-120.",
+      "evidenz": "A",
+      "gueltigkeit": "nur v2-Wire",
+      "id": "R1-11"
+    },
+    {
+      "aussage": "settings.changed gruppiert nach POLICY_EVENT_ORDER (live, next_activation, next_session, server_restart); Keys sortiert; ein Event pro nicht-leerer Gruppe (settingsRevision, scope='session', changedKeys, applyPolicy); leere → kein Event. scope hart 'session'; server-scoped Event existiert nicht. server_restart-Gruppe mit Registry unerreichbar.",
+      "beleg": "connection.py :: _emit_settings_changed L544-582 (scope L575); settings_control.py POLICY_EVENT_ORDER L60; Test L179-217.",
+      "evidenz": "A",
+      "gueltigkeit": "v2-Wire Session-Patch; konsistent 03.02/S-27",
+      "id": "R1-12"
+    },
+    {
+      "aussage": "stateVersion +1 genau einmal pro Transaktion: nur erstes settings.changed mit state_change=True; weitere Gruppen gleicher stateVersion, je eventSeq+1. Ack trägt aktuelle Version. Rejected/no_change: kein Anstieg.",
+      "beleg": "connection.py L560-580, _emit_ack L620-652; session.py mint_event L105-144; schema.py NON_STATE_EVENTS L191-197; Tests settings L196-217, state_version L506-545.",
+      "evidenz": "A",
+      "gueltigkeit": "v2-Wire",
+      "id": "R1-13"
+    },
+    {
+      "aussage": "Ack: type/commandId/accepted/result/activationId/inputPhase/stateVersion/settingsRevision + optional errors [{field,code,message}]. accepted=true nur applied/no_change. Replay → memoisiertes Ack verbatim, kein zweites Event. commandId-Konflikt wirkungslos.",
+      "beleg": "connection.py _answer_cached L594-616, _emit_ack L620-652, _memoise L654-661; commands.py is_accepted L279-281; schema.py ACCEPTED_RESULTS L143; Tests L290-305, L307-339.",
+      "evidenz": "A",
+      "gueltigkeit": "alle v2-Kommandos; rejected-Errors sortiert",
+      "id": "R1-14"
+    },
+    {
+      "aussage": "Revisionsspiegel: set_settings_revision nur bei applied (nur bei Änderung, sonst False). Snapshot liest settingsRevision/requestedSettings/effectiveSettings aus EINER atomaren Projektion (nicht Spiegel); Spiegel nur für Acks. Latch + Suppression NACH Projektion überlagert. snapshot.request → Ack + zusätzlicher Snapshot.",
+      "beleg": "session.py set_settings_revision L72-79; connection.py L540; snapshot.py build_snapshot L55-78; server.py settings_projection_for_wire L3302-3327, _latched_wire_effective L3265-3280, _suppression_live L3282-3300; Tests L704-737, L1253-1264; _apply_snapshot_request L584-592.",
+      "evidenz": "A",
+      "gueltigkeit": "v2-Snapshot und Ack",
+      "id": "R1-15"
+    },
+    {
+      "aussage": "Linearisierung: Patch-Block (Mutation+Spiegel+Events) und Snapshot-Bau unter demselben _event_dispatch_lock (RLock, Reentrancy beabsichtigt). Kein Snapshot zwischen Commit N+1 und Spiegel/Event N; kein Überholen.",
+      "beleg": "connection.py _event_dispatch_lock L86, _apply_settings_patch L505-521 (Kommentar 507-513), _dispatch_events L681-686, _snapshot_payload L781-797; Test WireLinearizationTests L1317-1490.",
+      "evidenz": "A",
+      "gueltigkeit": "pro v2-Verbindung",
+      "id": "R1-16"
+    },
+    {
+      "aussage": "patch_server-Schranken im Lock: unbekannt→unknown_key; !has_server_default→wrong_scope; secret→read_only_runtime_authority; coerce; Cross-Field gegen overlay-Kopie. Envelope VOR Lock (anders als apply_patch). Folge: selection/suppression nicht patchbar; activation.* als Server-Default patchbar.",
+      "beleg": "settings_control.py patch_server L1260-1336 (Envelope 1264, Lock 1272, Revision 1273-1288, Schranken 1290-1322, Cross 1324-1327); Tests control_plane L395-420, protocol_v2_settings L912-922.",
+      "evidenz": "A",
+      "gueltigkeit": "Server-Overlay (REST)",
+      "id": "R1-17"
+    },
+    {
+      "aussage": "patch_server Prepare→Persist→Commit: Kopien next_overlay/next_effective/next_revision; _persist in try/except; Fehler → accepted=False/internal_error/persistence_failed (Feld persistence), RAM+Revision unverändert; erst dann Zuweisung. next_effective ohne server_restart. Retry gleiche Basis möglich, lückenlos.",
+      "beleg": "settings_control.py patch_server L1355-1405; _persist_settings_control L7971-7973 → save_settings_control L451-469; Tests control_plane L848-902, protocol_v2_settings L1267-1314, runtime_persistence L80-108.",
+      "evidenz": "A",
+      "gueltigkeit": "Server-Overlay; Format = 03.10 (Rand)",
+      "id": "R1-18"
+    },
+    {
+      "aussage": "requires_restart implementiert aber unerreichbar: any(server_restart in changed) → to_dict requiresRestart nur wenn wahr. Kein Builtin-Key nutzt APPLY_SERVER_RESTART (nur live/next_activation/next_session). Nie im Body, server_restart-Gruppe nie belegt.",
+      "beleg": "settings_control.py patch_server L1389-1393, L1404; to_dict L260-261; APPLY_SERVER_RESTART L54, APPLY_POLICIES L57; builtin_definitions L285-609.",
+      "evidenz": "C",
+      "gueltigkeit": "gesamtes Registry; Mechanik ohne produktiven Key",
+      "id": "R1-19"
+    },
+    {
+      "aussage": "PATCH /api/v2/settings/server: Admin-Guard zuerst (401/403); baseSettingsRevision+changes durchgereicht. 409 conflict, 500 internal_error, 422 rejected, sonst 200; Body=result.to_dict(). Nur bei applied: forceCommunity→apply_kroko_force_change (unter _kroko_policy_lock); globalDisabledIds→apply_wake_word_global_disable. 400-Zweig (L9249) wegen Signatur payload:dict praktisch unerreichbar (C).",
+      "beleg": "server.py patch_settings_server_v2 L9244-9292 (Auth 9246-9248, Lock/Force 9264-9280, Wake 9281-9286, Status 9287-9292), admin_auth_error L8918-8919; Tests L827-922, L1275-1298.",
+      "evidenz": "A",
+      "gueltigkeit": "nur Server-Overlay; forceCommunity-Wirkung = 03.09",
+      "id": "R1-20"
+    },
+    {
+      "aussage": "Zwei öffentliche Lese-Routen ohne Key: schema {protocolVersion,serverVersion,serverCommit,secretsExposed:false,settings[...]} sortiert; server {protocolVersion:2,...,settingsRevision,settings:[{key,...,requestedValue,effectiveValue,applyPolicy}]} bzw. redacted:true für Secrets. Reads mutieren nichts.",
+      "beleg": "server.py L9223-9242, _settings_server_identity L9220-9221; schema_payload L663-669, to_schema_dict L200-212, server_public L1407-1444; Tests L759-825, control_plane L422-433.",
+      "evidenz": "A",
+      "gueltigkeit": "öffentlich; Secrets nie ausgeliefert; nur REST-Read, kein Event",
+      "id": "R1-21"
+    },
+    {
+      "aussage": "Startup-Validierung Overlay fail fast: revision bool→ValueError; <0→ValueError; overlay kein dict→ValueError; unbekannt/!has_server_default→ValueError; secret→ValueError; Coerce→ValueError(code); Cross-Field defaults+loaded→ValueError. Danach Overlay aus server_default_keys() aufgefüllt.",
+      "beleg": "settings_control.py ServerSettingsState.__init__ L1184-1240; Tests control_plane L786-843, runtime_persistence L229-301.",
+      "evidenz": "A",
+      "gueltigkeit": "Serverstart; Format = 03.10 (Rand)",
+      "id": "R1-22"
+    },
+    {
+      "aussage": "PATCH /api/config → update_settings: pro Feld STARTUP_ONLY→startup_only, unbekannt→unknown, Coerce-Fehler→invalid_value; Sonderregel log_live ohne event_store→invalid_dependency (entfernt). Applied: {value, appliesTo model_refresh|active_sessions|new_sessions}. Antwort {applied,rejected,settings,runtimeSettings,modelRefreshRequired}; 400 wenn rejected nicht leer, sonst 200; ValueError(kein dict)→400. Bei applied persistiert + auditiert. Kein settingsRevision, keine Events, kein Ack – getrennter Pfad.",
+      "beleg": "server.py update_config L8921-8937, update_settings L7826-7957 (appliesTo 7879-7892, Dependency 7857-7877, Rückgabe 7951-7957); Mengen L178-221, 223-254, 256-285, 287-291; Tests protocol L576-591, multi_user L2427-2447.",
+      "evidenz": "A",
+      "gueltigkeit": "Legacy-/Admin-Oberfläche; Anschluss 03.05",
+      "id": "R1-23"
+    },
+    {
+      "aussage": "POST /api/config/validate: Kandidat=replace(settings), hasattr (ValueError unbekannt), DERIVED verboten, coerce, __post_init__, enforce_cpu_model_policy. 200 {valid:true,settings:public_dict} oder 400 {valid:false,error}. Keine Zuweisung, kein Persist, keine Revision.",
+      "beleg": "server.py validate_config L9849-9868; DERIVED_DATA_PATH_SETTINGS L293-301.",
+      "evidenz": "B",
+      "gueltigkeit": "Admin; Legacy-Modell, nicht Registry; kein dedizierter Test",
+      "id": "R1-24"
+    },
+    {
+      "aussage": "POST /api/config/reload: load(), split model_updates (feste Menge model/realtime_model/engines/use_main/language/engine_options) vs. runtime_updates (Schnitt ACTIVE|NEW_SESSION), skipped=Rest; update_settings(runtime) + to_thread(switch_models, model) nur wenn nicht leer. Antwort {runtime,models,skipped}; Fehler→400. Liest nur Legacy-settings-Sektion, nicht Overlay.",
+      "beleg": "server.py reload_config L9870-9892; operations.py load L423-430.",
+      "evidenz": "B",
+      "gueltigkeit": "Admin; Legacy-Pfad, nicht Defaults/Revision; kein Test gefunden (UNKNOWN)",
+      "id": "R1-25"
+    },
+    {
+      "aussage": "Persistenz-Rand: EIN Dokument, zwei Familien (OVERLAY_FIELD/REVISION_FIELD); save/save_settings_control Read-modify-write unter Modul-Lock, atomar temp→os.replace; Exception → Temp weg, Original bleibt, Reraise. load_control: ValueError bei unlesbar/Nicht-Objekt/Overlay-Typ/Revision bool/<0; fehlend → ({},0). save_settings_control normalisiert revision (bool→0, <0→0).",
+      "beleg": "operations.py RuntimeConfigStore L401-549 (415, 417, 432-449, 451-469, 471-516, 518-545); Tests runtime_persistence L39-289.",
+      "evidenz": "A",
+      "gueltigkeit": "Serverstart + jeder Server-Patch; 03.10 Formatautorität",
+      "id": "R1-26"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "R1-N1",
+      "thema": "Eigener Validate-Endpunkt POST /api/v2/settings/validate existiert nicht; nur POST /api/config/validate (Legacy) + interne Vorstufen."
+    },
+    {
+      "id": "R1-N2",
+      "thema": "requiresRestart/server_restart codiert, aber von keinem Key ausgelöst; kein Test setzt True."
+    },
+    {
+      "id": "R1-N3",
+      "thema": "Server-scoped settings.changed existiert nicht; scope hart 'session' (03.02/S-27)."
+    }
+  ],
+  "researcher_session": "ses_e45dabb61ffeBqzcUhiwYYygvt",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "R1-N4",
+      "thema": "Branch feat/v2-release-cleanup im Checkout nicht nachweisbar (detached FETCH_HEAD)."
+    },
+    {
+      "id": "R1-N5",
+      "thema": "Kein Test für POST /api/config/reload in gesichteten Dateien (Verhalten nur Code, B)."
+    },
+    {
+      "id": "R1-N6",
+      "thema": "Erreichbarkeit 'if not coerced' (L1029) und nicht-dict-Body (L9249) nicht belegt (C)."
+    },
+    {
+      "id": "R1-N7",
+      "thema": "Replay-Wiederauslieferung settings.changed nach Retry: _minted verhindert neue Identität; Wiederauslieferung in AP-SRV-040 (04.04/04.06)."
+    },
+    {
+      "id": "R1-N8",
+      "thema": "ports.py L9-14 behauptet Vor-Bindungs-Zustand (Revision 0, Patch refused); Code ist gebunden (L75-81). Historischer Text."
+    }
+  ],
+  "writer_notes": "Zwei Revisionsströme (Session 0, Server Datei), strikter Transaktionsablauf (Wire-Envelope→Control-Envelope→Revision→Zulassung/Coerce→Validator→Cross-Field→Commit), deterministische Ack-/Event-Projektion (POLICY_ORDER, ein stateVersion-Anstieg, ein Event/Policy-Gruppe, scope session). NICHT zeichnen: Server-Patch→settings.changed, Session-Patch→Persistenz, requiresRestart regelmäßig, 400 bei v2-Server-PATCH. Legacy PATCH getrennt: pro Feld, appliesTo, 400 bei Ablehnung, KEIN Revision/Events. Abgrenzung: Typregeln 03.04, Wirksamkeit 03.09, Format 03.10, Events 04.04/04.06, Runtime-Contract 03.05. Kanten mit R1-IDs; Zahlen nur genannte Zeilen.",
+  "conflicts": [
+    {
+      "id": "C-01",
+      "thema": "Branch-Angabe vs. detached FETCH_HEAD: nur Commit verifizierbar."
+    },
+    {
+      "id": "C-02",
+      "thema": "ports.py L9-14 beschreibt Vor-Bindungs-Zustand; Code ist gebunden (L75-81). Historischer Text, nicht zitieren."
+    },
+    {
+      "id": "C-03",
+      "thema": "Zwei als unerreichbar markierte Pfade (if not coerced L1029; nicht-dict-Body L9249) nicht als Zustände zeichnen."
+    }
+  ]
+}

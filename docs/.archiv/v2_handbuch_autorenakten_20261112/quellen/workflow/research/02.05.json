@@ -1,0 +1,237 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup lokal NICHT verifizierbar (detached HEAD, leere refs/heads, shallow). Commit verifiziert.",
+  "chapter": "02.05",
+  "commit_verification": ".git/HEAD direkt a8993c5c68042d996eab680d84a5b138a214bb5d (detached)",
+  "correction_round": 0,
+  "diagram_edges": [
+    "recorder.start_recording -> stabilizer.reset(recording_id) | neue Aufnahme [T-01,T-04]",
+    "realtime worker (timer/syllable-*) -> SchedulerTranscriptionExecutor(realtime) | is_recording, nicht awaiting_speech_end [T-02,T-11]",
+    "executor -> FairInferenceQueue.submit(realtime) | ein Slot je Session, ersetzt alten (coalesced) [T-12]",
+    "queue.get -> Realtime-Slot | deadline_at >= now, sonst stale (kein Inferieren) [T-11,T-12]",
+    "worker -> InferenceResult -> _pending_recorder_results[request_id] | Holder-Set [T-13,T-14]",
+    "Holder -> transcribe_for_recorder -> realtime worker | generation unveraendert, Session existiert [T-11,T-14]",
+    "realtime worker -> Stabilizer.observe(observation) | Sequenz erhoeht, Identitaet erneut geprueft [T-03,T-04]",
+    "Stabilizer -> Event | akzeptiert/ignoriert (stale-sequence, outlier, ...) [T-04]",
+    "Event -> on_realtime_text_stabilization_update | publish_allowed (>=init_realtime_after_seconds), is_recording, Provenienz ok [T-07]",
+    "Session -> Timeline realtime_transcript -> Projektor -> transcription.interim | kein Terminal fuer Segment [T-07]",
+    "stop_recording -> recorded_audio_queue(segment_context) | Frames + Kontext [T-08]",
+    "stop_recording -> stabilizer.finalize() | argumentlos, nur _finalized [T-22]",
+    "text_worker -> recorder.text() -> wait_audio() | ein Thread, seriell [T-01,T-08]",
+    "transcribe() -> on_transcription_start -> _active_text_context | truthy Rueckgabe bricht ab [T-08]",
+    "perform_final_transcription -> submit | nur wenn transcribe_count == 0 [T-09]",
+    "executor(final) -> transcribe_for_recorder -> job(deadline=None) | request_id aus Kontext [T-11]",
+    "queue.get -> final-Deque | final vor realtime, Round-Robin ueber Sessions [T-12]",
+    "InferenceResult -> Holder -> Text-Thread | Routing: API -> Recorder-Holder -> Session [T-14]",
+    "Text-Thread -> ledger.resolve_completed | Text leer -> discarded/empty_final [T-16]",
+    "drain -> publications | nur in segment_sequence-Reihenfolge, Luecke blockiert [T-16]",
+    "publication -> _publish_ordered_final -> type:final + final_transcript | unter _ledger_dispatch_lock [T-18]",
+    "final_transcript -> Projektor -> transcription.completed | Terminal-Memo gesetzt [T-07,T-18]",
+    "cancel -> mark_cancel_requested | prepared Text geloescht, Segmente cancelled [T-17]",
+    "spaetes Final nach Cancel -> resolve_completed | cancelled, keine Publikation [T-17]",
+    "Drop/Ablehnung final -> resolve_terminal(failed/cancelled) | scheduler_<reason> [T-15]",
+    "alle Segmente terminal+gedrained -> activation_drained | completed/cancelled/failed [T-16]",
+    "Interim nach Segmentterminal -> Projektor | verworfen, keine eventId/eventSeq-Luecke [T-07]"
+  ],
+  "facts": [
+    {
+      "aussage": "Pro Session: Realtime-Worker-Thread im Recorder (Kontinuum, viele Durchlaeufe) + GENAU EIN Text-Thread (blockierendes recorder.text(), Finals seriell). Geteilt: Puffer + Scheduler; NICHT geteilt: Ergebnisweg.",
+      "beleg": "server.py _create_recorder 2737-2848, text_thread 2443-2448; realtime.py run_realtime_worker 31-1048",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "T-01"
+    },
+    {
+      "aussage": "Timer-Pfad (Default): Pause realtime_processing_pause (Server 0.02s), Reason timer. Silben-Pfad (nur realtime_transcription_use_syllable_boundaries, Default False): syllable-boundary/-followup (gebuendelt)/-fallback. awaiting_speech_end pausiert.",
+      "beleg": "realtime.py Schleife 988-1046, _run_realtime_transcription 687-834, syllable-Scheduler 945-986; server.py 431",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "T-02"
+    },
+    {
+      "aussage": "recording_id/Kontext/Startzeiten VOR Snapshot+Inferenz eingefroren; danach erneut geprueft; Abweichung -> verwerfen (keine Sequenz/Stabilizer/Callback). Nur bestanden erhoeht realtime_observation_sequence (Stabilizer-Sequenz).",
+      "beleg": "realtime.py 701-721,764-776; realtime_observation_sequence",
+      "evidenz": "CODE+TEST (e2e :1660-1721)",
+      "gueltigkeit": "V1+V2 (V2 bes. relevant)",
+      "id": "T-03"
+    },
+    {
+      "aussage": "Pruefreihenfolge observe: wrong-recording -> wrong-segment (erste Zuordnung nur nachgefuehrt) -> finalized -> stale-sequence (sequence<=_last) -> empty-text (Projektion leer) -> outlier; adopt-branch uebernimmt Outlier-Streak als Evidenz.",
+      "beleg": "stabilizer.py observe 291-359",
+      "evidenz": "CODE+TEST (Z.341-357)",
+      "gueltigkeit": "V1+V2",
+      "id": "T-04"
+    },
+    {
+      "aussage": "Exakte Defaults: min_char_confirmations 2, min_span 0.60s, max_window 8.00s, space 4/0.75s + stabiler Rechtskontext (min 2 Zeichen), punctuation 4, initial_prefix 2/0.80s, outlier_similarity 0.35, max_gap 1, max_recent 128, space-tokenized, require_audio_progress. Evidenz nur bei neuer Sequenz + Audio-Endsample strikt groesser. Stabilitaet = Anzahl + Zeitspanne; Leerzeichen brauchen rechten Kontext.",
+      "beleg": "stabilizer.py Config 15-36, _char_is_stable 622-644, _space_is_stable 646-677, _add_evidence 715-740, _evidence_passes 1036-1054",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2 (Wire-Felder)",
+      "id": "T-05"
+    },
+    {
+      "aussage": "Vergleichstext NFKC, Whitespace kollabiert, Satzzeichen (category P) entfernt, casefold, Endspace weg. stable waechst nur bei public_consensus_aligned + laengerem Frontier (commit_reason space-confirmed/evidence-threshold). publish_allowed False -> Delta zurueckgehalten (_unpublished_stable_delta), spaeter nachgeliefert. display=stable+unstable. consensus_*/internal_revision diagnostisch.",
+      "beleg": "stabilizer.py _accepted_event 425-540, _project_text 944-994",
+      "evidenz": "CODE+TEST (:394-404 Delta geht nicht verloren)",
+      "gueltigkeit": "V1/V2-Engine, V2-Wire",
+      "id": "T-06"
+    },
+    {
+      "aussage": "Interim erreicht Server nur wenn is_recording + Provenienz unveraendert + completed_at-recording_start > init_realtime_after_seconds (Default INIT_REALTIME_INITIAL_PAUSE 0.2, audio_recorder Z.70). Fruehere tragen Evidenz, werden nicht publiziert. Server: reject_current_recording -> verwerfen; recording_id/Kontext/Segment-Abweichung -> verwerfen (kein Ersatz). Textwahl display (stabilized) vs raw_text. Legacy type:realtime -> Timeline realtime_transcript -> transcription.interim (text Pflicht + Stabilizer-Felder). Interims NON_STATE (kein stateVersion++, aber eventSeq/eventId). Interim nach Terminal vor Mint verworfen (+ Terminal-Memo).",
+      "beleg": "realtime.py _publish_realtime_text 510-683; server.py 4981-5119,4900-4979,5880-5950; events.py 54-73,123-131,357-391; schema.py 158,191-197",
+      "evidenz": "CODE+TEST (races :748-762; e2e :1660-1759; contract :212,648)",
+      "gueltigkeit": "V2-Wire; V1 type:realtime",
+      "id": "T-07"
+    },
+    {
+      "aussage": "text() loescht Interrupt-Flags -> wait_audio() wartet Start/Stop (Poll 0.02s), laedt Frames in recorder.audio (Kontext aus recorded_audio_queue segment_context sonst _active_recording_context) -> transcribe() setzt transcribing + on_transcription_start(audio_copy); truthy Rueckgabe bricht ab -> sonst perform_final_transcription. _on_transcription_start bindet Kontext (recorder._current_transcription_context + _active_text_context); Text-Thread uebernimmt unter lock und setzt sofort None -> genau EIN Final je Kontext.",
+      "beleg": "transcription_api.py 22-59,72-142; audio_recorder.py 663-698; lifecycle.py 152-238; server.py 4668-4728,5534-5587",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "T-08"
+    },
+    {
+      "aussage": "perform_final sendet NUR bei transcribe_count==0, sonst konsumiert laufenden. count++ in submit (extern 230/intern 241), -- nach Empfang (107). Early (Default early_on_silence 0.2): nach Sprach-Ende+Stille aktueller Frame-Stand als Finalauftrag (allowed_to_early=False). FOLGE: spaeterer Voll-Rest NICHT erneut; Finaltext aus Frame-Stand VOR Ende. KEIN Bugfix, implementierter Vertrag.",
+      "beleg": "transcription_api.py 87-107; transcription.py 202-241; recording.py 500-520,537; server.py early-Default 435",
+      "evidenz": "CODE+TEST (slow_final_gap :108ff)",
+      "gueltigkeit": "V1+V2",
+      "id": "T-09"
+    },
+    {
+      "aussage": "Externer Executor (Server): Audio tiefkopiert, segment_context aus _current/_active kopiert, Daemon-Thread VoiceSTTExternalFinalTranscription; Ergebnis (success/error) in _external_transcription_results. Pipe-Betrieb: (audio,language,use_prompt) an parent_transcription_pipe.",
+      "beleg": "transcription.py submit 206-238, receive 244-256, call_executor 176-199",
+      "evidenz": "CODE+TEST (protocol :679ff)",
+      "gueltigkeit": "V1+V2",
+      "id": "T-10"
+    },
+    {
+      "aussage": "request_id = Kontext-request_id (nur final) sonst uuid4.hex. Holder unter _pending_recorder_lock. Job: segment aus Kontext/current, sequence=0 KONSTANT, generation, created_at monotonic, deadline_at NUR realtime (now + max_realtime_queue_age_ms/1000, Default 1500ms Z.492). Warten 0.1s-Scheiben; Abbruch nur stop_event/Session-weg/Generation -> leeres TranscriptionResult. KEIN Inferenz-Timeout; final-Fehler -> Ledger failed.",
+      "beleg": "Executor 2273-2305; transcribe_for_recorder 8251-8351",
+      "evidenz": "CODE stark (Timeout-Freiheit = CODE-Ableitung)",
+      "gueltigkeit": "V1+V2 (+OpenAI separat)",
+      "id": "T-11"
+    },
+    {
+      "aussage": "Pro Session final-Deque (FIFO) + genau EIN realtime-Slot. final abgelehnt bei len>=8 (max_final_queue_depth_per_session) oder total>=64 (max_global_inference_queue_depth). realtime ersetzt vorhandenen (coalesced, coalesced=True); globale Grenze nur ohne belegten Slot. get(): erst final dann realtime; realtime deadline<now (strikt) -> stale, nie inferiert. Round-Robin _ordered_sessions. cancel_session alles cancelled. KEINE numerische Prioritaet/Vererbung; Reihenfolge-/Verdraengungsregel ist die Prioritaet.",
+      "beleg": "FairInferenceQueue 1756-1940; Scheduler 2111-2204; Defaults 492-493",
+      "evidenz": "CODE+TEST (protocol :630-677)",
+      "gueltigkeit": "V1+V2+OpenAI",
+      "id": "T-12"
+    },
+    {
+      "aussage": "transcribe_with_options nur wenn job.request_options UND Methode vorhanden, sonst transcribe. text strip(). queue_delay=started-created, inference_duration, total_latency (monotonic) in RunningStats; InferenceResult inkl audio_duration (len/16000) an result_callback. Fehler -> failed_jobs + error (kein Worker-Abbruch).",
+      "beleg": "SharedEngineWorker._worker 2012-2099; Job/Result-Dataclasses 1619-1656",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "alle",
+      "id": "T-13"
+    },
+    {
+      "aussage": "Reihenfolge: (1) Performance-Event inference.completed; (2) complete_pending_api (OpenAI) -> Treffer return; (3) complete_pending_recorder (Holder event.set()) -> Treffer return; (4) sonst session.handle_inference_result. Recorder-Text NICHT im Callback, sondern blockierter Aufrufer + Recorder/Text-Thread.",
+      "beleg": "server.py _on_inference_result 8547-8611; complete_pending_recorder 8353-8360; handle_inference_result 3044-3048",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2+OpenAI",
+      "id": "T-14"
+    },
+    {
+      "aussage": "Drops coalesced/stale/cancelled je eigener Session-Zaehler; final mit Kontext im Ledger: cancelled bei cancelled sonst failed, Reason scheduler_<reason>. Submit-Ablehnung: realtime realtime_rejected; final final_rejected + Ledger failed + Holder-Fehler. Volller Scheduler: scheduler.overloaded + queue.limit_reached.",
+      "beleg": "Scheduler/submit 7458-7526; on_job_dropped 3050-3068; on_submit_result 3070-3091; _on_scheduler_drop 8613-8627",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "T-15"
+    },
+    {
+      "aussage": "Jedes Segment segment_sequence (aufsteigend) + request_id. resolve_completed trimmt; leer -> resolve_terminal discarded/empty_final. Publikation NUR in _next_publish_sequence-Reihenfolge: drain stoppt am Loch (prepared unsichtbar). Resolution/Publication/ActivationTerminal als LedgerUpdate; changed idempotent (Wiederholung aendert nichts). Terminal erst wenn input_closed + alle terminal UND gedrained; Zustand requested>failed>cancelled>completed.",
+      "beleg": "segment_ledger.py accept 232-260, resolve_completed 316-353, resolve_terminal 355-373, drain 490-510, terminalize 512-553, normalize 46-65",
+      "evidenz": "CODE+TEST (segment_ledger :31-143)",
+      "gueltigkeit": "V1+V2",
+      "id": "T-16"
+    },
+    {
+      "aussage": "mark_cancel_requested fachlich (kein Publish/Callbacks): nicht-gedrainte prepared=None + cancelled (Resolution), danach EIN Drain. accept dahinter -> RuntimeError. Spaetes Fertiges -> einmal cancelled statt vorbereitet (324-344). Gedraintes nie zurueck. cancel_all: erst ALLE cancelled/input_closed, dann einmal drain (Session-Abbruch).",
+      "beleg": "segment_ledger.py 171-230,262-314,375-419,324-344; server.py close 2891-2937,4517-4567",
+      "evidenz": "CODE+TEST (:81-134, :94-122, :176-246)",
+      "gueltigkeit": "V1+V2",
+      "id": "T-17"
+    },
+    {
+      "aussage": "Reihenfolge _apply_ledger_update: resolutions (Terminals), dann publications (Finals), dann activation_terminals (drained) - ALLES unter _ledger_dispatch_lock (sichtbare Reihenfolge thread-unabhaengig). Final-Payload type:final + IDs + segment + Textfelder (duration/endReason/preRecordingBuffer/Zeiten/wakeWord; segment_text_fields). Plus Timeline final_transcript, Performance stream.final_text (utteranceToFinalMs, speechEndToFinalMs, chars/words), transcription.completed, Statuswechsel (ausser recording/closed). Nicht-Publikation: final_transcript_discarded/_cancelled/_failed + reason/requestId/Aktivierung/Segment + Realtime-Summary + transcription.<state> (warning, failed=error). Leer -> discarded/empty_final, KEIN type:final.",
+      "beleg": "server.py 4553-4567 (dispatch 4536-4551), 4816-4898, 4577-4611, 4771-4794; Textfelder 1375-1389",
+      "evidenz": "CODE+TEST (multi_user :554-594, :639ff)",
+      "gueltigkeit": "V1+V2 (V2 Projektion)",
+      "id": "T-18"
+    },
+    {
+      "aussage": "Whitespace->space + strip; Grossbuchstabe wenn ensure_sentence_starting_uppercase; NUR preview=False + ensure_ends_with_period + letztes alphanumerisch -> Punkt. Realtime preview=True (kein Punkt); Final ohne preview (Punkt). Ledger sieht unpunktierten Roh-Text, publiziert normalisiert.",
+      "beleg": "text_formatting.py 18-44; Aufrufe realtime 656-681 (preview True), transcription_api 119-127",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1/V2 + Vorschau",
+      "id": "T-19"
+    },
+    {
+      "aussage": "Events stream.first_text (timeToFirstTextMs, audioElapsedSeconds, einmal je generation/segmentId), transcription.realtime_emitted (nur realtime_log_detail events Default events; sincePreviousMs, Zaehler, isOutlier), transcription.performance_summary (Counts, avg/min/max/p50/p95, timeToFirstRealtimeMs/TimeToFinalMs), stream.final_text, inference.completed (queueDelayMs, inferenceMs, totalLatencyMs, realTimeFactor, activeSessions/Speakers). Snapshot: queueDelay/inferenceDuration/totalLatency je Lane + ledger/queueDepth/coalesced/stale/cancelled/forcedFinalizations. Deadline: NUR Realtime-Queue-Alter (1500ms), geprueft beim Dequeue.",
+      "beleg": "server.py 5121-5228,5230-5292,4624-4666,8576-8605",
+      "evidenz": "CODE stark",
+      "gueltigkeit": "V1+V2",
+      "id": "T-20"
+    },
+    {
+      "aussage": "Segment-ID: V1 Integer-Zaehler (ab 1, final() schiebt), V2 kanonische UUID (id_factory, canonical_ids=True). Ledger normalisiert numerisch->int sonst String. request_id: final Kontext-request_id (uuid4 hex 32), realtime frisch. transcriptionId Telemetrie f\"{session}:{generation}:{segment}\". activationId kanonisch (controlled) sonst legacy-<session>-<n>. v2-Event: eventId UUID, eventSeq monoton je Event inkl Interims, stateVersion nur sichtbare (Interims ausgenommen). logical_key nur activation.input_closed + transcription.terminal je Segment -> Retry gleiches Envelope.",
+      "beleg": "server.py SegmentState 1308-1352, _transcription_id 5826-5827; ledger 46-65,247-256; schema 214-233; session 105-144; connection 276-282; activation 242,492",
+      "evidenz": "CODE+TEST (state_version, contract :406)",
+      "gueltigkeit": "V1/V2 getrennt",
+      "id": "T-21"
+    },
+    {
+      "aussage": "finalize() NUR argumentlos in stop_recording: final_text leer, kein Abgleich, _finalized True, weitere -> ignored finalized. RealtimeTextFinalObservation NUR Tests + engineering-Tools, nie Produkt. Final<->Stabil-Abgleich = NOT_IMPLEMENTED (Vertrag vorhanden, nicht verdrahtet).",
+      "beleg": "lifecycle.py 120-126; stabilizer 361-402, FinalObservation 76-88; Grep Baum; Tests 449-489",
+      "evidenz": "CODE stark (+Grep)",
+      "gueltigkeit": "V1+V2",
+      "id": "T-22"
+    }
+  ],
+  "investigated_sources": [
+    "api_fastapi_server/server.py (Executor, Scheduler, FairQueue, Worker, Ergebnisrouting, Ledger-Publikation, Metriken)",
+    "core/{realtime,realtime_text_stabilizer,transcription,transcription_api,lifecycle,text_formatting} (Worker, Stabilizer, Final-Auftrag, Normierung)",
+    "segment_ledger.py (Aufloesung/Drain/Terminals/Cancel)",
+    "protocol_v2/{events,session,schema,connection} (Interim-Projektion, Envelopes)",
+    "Tests (e2e, contract, state_version, races, multi_user, slow_final_gap, segment_ledger, stabilizer)"
+  ],
+  "not_implemented": [
+    {
+      "id": "N-1",
+      "thema": "Kein Inferenz-Ausfuehrungs-Timeout (final+realtime; nur Liveness-/Generation-Abbruch; Realtime nur Queue-Alter)"
+    },
+    {
+      "id": "N-2",
+      "thema": "Kein Final<->Stabil-Abgleich im Produktpfad (Vertrag vorhanden, nicht verdrahtet)"
+    },
+    {
+      "id": "N-3",
+      "thema": "realtime_min/max_audio_seconds + realtime_degradation_threshold_ms existieren (Settings/CLI/Snapshot), werden NICHT ausgewertet"
+    },
+    {
+      "id": "N-4",
+      "thema": "Tot: recorder.realtime_stabilized_text/safetext geschrieben, nie gelesen"
+    },
+    {
+      "id": "N-5",
+      "thema": "Streaming-Realtime-Zweig implementiert; Nutzung durch Default-Engine (kroko) hier nicht entscheidbar"
+    },
+    {
+      "id": "N-6",
+      "thema": "InferenceJob.sequence konstant 0; sichtbare sequence = Recorder-Zaehler realtime_observation_sequence"
+    },
+    {
+      "id": "N-7",
+      "thema": "Transkript-Persistenz/Ablage nicht untersucht (02.06/02.07); Early-Audio-Rest 02.02; Scheduler-Interna 02.08"
+    }
+  ],
+  "researcher_session": "ses_e469acca1ffeNbtDnzxSel2wL9",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "writer_notes": [
+    "Zwei Pfade, ein Ergebnis: Realtime Vorschau-Maschine vs Final ledger-Publikationsstrom; Final autoritativ, NICHT aus Realtime zusammengesetzt.",
+    "Reihenfolge = Garantie: Ledger + sequence + drain-Locks.",
+    "Netze: Cancel-Barriere, Stale-/Coalesce-Drops, Provenienzpruefungen.",
+    "Ehrlich: kein Timeout, kein Abgleich, 3 ungenutzte Settings."
+  ]
+}

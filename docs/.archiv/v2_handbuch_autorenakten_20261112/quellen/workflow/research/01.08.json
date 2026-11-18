@@ -1,0 +1,272 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nur Auftragskontext (keine Ref im Checkout); Commit belegt.",
+  "chapter": "01.08",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached), identisch 01.01-Stand. Notiz 01.08 nur Gliederungsthema. Diagramm NOT_REQUESTED.",
+  "conflicts": [
+    {
+      "auflösung": "YAML via parser.set_defaults; Compose mit config.yaml gilt 8. Wie C-01 (01.01) - referenzieren.",
+      "beleg": "server.py:10655",
+      "id": "C-G01",
+      "thema": "max_sessions Code 4 vs config 8 (Precedence)"
+    },
+    {
+      "auflösung": "Server lehnt ab, Bibliothek korrigiert still - trennen.",
+      "beleg": "server.py:8704 vs initialization.py:437-444",
+      "id": "C-G02",
+      "thema": "CPU-Verhalten Server vs Bibliothek"
+    },
+    {
+      "auflösung": "Zwei Engines = Transkription; Wake-Backends separat (Server meldet nur openwakeword).",
+      "beleg": "server.py:7728",
+      "id": "C-G03",
+      "thema": "Engine-Scope"
+    },
+    {
+      "auflösung": "Repo physisch != Produkt verfuegbar.",
+      "beleg": "MANIFEST prune engineering; AST kein Import",
+      "id": "C-G04",
+      "thema": "Entwuerfe vs Produkt"
+    },
+    {
+      "auflösung": "Keine Sessions-Persistenz, aber Serverkonfiguration+Overlay persistiert; device/host/port/Keys nicht.",
+      "beleg": "server.py:7964-7968",
+      "id": "C-G05",
+      "thema": "Persistenz-Umfang"
+    }
+  ],
+  "correction_round": 0,
+  "facts": [
+    {
+      "aussage": "Registry exakt faster_whisper + kroko_onnx, Default faster_whisper. Nur Normalisierung (strip/lower/- zu _), kein Alias-Mapping. Sonst UnsupportedTranscriptionEngineError (Supported engines: ...).",
+      "beleg": "factory.py Z.16-19,22,25-29,39-47,59-69,72-76",
+      "evidenz": "CODE+TEST (boundary :61-71, 26 Namen abgewiesen; protocol :272,300-304)",
+      "gueltigkeit": "gesamt inkl /api/config (=P-04)",
+      "id": "G-01"
+    },
+    {
+      "aussage": "5 Altadapter nur engineering/drafts (ohne __init__, nicht importierbar, prune MANIFEST); 7 weitere geloestt; kein Produkt-Import. Grenze Repo-vorhanden vs Produkt-verfuegbar.",
+      "beleg": "boundary-Test :33-48,146-184,219-223; packaging :56-68 (Wheel genau 2 Engine-Module)",
+      "evidenz": "CODE+TEST",
+      "gueltigkeit": "Repo-Layout + Artefakt",
+      "id": "G-02"
+    },
+    {
+      "aussage": "CPU vierfach erzwungen: Factory cpu/0 vor Instanziierung; effective_device wirft bei !=cpu; enforce_cpu_model_policy setzt cpu; CLI choices=(cpu); YAML/runtime device!=cpu -> SystemExit. Bibliothek dagegen warnt + schreibt still um.",
+      "beleg": "factory.py:64-65; server.py:8704-8707,8764-8767,10379-10380,10453; initialization.py:437-444",
+      "evidenz": "CODE+TEST (boundary :75-86, :99-105)",
+      "gueltigkeit": "Server/CLI/Wheel; Bibliothek separat (=P-05,N-02)",
+      "id": "G-03"
+    },
+    {
+      "aussage": "Kroko provider != cpu -> TranscriptionEngineError (CPU-only build); Rueckgabe immer cpu.",
+      "beleg": "kroko_onnx_engine.py _provider_from_config Z.220-230, Verwendung Z.441",
+      "evidenz": "CODE",
+      "gueltigkeit": "kroko_onnx",
+      "id": "G-04"
+    },
+    {
+      "aussage": "cpu_only.py erzwingt CPU-Torch-Index, +cpu-Pin, check (cuda/hip gesetzt, GPU-Distributionen per Regex, Metadaten, CPU-Tensor-Op). is_available bewusst NICHT als Beweis. Verdrahtet CI (beide Envs) + Docker (Index/Constraint + Abbruch).",
+      "beleg": "cpu_only.py Z.20-21,40,43-47,92-145; ci.yml:104,111,177,185; Dockerfile:30-32,39-40",
+      "evidenz": "CODE+CONFIG",
+      "gueltigkeit": "alle kontrollierten Installationspfade",
+      "id": "G-05"
+    },
+    {
+      "aussage": "Oeffentlich (pro -> voice-stt-server) >=3.12,<3.13; ohne Variante (voicestt) >=3.11. Grund: Kroko-Native nur cp312. CI/rc_manifest erzwingen cp312.",
+      "beleg": "setup.py:37-43,378-380; ci.yml:37; release-candidate.yml:47; rc_manifest.py:68-69",
+      "evidenz": "CONFIG+TEST",
+      "gueltigkeit": "Installation/Release (=P-03)",
+      "id": "G-06"
+    },
+    {
+      "aussage": "Release-Manifest nur linux_x86_64 + win_amd64; Workflows nur ubuntu-24.04/windows-latest. Kroko-Artefakte win*/linux*|manylinux*|musllinux*, amd64/x86_64, arm64/aarch64-match. macOS/ARM-Laufzeit: nicht gebaut/qualifiziert, kein formales Laufzeit-Verbot -> UNKNOWN U-03.",
+      "beleg": "rc_manifest.py:32,70-76; artifacts.py:254-302; ci.yml:45; release-*.yml",
+      "evidenz": "CODE+CONFIG",
+      "gueltigkeit": "Release-/Qualifizierungsgrenze",
+      "id": "G-07"
+    },
+    {
+      "aussage": "TUNING_PROFILES nur custom (settings {}); sonst ValueError mit Verweis. Drei entfernte Presets an allen 4 Eingaengen abgewiesen (--profile, --tuning-profile, YAML, runtime.json).",
+      "beleg": "server.py:151-175,10659-10663,10684-10691",
+      "evidenz": "CODE+TEST (protocol :186,229-260,279-281 HTTP400)",
+      "gueltigkeit": "Serverkonfiguration (=N-03)",
+      "id": "G-08"
+    },
+    {
+      "aussage": "BASE_TUNING_DEFAULTS nur Defaults (beam 5/3, batch 16/16, pause 0.02, min_length 0.2, post_speech 0.55, early 0.2); custom ueberschreibt nichts. tuning_description abgeleitet (nicht setzbar, neu gesetzt je Pruefung).",
+      "beleg": "server.py:151-160,166,10302,8769-8770",
+      "evidenz": "CODE",
+      "gueltigkeit": "Konfigurationsflaeche",
+      "id": "G-09"
+    },
+    {
+      "aussage": "5 Wake-Word-Keys calibration:pending mit Trace-IDs; Defaults neutrale Startwerte, keine belegten Betriebspunkte, kalibriert EVIDENCE_BLOCKED: minConsecutivePredictionFrames 1, cooldownMs 0, preRollMs 0, detectorGain 1.0, vadThreshold 0.0. preRollMs ohne Obergrenze (Clamp durch Historie).",
+      "beleg": "settings_control.py Z.101-120,424-557",
+      "evidenz": "CODE (Schema-Texte)",
+      "gueltigkeit": "V2-Settings-Schema",
+      "id": "G-10"
+    },
+    {
+      "aussage": "runtimeSuppression.* writable=False; Patch -> read_only_runtime_authority. Schreiben nur trigger_suppression.set / Controller.",
+      "beleg": "settings_control.py:396-423,988-1000,151-165",
+      "evidenz": "CODE",
+      "gueltigkeit": "V2-Control-Plane",
+      "id": "G-11"
+    },
+    {
+      "aussage": "SessionStore begrenzt max_sessions (Default 4/4/config 8) + max_active_speakers (4). V1+V2 teilen Topf; V2-voll -> session.rejected session_limit_reached + 4409. KEIN Thread-/FD-/Connection-Budget (kein RLIMIT/Semaphore/nofile/max_connections; Manager ohne Zaehler). Threads je Session + Scheduler-Paar ohne Buchfuehrung.",
+      "beleg": "server.py:6133-6199,6142-6151,6201-6208,7325-7370,487-488,10485-10486; connection.py:247-252; Manager 1692-1744; Scheduler 2111-2159; initialization 671-696; safepipe 39; grep-negativ RLIMIT",
+      "evidenz": "CODE (+ABSENCE mittel)",
+      "gueltigkeit": "Single-Process",
+      "id": "G-12"
+    },
+    {
+      "aussage": "Unterschiedliche Kroko-Modelle in beiden Lanes -> Start-ValueError; gleiches Modell -> use_main_model_for_realtime erzwungen (eine Instanz). Kein zweites natives Modell unterstuetzt.",
+      "beleg": "kroko_runtime.py:54-73 (via enforce_cpu_model_policy Z.8775)",
+      "evidenz": "CODE",
+      "gueltigkeit": "Prozess/Deployment",
+      "id": "G-13"
+    },
+    {
+      "aussage": "Rangklassen (kroko=2, large-v3-turbo=3, large=4, medium=3, small=2, base|tiny=1); Ablehnung bei max>3 oder mehr Medium-Aequivalente als erlaubt (2 wenn allow_two_medium, sonst 1). KEINE Byte-/RAM-Obergrenze (RAM UNKNOWN U-02).",
+      "beleg": "server.py model_size_rank Z.8711-8741, Policy Z.8784-8801",
+      "evidenz": "CODE",
+      "gueltigkeit": "Modellkombination/Prozess",
+      "id": "G-14"
+    },
+    {
+      "aussage": "Harte Limits: max_audio_packet 512KiB->AudioPacketError; Metadaten 64KiB; channels<=8; nur pcm_s16le frame-aligned; final-Tiefe 8 / global 64 -> Submit abgelehnt; realtime 1500ms -> stale; audio-queue 30s Deckel; openai_max 25MiB; Handshake 10s->4408; realtime_max 20s Feld. limits_dict publiziert 7 via /api/metrics.",
+      "beleg": "server.py:7654,7661-7675,1783-1809,1841-1849,8299,6015,6033,513,7702-7711; protocol.py:7,60-64; schema.py:204-209",
+      "evidenz": "CODE",
+      "gueltigkeit": "Prozess/Session",
+      "id": "G-15"
+    },
+    {
+      "aussage": "Getrennte Transporte: /ws/transcribe (V1: Query-Admission, Server-hello uuid-hex) vs /ws/v2 (Client-hello-Validierung, kein Manager: keine Legacy-Payload erreicht V2). IDs V1 hex-32, V2 kanonisch-gebundenstricht (kompakt/Gross abgelehnt, kein Migrationspfad). Envelopes v2 hello.accepted/incompatible/rejected/ack/snapshot/changed; Kommandos 5er-Satz; v1 type:hello/start|stop|...",
+      "beleg": "server.py Manager 1692-1744,8844, V1 9912-9945 (9938), V2-Docstring 10121-10136; schema.py:29-57,214-233; handshake.py:66,185",
+      "evidenz": "CODE (+Docstring)",
+      "gueltigkeit": "Transport (=P-12..P-15,P-23)",
+      "id": "G-16"
+    },
+    {
+      "aussage": "Pakete VoiceSTT*/VoiceSTT_server*/api_fastapi_server*/voice_stt_server*; UI static/index.html (package_data) verbindet /ws/transcribe (V1). V2-Client nur Testcode; AudioToTextRecorderClient = V1-Client (Recorder-Subprozess).",
+      "beleg": "setup.py:359-373,405; index.html:1132; audio_recorder_client.py:87; grep V2Client nur Tests/Server",
+      "evidenz": "CODE+CONFIG (+ABSENCE)",
+      "gueltigkeit": "Wheel (=P-23)",
+      "id": "G-17"
+    },
+    {
+      "aussage": "Sessions nur Speicher (Dict/Reserve/Sprecher; Ende = weg). Persistiert nur Serverkonfiguration (RuntimeConfigStore atomar: settings/Overlay/Revision; Session-Settings never persisted; device/host/port/admin/openai/runtime/device bewusst nicht). Betriebsmodell: Prozess ohne Zustand ueber Neustart. Kein Cluster (U-01).",
+      "beleg": "server.py:6133-6199,7959-7969; operations.py:401-469; settings_control.py:940-941",
+      "evidenz": "CODE",
+      "gueltigkeit": "Betriebsmodell",
+      "id": "G-18"
+    },
+    {
+      "aussage": "CommandReplayCache dict ohne Limit/Eviction, setdefault nie ueberschrieben, nur clear() bei Teardown. Test: 1000 Eintraege bleiben, Lookup funktioniert. Wachstum linear zu commandIds je Session.",
+      "beleg": "activation_commands.py:295-329; server.py:2406-2409,2935-2937; Test :305-314",
+      "evidenz": "CODE+TEST",
+      "gueltigkeit": "je V2-Session (nicht limitiert)",
+      "id": "G-19"
+    },
+    {
+      "aussage": "Base.supports_streaming=False + create_streaming_session wirft (kein Chunk-Streaming) = faster_whisper ohne Session. Kroko supports_streaming=True + StreamingSession. Relevant: Realtime-Lane Interim vs Final-Lane nicht.",
+      "beleg": "base.py:117,138-144; kroko :597,606-658; faster_whisper ohne Impl",
+      "evidenz": "CODE",
+      "gueltigkeit": "Engine-Faehigkeiten",
+      "id": "G-20"
+    },
+    {
+      "aussage": "cpu_threads/num_workers aus engine_options an WhisperModel; kroko num_threads Default 1. Compose OMP_NUM_THREADS aus VOICESTT_CPU_THREADS Default 4. KEIN Server-Feld/Limit/Pruefung.",
+      "beleg": "faster_whisper_engine.py:52-63; kroko:440; compose:38; config.yaml:144 (Deployment, nicht Settings)",
+      "evidenz": "CODE+CONFIG",
+      "gueltigkeit": "Engine/Deployment (indirekt, ungeprueft)",
+      "id": "G-21"
+    },
+    {
+      "aussage": "Image: python3.12 -m VoiceSTT_server.server --host 0.0.0.0 --port 8010 --device cpu --compute-type int8 --engine-options/--realtime local_files_only true; User 10001; Volume /var/lib/voicestt; EXPOSE 8010; Healthcheck nur /health (200 auch ohne Modell, sonst Restart-Loop). Kein Gunicorn/workers/Broker/Replicas. Base-Digest gepinnt.",
+      "beleg": "Dockerfile:43-102 (73-78,59-68,95-102); compose:14-90; build_production.py:45-53; P-24",
+      "evidenz": "CONFIG",
+      "gueltigkeit": "Deployment (kein Cluster/GPU ABSENCE U-01)",
+      "id": "G-22"
+    }
+  ],
+  "investigated_sources": [
+    "setup.py, Dockerfile, compose, requirements, workflows, rc_manifest.py, artifacts.py",
+    "server.py, factory.py, kroko_onnx_engine.py, faster_whisper_engine.py, base.py",
+    "settings_control.py, protocol.py, schema.py, handshake.py",
+    "operations.py, cpu_only.py, build_production.py, config.yaml",
+    "Tests (engine_boundary, protocol, cpu, info, client_v2_identity, distribution_contents)"
+  ],
+  "not_implemented": [
+    {
+      "id": "N-G01",
+      "thema": "Keine dritte Engine"
+    },
+    {
+      "id": "N-G02",
+      "thema": "Keine GPU (vierfach + Kroko-provider)"
+    },
+    {
+      "id": "N-G03",
+      "thema": "Keine Tuning-Presets ausser custom"
+    },
+    {
+      "id": "N-G04",
+      "thema": "Keine Session-Persistenz"
+    },
+    {
+      "id": "N-G05",
+      "thema": "Kein V2-Client im Paket"
+    },
+    {
+      "id": "N-G06",
+      "thema": "Kein Chunk-Streaming faster_whisper"
+    },
+    {
+      "id": "N-G07",
+      "thema": "Keine zwei Kroko-Modelle"
+    },
+    {
+      "id": "N-G08",
+      "thema": "Kein zweiter Schreibpfad Runtime-Suppression"
+    },
+    {
+      "id": "N-G09",
+      "thema": "Kein Thread-/FD-/Connection-Budget"
+    },
+    {
+      "id": "N-G10",
+      "thema": "Keine Replay-Begrenzung"
+    }
+  ],
+  "researcher_session": "ses_e46eb52d6ffeR7hjdU0raPpWkV",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U-01",
+      "thema": "Cluster/Multi-Replica nicht verboten, aber Sessions/Replay prozesslokal (faktische Grenze, ABSENCE)"
+    },
+    {
+      "id": "U-02",
+      "thema": "RAM/VRAM-Budgets unbekannt (nur Rangklassen, keine Bytes/Messung/OOM)"
+    },
+    {
+      "id": "U-03",
+      "thema": "macOS/ARM/32-bit Laufzeit nicht verboten, nur nicht gebaut/qualifiziert"
+    },
+    {
+      "id": "U-04",
+      "thema": "Durchsatz/Latenz: keine Benchmarks; degradation-Schwelle kein Kapazitaetsnachweis"
+    },
+    {
+      "id": "U-05",
+      "thema": "Host/Container-FD-Limit nirgends gelesen/gesetzt"
+    },
+    {
+      "id": "U-06",
+      "thema": "ws/logs unter Last: kein Limit, faktisch unbegrenzt, kein Vertrag"
+    }
+  ]
+}

@@ -1,0 +1,346 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup NICHT verifizierbar (nur FETCH_HEAD); nur Commit bindend. Repo shallow.",
+  "chapter": "09.05",
+  "commit_verification": ".git/HEAD = a8993c5c68042d996eab680d84a5b138a214bb5d (detached); FETCH_HEAD per Hash von github.com/marcosudau-vps/voice-stt-server.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "extend-Docstring veraltet; Code+Tests Ablehnung gilt."
+    },
+    {
+      "id": "C2",
+      "thema": "source-Toleranz enger als Code (unvalidiert ignoriert)."
+    },
+    {
+      "id": "C3",
+      "thema": "Testkommentar nur /ws/logs+transcribe veraltet (Assertion ok)."
+    },
+    {
+      "id": "C4",
+      "thema": "v1-Timings 0.01-3600s vs Registry ms (Zweistufigkeit)."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "Genau 2 /v1-Routen hinter optionalem Bearer-Gate; nur ein include_router.",
+      "beleg": "openai_routes.py:43,67,45,104; server.py:9899-9910",
+      "evidenz": "E1",
+      "gueltigkeit": "HTTP-Server",
+      "id": "KV9-01"
+    },
+    {
+      "aussage": "API aus -> 404 vor Auth; falscher Key 401 invalid_api_key.",
+      "beleg": "openai_routes.py:93-103; security/openai.py:17-35",
+      "evidenz": "E2",
+      "gueltigkeit": "/v1/*",
+      "id": "KV9-02"
+    },
+    {
+      "aussage": "/v1/models Hülle object=list/data; pro Item id/object=model/created 0/owned_by/engine/loaded/lanes; whisper-1 injiziert routing_alias/final/true/[final].",
+      "beleg": "openai_routes.py:48-65",
+      "evidenz": "E1",
+      "gueltigkeit": "/v1/models",
+      "id": "KV9-03"
+    },
+    {
+      "aussage": "Pflicht file+model; Enums/Defaults/Endungen; Abweichung von granularities [segment] nur mit verbose_json.",
+      "beleg": "openai_compat.py:9-13,92-157; openai_routes.py:118-121",
+      "evidenz": "E2",
+      "gueltigkeit": "multipart",
+      "id": "KV9-04"
+    },
+    {
+      "aussage": "6 Formen; verbose/words nur word; diarized single_speaker + compatibility.",
+      "beleg": "openai_compat.py:182-258; openai_routes.py:549-556",
+      "evidenz": "E2",
+      "gueltigkeit": "HTTP-Antwort",
+      "id": "KV9-05"
+    },
+    {
+      "aussage": "Fehlerhuelle message/type/param/code; invalid_model_override 400/model_not_loaded 409/model_not_found 404/invalid_api_key 401/file_too_large 413.",
+      "beleg": "openai_compat.py:16-21,160-161; openai_routes.py:147-617",
+      "evidenz": "E2",
+      "gueltigkeit": "alle /v1-Fehler",
+      "id": "KV9-06"
+    },
+    {
+      "aussage": "SSE transcript.text.delta/done/error (+diarized transcript.text.segment); no-cache/no-buffer.",
+      "beleg": "openai_routes.py:211-467; openai_compat.py:261-262",
+      "evidenz": "E2",
+      "gueltigkeit": "stream=true",
+      "id": "KV9-07"
+    },
+    {
+      "aussage": "Aliasse final/realtime (realtime nur ohne use_main); settings-Aliasse + main->final; Override nur whisper-1 sonst 400; 409/404 je geladen/unbekannt.",
+      "beleg": "server.py:8425-8491,509-512; openai_routes.py:122-136",
+      "evidenz": "E2",
+      "gueltigkeit": "/v1/transcriptions",
+      "id": "KV9-08"
+    },
+    {
+      "aussage": "X-Request-ID auf POST transcriptions (auch 4xx/5xx), nicht GET models; Resolved/Route/Override nach Aufloesung.",
+      "beleg": "openai_routes.py:69-77,111-146,583-587",
+      "evidenz": "E2",
+      "gueltigkeit": "alle Antworten",
+      "id": "KV9-09"
+    },
+    {
+      "aussage": "Listen name+name[], JSON-Array/Komma dedup; references ohne Split.",
+      "beleg": "openai_compat.py:66-89,126",
+      "evidenz": "E2",
+      "gueltigkeit": "multipart",
+      "id": "KV9-10"
+    },
+    {
+      "aussage": "prompt/temperature/threshold nur faster_whisper; Kroko liest threshold nicht.",
+      "beleg": "openai_routes.py:204-209; faster_whisper_engine.py:85-102",
+      "evidenz": "E1",
+      "gueltigkeit": "Lane-abhaengig",
+      "id": "KV9-11"
+    },
+    {
+      "aussage": "/ws/transcribe erforderlicher Kompatibilitaetspfad; keine Fusion v2.",
+      "beleg": "server.py:10121-10136,9912-9913",
+      "evidenz": "E1",
+      "gueltigkeit": "Routing",
+      "id": "KV9-12"
+    },
+    {
+      "aussage": "hello-Basishuelfe type/hello/clientId/sessionId/settings/sessionConfig/activationConfig/sessionCapabilities/limits/supportedEngines/runtimeSettings/logAccess + ready/Fehler additiv.",
+      "beleg": "server.py:9914-9986",
+      "evidenz": "E1",
+      "gueltigkeit": "/ws/transcribe",
+      "id": "KV9-13"
+    },
+    {
+      "aussage": "hello-Felder stabil; ready+Fehler additiv; unbekannte Felder ignorieren.",
+      "beleg": "server.py:10002-10020,7811-7819",
+      "evidenz": "E2",
+      "gueltigkeit": "v1-Sitzung",
+      "id": "KV9-14"
+    },
+    {
+      "aussage": "7 Typen start/stop/clear/ping/metrics/trigger/audio_availability; sonst error where command.",
+      "beleg": "server.py:10024-10105",
+      "evidenz": "E2",
+      "gueltigkeit": "/ws/transcribe",
+      "id": "KV9-15"
+    },
+    {
+      "aussage": "v2-Typen auf v1 nur error, kein Ack; commandId bleibt frei.",
+      "beleg": "server.py:10099-10105; boundary.py:92-153",
+      "evidenz": "E3",
+      "gueltigkeit": "v1-Wire",
+      "id": "KV9-16"
+    },
+    {
+      "aussage": "trigger_ack type/commandId/accepted/reason/activationId/phase/sessionId; idempotent.",
+      "beleg": "server.py:3414-3425,3500-3572; activation_commands.py:175-329",
+      "evidenz": "E2",
+      "gueltigkeit": "kontrolliert",
+      "id": "KV9-17"
+    },
+    {
+      "aussage": "reason-Vokabular stabil; map wirft UnmappedDomainReason, _answer_domain projiziert internal_error (geloggt).",
+      "beleg": "commands.py:211-276; trigger_contract.py:196-204",
+      "evidenz": "E2",
+      "gueltigkeit": "v1+v2",
+      "id": "KV9-18"
+    },
+    {
+      "aussage": "audio_ack mit bool/nicht-leer; Verlust cancelt Activation nicht Sitzung.",
+      "beleg": "server.py:3730-3766,3823-3833",
+      "evidenz": "E1",
+      "gueltigkeit": "beide (gemeinsam)",
+      "id": "KV9-19"
+    },
+    {
+      "aussage": "Framing 4B LE + JSON max 64K + PCM nur pcm_s16le; Eingang beliebig, Server resampelt 16 kHz.",
+      "beleg": "protocol.py:7,40-82; server.py:7653-7683",
+      "evidenz": "E2",
+      "gueltigkeit": "v1-Binaer",
+      "id": "KV9-20"
+    },
+    {
+      "aussage": "Typen hello/ready/status/realtime/final/warning/error/pong/metrics + Events; fullSentence entfernt.",
+      "beleg": "server.py:4816-4838,3115-3134,7763-7768",
+      "evidenz": "E2",
+      "gueltigkeit": "v1-Wire",
+      "id": "KV9-21"
+    },
+    {
+      "aussage": "v1 32-Hex/legacy-counter; v2 UUID; nie umformatiert.",
+      "beleg": "server.py:2337-2343,1308-1346,4748-4752,9938",
+      "evidenz": "E2",
+      "gueltigkeit": "beide",
+      "id": "KV9-22"
+    },
+    {
+      "aussage": "requestId=transcriptionId=sessionId; clientId Grammatik sonst client-hex.",
+      "beleg": "openai_routes.py:69-92; server.py:1362-1372",
+      "evidenz": "E1",
+      "gueltigkeit": "/v1 + v1-WS",
+      "id": "KV9-23"
+    },
+    {
+      "aussage": "runtime.json settings/flach; unbekannt still ignoriert; Secrets/abgeleitet nie.",
+      "beleg": "operations.py:423-430; server.py:8826-8843",
+      "evidenz": "E2",
+      "gueltigkeit": "Start vorhanden",
+      "id": "KV9-24"
+    },
+    {
+      "aussage": "Koexistenz settings+overlay+revision+unbekannt; atomar kein Clobbern.",
+      "beleg": "operations.py:401-469; test_settings_runtime_persistence.py:39-175",
+      "evidenz": "E2",
+      "gueltigkeit": "jede Persistenz",
+      "id": "KV9-25"
+    },
+    {
+      "aussage": "/api/config GET/PATCH je Schluessel; rejected unknown/startup/invalid/dependency; appliesTo-Map.",
+      "beleg": "server.py:8907-8937,7826-7904,1211-1273",
+      "evidenz": "E2",
+      "gueltigkeit": "Admin-API",
+      "id": "KV9-26"
+    },
+    {
+      "aussage": "public_dict ohne Secrets/Engine-Options/Pfade; Sitzung ohne model_paths.",
+      "beleg": "server.py:545-556,979-982",
+      "evidenz": "E2",
+      "gueltigkeit": "hello/ready/config",
+      "id": "KV9-27"
+    },
+    {
+      "aussage": "Ohne Flags legacy (kein Controller); false/false -> trigger_required.",
+      "beleg": "server.py:1153-1183; trigger_contract.py:252-270",
+      "evidenz": "E2",
+      "gueltigkeit": "/ws/transcribe",
+      "id": "KV9-28"
+    },
+    {
+      "aussage": "Wake tolerant (ignoriert/Fallback/Warnung); nur Trigger-Flags streng.",
+      "beleg": "server.py:655-753,1085-1144",
+      "evidenz": "E2",
+      "gueltigkeit": "v1-Admission",
+      "id": "KV9-29"
+    },
+    {
+      "aussage": "Recorder-Signatur/Konstanten/Exporte fixiert; private Wrapper entfernt.",
+      "beleg": "test_audio_recorder_public_api.py:28-267",
+      "evidenz": "E3",
+      "gueltigkeit": "Python-Embedding",
+      "id": "KV9-30"
+    },
+    {
+      "aussage": "CLI kanonisch + 3 Kompat-Aliasse + Dev-Helper stt-install-kroko.",
+      "beleg": "setup.py:409-423",
+      "evidenz": "E1",
+      "gueltigkeit": "Distribution",
+      "id": "KV9-31"
+    },
+    {
+      "aussage": "Admin/OpenAI Legacy-Header + Env-Fallbacks; lokal ohne Key.",
+      "beleg": "security/admin.py:8-46; security/openai.py:14-22",
+      "evidenz": "E2",
+      "gueltigkeit": "Admin/OpenAI",
+      "id": "KV9-32"
+    },
+    {
+      "aussage": "Legacy-REST/WS registriert; /api/v2/* + /ws/v2 nur additiv.",
+      "beleg": "server.py:8874-10121; openai_routes.py:43,67",
+      "evidenz": "E1",
+      "gueltigkeit": "Oberflaeche",
+      "id": "KV9-33"
+    },
+    {
+      "aussage": "Nur fw/kroko_onnx; parakeet/Profile != custom laut abgelehnt.",
+      "beleg": "test_fastapi_server_protocol.py:229-304; server.py:10302",
+      "evidenz": "E2",
+      "gueltigkeit": "Start/validate",
+      "id": "KV9-34"
+    },
+    {
+      "aussage": "extend beidseitig entfernt; nur 4 Aktionen kanonisch.",
+      "beleg": "activation_commands.py:37-50,204-210; boundary.py:200-222",
+      "evidenz": "E2",
+      "gueltigkeit": "beide",
+      "id": "KV9-35"
+    },
+    {
+      "aussage": "/ws/v2 ruft v1-Handler, mappt reasons->results; Unmapped->internal_error (geloggt).",
+      "beleg": "connection.py:362-421; commands.py:266-276",
+      "evidenz": "E1",
+      "gueltigkeit": "v2-Wire",
+      "id": "KV9-36"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "Diarisierung single_speaker Platzhalter."
+    },
+    {
+      "id": "N2",
+      "thema": "temperature/prompt/threshold ausser fw wirkungslos."
+    },
+    {
+      "id": "N3",
+      "thema": "Kein Alias-Mapping alter Settings-Namen."
+    },
+    {
+      "id": "N4",
+      "thema": "Private Recorder-Wrapper entfernt."
+    },
+    {
+      "id": "N5",
+      "thema": "fullSentence existiert nicht."
+    },
+    {
+      "id": "N6",
+      "thema": "extend existiert nicht."
+    },
+    {
+      "id": "N7",
+      "thema": "Kein Pydantic/OpenAPI-Schema /v1."
+    },
+    {
+      "id": "N8",
+      "thema": "Kein Branch-Ref checkout."
+    }
+  ],
+  "researcher_session": "ses_e33fb9bb8ffegW8p32aYKsUgYn",
+  "solver_notes": [
+    "36 Fakten: /v1-OpenAI, /ws/transcribe v1, IDs, Settings, weitere Oberflaechen, Nicht-Kompatibilitaet."
+  ],
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "stt-server-legacy funktional ungeprueft."
+    },
+    {
+      "id": "U2",
+      "thema": "Keine v1-Settings Feld-/Versionsliste."
+    },
+    {
+      "id": "U3",
+      "thema": "X-Header Nutzung extern unbekannt."
+    },
+    {
+      "id": "U4",
+      "thema": "0.1s Poll Zusicherung unbekannt."
+    },
+    {
+      "id": "U5",
+      "thema": "Alias-Lane Wurf Zeitpunkt ungeprueft."
+    },
+    {
+      "id": "U6",
+      "thema": "reload skipped Toleranz unbekannt."
+    }
+  ],
+  "writer_notes": "Tr580ennen /v1, /ws/transcribe, IDs, Settings, weitere; erhalten vs gebrochen (KV9-34/35). C1/C3 nicht zitieren; C4 Zweistufigkeit. E3 testfixiert kennzeichnen. Kein Diagramm."
+}

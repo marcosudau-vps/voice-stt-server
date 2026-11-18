@@ -1,0 +1,237 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD). Nur Commit bindend.",
+  "chapter": "07.07",
+  "commit_verification": ".git/HEAD direkt SHA a8993c5c68042d996eab680d84a5b138a214bb5d (detached). Quellen: setup.py, pyproject, MANIFEST, VERSION, requirements, build_identity, wakeword_resources, _version, _build_identity, Tests, CI.",
+  "conflicts": [
+    {
+      "id": "N1",
+      "thema": "Public-install_requires redundant zu recommended/default/server (kein Hinweis)."
+    },
+    {
+      "id": "N2",
+      "thema": "example-app-Extra vs prune examples (Quellen fehlen im sdist)."
+    },
+    {
+      "id": "N3",
+      "thema": "numpy==1.26.4 gepinnt aber nicht referenziert (nur transitiv)."
+    },
+    {
+      "id": "N4",
+      "thema": "Drei Produktnamen akzeptiert, nur zwei baubar (pro bewusst nicht)."
+    },
+    {
+      "id": "C1",
+      "thema": "INSTALL_GUIDE verweist build/BUILD.md (Dokuverweis, keine Evidenz)."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [],
+  "facts": [
+    {
+      "aussage": "Zwei Varianten via VOICESTT_DISTRIBUTION_VARIANT: leer=voicestt, pro=voice-stt-server; sonst SystemExit; strip/lower.",
+      "beleg": "setup.py:29-75; test_build_distribution:70-89; identity_installation:33",
+      "evidenz": "stark",
+      "gueltigkeit": "Build-Zeit beide",
+      "id": "PK7-01"
+    },
+    {
+      "aussage": "sdist-Rebuild leitet Variante aus _build_identity.json ab (kein Checkout, PKG-INFO); identische Metadaten.",
+      "beleg": "setup.py:46-57,76; _build_identity.py:196-207; identity_installation:183-203",
+      "evidenz": "stark",
+      "gueltigkeit": "sdist->Wheel",
+      "id": "PK7-02"
+    },
+    {
+      "aussage": "python_requires: public >=3.12,<3.13 (cp312-Runtime), legacy >=3.11 ohne Obergrenze.",
+      "beleg": "setup.py:37-43,378-380",
+      "evidenz": "stark",
+      "gueltigkeit": "je Variante",
+      "id": "PK7-03"
+    },
+    {
+      "aussage": "install_requires: Legacy 9 (u.a. torch unpinned), Public 19 = 9 + faster-whisper/av + silero-onnx + 7 Server-Deps.",
+      "beleg": "setup.py:232-242,244-269,319-336,382-384; contents:91-96",
+      "evidenz": "stark",
+      "gueltigkeit": "beide",
+      "id": "PK7-04"
+    },
+    {
+      "aussage": "Deps aus requirements.txt gespiegelt (Paketname->Zeile); numpy gepinnt aber nicht referenziert.",
+      "beleg": "setup.py:171-192,230; requirements.txt:1-17",
+      "evidenz": "stark",
+      "gueltigkeit": "beide",
+      "id": "PK7-05"
+    },
+    {
+      "aussage": "Extras 20 Schluessel/Aliasse additiv: minimal leer, faster-whisper, silero-*, kroko-builder, porcupine/oww/wakewords, server 7, example-app 7, recommended/default, all.",
+      "beleg": "setup.py:280-317; boundary:187-208; contents:82-88",
+      "evidenz": "stark",
+      "gueltigkeit": "beide",
+      "id": "PK7-06"
+    },
+    {
+      "aussage": "Public Pflicht ueberlappt recommended/default/server (Legacy einziger Weg dorthin); Wake Extra wegen tflite.",
+      "beleg": "setup.py:300-336",
+      "evidenz": "stark/mittel",
+      "gueltigkeit": "Metadaten",
+      "id": "PK7-07"
+    },
+    {
+      "aussage": "Eine Versionsautoritaet resolve_version (Identitaet>ENV>VERSION>Metadaten); SemVer hart; rc.1->rc1.",
+      "beleg": "setup.py:19-27; _version.py:144-184; _build_identity:27-39; VERSION; version_authority:212-223",
+      "evidenz": "stark",
+      "gueltigkeit": "Build+Laufzeit",
+      "id": "PK7-08"
+    },
+    {
+      "aussage": "Build-Identitaet _build_identity.json in Wheel+sdist (Schema1, product/packageVersion, commit/tree/dirty/date, Name, krokoVariant, provenance); sdist-Konflikt->IdentityError.",
+      "beleg": "setup.py:210-227,408; build_identity_support:19-74; _build_identity:18,112-176",
+      "evidenz": "stark",
+      "gueltigkeit": "beide, Rebuild ohne Git",
+      "id": "PK7-09"
+    },
+    {
+      "aussage": "Stale Quell-Ressource ignoriert (load None); Repeat-Wheels byte-identisch mit SOURCE_DATE_EPOCH.",
+      "beleg": "_build_identity.py:196-200; identity_installation:58-68,218-228",
+      "evidenz": "stark",
+      "gueltigkeit": "Reproduzierbarkeit",
+      "id": "PK7-10"
+    },
+    {
+      "aussage": "Whitelist 4 Pakete via find_packages include; voice_stt_server lazy Re-Export; engineering/tests/examples nie drin.",
+      "beleg": "setup.py:359-373; MANIFEST:29-30; voice_stt_server/__init__; boundary:219-223",
+      "evidenz": "stark",
+      "gueltigkeit": "Wheel/sdist-Intention",
+      "id": "PK7-11"
+    },
+    {
+      "aussage": "package_data: VoiceSTT warmup/models.json/licenses/channel-json + Wakeword-Liste, api static/index.html; include_package_data True; Dateien existieren.",
+      "beleg": "setup.py:387-407",
+      "evidenz": "stark/mittel",
+      "gueltigkeit": "Wheel, sdist teils UNKNOWN",
+      "id": "PK7-12"
+    },
+    {
+      "aussage": "Wakeword manifest-abgeleitet 56 Dateien (25x2 + 2x2 + models.json + silero.onnx); fehlend->FileNotFoundError; historische Varianten nicht drin.",
+      "beleg": "setup.py:78-88; wakeword_package_resources:30-73; wakeword_resources:51-95",
+      "evidenz": "stark",
+      "gueltigkeit": "Wheel (sdist U1)",
+      "id": "PK7-13"
+    },
+    {
+      "aussage": "Keine Kroko-Gewichte im Paket (nur models.json/licenses); Runtime via Wheel-Merge Retag cp312/Root-Is-Purelib false, Metadaten entfernt.",
+      "beleg": "setup.py:388-396; kroko_authority:129-137; build_distribution:146,420-440; build_distribution:137-166",
+      "evidenz": "stark",
+      "gueltigkeit": "Public-Wheel",
+      "id": "PK7-14"
+    },
+    {
+      "aussage": "5 console_scripts: voice-stt-server/stt-server->server:main, legacy->stt_server:main, stt->client, stt-install-kroko.",
+      "beleg": "setup.py:409-424; server:8-14; stt_server:907; client:36; install_kroko:2153",
+      "evidenz": "stark",
+      "gueltigkeit": "beide",
+      "id": "PK7-15"
+    },
+    {
+      "aussage": "CI Wheel+sdist + twine check (Dev); Public nur --wheel (Merge/Retag); kein Public-sdist (Manifest ohne Key).",
+      "beleg": "pyproject:1-3; setup:408; ci:69-82; contents:37-47; build_distribution:146; state:69-72",
+      "evidenz": "stark",
+      "gueltigkeit": "Dev vs Public",
+      "id": "PK7-16"
+    },
+    {
+      "aussage": "MANIFEST 8 Includes (Reqs/README/NOTES/LICENSE/VERSION/build_identity/channel-json/wakeword-Modul), 9 Prunes, 3 Excludes; sdist rebuildbar.",
+      "beleg": "MANIFEST:1-30; setup:10-22,78-88",
+      "evidenz": "stark",
+      "gueltigkeit": "sdist",
+      "id": "PK7-17"
+    },
+    {
+      "aussage": "pyproject nur build-system (setuptools>=68/wheel/packaging>=24); keine project/setup.cfg; setup.py einzige Quelle; REPO_ROOT in sys.path.",
+      "beleg": "pyproject:1-3; setup:12-22",
+      "evidenz": "stark",
+      "gueltigkeit": "jeder Build",
+      "id": "PK7-18"
+    },
+    {
+      "aussage": "Metadaten name/version/author/MIT/url/markdown/keywords; description variantenabhaengig; INSTALL_GUIDE nur Legacy; README relativ (cwd=Wurzel); keine Classifier.",
+      "beleg": "setup.py:91-169,338-386",
+      "evidenz": "stark/mittel",
+      "gueltigkeit": "beide",
+      "id": "PK7-19"
+    },
+    {
+      "aussage": "example-app 7 Pins vs prune examples (Quellen nicht im sdist; Checkout hat sie).",
+      "beleg": "setup.py:126,270-301; MANIFEST:30",
+      "evidenz": "stark/mittel",
+      "gueltigkeit": "sdist",
+      "id": "PK7-20"
+    },
+    {
+      "aussage": "Packaging-Tests nicht im Default (testpaths unit); CI explizit unit+compat/packaging; RC Einzeldatei; extras_matrix Helfer 6 Faelle.",
+      "beleg": "pytest.ini:1-3; ci:187-191; RC:94; extras_matrix:1-108",
+      "evidenz": "stark",
+      "gueltigkeit": "Test/CI, Evidenzgrenze",
+      "id": "PK7-21"
+    },
+    {
+      "aussage": "VoiceSTT_server/index.html nicht deklariert (nur api static/index.html, server.py:140); kein Bestandteil.",
+      "beleg": "setup.py:405; server.py:140",
+      "evidenz": "stark/mittel",
+      "gueltigkeit": "Deklaration (Altlast)",
+      "id": "PK7-22"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "NI-01",
+      "thema": "Kein setup.cfg (nur setup.py + pyproject)."
+    },
+    {
+      "id": "NI-02",
+      "thema": "Keine PEP621-project-Tabelle."
+    },
+    {
+      "id": "NI-03",
+      "thema": "Keine Classifier (auskommentiert)."
+    },
+    {
+      "id": "NI-04",
+      "thema": "Kein Public-sdist (Manifest ohne Key)."
+    },
+    {
+      "id": "NI-05",
+      "thema": "Kein Kroko-Dist-Metadatum im Merge-Wheel."
+    },
+    {
+      "id": "NI-06",
+      "thema": "Keine Kroko-Gewichte im Paket."
+    }
+  ],
+  "researcher_session": "ses_e375f78d9ffevpWdB1S8gic4PQ",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Wakeword im sdist nur Kommentar, kein Test."
+    },
+    {
+      "id": "U2",
+      "thema": "tests/docs im sdist unbelegt."
+    },
+    {
+      "id": "U3",
+      "thema": "Wheel-LICENSE via Defaults unbelegt."
+    },
+    {
+      "id": "U4",
+      "thema": "Requires-Python abgeleitet, kein Test."
+    },
+    {
+      "id": "U5",
+      "thema": "minimal-Verbrauch unbelegt."
+    }
+  ],
+  "writer_notes": "Nicht duplizieren: 06.x Extras/Split/Installer/CPU; 07.05/06 nur Evidenzgrenze; 07.09-11 Merge/RC/CI nur Konsequenz. Kroko Metadaten vs Gewichte; Server static/index.html; CLI-Ziele. NOT_REQUESTED."
+}

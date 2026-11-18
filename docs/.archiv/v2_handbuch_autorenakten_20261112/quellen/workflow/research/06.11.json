@@ -1,0 +1,314 @@
+{
+  "branch_note": "Branch feat/v2-release-cleanup nicht verifizierbar (detached HEAD). Nur Commit a8993c5c68042d996eab680d84a5b138a214bb5d bindend.",
+  "chapter": "06.11",
+  "commit_verification": ".git/HEAD exakt a8993c5c68042d996eab680d84a5b138a214bb5d (detached). Zeilenangaben zu diesem Commit.",
+  "conflicts": [
+    {
+      "id": "C1",
+      "thema": "Healthcheck-Vertrag: Root Liveness-only (Test-erzwungen) vs VPS ready and ok [P6-30]."
+    },
+    {
+      "id": "C2",
+      "thema": "max_sessions Default Code 4 vs config.yaml/VPS 8; Effektivwert via --config-YAML."
+    },
+    {
+      "id": "C3",
+      "thema": "Docstrings 0.1/100 vs Code 0.02/128; Code gewinnt [P6-10/13]."
+    },
+    {
+      "id": "C4",
+      "thema": "YAML-Latenz/VAD-Felder ohne Wirkung (N1/N2) suggerieren Steuerung."
+    },
+    {
+      "id": "C5",
+      "thema": "cpu_threads→OMP_NUM_THREADS nur deklarativ, kein Python-Reader [P6-20]."
+    }
+  ],
+  "correction_round": 1,
+  "diagram_edges": [
+    "uvicorn (1 Prozess) -> App (P6-01)",
+    "WS-Client -> SessionStore reserve/max_sessions (P6-23)",
+    "Session -> Text-Thread/Recorder (P6-03)",
+    "Recorder -> Recording-/Realtime-Thread (P6-03/13)",
+    "Recording -> audio_queue trim 128 drop-oldest (P6-10)",
+    "Recorder -> recorded_audio_queue (P6-11)",
+    "recorded_queue -> Trim >8 discard+ledger (P6-11)",
+    "Session -> FairInference(main) final deque 8 (P6-07)",
+    "Session -> FairInference(realtime) 1 Slot coalescing (P6-08)",
+    "FairInference -> Worker 1/Lane (P6-02)",
+    "FairInference -> Drop stale 1500ms (P6-09)",
+    "Worker -> Engine transcribe (P6-17/18/19)",
+    "Worker -> Service result (P6-02)",
+    "HTTP -> Default-Executor to_thread (P6-06)",
+    "Executor -> FairInference openai-<id> (P6-25)",
+    "Service -> EventHub Events (P6-27)",
+    "Hub -> 3 Writer bounded 10000 (P6-27)",
+    "Service -> Ready-/Idle-Thread (P6-05/21)",
+    "Overload -> scheduler.overloaded nur voll (P6-26)",
+    "Healthcheck -> metrics() alle Snapshots kein Cache (P6-29)"
+  ],
+  "facts": [
+    {
+      "aussage": "Ein Prozess/eine App: uvicorn.run ohne workers, kein --workers; Skalierung nur Threads.",
+      "beleg": "server.py L10813-10835; workers nur Scheduler-Dict.",
+      "evidenz": "hoch",
+      "gueltigkeit": "V2-CPU inkl. Docker",
+      "id": "P6-01"
+    },
+    {
+      "aussage": "2 Inferenz-Lanes je 1 Worker-Thread sequenziell; max 1/Lane (2 gesamt); Rest wartet.",
+      "beleg": "server.py L1973-2099/2111-2159.",
+      "evidenz": "hoch",
+      "gueltigkeit": "alle Engines/Lanes",
+      "id": "P6-02"
+    },
+    {
+      "aussage": "Pro Session 3 Threads: Text-Worker (recorder.text), Recording-, Realtime-Thread (daemon); stdout nur Subprozess.",
+      "beleg": "server.py L2443-2448/4668-4718; initialization.py L666-701; Tests L1207-1222.",
+      "evidenz": "hoch",
+      "gueltigkeit": "pro admitted Session",
+      "id": "P6-03"
+    },
+    {
+      "aussage": "Session-Last variabel: +1 Timer-Thread je Deadline (Token, beendet Vorgänger) +1 Followup je Fenster; transient/daemon.",
+      "beleg": "server.py L4393-4420/4440-4479/5653-5658.",
+      "evidenz": "hoch",
+      "gueltigkeit": "controlled/Wake-Sessions",
+      "id": "P6-04"
+    },
+    {
+      "aussage": "Grundlast ~5-6 Daemons: Ready, Idle, 3 Hub-Writer + transient Kroko (LicenseCheck background / Reconcile).",
+      "beleg": "server.py L7290-7302/8521-8545/7623-7639/6736-6743; event_logging.py L745-763; kroko.py L177-183.",
+      "evidenz": "hoch",
+      "gueltigkeit": "ab service.start()",
+      "id": "P6-05"
+    },
+    {
+      "aussage": "HTTP belegt je Anfrage Default-Executor-Thread (to_thread Decode/Inferenz); keine Executor-Konfiguration.",
+      "beleg": "openai_routes.py L160/342-350/469-477.",
+      "evidenz": "hoch/U1",
+      "gueltigkeit": "OpenAI-HTTP (nicht WS-Ingest)",
+      "id": "P6-06"
+    },
+    {
+      "aussage": "Final-Limits: Session-Deque 8 + global 64 (Gründe voll); pro Lane eigene Queue (getrennt 2×64, shared 1×64).",
+      "beleg": "server.py L1756-1818/2124-2129; Settings L491-493.",
+      "evidenz": "hoch",
+      "gueltigkeit": "final/realtime/OpenAI",
+      "id": "P6-07"
+    },
+    {
+      "aussage": "Realtime max 1 wartend/Session; neu ersetzt alt (accepted+coalesced, alt verworfen); final nie coalesced.",
+      "beleg": "server.py L1799-1816/3050-3056/4642-4643; Tests L630-651.",
+      "evidenz": "hoch",
+      "gueltigkeit": "nur realtime",
+      "id": "P6-08"
+    },
+    {
+      "aussage": "Realtime-Deadline 1500ms ab Erzeugung; älter beim Dequeue → stale verworfen (kein Rechnen); final keine Deadline.",
+      "beleg": "server.py L8298-8302/1841-1849; Tests L667-677.",
+      "evidenz": "hoch",
+      "gueltigkeit": "Recorder-Realtime",
+      "id": "P6-09"
+    },
+    {
+      "aussage": "Audio-Queue unbegrenzt, Consumer trimmt >128 (drop-oldest, Warnung); 512 Samples@16kHz=32ms → ~4,1s Rückstau (abgeleitet).",
+      "beleg": "server.py L2816; recording.py L191-210; audio_recorder.py L81-83; initialization.py L190; Tests L1207-1222.",
+      "evidenz": "hoch/niedrig",
+      "gueltigkeit": "feed_audio-Consumer",
+      "id": "P6-10"
+    },
+    {
+      "aussage": "recorded_audio_queue >8 → älteste verworfen + ledger discarded + Warnung; Zähler droppedRecordedSegments/finalRejected.",
+      "beleg": "server.py L6064-6130; Tests L718-740/1266-1284.",
+      "evidenz": "hoch",
+      "gueltigkeit": "pro Session nach Flush",
+      "id": "P6-11"
+    },
+    {
+      "aussage": "Aufnahme ≥30s → ForceFinalize-Thread (flush, Speaker aus, Warnung, forcedFinalizations); begrenzt Segment, nicht Session.",
+      "beleg": "server.py L489/6011-6085; Tests L1235-1264.",
+      "evidenz": "hoch",
+      "gueltigkeit": "beide Pfade",
+      "id": "P6-12"
+    },
+    {
+      "aussage": "Realtime-Takt Pause 0,02s (min 0,001s), Poll ~1ms; Update-Latenz = Pause+Queue+Inferenz.",
+      "beleg": "realtime.py L54-63/1019-1037; server.py L431; CLI L10466.",
+      "evidenz": "hoch",
+      "gueltigkeit": "Recorder-Realtime (C3: Doc 0.1 falsch)",
+      "id": "P6-13"
+    },
+    {
+      "aussage": "realtime_min/max_audio_seconds + vad_energy_threshold validiert/persistiert, aber nie gelesen: keine Wirkung.",
+      "beleg": "server.py L495-497/10493-10495/10757-10759; kein VoiceSTT-Vorkommen.",
+      "evidenz": "hoch",
+      "gueltigkeit": "V2 (N2)",
+      "id": "P6-14"
+    },
+    {
+      "aussage": "Erster Job nach Kalt/Idle wartet Engine-Laden (ensure_models_loaded, 180s, Warmup-Gate); Wechsel schließt Queues + ready-reset + neue wait_ready.",
+      "beleg": "server.py L7393-7452/8191-8223/1981-1985.",
+      "evidenz": "hoch",
+      "gueltigkeit": "Lazy/Wechsel (VPS warmup-false)",
+      "id": "P6-15"
+    },
+    {
+      "aussage": "realtime_degradation_threshold_ms nur Reporting (limits_dict); keine QoS-Logik.",
+      "beleg": "server.py L494/7710/10492; nur Treffer.",
+      "evidenz": "hoch",
+      "gueltigkeit": "Server (N1)",
+      "id": "P6-16"
+    },
+    {
+      "aussage": "CPU-only hart (ValueError/device=cpu/choices cpu); compute int8 default → WhisperModel (Docker CMD). Kroko liest compute nicht.",
+      "beleg": "server.py L417/8704-8708/8767/10452-10453; Dockerfile L100; faster_whisper_engine.py L56-63; Tests.",
+      "evidenz": "hoch",
+      "gueltigkeit": "alle Engines (U4)",
+      "id": "P6-17"
+    },
+    {
+      "aussage": "Ränge: kroko 2; large-v3-turbo-Familie 3 (als Medium; --///-Endungen); sonst large 4; medium 3; small 2; base/tiny 1; unbekannt None (Skip). Ablehnung max>3 oder medium-Anzahl>limit (2/1). Gleich Engine+Modell → shared; policy-aus → Skip.",
+      "beleg": "server.py L8711-8801; Tests L200-243.",
+      "evidenz": "hoch",
+      "gueltigkeit": "create_app + Wechsel",
+      "id": "P6-18"
+    },
+    {
+      "aussage": "Kroko nur eine Identität/Prozess: zwei verschiedene → ValueError; gleiches → shared Instanz.",
+      "beleg": "kroko_runtime.py L54-73; server.py L8775; Tests.",
+      "evidenz": "hoch",
+      "gueltigkeit": "nur Kroko",
+      "id": "P6-19"
+    },
+    {
+      "aussage": "Threads: OMP_NUM_THREADS aus deployment.cpu_threads (Default 4), kein Python-Reader; faster_whisper nur bei engine_options; Kroko 1; Session-VAD 2+1. CT2-Flag gesetzt.",
+      "beleg": "compose L38-39; config L144; compose.py L131-137; vps L33-34; faster_whisper L52-63; kroko L440; silero L437-444; Tests.",
+      "evidenz": "hoch/U3",
+      "gueltigkeit": "Deployment/Engine",
+      "id": "P6-20"
+    },
+    {
+      "aussage": "Unload nur idle-zeitbasiert (Timeout 3600s, Intervall min(30,timeout/4)) wenn !busy (Speaker/pending) + gc; oder manuell/Admin/Wechsel. Kein Speicherdruck-Pfad.",
+      "beleg": "server.py L499-502/7544-7573/7623-7639.",
+      "evidenz": "hoch",
+      "gueltigkeit": "idle-an (Default)",
+      "id": "P6-21"
+    },
+    {
+      "aussage": "Kein RAM-/Disk-Guard (best-effort Telemetrie nur Logs); Entscheidung nur statische Politik; Disk nur Rotation/25MiB-Limit.",
+      "beleg": "operations.py L82-124/7575-7597/8604/5157; server.py L513; event_logging L321-372; Grep psutil/MemoryError.",
+      "evidenz": "hoch",
+      "gueltigkeit": "Server (N3/U2)",
+      "id": "P6-22"
+    },
+    {
+      "aussage": "max_sessions via Reservation (sessions+reserved; nie mehr Recorder); Ablehnung WS-error+limits+1013 + Audit session_limit (Code 4, config/VPS 8).",
+      "beleg": "server.py L6142-6165/6236-6237/7349-7365/9970-9986; Tests L950-958/1295-1310.",
+      "evidenz": "hoch",
+      "gueltigkeit": "/ws/transcribe (HTTP siehe P6-25)",
+      "id": "P6-23"
+    },
+    {
+      "aussage": "Speaker-Limit 4: nur neue Aufnahme verworfen (reject_current_recording, rejected_audio_chunks+1) + Warnung; laufende weiter; Slot-Freigabe Ende/Abbruch.",
+      "beleg": "server.py L488/5314-5327/6182/6201-6212; Tests L934-948.",
+      "evidenz": "hoch",
+      "gueltigkeit": "pro Session-Speaker",
+      "id": "P6-24"
+    },
+    {
+      "aussage": "HTTP = Pseudo-Session openai-<reqId> in Fair-Queue (kein Session/Speaker-Slot; Limit 64/Lane + 1-Inferenz/Lane); kein Cap (_pending unbegrenzt), kein Vorrang (Round-Robin); Timeout 600s.",
+      "beleg": "server.py L6257/8362-8413/8384/7458-7526.",
+      "evidenz": "hoch",
+      "gueltigkeit": "OpenAI-HTTP (N5)",
+      "id": "P6-25"
+    },
+    {
+      "aussage": "Overload nur bei Ablehnung mit reason~'voll' → system.scheduler.overloaded (warning+IDs/lane/reason) + queue.limit_reached; Kroko/unbekannt/geschlossen still; Zähler rejectedJobs/realtimeRejected/finalRejected; kein Test Event-Pfad.",
+      "beleg": "server.py L7497-7526/1898-1915/3050-3091.",
+      "evidenz": "hoch",
+      "gueltigkeit": "beide Lanes (fragil deutsch)",
+      "id": "P6-26"
+    },
+    {
+      "aussage": "Telemetrie nur protokollierend: ein Hub, Facades teilen; bounded Priority-Queues (10000); voll → verworfen+gezählt; kein Pfad steuert Scheduling/Admission; nur /health via logging_ready.",
+      "beleg": "server.py L6313-6315; event_logging.py L189-223/1071-1074/1340-1355; server.py L8889-8895.",
+      "evidenz": "hoch",
+      "gueltigkeit": "Events (Flush → 06.09)",
+      "id": "P6-27"
+    },
+    {
+      "aussage": "Ablehnung = Fehler/Reason (RuntimeError/Ledger failed|scheduler_rejected), kein 429/503-Retry; Auslastung nur overload/limits.",
+      "beleg": "openai_routes.py (429=0); server.py L3080-3091/8400-8403.",
+      "evidenz": "hoch",
+      "gueltigkeit": "HTTP+WS (N4)",
+      "id": "P6-28"
+    },
+    {
+      "aussage": "/health baut je Aufruf metrics + alle Session-Snapshots (qsize/RunningStats), kein Cache; O(Sessions) im Loop.",
+      "beleg": "server.py L4624-4666/5999-6009/6222-6234/7685-7700/8885-8905.",
+      "evidenz": "hoch",
+      "gueltigkeit": "Health/Metriken (Felder → 06.10)",
+      "id": "P6-29"
+    },
+    {
+      "aussage": "Harte Limits nur Orchestrierung (mem 6g/cpu 5/pids 512); Python kennt sie nicht (kein MemoryError-Pfad) → OOM/Throttling Docker. Healthcheck-Vertrag divergent (C1).",
+      "beleg": "vps/docker-compose L51-60; compose L83-90; Dockerfile L95-96; Tests L141-186.",
+      "evidenz": "hoch",
+      "gueltigkeit": "Deployment (U5)",
+      "id": "P6-30"
+    }
+  ],
+  "not_implemented": [
+    {
+      "id": "N1",
+      "thema": "degradation_threshold ohne Wirkung [P6-16]."
+    },
+    {
+      "id": "N2",
+      "thema": "min/max_audio_seconds + vad_energy_threshold nicht verdrahtet [P6-14]."
+    },
+    {
+      "id": "N3",
+      "thema": "Kein RAM-/Disk-Guard, kein Druck-Unload, kein MemoryError [P6-22]."
+    },
+    {
+      "id": "N4",
+      "thema": "Kein 429/503-Mapping [P6-28]."
+    },
+    {
+      "id": "N5",
+      "thema": "Kein Cap wartende OpenAI-Anfragen [P6-25]."
+    },
+    {
+      "id": "N6",
+      "thema": "can_accept tot, zählt rejected_sessions."
+    }
+  ],
+  "researcher_session": "ses_e3dbc55daffelyJTYTOnsgch3W",
+  "source_commit": "a8993c5c68042d996eab680d84a5b138a214bb5d",
+  "source_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\opencode\\voice-stt-v2-src",
+  "unknown": [
+    {
+      "id": "U1",
+      "thema": "Executor-Größe [P6-06]."
+    },
+    {
+      "id": "U2",
+      "thema": "RSS-/Modell-Footprint [P6-22]."
+    },
+    {
+      "id": "U3",
+      "thema": "OMP/CT2-Wirkung library-intern [P6-20]."
+    },
+    {
+      "id": "U4",
+      "thema": "Kroko-int8 im .data [P6-17/20]."
+    },
+    {
+      "id": "U5",
+      "thema": "OOM-Verhalten Docker [P6-30]."
+    }
+  ],
+  "writer_notes": "Nicht duplizieren: 06.01 Install/Zahlen (nur Laufzeit-Politik); 06.07 Start/Stop (nur Performance-Wirkung); 06.10 Felder (nur Referenz); Protokoll/Fehler nur Ablehnungssignal. Keine ms-Versprechen: belegt 1500ms/180s/30s/3600s/0,02s (4,1s abgeleitet markiert)."
+}
